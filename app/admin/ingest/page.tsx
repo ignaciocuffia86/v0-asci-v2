@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useDropzone } from "react-dropzone";
 import Papa from "papaparse";
-import { Upload, FileUp, CheckCircle, AlertCircle, Loader2, Activity } from 'lucide-react';
+import { Upload, FileUp, CheckCircle, AlertCircle, Loader2, Activity, Database } from 'lucide-react';
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import {
@@ -14,7 +14,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { ingestBatch, createIngestionLog, completeIngestionLog } from "@/app/actions/ingest";
+import { createImportBatch, uploadBatchRows, triggerBatchProcessing, getBatchStatus } from "@/app/actions/ingest";
 
 // Define the expected CSV structure based on the provided file
 const REQUIRED_HEADERS = [
@@ -28,9 +28,10 @@ export default function IngestPage() {
   const [file, setFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [status, setStatus] = useState<"idle" | "parsing" | "uploading" | "completed" | "error">("idle");
+  const [status, setStatus] = useState<"idle" | "parsing" | "uploading" | "processing" | "completed" | "error">("idle");
   const [stats, setStats] = useState({ total: 0, processed: 0, errors: 0 });
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [batchId, setBatchId] = useState<string | null>(null);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length > 0) {
@@ -38,6 +39,7 @@ export default function IngestPage() {
       setStatus("idle");
       setErrorMessage(null);
       setProgress(0);
+      setBatchId(null);
     }
   }, []);
 
@@ -49,6 +51,41 @@ export default function IngestPage() {
     maxFiles: 1,
   });
 
+  // Poll for batch status when in processing state
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+
+    if (status === "processing" && batchId) {
+      interval = setInterval(async () => {
+        const batchStatus = await getBatchStatus(batchId);
+        
+        if (batchStatus) {
+          setStats(prev => ({
+            ...prev,
+            processed: batchStatus.processed_rows || 0,
+            // We can add error tracking to the batch table if needed
+          }));
+
+          if (batchStatus.status === 'completed') {
+            setStatus("completed");
+            setIsUploading(false);
+            setProgress(100);
+            clearInterval(interval);
+          } else if (batchStatus.status === 'failed') {
+            setStatus("error");
+            setErrorMessage(batchStatus.error_message || "Error desconocido durante el procesamiento");
+            setIsUploading(false);
+            clearInterval(interval);
+          }
+        }
+      }, 2000);
+    }
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [status, batchId]);
+
   const processFile = async () => {
     if (!file) return;
 
@@ -56,16 +93,7 @@ export default function IngestPage() {
     setStatus("parsing");
     setStats({ total: 0, processed: 0, errors: 0 });
 
-    // 1. Create Log Entry
-    const logId = await createIngestionLog(file.name);
-    if (!logId) {
-      setErrorMessage("Error al crear el log de ingesta.");
-      setIsUploading(false);
-      setStatus("error");
-      return;
-    }
-
-    // 2. Parse CSV
+    // 1. Parse CSV
     Papa.parse(file, {
       header: true,
       skipEmptyLines: true,
@@ -85,49 +113,47 @@ export default function IngestPage() {
           return;
         }
 
+        // 2. Create Import Batch
+        const newBatchId = await createImportBatch(file.name, totalRows);
+        if (!newBatchId) {
+          setErrorMessage("Error al crear el lote de importación.");
+          setIsUploading(false);
+          setStatus("error");
+          return;
+        }
+        setBatchId(newBatchId);
         setStatus("uploading");
 
-        // 3. Process in Batches
-        const BATCH_SIZE = 50;
-        let processedCount = 0;
-        let errorCount = 0;
-        const errors: any[] = [];
-
+        // 3. Upload to Raw Tables in Batches
+        const BATCH_SIZE = 100; // Larger batch size for raw insert
+        
         for (let i = 0; i < totalRows; i += BATCH_SIZE) {
           const batch = rows.slice(i, i + BATCH_SIZE);
           
-          try {
-            const result = await ingestBatch(batch, logId);
-            if (result.success) {
-              processedCount += result.processed;
-            } else {
-              errorCount += batch.length;
-              errors.push({ batch: i, error: result.error });
-            }
-          } catch (e) {
-            errorCount += batch.length;
-            errors.push({ batch: i, error: String(e) });
+          const result = await uploadBatchRows(newBatchId, batch);
+          if (!result.success) {
+            setErrorMessage(`Error al subir filas: ${result.error}`);
+            setStatus("error");
+            setIsUploading(false);
+            return;
           }
 
-          const currentProgress = Math.round(((i + batch.length) / totalRows) * 100);
-          setProgress(Math.min(currentProgress, 100));
-          setStats((prev) => ({
-            ...prev,
-            processed: processedCount,
-            errors: errorCount,
-          }));
+          const currentProgress = Math.round(((i + batch.length) / totalRows) * 50); // First 50% is upload
+          setProgress(currentProgress);
         }
 
-        // 4. Complete Log
-        await completeIngestionLog(logId, {
-          total_rows: totalRows,
-          processed_rows: processedCount,
-          errors: errors,
-          status: errorCount === totalRows ? "failed" : "completed",
-        });
-
-        setStatus("completed");
-        setIsUploading(false);
+        // 4. Trigger Database Processing
+        setStatus("processing");
+        const triggerResult = await triggerBatchProcessing(newBatchId);
+        
+        if (!triggerResult.success) {
+          setErrorMessage(`Error al iniciar procesamiento: ${triggerResult.error}`);
+          setStatus("error");
+          setIsUploading(false);
+          return;
+        }
+        
+        // The useEffect hook will handle polling for completion
       },
       error: (error) => {
         setErrorMessage(`Error al leer el CSV: ${error.message}`);
@@ -142,7 +168,7 @@ export default function IngestPage() {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Ingesta de Datos</h1>
         <p className="text-muted-foreground">
-          Sube archivos CSV para actualizar la base de datos de contactos y compañías.
+          Sube archivos CSV para actualizar la base de datos. El procesamiento se realiza en segundo plano.
         </p>
       </div>
 
@@ -199,7 +225,9 @@ export default function IngestPage() {
                 {isUploading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Procesando...
+                    {status === "parsing" && "Leyendo CSV..."}
+                    {status === "uploading" && "Subiendo datos..."}
+                    {status === "processing" && "Procesando en base de datos..."}
                   </>
                 ) : (
                   <>
@@ -227,20 +255,26 @@ export default function IngestPage() {
               </div>
             )}
 
-            {(status === "parsing" || status === "uploading" || status === "completed") && (
+            {(status !== "idle") && (
               <div className="space-y-4">
                 <div className="space-y-2">
                   <div className="flex justify-between text-sm">
-                    <span>Progreso</span>
-                    <span>{progress}%</span>
+                    <span>
+                      {status === "parsing" && "Analizando estructura..."}
+                      {status === "uploading" && "Cargando datos crudos..."}
+                      {status === "processing" && "Motor de ingesta ejecutándose..."}
+                      {status === "completed" && "Finalizado"}
+                      {status === "error" && "Error"}
+                    </span>
+                    <span>{status === "processing" ? "En progreso..." : `${progress}%`}</span>
                   </div>
-                  <Progress value={progress} />
+                  <Progress value={status === "processing" ? undefined : progress} className={status === "processing" ? "animate-pulse" : ""} />
                 </div>
 
-                <div className="grid grid-cols-3 gap-4 pt-4">
+                <div className="grid grid-cols-2 gap-4 pt-4">
                   <div className="text-center p-3 bg-muted/30 rounded-lg">
                     <div className="text-2xl font-bold">{stats.total}</div>
-                    <div className="text-xs text-muted-foreground uppercase">Total</div>
+                    <div className="text-xs text-muted-foreground uppercase">Total Filas</div>
                   </div>
                   <div className="text-center p-3 bg-green-500/10 rounded-lg">
                     <div className="text-2xl font-bold text-green-600 dark:text-green-400">
@@ -248,13 +282,17 @@ export default function IngestPage() {
                     </div>
                     <div className="text-xs text-muted-foreground uppercase">Procesados</div>
                   </div>
-                  <div className="text-center p-3 bg-red-500/10 rounded-lg">
-                    <div className="text-2xl font-bold text-red-600 dark:text-red-400">
-                      {stats.errors}
-                    </div>
-                    <div className="text-xs text-muted-foreground uppercase">Errores</div>
-                  </div>
                 </div>
+
+                {status === "processing" && (
+                  <Alert className="bg-blue-500/10 border-blue-500/20 text-blue-700 dark:text-blue-300">
+                    <Database className="h-4 w-4" />
+                    <AlertTitle>Procesando en Backend</AlertTitle>
+                    <AlertDescription>
+                      Los datos se están procesando en el servidor de base de datos. Esto es mucho más rápido y seguro.
+                    </AlertDescription>
+                  </Alert>
+                )}
 
                 {status === "completed" && (
                   <Alert className="bg-green-500/10 border-green-500/20 text-green-700 dark:text-green-300">
