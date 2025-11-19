@@ -5,7 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 type SearchFilters = {
   technologies: string[];
   processes: string[];
-  country: string;
+  countries: string[]; // Changed from single country to array
   industry: string;
 };
 
@@ -25,10 +25,11 @@ export async function searchCompanies(filters: SearchFilters) {
       logo_url
     `);
 
-  // Apply optional filters
-  if (filters.country) {
-    query = query.ilike("country", `%${filters.country}%`);
+  if (filters.countries.length > 0) {
+    query = query.in('country', filters.countries);
   }
+  
+  // Apply optional industry filter
   if (filters.industry) {
     query = query.ilike("industry", `%${filters.industry}%`);
   }

@@ -3,7 +3,7 @@
 import { useState, useCallback } from "react";
 import { useDropzone } from "react-dropzone";
 import Papa from "papaparse";
-import { Upload, FileUp, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
+import { Upload, FileUp, CheckCircle, AlertCircle, Loader2, Activity } from 'lucide-react';
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import {

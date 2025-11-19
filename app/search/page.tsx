@@ -13,14 +13,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Search, X, Building2, Users, MapPin, Briefcase } from 'lucide-react';
+import { Search, X, Building2, MapPin, Briefcase } from 'lucide-react';
 import { searchCompanies } from "@/app/actions/search";
 import { CompanyDrawer } from "@/components/company-drawer";
+import { COUNTRIES } from "@/lib/constants";
 
 type SearchFilters = {
   technologies: string[];
   processes: string[];
-  country: string;
+  countries: string[];
   industry: string;
 };
 
@@ -40,7 +41,7 @@ export default function SearchPage() {
   const [filters, setFilters] = useState<SearchFilters>({
     technologies: [],
     processes: [],
-    country: "",
+    countries: [],
     industry: "",
   });
   const [technologies, setTechnologies] = useState<any[]>([]);
@@ -79,26 +80,28 @@ export default function SearchPage() {
     setIsSearching(false);
   };
 
-  const addFilter = (type: "technologies" | "processes", id: string) => {
+  const addFilter = (type: "technologies" | "processes" | "countries", id: string) => {
     if (!filters[type].includes(id)) {
       setFilters({ ...filters, [type]: [...filters[type], id] });
     }
   };
 
-  const removeFilter = (type: "technologies" | "processes", id: string) => {
+  const removeFilter = (type: "technologies" | "processes" | "countries", id: string) => {
     setFilters({
       ...filters,
       [type]: filters[type].filter((i) => i !== id),
     });
   };
 
-  const getItemName = (type: "technologies" | "processes", id: string) => {
+  const getItemName = (type: "technologies" | "processes" | "countries", id: string) => {
     if (type === "technologies") {
       const tech = technologies.find((t) => t.id === id);
       return tech ? `${tech.name}` : id;
-    } else {
+    } else if (type === "processes") {
       const proc = processes.find((p) => p.id === id);
       return proc ? proc.name : id;
+    } else {
+      return id;
     }
   };
 
@@ -122,7 +125,7 @@ export default function SearchPage() {
                   <SelectTrigger>
                     <SelectValue placeholder="Selecciona tecnologías..." />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="bg-white dark:bg-gray-950 border-border">
                     {technologies.map((tech) => (
                       <SelectItem key={tech.id} value={tech.id}>
                         {tech.name}
@@ -151,7 +154,7 @@ export default function SearchPage() {
                   <SelectTrigger>
                     <SelectValue placeholder="Selecciona procesos..." />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="bg-white dark:bg-gray-950 border-border">
                     {processes.map((proc) => (
                       <SelectItem key={proc.id} value={proc.id}>
                         {proc.name}
@@ -175,13 +178,32 @@ export default function SearchPage() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="country">País (Opcional)</Label>
-                <Input
-                  id="country"
-                  placeholder="Ej: Argentina, Chile"
-                  value={filters.country}
-                  onChange={(e) => setFilters({ ...filters, country: e.target.value })}
-                />
+                <Label>País (Opcional)</Label>
+                <Select onValueChange={(val) => addFilter("countries", val)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Selecciona países..." />
+                  </SelectTrigger>
+                  <SelectContent className="bg-white dark:bg-gray-950 border-border">
+                    {COUNTRIES.map((country) => (
+                      <SelectItem key={country} value={country}>
+                        {country}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {filters.countries.map((country) => (
+                    <Badge key={country} variant="secondary">
+                      {country}
+                      <button
+                        onClick={() => removeFilter("countries", country)}
+                        className="ml-1 hover:text-destructive"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </Badge>
+                  ))}
+                </div>
               </div>
 
               <div className="space-y-2">
