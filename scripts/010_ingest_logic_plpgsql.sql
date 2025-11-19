@@ -1,6 +1,10 @@
--- Function to process a batch of imported rows
-CREATE OR REPLACE FUNCTION public.process_import_batch(p_batch_id UUID)
-RETURNS VOID AS $$
+-- Function to process a batch of imported rows with a limit (Chunking)
+-- Added SECURITY DEFINER to bypass RLS restrictions during processing
+CREATE OR REPLACE FUNCTION public.process_import_batch(p_batch_id UUID, p_limit INTEGER DEFAULT 50)
+RETURNS INTEGER 
+SECURITY DEFINER -- This allows the function to bypass RLS policies
+SET search_path = public
+AS $$
 DECLARE
   v_row RECORD;
   v_row_data JSONB;
@@ -16,22 +20,26 @@ DECLARE
   v_prev_pos_desc TEXT;
   v_prev_pos_start TEXT;
   v_prev_pos_end TEXT;
+  v_processed_count INTEGER := 0;
 BEGIN
-  -- Update batch status to processing
+  -- Disable RLS for this session to allow function to access all rows
+  SET LOCAL row_security = off;
+  
+  -- Update batch status to processing if it's pending
   UPDATE public.import_batches 
   SET status = 'processing', updated_at = now() 
-  WHERE id = p_batch_id;
+  WHERE id = p_batch_id AND status = 'pending';
 
-  -- Iterate over pending rows in the batch
+  -- Iterate over pending rows in the batch with LIMIT
   FOR v_row IN 
     SELECT * FROM public.import_rows 
     WHERE batch_id = p_batch_id AND status = 'pending' 
+    LIMIT p_limit
   LOOP
     v_row_data := v_row.row_data;
     
     BEGIN
       -- 1. Process Current Company
-      -- Use upsert_company to find or create the company
       v_company_id := public.upsert_company(
         (v_row_data->>'company_name')::TEXT,
         (v_row_data->>'company_linkedin_url')::TEXT,
@@ -44,12 +52,10 @@ BEGIN
       -- 2. Process Previous Companies and Build Previous Positions JSON
       v_prev_positions := '[]'::JSONB;
       
-      -- Loop through previous positions 1 to 6
       FOR i IN 1..6 LOOP
         v_prev_company_name := v_row_data->>('previous_company_' || i);
         
         IF v_prev_company_name IS NOT NULL AND v_prev_company_name != '' THEN
-          -- Find or create previous company (only name is available usually)
           v_prev_company_id := public.upsert_company(v_prev_company_name);
           
           v_prev_pos_title := v_row_data->>('previous_position_' || i);
@@ -57,7 +63,6 @@ BEGIN
           v_prev_pos_start := v_row_data->>('previous_position_' || i || '_started_at');
           v_prev_pos_end := v_row_data->>('previous_position_' || i || '_ended_at');
           
-          -- Add to previous positions array with company_id
           v_prev_positions := v_prev_positions || jsonb_build_object(
             'company_id', v_prev_company_id,
             'company_name', v_prev_company_name,
@@ -73,17 +78,15 @@ BEGIN
       v_linkedin_url := v_row_data->>'linkedin_url';
       v_full_name := v_row_data->>'full_name';
       
-      -- Handle missing linkedin_url by generating a placeholder
       IF v_linkedin_url IS NULL OR v_linkedin_url = '' THEN
         IF v_full_name IS NOT NULL AND v_full_name != '' THEN
            v_linkedin_url := 'placeholder:' || gen_random_uuid();
         ELSE
-           -- Skip if no linkedin url and no name
            RAISE EXCEPTION 'Missing linkedin_url and full_name';
         END IF;
       END IF;
 
-      -- Upsert Contact
+      -- Upsert Contact (OVERWRITE logic)
       INSERT INTO public.contacts (
         linkedin_url,
         first_name,
@@ -113,7 +116,7 @@ BEGIN
         v_prev_positions,
         (v_row_data->>'country')::TEXT,
         (v_row_data->>'profile_picture_url')::TEXT,
-        FALSE -- Mark as not processed so signals are detected later
+        FALSE 
       )
       ON CONFLICT (linkedin_url) DO UPDATE SET
         first_name = EXCLUDED.first_name,
@@ -128,11 +131,11 @@ BEGIN
         previous_positions = EXCLUDED.previous_positions,
         country = EXCLUDED.country,
         profile_picture_url = EXCLUDED.profile_picture_url,
-        processed = FALSE, -- Reprocess signals on update
+        processed = FALSE,
         updated_at = now()
       RETURNING id INTO v_contact_id;
 
-      -- 4. Trigger Signal Detection immediately for this contact
+      -- 4. Trigger Signal Detection
       PERFORM public.process_contact_signals(v_contact_id);
 
       -- Mark row as processed
@@ -144,19 +147,23 @@ BEGIN
       UPDATE public.import_batches
       SET processed_rows = processed_rows + 1
       WHERE id = p_batch_id;
+      
+      v_processed_count := v_processed_count + 1;
 
     EXCEPTION WHEN OTHERS THEN
-      -- Log error and mark row as failed
       UPDATE public.import_rows 
       SET status = 'failed', error_message = SQLERRM 
       WHERE id = v_row.id;
     END;
   END LOOP;
 
-  -- Mark batch as completed
-  UPDATE public.import_batches 
-  SET status = 'completed', updated_at = now() 
-  WHERE id = p_batch_id;
+  -- Check if batch is fully completed
+  IF NOT EXISTS (SELECT 1 FROM public.import_rows WHERE batch_id = p_batch_id AND status = 'pending') THEN
+     UPDATE public.import_batches 
+     SET status = 'completed', updated_at = now() 
+     WHERE id = p_batch_id;
+  END IF;
 
+  RETURN v_processed_count;
 END;
 $$ LANGUAGE plpgsql;

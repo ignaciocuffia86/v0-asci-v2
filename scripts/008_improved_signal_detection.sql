@@ -51,6 +51,7 @@ BEGIN
             keyword_matched,
             source_field,
             company_id,
+            is_current_employee,
             snippet
           ) VALUES (
             contact_id,
@@ -59,6 +60,7 @@ BEGIN
             keyword,
             field_name,
             contact_record.current_company_id,
+            TRUE, -- Current position = current employee
             snippet_text
           );
         END IF;
@@ -86,6 +88,7 @@ BEGIN
               keyword_matched,
               source_field,
               company_id, -- Use the company_id from the previous position
+              is_current_employee,
               snippet
             ) VALUES (
               contact_id,
@@ -94,6 +97,7 @@ BEGIN
               keyword,
               'previous_position_' || (i+1) || '_description',
               prev_company_id,
+              FALSE, -- Previous position = alumni (ex-employee)
               snippet_text
             );
           END IF;
@@ -109,6 +113,7 @@ BEGIN
               keyword_matched,
               source_field,
               company_id,
+              is_current_employee,
               snippet
             ) VALUES (
               contact_id,
@@ -117,6 +122,7 @@ BEGIN
               keyword,
               'previous_position_' || (i+1),
               prev_company_id,
+              FALSE, -- Previous position = alumni (ex-employee)
               snippet_text
             );
           END IF;
@@ -147,6 +153,7 @@ BEGIN
               keyword_matched,
               source_field,
               company_id,
+              is_current_employee,
               snippet
             ) VALUES (
               contact_id,
@@ -155,6 +162,7 @@ BEGIN
               keyword,
               field_name,
               contact_record.current_company_id,
+              TRUE, -- Current position = current employee
               snippet_text
             );
         END IF;
@@ -181,6 +189,7 @@ BEGIN
               keyword_matched,
               source_field,
               company_id,
+              is_current_employee,
               snippet
             ) VALUES (
               contact_id,
@@ -189,6 +198,7 @@ BEGIN
               keyword,
               'previous_position_' || (i+1) || '_description',
               prev_company_id,
+              FALSE, -- Previous position = alumni (ex-employee)
               snippet_text
             );
           END IF;
@@ -203,6 +213,7 @@ BEGIN
               keyword_matched,
               source_field,
               company_id,
+              is_current_employee,
               snippet
             ) VALUES (
               contact_id,
@@ -211,6 +222,7 @@ BEGIN
               keyword,
               'previous_position_' || (i+1),
               prev_company_id,
+              FALSE, -- Previous position = alumni (ex-employee)
               snippet_text
             );
           END IF;
