@@ -157,7 +157,7 @@ $$;
 
 -- Function: Process Contact Signals (Optimized with Set-Based SQL and Snippets)
 DROP FUNCTION IF EXISTS public.process_contact_signals(UUID);
-CREATE OR REPLACE FUNCTION public.process_contact_signals(p_contact_id UUID)
+CREATE OR REPLACE FUNCTION public.process_contact_signals(contact_id UUID)
 RETURNS VOID
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -169,7 +169,7 @@ DECLARE
   v_company_id UUID;
 BEGIN
   -- Get contact data
-  SELECT * INTO v_contact FROM public.contacts WHERE id = p_contact_id;
+  SELECT * INTO v_contact FROM public.contacts WHERE id = contact_id;
   IF NOT FOUND THEN RETURN; END IF;
 
   -- 1. Analyze Current Position (Headline, About, Current Title, Current Description)
@@ -182,7 +182,7 @@ BEGIN
     -- Check Processes (Set-based)
     INSERT INTO public.signals (contact_id, company_id, signal_type, signal_id, keyword_matched, source_field, is_current_employee, snippet)
     SELECT 
-      p_contact_id, 
+      contact_id, 
       v_contact.current_company_id, 
       'process', 
       dp.id, 
@@ -198,7 +198,7 @@ BEGIN
     -- Check Products (Set-based)
     INSERT INTO public.signals (contact_id, company_id, signal_type, signal_id, keyword_matched, source_field, is_current_employee, snippet)
     SELECT 
-      p_contact_id, 
+      contact_id, 
       v_contact.current_company_id, 
       'technology', 
       dp.id, 
@@ -223,7 +223,7 @@ BEGIN
         -- Check Processes (Set-based)
         INSERT INTO public.signals (contact_id, company_id, signal_type, signal_id, keyword_matched, source_field, is_current_employee, snippet)
         SELECT 
-          p_contact_id, 
+          contact_id, 
           v_company_id, 
           'process', 
           dp.id, 
@@ -239,7 +239,7 @@ BEGIN
         -- Check Products (Set-based)
         INSERT INTO public.signals (contact_id, company_id, signal_type, signal_id, keyword_matched, source_field, is_current_employee, snippet)
         SELECT 
-          p_contact_id, 
+          contact_id, 
           v_company_id, 
           'technology', 
           dp.id, 
