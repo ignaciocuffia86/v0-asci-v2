@@ -5,6 +5,7 @@ import { Montserrat as V0_Font_Montserrat, Source_Serif_4 as V0_Font_Source_Seri
 import { Montserrat as V0_Font_Montserrat, Source_Serif_4 as V0_Font_Source_Serif_4 } from 'next/font/google'
 import { Montserrat as V0_Font_Montserrat, Source_Serif_4 as V0_Font_Source_Serif_4 } from 'next/font/google'
 import { Montserrat as V0_Font_Montserrat, Source_Serif_4 as V0_Font_Source_Serif_4 } from 'next/font/google'
+import { Montserrat as V0_Font_Montserrat, Source_Serif_4 as V0_Font_Source_Serif_4 } from 'next/font/google'
 
 // Initialize fonts
 const _montserrat = V0_Font_Montserrat({ subsets: ['latin'], weight: ["100","200","300","400","500","600","700","800","900"] })
