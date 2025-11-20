@@ -2,65 +2,53 @@
 
 import { createClient } from "@/lib/supabase/server"
 
-export async function processSignals(batchSize = 50) {
+export async function processSignals(batchSize = 10) {
   const supabase = await createClient()
 
-  // 1. Get pending contacts
-  const { data: contacts, error } = await supabase.from("contacts").select("id").eq("processed", false).limit(batchSize)
+  // Call the background processing function manually
+  // This function (process_pending_queue) picks the oldest pending batch and processes a chunk
+  const { data, error } = await supabase.rpc("process_pending_queue", {
+    p_limit: batchSize,
+  })
 
   if (error) {
-    console.error("Error fetching pending contacts:", error)
+    console.error("Error processing queue:", error)
     return { success: false, error: error.message }
   }
 
-  if (!contacts || contacts.length === 0) {
-    return { success: true, processed: 0, message: "No pending contacts found." }
-  }
-
-  let processedCount = 0
-  let errors = 0
-
-  // 2. Process each contact using the database function
-  // We call the RPC function for each contact.
-  // Ideally, we could make a batch RPC function, but this is safer for timeouts.
-  for (const contact of contacts) {
-    try {
-      const { error: rpcError } = await supabase.rpc("process_contact_signals", {
-        contact_id: contact.id,
-      })
-
-      if (rpcError) {
-        console.error(`Error processing contact ${contact.id}:`, rpcError)
-        errors++
-      } else {
-        processedCount++
-      }
-    } catch (e) {
-      console.error(`Exception processing contact ${contact.id}:`, e)
-      errors++
-    }
-  }
+  // data is the number of processed rows returned by the function
+  const processedCount = (data as number) || 0
 
   return {
     success: true,
     processed: processedCount,
-    errors,
-    remaining: contacts.length - processedCount - errors, // Should be 0 if batch finished
+    errors: 0, // Errors are handled internally by the SQL function (marked as failed rows)
+    remaining: 0, // The UI will fetch stats to see remaining
   }
 }
 
 export async function getProcessingStats() {
   const supabase = await createClient()
 
+  // Get pending rows from import_rows (the source of truth for the ETL)
   const { count: pendingCount } = await supabase
-    .from("contacts")
+    .from("import_rows")
     .select("*", { count: "exact", head: true })
-    .eq("processed", false)
+    .eq("status", "pending")
 
+  // Get total signals
   const { count: totalSignals } = await supabase.from("signals").select("*", { count: "exact", head: true })
+
+  // Check if there are any active batches (processing)
+  const { count: processingBatches } = await supabase
+    .from("import_batches")
+    .select("*", { count: "exact", head: true })
+    .eq("status", "processing")
 
   return {
     pending: pendingCount || 0,
     signals: totalSignals || 0,
+    // System is processing if there are pending rows or batches marked as processing
+    isSystemProcessing: (pendingCount || 0) > 0 || (processingBatches || 0) > 0,
   }
 }

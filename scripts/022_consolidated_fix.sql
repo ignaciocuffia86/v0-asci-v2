@@ -53,8 +53,9 @@ END $$;
 -- 3. Update Functions to Latest Logic
 
 -- Function: Process Contact Signals (Optimized & Prioritized)
+-- Renamed parameter to p_contact_id to avoid ambiguity
 DROP FUNCTION IF EXISTS public.process_contact_signals(UUID);
-CREATE OR REPLACE FUNCTION public.process_contact_signals(contact_id UUID)
+CREATE OR REPLACE FUNCTION public.process_contact_signals(p_contact_id UUID)
 RETURNS VOID
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -65,7 +66,7 @@ DECLARE
   v_company_id UUID;
 BEGIN
   -- Get contact data
-  SELECT * INTO v_contact FROM public.contacts WHERE id = contact_id;
+  SELECT * INTO v_contact FROM public.contacts WHERE id = p_contact_id;
   IF NOT FOUND THEN RETURN; END IF;
 
   -- ===================================================================
@@ -77,7 +78,7 @@ BEGIN
     -- PROCESSES: Try current_position_title first, then headline, then about
     INSERT INTO public.signals (contact_id, company_id, signal_type, signal_id, keyword_matched, source_field, is_current_employee, snippet)
     SELECT DISTINCT ON (dp.id)
-      contact_id,
+      p_contact_id,
       v_contact.current_company_id,
       'process',
       dp.id,
@@ -113,7 +114,7 @@ BEGIN
     -- PRODUCTS: Try current_position_title first, then headline, then about
     INSERT INTO public.signals (contact_id, company_id, signal_type, signal_id, keyword_matched, source_field, is_current_employee, snippet)
     SELECT DISTINCT ON (dp.id)
-      contact_id,
+      p_contact_id,
       v_contact.current_company_id,
       'technology',
       dp.id,
@@ -158,7 +159,7 @@ BEGIN
         -- PROCESSES
         INSERT INTO public.signals (contact_id, company_id, signal_type, signal_id, keyword_matched, source_field, is_current_employee, snippet)
         SELECT DISTINCT ON (dp.id)
-          contact_id,
+          p_contact_id,
           v_company_id,
           'process',
           dp.id,
@@ -177,7 +178,7 @@ BEGIN
         -- PRODUCTS
         INSERT INTO public.signals (contact_id, company_id, signal_type, signal_id, keyword_matched, source_field, is_current_employee, snippet)
         SELECT DISTINCT ON (dp.id)
-          contact_id,
+          p_contact_id,
           v_company_id,
           'technology',
           dp.id,
