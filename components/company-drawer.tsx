@@ -579,33 +579,49 @@ function SignalCard({ signal }: { signal: Signal }) {
 
                     let primaryEmail = null
                     let primaryEmailStatus = null
+                    let primaryEmailType = null
 
                     // 1. Main Job Priority
                     if (e1 && e1t === "main job") {
                       primaryEmail = e1
                       primaryEmailStatus = e1s
+                      primaryEmailType = e1t
                     } else if (e2 && e2t === "main job") {
                       primaryEmail = e2
                       primaryEmailStatus = e2s
+                      primaryEmailType = e2t
                     }
                     // 2. Job Priority
                     else if (e1 && e1t?.includes("job")) {
                       primaryEmail = e1
                       primaryEmailStatus = e1s
+                      primaryEmailType = e1t
                     } else if (e2 && e2t?.includes("job")) {
                       primaryEmail = e2
                       primaryEmailStatus = e2s
+                      primaryEmailType = e2t
                     }
                     // 3. Fallback
                     else if (e1) {
                       primaryEmail = e1
                       primaryEmailStatus = e1s
+                      primaryEmailType = e1t
                     } else if (e2) {
                       primaryEmail = e2
                       primaryEmailStatus = e2s
+                      primaryEmailType = e2t
+                    }
+
+                    const getEmailLabel = (type: string | null) => {
+                      if (!type) return null
+                      if (type.includes("job") || type === "main job") return "Laboral"
+                      if (type === "personal") return "Personal"
+                      return null
                     }
 
                     if (primaryEmail) {
+                      const emailLabel = getEmailLabel(primaryEmailType)
+
                       return (
                         <Badge
                           variant="outline"
@@ -619,6 +635,11 @@ function SignalCard({ signal }: { signal: Signal }) {
                           {primaryEmail}
                           {primaryEmailStatus === "valid" && (
                             <CheckCircle2 className="h-3 w-3 text-green-500 fill-green-100" />
+                          )}
+                          {emailLabel && (
+                            <span className="ml-1 text-[10px] font-semibold uppercase tracking-wider opacity-70 border-l border-blue-200 pl-1.5 leading-none">
+                              {emailLabel}
+                            </span>
                           )}
                         </Badge>
                       )
