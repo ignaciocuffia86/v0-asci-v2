@@ -1,6 +1,13 @@
+-- Drop any existing versions of the function to avoid signature conflicts
+DROP FUNCTION IF EXISTS public.auto_merge_safe_duplicates();
+DROP FUNCTION IF EXISTS public.auto_merge_safe_duplicates(INTEGER);
+
+-- Added explicit DROP statements to remove old function versions before creating new one
+
 -- Function to automatically merge safe duplicates
 -- Returns the number of groups merged
-CREATE OR REPLACE FUNCTION public.auto_merge_safe_duplicates()
+-- Added p_limit parameter to prevent timeouts
+CREATE OR REPLACE FUNCTION public.auto_merge_safe_duplicates(p_limit INTEGER DEFAULT 50)
 RETURNS INTEGER AS $$
 DECLARE
     group_record RECORD;
@@ -17,7 +24,8 @@ DECLARE
     candidate_master_score INTEGER;
     current_score INTEGER;
 BEGIN
-    -- Iterate over all groups with duplicates
+    -- Iterate over groups with duplicates, limited by p_limit
+    -- Added LIMIT to the query to process in batches
     FOR group_record IN 
         SELECT 
             normalized_name,
@@ -33,6 +41,7 @@ BEGIN
         WHERE normalized_name IS NOT NULL
         GROUP BY normalized_name
         HAVING COUNT(*) > 1
+        LIMIT p_limit
     LOOP
         companies_in_group := group_record.companies;
         
