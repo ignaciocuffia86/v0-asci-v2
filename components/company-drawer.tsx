@@ -6,7 +6,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
-import { Building2, Globe, Linkedin, Bookmark, ExternalLink } from "lucide-react"
+import { Building2, Globe, Linkedin, Bookmark } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
@@ -26,10 +26,16 @@ type Signal = {
   keyword_matched: string
   source_field: string
   snippet: string
+  is_current_employee: boolean // Added field
   contact: {
     full_name: string
     headline: string
     profile_picture_url: string | null
+    current_position_title: string | null // Added field
+    current_company: {
+      // Added field
+      name: string
+    } | null
   }
   signal_name: string
 }
@@ -83,10 +89,15 @@ export function CompanyDrawer({
         keyword_matched,
         source_field,
         snippet,
+        is_current_employee, 
         contacts:contact_id (
           full_name,
           headline,
-          profile_picture_url
+          profile_picture_url,
+          current_position_title,
+          current_company:current_company_id (
+            name
+          )
         )
       `)
       .eq("company_id", companyId)
@@ -98,7 +109,6 @@ export function CompanyDrawer({
     if (filterType === "process") {
       signalsQuery = signalsQuery.eq("is_current_employee", true)
     }
-    // </CHANGE>
 
     const { data: signalsData } = await signalsQuery.limit(50)
 
@@ -219,135 +229,291 @@ export function CompanyDrawer({
     }
   }
 
+  const getTagCloud = () => {
+    const tagCounts = new Map<string, number>()
+    signals.forEach((signal) => {
+      const keyword = signal.keyword_matched
+      tagCounts.set(keyword, (tagCounts.get(keyword) || 0) + 1)
+    })
+    return Array.from(tagCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+  }
+
+  const formatSourceField = (field: string, snippet?: string) => {
+    switch (field) {
+      case "about":
+        return "Acerca de"
+      case "current_position":
+        return "Posición Actual"
+      case "headline":
+        return "Titular"
+      case "previous_position":
+        // Try to extract position title from snippet if possible, or just generic
+        // The snippet usually contains "Title Description..."
+        // We can't easily parse the title back perfectly, but we can say "Posición Anterior"
+        // The user asked: "menciono %producto% cuando trabaja de "previous_position""
+        // We can try to use the snippet context or just say "Posición Anterior"
+        return "Posición Anterior"
+      default:
+        return field
+    }
+  }
+  // </CHANGE>
+
   if (!company) return null
 
   return (
     <Sheet open={isOpen} onOpenChange={onClose}>
-      <SheetContent className="w-full sm:max-w-2xl overflow-y-auto bg-white dark:bg-slate-950">
-        <SheetHeader>
-          <div className="flex items-start gap-4">
-            <div className="w-16 h-16 bg-muted rounded-lg flex items-center justify-center flex-shrink-0">
-              {company.logo_url ? (
-                <img
-                  src={company.logo_url || "/placeholder.svg"}
-                  alt={company.name}
-                  className="w-full h-full object-cover rounded-lg"
-                />
-              ) : (
-                <Building2 className="h-8 w-8 text-muted-foreground" />
-              )}
-            </div>
-            <div className="flex-1">
-              <SheetTitle className="text-2xl">{company.name}</SheetTitle>
-              <SheetDescription className="mt-1">
-                {company.industry && <span>{company.industry}</span>}
-                {company.country && <span> · {company.country}</span>}
+      <SheetContent className="w-full sm:max-w-3xl overflow-y-auto bg-white dark:bg-slate-950 p-0">
+        <div className="p-6">
+          <SheetHeader className="space-y-4 pb-6">
+            <div className="flex items-start gap-6">
+              <div className="w-24 h-24 bg-gradient-to-br from-primary/10 to-primary/5 rounded-xl flex items-center justify-center flex-shrink-0 border border-primary/10 shadow-sm">
+                {company.logo_url ? (
+                  <img
+                    src={company.logo_url || "/placeholder.svg"}
+                    alt={company.name}
+                    className="w-full h-full object-contain rounded-xl p-2"
+                  />
+                ) : (
+                  <Building2 className="h-10 w-10 text-primary/60" />
+                )}
+              </div>
+              <div className="flex-1 space-y-3">
+                <div>
+                  <SheetTitle className="text-3xl font-bold text-slate-900 dark:text-slate-100">
+                    {company.name}
+                  </SheetTitle>
+                  <SheetDescription className="mt-2 text-base flex items-center gap-2">
+                    {company.industry && (
+                      <span className="font-medium text-slate-700 dark:text-slate-300">{company.industry}</span>
+                    )}
+                    {company.country && (
+                      <>
+                        <span className="text-slate-300">•</span>
+                        <span className="text-slate-600 dark:text-slate-400">{company.country}</span>
+                      </>
+                    )}
+                  </SheetDescription>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  {company.website && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-9 bg-white dark:bg-slate-900 hover:bg-slate-50"
+                      asChild
+                    >
+                      <a href={company.website} target="_blank" rel="noopener noreferrer">
+                        <Globe className="h-4 w-4 mr-2 text-slate-500" />
+                        Sitio Web
+                      </a>
+                    </Button>
+                  )}
+                  {company.linkedin_url && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-9 bg-white dark:bg-slate-900 hover:bg-slate-50"
+                      asChild
+                    >
+                      <a href={company.linkedin_url} target="_blank" rel="noopener noreferrer">
+                        <Linkedin className="h-4 w-4 mr-2 text-[#0077b5]" />
+                        LinkedIn
+                      </a>
+                    </Button>
+                  )}
+                  <Button
+                    variant={isBookmarked ? "default" : "outline"}
+                    size="sm"
+                    className={`h-9 ml-auto ${isBookmarked ? "bg-primary text-primary-foreground" : "bg-white dark:bg-slate-900"}`}
+                    onClick={handleBookmark}
+                  >
+                    <Bookmark className={`h-4 w-4 mr-2 ${isBookmarked ? "fill-current" : ""}`} />
+                    {isBookmarked ? "Guardado" : "Guardar"}
+                  </Button>
+                </div>
+
+                {signals.length > 0 && (
+                  <div className="pt-2">
+                    <div className="flex flex-wrap gap-2">
+                      {getTagCloud().map(([keyword, count]) => (
+                        <Badge
+                          key={keyword}
+                          variant="secondary"
+                          className="px-2.5 py-0.5 text-xs font-medium bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200 transition-colors"
+                        >
+                          {keyword} <span className="ml-1 text-slate-400 font-normal">{count}</span>
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {/* </CHANGE> */}
+
                 {filterType && (
-                  <div className="mt-2">
-                    <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20">
+                  <div className="pt-1">
+                    <Badge
+                      variant="outline"
+                      className="bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-800 shadow-sm"
+                    >
                       Filtrado por {filterType === "process" ? "Proceso" : "Tecnología"}
                     </Badge>
                   </div>
                 )}
-              </SheetDescription>
-              <div className="flex gap-2 mt-3">
-                {company.website && (
-                  <Button variant="outline" size="sm" asChild>
-                    <a href={company.website} target="_blank" rel="noopener noreferrer">
-                      <Globe className="h-3 w-3 mr-1" />
-                      Web
-                    </a>
-                  </Button>
-                )}
-                {company.linkedin_url && (
-                  <Button variant="outline" size="sm" asChild>
-                    <a href={company.linkedin_url} target="_blank" rel="noopener noreferrer">
-                      <Linkedin className="h-3 w-3 mr-1" />
-                      LinkedIn
-                    </a>
-                  </Button>
-                )}
               </div>
             </div>
-            <Button variant={isBookmarked ? "default" : "outline"} size="sm" onClick={handleBookmark}>
-              <Bookmark className={`h-4 w-4 ${isBookmarked ? "fill-current" : ""}`} />
-            </Button>
-          </div>
-        </SheetHeader>
+          </SheetHeader>
 
-        <Separator className="my-6" />
+          <Separator className="mb-6" />
 
-        <Tabs defaultValue="signals" className="w-full">
-          <TabsList className="w-full">
-            <TabsTrigger value="signals" className="flex-1">
-              Señales ({signals.length})
-            </TabsTrigger>
-            <TabsTrigger value="contacts" className="flex-1">
-              Contactos ({contacts.length})
-            </TabsTrigger>
-          </TabsList>
+          <Tabs defaultValue="signals" className="w-full">
+            <TabsList className="w-full grid grid-cols-2 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
+              <TabsTrigger
+                value="signals"
+                className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm"
+              >
+                Señales{" "}
+                <span className="ml-1.5 text-xs opacity-70 bg-slate-200 dark:bg-slate-700 px-1.5 py-0.5 rounded-full">
+                  {signals.length}
+                </span>
+              </TabsTrigger>
+              <TabsTrigger
+                value="contacts"
+                className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm"
+              >
+                Contactos{" "}
+                <span className="ml-1.5 text-xs opacity-70 bg-slate-200 dark:bg-slate-700 px-1.5 py-0.5 rounded-full">
+                  {contacts.length}
+                </span>
+              </TabsTrigger>
+            </TabsList>
 
-          <TabsContent value="signals" className="space-y-4 mt-4">
-            {signals.map((signal) => (
-              <div key={signal.id} className="border rounded-lg p-4 space-y-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <Avatar className="h-8 w-8">
-                      <AvatarImage src={signal.contact?.profile_picture_url || undefined} />
-                      <AvatarFallback>{signal.contact?.full_name?.charAt(0) || "?"}</AvatarFallback>
+            <TabsContent value="signals" className="space-y-4 mt-6">
+              {signals.map((signal) => (
+                <div
+                  key={signal.id}
+                  className="group border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-4 hover:border-primary/30 hover:shadow-md transition-all bg-white dark:bg-slate-900"
+                >
+                  <div className="flex items-start gap-4">
+                    <Avatar className="h-14 w-14 border-2 border-white shadow-sm ring-1 ring-slate-100">
+                      <AvatarImage src={signal.contact?.profile_picture_url || undefined} className="object-cover" />
+                      <AvatarFallback className="text-lg font-semibold bg-slate-100 text-slate-600">
+                        {signal.contact?.full_name?.charAt(0) || "?"}
+                      </AvatarFallback>
                     </Avatar>
-                    <div>
-                      <div className="font-medium text-sm">{signal.contact?.full_name}</div>
-                      <div className="text-xs text-muted-foreground">{signal.contact?.headline}</div>
+                    <div className="flex-1 min-w-0 pt-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="font-bold text-lg text-slate-900 dark:text-slate-100 truncate">
+                          {signal.contact?.full_name}
+                        </div>
+                        <Badge
+                          variant={signal.signal_type === "technology" ? "default" : "secondary"}
+                          className="shrink-0 shadow-sm"
+                        >
+                          {signal.signal_type === "technology" ? "Tech" : "Proceso"}
+                        </Badge>
+                      </div>
+
+                      <div className="text-sm text-slate-500 truncate font-medium">{signal.contact?.headline}</div>
+
+                      {!signal.is_current_employee && signal.contact?.current_company && (
+                        <div className="text-xs text-amber-600 dark:text-amber-400 mt-1 flex items-center gap-1 font-medium">
+                          <span>
+                            Ex-empleado • Actualmente {signal.contact.current_position_title || "trabaja"} en{" "}
+                            {signal.contact.current_company.name}
+                          </span>
+                        </div>
+                      )}
+                      {/* </CHANGE> */}
                     </div>
                   </div>
-                  <Badge variant={signal.signal_type === "technology" ? "default" : "secondary"}>
-                    {signal.signal_type === "technology" ? "Tech" : "Proceso"}
-                  </Badge>
-                </div>
-                <div className="text-sm">
-                  <span className="font-semibold text-primary">"{signal.keyword_matched}"</span>
-                  {" en "}
-                  <span className="text-muted-foreground">{signal.source_field}</span>
-                </div>
-                <div className="text-sm text-muted-foreground bg-muted/30 p-2 rounded italic">
-                  ...{signal.snippet}...
-                </div>
-              </div>
-            ))}
-            {signals.length === 0 && (
-              <div className="text-center py-8 text-muted-foreground">No hay señales disponibles</div>
-            )}
-          </TabsContent>
 
-          <TabsContent value="contacts" className="space-y-3 mt-4">
-            {contacts.map((contact) => (
-              <div key={contact.id} className="border rounded-lg p-4 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <Avatar>
-                    <AvatarImage src={contact.profile_picture_url || undefined} />
-                    <AvatarFallback>{contact.full_name.charAt(0)}</AvatarFallback>
-                  </Avatar>
-                  <div>
-                    <div className="font-medium">{contact.full_name}</div>
-                    <div className="text-sm text-muted-foreground">{contact.headline}</div>
+                  <div className="bg-slate-50 dark:bg-slate-900/50 rounded-lg p-4 border border-slate-100 dark:border-slate-800">
+                    <div className="flex items-center gap-2 flex-wrap mb-2">
+                      <span className="text-sm text-slate-500">Mencionó:</span>
+                      <Badge className="px-3 py-1 bg-primary/10 text-primary hover:bg-primary/20 border-primary/20 shadow-sm text-sm font-semibold">
+                        {signal.keyword_matched}
+                      </Badge>
+                      <span className="text-sm text-slate-500">
+                        en{" "}
+                        <span className="font-medium text-slate-700 dark:text-slate-300">
+                          {signal.source_field === "previous_position"
+                            ? `su posición anterior`
+                            : formatSourceField(signal.source_field)}
+                        </span>
+                      </span>
+                    </div>
+
+                    {signal.snippet && (
+                      <div className="text-sm text-slate-600 dark:text-slate-400 italic leading-relaxed pl-3 border-l-2 border-primary/30">
+                        "{signal.snippet}"
+                      </div>
+                    )}
                   </div>
                 </div>
-                <div className="flex items-center gap-3">
-                  <Badge variant="outline">{contact.signal_count} señales</Badge>
-                  <Button variant="ghost" size="sm" asChild>
-                    <a href={contact.linkedin_url} target="_blank" rel="noopener noreferrer">
-                      <ExternalLink className="h-3 w-3" />
-                    </a>
-                  </Button>
+              ))}
+              {signals.length === 0 && (
+                <div className="text-center py-16 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                  <Building2 className="h-12 w-12 mx-auto mb-3 text-slate-300" />
+                  <p className="text-slate-500 font-medium">No hay señales disponibles</p>
                 </div>
-              </div>
-            ))}
-            {contacts.length === 0 && (
-              <div className="text-center py-8 text-muted-foreground">No hay contactos disponibles</div>
-            )}
-          </TabsContent>
-        </Tabs>
+              )}
+            </TabsContent>
+
+            <TabsContent value="contacts" className="space-y-3 mt-6">
+              {contacts.map((contact) => (
+                <div
+                  key={contact.id}
+                  className="border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex items-center justify-between hover:border-primary/30 hover:shadow-sm transition-all bg-white dark:bg-slate-900"
+                >
+                  <div className="flex items-center gap-4 flex-1 min-w-0">
+                    <Avatar className="h-12 w-12 border border-slate-100 shadow-sm">
+                      <AvatarImage src={contact.profile_picture_url || undefined} className="object-cover" />
+                      <AvatarFallback className="text-base font-semibold bg-slate-100 text-slate-600">
+                        {contact.full_name.charAt(0)}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold text-base text-slate-900 dark:text-slate-100 truncate">
+                        {contact.full_name}
+                      </div>
+                      <div className="text-sm text-slate-500 truncate">{contact.headline}</div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <Badge
+                      variant="secondary"
+                      className="px-2.5 py-0.5 bg-slate-100 text-slate-600 border-slate-200 shadow-sm"
+                    >
+                      {contact.signal_count} {contact.signal_count === 1 ? "señal" : "señales"}
+                    </Badge>
+                    {contact.linkedin_url && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-slate-400 hover:text-[#0077b5] hover:bg-blue-50"
+                        asChild
+                      >
+                        <a href={contact.linkedin_url} target="_blank" rel="noopener noreferrer">
+                          <Linkedin className="h-4 w-4" />
+                        </a>
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {contacts.length === 0 && (
+                <div className="text-center py-16 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                  <Building2 className="h-12 w-12 mx-auto mb-3 text-slate-300" />
+                  <p className="text-slate-500 font-medium">No hay contactos disponibles</p>
+                </div>
+              )}
+            </TabsContent>
+          </Tabs>
+        </div>
       </SheetContent>
     </Sheet>
   )
