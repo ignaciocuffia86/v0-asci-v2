@@ -83,15 +83,26 @@ export async function getCompanySignalSummary(companyId: string): Promise<Compan
 export async function searchCompaniesByName(query: string) {
   const supabase = await createClient()
 
-  const { data, error } = await supabase
-    .from("companies")
-    .select("id, name, logo_url, country, industry")
-    .ilike("name", `%${query}%`)
-    .limit(10)
+  const { data, error } = await supabase.rpc("search_companies_by_name_filtered", {
+    p_query_text: query,
+    p_limit: 10,
+  })
 
   if (error) {
-    console.error("Error searching companies:", error)
-    return []
+    // Fallback to simpler query if RPC fails or doesn't exist yet (during migration)
+    console.error("Error using RPC search, falling back to basic search:", error)
+    const { data: fallbackData, error: fallbackError } = await supabase
+      .from("companies")
+      .select("id, name, logo_url, country, industry, linkedin_url")
+      .ilike("name", `%${query}%`)
+      .not("linkedin_url", "is", null)
+      .limit(10)
+
+    if (fallbackError) {
+      console.error("Error searching companies (fallback):", fallbackError)
+      return []
+    }
+    return fallbackData
   }
 
   return data
