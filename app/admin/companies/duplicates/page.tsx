@@ -1,7 +1,12 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { getPotentialDuplicates, mergeCompanies, type CompanyDuplicateGroup } from "@/app/actions/companies"
+import {
+  getPotentialDuplicates,
+  mergeCompanies,
+  autoMergeSafeDuplicates,
+  type CompanyDuplicateGroup,
+} from "@/app/actions/companies"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -22,6 +27,7 @@ import {
 export default function DuplicatesPage() {
   const [duplicates, setDuplicates] = useState<CompanyDuplicateGroup[]>([])
   const [loading, setLoading] = useState(true)
+  const [processing, setProcessing] = useState(false)
   const { toast } = useToast()
 
   const fetchDuplicates = async () => {
@@ -43,6 +49,36 @@ export default function DuplicatesPage() {
   useEffect(() => {
     fetchDuplicates()
   }, [])
+
+  const handleAutoMerge = async () => {
+    if (
+      !confirm("Are you sure? This will automatically merge all groups where it's safe (single or no LinkedIn URL).")
+    ) {
+      return
+    }
+
+    setProcessing(true)
+    try {
+      const result = await autoMergeSafeDuplicates()
+      if (result.success) {
+        toast({
+          title: "Auto-merge complete",
+          description: `Successfully merged ${result.count} groups.`,
+        })
+        fetchDuplicates()
+      } else {
+        throw new Error(result.error)
+      }
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to auto-merge duplicates",
+        variant: "destructive",
+      })
+    } finally {
+      setProcessing(false)
+    }
+  }
 
   const handleMerge = async (masterId: string, duplicateId: string) => {
     try {
@@ -73,9 +109,14 @@ export default function DuplicatesPage() {
     <div className="space-y-6 p-6">
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-bold">Company Deduplication</h1>
-        <Button onClick={fetchDuplicates} variant="outline">
-          Refresh
-        </Button>
+        <div className="space-x-2">
+          <Button onClick={fetchDuplicates} variant="outline" disabled={loading || processing}>
+            Refresh
+          </Button>
+          <Button onClick={handleAutoMerge} disabled={loading || processing || duplicates.length === 0}>
+            {processing ? "Processing..." : "Auto-Merge Safe Matches"}
+          </Button>
+        </div>
       </div>
 
       {duplicates.length === 0 ? (

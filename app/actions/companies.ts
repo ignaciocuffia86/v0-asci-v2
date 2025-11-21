@@ -39,3 +39,19 @@ export async function mergeCompanies(masterId: string, duplicateId: string) {
 
   revalidatePath("/admin/companies/duplicates")
 }
+
+export async function autoMergeSafeDuplicates() {
+  const supabase = await createClient()
+
+  try {
+    const { data, error } = await supabase.rpc("auto_merge_safe_duplicates")
+
+    if (error) throw error
+
+    revalidatePath("/admin/companies/duplicates")
+    return { success: true, count: data }
+  } catch (error) {
+    console.error("Error auto-merging duplicates:", error)
+    return { success: false, error: "Failed to auto-merge duplicates" }
+  }
+}
