@@ -41,12 +41,14 @@ SET normalized_name = normalize_company_name(name)
 WHERE normalized_name IS NULL;
 
 -- 4. Update upsert_company function to use robust logic
+-- Added DEFAULT NULL to p_linkedin_url to match existing function signature
 CREATE OR REPLACE FUNCTION public.upsert_company(
   p_name TEXT,
-  p_linkedin_url TEXT,
+  p_linkedin_url TEXT DEFAULT NULL,
   p_website TEXT DEFAULT NULL,
   p_industry TEXT DEFAULT NULL,
-  p_country TEXT DEFAULT NULL
+  p_country TEXT DEFAULT NULL,
+  p_logo_url TEXT DEFAULT NULL
 ) RETURNS UUID AS $$
 DECLARE
   v_company_id UUID;
@@ -84,7 +86,8 @@ BEGIN
         END,
         website = COALESCE(website, p_website),
         industry = COALESCE(industry, p_industry),
-        country = COALESCE(country, p_country)
+        country = COALESCE(country, p_country),
+        logo_url = COALESCE(logo_url, p_logo_url)
       WHERE id = v_company_id;
       
       RETURN v_company_id;
@@ -103,7 +106,8 @@ BEGIN
         linkedin_url = COALESCE(linkedin_url, v_clean_linkedin_url),
         website = COALESCE(website, p_website),
         industry = COALESCE(industry, p_industry),
-        country = COALESCE(country, p_country)
+        country = COALESCE(country, p_country),
+        logo_url = COALESCE(logo_url, p_logo_url)
       WHERE id = v_company_id;
       
       RETURN v_company_id;
@@ -142,14 +146,16 @@ BEGIN
     linkedin_url, 
     website, 
     industry, 
-    country
+    country,
+    logo_url
   ) VALUES (
     p_name, 
     v_normalized_name, 
     v_clean_linkedin_url, 
     p_website, 
     p_industry, 
-    p_country
+    p_country,
+    p_logo_url
   )
   ON CONFLICT (linkedin_url) DO UPDATE 
   SET updated_at = NOW() 
