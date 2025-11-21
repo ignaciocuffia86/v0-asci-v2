@@ -1,0 +1,177 @@
+"use client"
+
+import { useState, useEffect } from "react"
+import { useParams, useRouter } from "next/navigation"
+import { createClient } from "@/lib/supabase/client"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { ArrowLeft, Building2, Globe, Linkedin, Search, Users, Sparkles } from "lucide-react"
+import Link from "next/link"
+
+// Components for each tab (will be implemented fully in next steps)
+import { BookmarkOverview } from "./_components/overview-tab"
+import { BookmarkSignals } from "./_components/signals-tab"
+import { BookmarkContacts } from "./_components/contacts-tab"
+import { BookmarkIcebreakers } from "./_components/icebreakers-tab"
+
+export default function BookmarkWorkspacePage() {
+  const params = useParams()
+  const router = useRouter()
+  const companyId = params.id as string
+  const [company, setCompany] = useState<any>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const supabase = createClient()
+
+  useEffect(() => {
+    const fetchCompany = async () => {
+      setIsLoading(true)
+      const { data, error } = await supabase.from("companies").select("*").eq("id", companyId).single()
+
+      if (error) {
+        console.error("Error fetching company:", error)
+        // Handle error (maybe redirect back to bookmarks)
+      } else {
+        setCompany(data)
+      }
+      setIsLoading(false)
+    }
+
+    if (companyId) {
+      fetchCompany()
+    }
+  }, [companyId])
+
+  if (isLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+      </div>
+    )
+  }
+
+  if (!company) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen space-y-4">
+        <h2 className="text-xl font-semibold">Empresa no encontrada</h2>
+        <Button onClick={() => router.push("/bookmarks")}>Volver a mis bookmarks</Button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col h-full bg-background">
+      {/* Header */}
+      <header className="border-b bg-card px-6 py-4">
+        <div className="flex items-center gap-4 mb-4">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => router.push("/bookmarks")}
+            className="pl-0 hover:pl-2 transition-all"
+          >
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Volver
+          </Button>
+        </div>
+
+        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+          <div className="flex items-start gap-4">
+            <div className="h-16 w-16 bg-muted rounded-lg border flex items-center justify-center overflow-hidden">
+              {company.logo_url ? (
+                <img
+                  src={company.logo_url || "/placeholder.svg"}
+                  alt={company.name}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <Building2 className="h-8 w-8 text-muted-foreground" />
+              )}
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight">{company.name}</h1>
+              <div className="flex items-center gap-2 text-muted-foreground mt-1">
+                <span>{company.industry || "Industria no especificada"}</span>
+                {company.country && (
+                  <>
+                    <span>•</span>
+                    <span>{company.country}</span>
+                  </>
+                )}
+              </div>
+              <div className="flex items-center gap-2 mt-2">
+                {company.website && (
+                  <Button variant="outline" size="xs" asChild className="h-7 text-xs bg-transparent">
+                    <Link href={company.website} target="_blank">
+                      <Globe className="h-3 w-3 mr-1" />
+                      Website
+                    </Link>
+                  </Button>
+                )}
+                {company.linkedin_url && (
+                  <Button variant="outline" size="xs" asChild className="h-7 text-xs bg-transparent">
+                    <Link href={company.linkedin_url} target="_blank">
+                      <Linkedin className="h-3 w-3 mr-1" />
+                      LinkedIn
+                    </Link>
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">{/* Future global actions */}</div>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="flex-1 p-6 overflow-auto">
+        <Tabs defaultValue="overview" className="space-y-6">
+          <TabsList className="bg-muted/50 p-1">
+            <TabsTrigger value="overview" className="gap-2">
+              <Building2 className="h-4 w-4" />
+              Resumen
+            </TabsTrigger>
+            <TabsTrigger value="signals" className="gap-2">
+              <Search className="h-4 w-4" />
+              Investigación
+              <Badge variant="secondary" className="ml-1 text-[10px] px-1 h-4">
+                Privado
+              </Badge>
+            </TabsTrigger>
+            <TabsTrigger value="prospects" className="gap-2">
+              <Users className="h-4 w-4" />
+              Prospectos
+              <Badge variant="secondary" className="ml-1 text-[10px] px-1 h-4">
+                Privado
+              </Badge>
+            </TabsTrigger>
+            <TabsTrigger value="icebreakers" className="gap-2">
+              <Sparkles className="h-4 w-4 text-amber-500" />
+              Icebreakers
+              <Badge variant="secondary" className="ml-1 text-[10px] px-1 h-4">
+                AI
+              </Badge>
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="overview" className="m-0 focus-visible:ring-0">
+            <BookmarkOverview company={company} />
+          </TabsContent>
+
+          <TabsContent value="signals" className="m-0 focus-visible:ring-0">
+            <BookmarkSignals companyId={companyId} />
+          </TabsContent>
+
+          <TabsContent value="prospects" className="m-0 focus-visible:ring-0">
+            <BookmarkContacts companyId={companyId} />
+          </TabsContent>
+
+          <TabsContent value="icebreakers" className="m-0 focus-visible:ring-0">
+            <BookmarkIcebreakers companyId={companyId} companyName={company.name} />
+          </TabsContent>
+        </Tabs>
+      </main>
+    </div>
+  )
+}
