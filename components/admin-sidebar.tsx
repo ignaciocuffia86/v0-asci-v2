@@ -1,12 +1,12 @@
-"use client";
+"use client"
 
-import Link from "next/link";
-import { usePathname } from 'next/navigation';
-import { cn } from "@/lib/utils";
-import { LayoutDashboard, Upload, BookOpen, Activity, FileText, LogOut, Search } from 'lucide-react';
-import { Button } from "@/components/ui/button";
-import { createClient } from "@/lib/supabase/client";
-import { useRouter } from 'next/navigation';
+import Link from "next/link"
+import { usePathname } from "next/navigation"
+import { cn } from "@/lib/utils"
+import { Upload, BookOpen, Activity, FileText, LogOut, Search, Building2 } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { createClient } from "@/lib/supabase/client"
+import { useRouter } from "next/navigation"
 
 const sidebarItems = [
   {
@@ -20,6 +20,11 @@ const sidebarItems = [
     icon: BookOpen,
   },
   {
+    title: "Compañías",
+    href: "/admin/companies/duplicates",
+    icon: Building2,
+  },
+  {
     title: "Procesamiento",
     href: "/admin/processing",
     icon: Activity,
@@ -29,17 +34,17 @@ const sidebarItems = [
     href: "/admin/logs",
     icon: FileText,
   },
-];
+]
 
 export function AdminSidebar() {
-  const pathname = usePathname();
-  const router = useRouter();
-  const supabase = createClient();
+  const pathname = usePathname()
+  const router = useRouter()
+  const supabase = createClient()
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
-    router.push("/auth/login");
-  };
+    await supabase.auth.signOut()
+    router.push("/auth/login")
+  }
 
   return (
     <aside className="w-64 bg-sidebar border-r border-sidebar-border flex flex-col h-screen sticky top-0">
@@ -55,27 +60,22 @@ export function AdminSidebar() {
       <div className="flex-1 py-6 px-4 flex flex-col gap-2">
         <div className="mb-4">
           <Link href="/search">
-            <Button
-              variant="outline"
-              className="w-full justify-start gap-2"
-            >
+            <Button variant="outline" className="w-full justify-start gap-2 bg-transparent">
               <Search className="h-4 w-4" />
               Volver a Búsqueda
             </Button>
           </Link>
         </div>
-        
-        <div className="text-xs font-semibold text-muted-foreground mb-2 px-2 uppercase tracking-wider">
-          Gestión
-        </div>
-        
+
+        <div className="text-xs font-semibold text-muted-foreground mb-2 px-2 uppercase tracking-wider">Gestión</div>
+
         {sidebarItems.map((item) => (
           <Link key={item.href} href={item.href}>
             <Button
               variant={pathname === item.href ? "secondary" : "ghost"}
               className={cn(
                 "w-full justify-start gap-2",
-                pathname === item.href && "bg-sidebar-accent text-sidebar-accent-foreground"
+                pathname === item.href && "bg-sidebar-accent text-sidebar-accent-foreground",
               )}
             >
               <item.icon className="h-4 w-4" />
@@ -96,5 +96,5 @@ export function AdminSidebar() {
         </Button>
       </div>
     </aside>
-  );
+  )
 }
