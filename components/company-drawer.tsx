@@ -30,6 +30,7 @@ type Signal = {
   is_current_employee: boolean
   company_id: string
   contact_id: string
+  signal_id: string
   contact: {
     id?: string // Added id to contact
     name: string // Changed full_name to name for consistency or handle mapping
@@ -122,6 +123,7 @@ export function CompanyDrawer({
         is_current_employee,
         company_id,
         contact_id,
+        signal_id,
         contacts:contact_id (
           id,
           full_name,
@@ -142,8 +144,9 @@ export function CompanyDrawer({
       `)
       .eq("company_id", companyId)
 
-    // Don't filter by signal_id here - we'll filter after getting the data
-    // The filterSignalIds are dictionary IDs (process/product), not signal row IDs
+    if (filterSignalIds && filterSignalIds.length > 0) {
+      signalsQuery = signalsQuery.in("signal_id", filterSignalIds)
+    }
 
     if (filterType === "process") {
       signalsQuery = signalsQuery.eq("is_current_employee", true)
@@ -156,7 +159,7 @@ export function CompanyDrawer({
 
     // Enrich with signal names
     if (signalsData) {
-      let enrichedSignals = await Promise.all(
+      const enrichedSignals = await Promise.all(
         signalsData.map(async (signal: any) => {
           const signalName = signal.keyword_matched
 
@@ -171,35 +174,6 @@ export function CompanyDrawer({
           }
         }),
       )
-
-      if (filterSignalIds && filterSignalIds.length > 0) {
-        // Filter signals based on dictionary matches
-        // For processes: check if keyword_matched is in the dictionary_processes names
-        // For products: check if keyword_matched is in the dictionary_products names
-
-        // We need to fetch the dictionary names for the given IDs
-        if (filterType === "process") {
-          const { data: processNames } = await supabase
-            .from("dictionary_processes")
-            .select("name")
-            .in("id", filterSignalIds)
-
-          const processNameSet = new Set(processNames?.map((p) => p.name.toLowerCase()) || [])
-          console.log("[v0] Process names to filter:", Array.from(processNameSet))
-
-          enrichedSignals = enrichedSignals.filter((s) => processNameSet.has(s.keyword_matched.toLowerCase()))
-        } else if (filterType === "technology") {
-          const { data: productNames } = await supabase
-            .from("dictionary_products")
-            .select("name")
-            .in("id", filterSignalIds)
-
-          const productNameSet = new Set(productNames?.map((p) => p.name.toLowerCase()) || [])
-          console.log("[v0] Product names to filter:", Array.from(productNameSet))
-
-          enrichedSignals = enrichedSignals.filter((s) => productNameSet.has(s.keyword_matched.toLowerCase()))
-        }
-      }
 
       console.log("[v0] Enriched signals after filter:", enrichedSignals.length)
       setSignals(enrichedSignals as any)
@@ -590,75 +564,67 @@ function SignalCard({ signal }: { signal: Signal }) {
               {/* Contact Info Badges */}
               {signal.is_current_employee && (
                 <div className="flex flex-wrap gap-2 mt-2.5">
-                  {/* Corporate Email */}
-                  {(signal.contact.email1_type?.includes("job") || signal.contact.email1_type === "main job") &&
-                  signal.contact.email1 ? (
-                    <Badge
-                      variant="outline"
-                      className="font-normal bg-blue-50 text-blue-700 border-blue-100 hover:bg-blue-100 cursor-pointer gap-1.5 py-0.5 pl-2 pr-1.5 h-6 transition-colors"
-                      onClick={() => {
-                        navigator.clipboard.writeText(signal.contact.email1 || "")
-                        toast({ title: "Copiado", description: "Email copiado al portapapeles" })
-                      }}
-                    >
-                      <Mail className="h-3 w-3" />
-                      {signal.contact.email1}
-                      {signal.contact.email1_status === "valid" && (
-                        <CheckCircle2 className="h-3 w-3 text-green-500 fill-green-100" />
-                      )}
-                    </Badge>
-                  ) : (signal.contact.email2_type?.includes("job") || signal.contact.email2_type === "main job") &&
-                    signal.contact.email2 ? (
-                    <Badge
-                      variant="outline"
-                      className="font-normal bg-blue-50 text-blue-700 border-blue-100 hover:bg-blue-100 cursor-pointer gap-1.5 py-0.5 pl-2 pr-1.5 h-6 transition-colors"
-                      onClick={() => {
-                        navigator.clipboard.writeText(signal.contact.email2 || "")
-                        toast({ title: "Copiado", description: "Email copiado al portapapeles" })
-                      }}
-                    >
-                      <Mail className="h-3 w-3" />
-                      {signal.contact.email2}
-                      {signal.contact.email2_status === "valid" && (
-                        <CheckCircle2 className="h-3 w-3 text-green-500 fill-green-100" />
-                      )}
-                    </Badge>
-                  ) : null}
+                  {/* Corporate Email Prioritization Logic:
+                    1. Check for 'main job' type in either email1 or email2
+                    2. If not found, check for any 'job' type
+                    3. Fallback to personal/other
+                  */}
+                  {(() => {
+                    const e1 = signal.contact.email1
+                    const e1t = signal.contact.email1_type
+                    const e1s = signal.contact.email1_status
+                    const e2 = signal.contact.email2
+                    const e2t = signal.contact.email2_type
+                    const e2s = signal.contact.email2_status
 
-                  {/* Personal Email (Fallback) */}
-                  {!(
-                    (signal.contact.email1_type?.includes("job") || signal.contact.email1_type === "main job") &&
-                    signal.contact.email1
-                  ) &&
-                    !(
-                      (signal.contact.email2_type?.includes("job") || signal.contact.email2_type === "main job") &&
-                      signal.contact.email2
-                    ) &&
-                    (signal.contact.email1 ? (
-                      <Badge
-                        variant="outline"
-                        className="font-normal cursor-pointer gap-1.5 py-0.5 px-2 h-6 hover:bg-slate-50"
-                        onClick={() => {
-                          navigator.clipboard.writeText(signal.contact.email1 || "")
-                          toast({ title: "Copiado", description: "Email copiado al portapapeles" })
-                        }}
-                      >
-                        <Mail className="h-3 w-3 text-muted-foreground" />
-                        {signal.contact.email1}
-                      </Badge>
-                    ) : signal.contact.email2 ? (
-                      <Badge
-                        variant="outline"
-                        className="font-normal cursor-pointer gap-1.5 py-0.5 px-2 h-6 hover:bg-slate-50"
-                        onClick={() => {
-                          navigator.clipboard.writeText(signal.contact.email2 || "")
-                          toast({ title: "Copiado", description: "Email copiado al portapapeles" })
-                        }}
-                      >
-                        <Mail className="h-3 w-3 text-muted-foreground" />
-                        {signal.contact.email2}
-                      </Badge>
-                    ) : null)}
+                    let primaryEmail = null
+                    let primaryEmailStatus = null
+
+                    // 1. Main Job Priority
+                    if (e1 && e1t === "main job") {
+                      primaryEmail = e1
+                      primaryEmailStatus = e1s
+                    } else if (e2 && e2t === "main job") {
+                      primaryEmail = e2
+                      primaryEmailStatus = e2s
+                    }
+                    // 2. Job Priority
+                    else if (e1 && e1t?.includes("job")) {
+                      primaryEmail = e1
+                      primaryEmailStatus = e1s
+                    } else if (e2 && e2t?.includes("job")) {
+                      primaryEmail = e2
+                      primaryEmailStatus = e2s
+                    }
+                    // 3. Fallback
+                    else if (e1) {
+                      primaryEmail = e1
+                      primaryEmailStatus = e1s
+                    } else if (e2) {
+                      primaryEmail = e2
+                      primaryEmailStatus = e2s
+                    }
+
+                    if (primaryEmail) {
+                      return (
+                        <Badge
+                          variant="outline"
+                          className="font-normal bg-blue-50 text-blue-700 border-blue-100 hover:bg-blue-100 cursor-pointer gap-1.5 py-0.5 pl-2 pr-1.5 h-6 transition-colors"
+                          onClick={() => {
+                            navigator.clipboard.writeText(primaryEmail || "")
+                            toast({ title: "Copiado", description: "Email copiado al portapapeles" })
+                          }}
+                        >
+                          <Mail className="h-3 w-3" />
+                          {primaryEmail}
+                          {primaryEmailStatus === "valid" && (
+                            <CheckCircle2 className="h-3 w-3 text-green-500 fill-green-100" />
+                          )}
+                        </Badge>
+                      )
+                    }
+                    return null
+                  })()}
 
                   {/* Personal Phone */}
                   {signal.contact.phone1_type === "personal" && signal.contact.phone1 && (
