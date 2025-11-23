@@ -3,15 +3,6 @@
 import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
 import { generateText } from "ai"
-import { google } from "@ai-sdk/google"
-import { createOpenAI } from "@ai-sdk/openai"
-
-// Configuración de Perplexity (vía OpenAI compatible)
-const perplexity = createOpenAI({
-  name: "perplexity",
-  apiKey: process.env.PERPLEXITY_API_KEY ?? "",
-  baseURL: "https://api.perplexity.ai/",
-})
 
 // --- SIGNALS ---
 
@@ -98,9 +89,8 @@ export async function searchWebSignals(bookmarkId: string, query: string) {
     `
 
     const { text } = await generateText({
-      model: perplexity("sonar-pro"),
+      model: "perplexity/sonar-pro",
       prompt: prompt,
-      temperature: 0.1,
     })
 
     let results = []
@@ -131,9 +121,13 @@ export async function searchWebSignals(bookmarkId: string, query: string) {
 
     revalidatePath(`/bookmarks/${bookmarkId}`)
     return { success: true, count: results.length }
-  } catch (error) {
-    console.error("Web Search failed", error)
-    return { success: false, error: "Error al realizar la búsqueda web" }
+  } catch (error: any) {
+    console.error("Web Search failed via AI Gateway", error)
+    const errorMessage =
+      error.message?.includes("fetch failed") || error.message?.includes("Gateway")
+        ? "Error de conexión con Vercel AI Gateway. Por favor verifique que el proveedor 'Perplexity' esté habilitado en el Dashboard de Vercel (Pestaña AI Gateway)."
+        : "Error al realizar la búsqueda web. Intente nuevamente."
+    return { success: false, error: errorMessage }
   }
 }
 
@@ -288,15 +282,29 @@ export async function generateIcebreaker(bookmarkId: string, contactId: string |
   // 7. Generar con IA
   let generatedText = ""
   try {
-    const { text } = await generateText({
-      model: google("gemini-1.5-flash"), // Reverting to gemini-1.5-flash
-      prompt: finalPrompt,
-      temperature: 0.7,
-    })
-    generatedText = text
-  } catch (error) {
-    console.error("AI Generation failed, using fallback", error)
-    generatedText = `[Fallo de IA, usando fallback] Hola ${variables.contact_name}, me gustaría conectar respecto a ${variables.company_name} y cómo podemos colaborar.`
+    try {
+      const { text } = await generateText({
+        model: "google/gemini-2.5-flash",
+        prompt: finalPrompt,
+        temperature: 0.7,
+      })
+      generatedText = text
+    } catch (primaryError) {
+      console.warn("Gemini 2.5 Flash failed, trying fallback to 1.5 Flash", primaryError)
+      const { text } = await generateText({
+        model: "google/gemini-1.5-flash",
+        prompt: finalPrompt,
+        temperature: 0.7,
+      })
+      generatedText = text
+    }
+  } catch (error: any) {
+    console.error("AI Generation failed via Gateway", error)
+    if (error.message?.includes("fetch failed") || error.message?.includes("Gateway")) {
+      generatedText = `[Error de Configuración] No se pudo conectar con Vercel AI Gateway. Por favor habilite el proveedor 'Google Gemini' en su Dashboard de Vercel.`
+    } else {
+      generatedText = `[Error de IA] Hola ${variables.contact_name}, me gustaría conectar respecto a ${variables.company_name}.`
+    }
   }
 
   // 8. Guardar resultado
@@ -428,20 +436,36 @@ export async function analyzeStrategy(bookmarkId: string, website: string, sende
   let analysis = { target_summary: "", recommended_pitch: "" }
 
   try {
-    const { text } = await generateText({
-      model: google("gemini-1.5-flash"), // Reverting to gemini-1.5-flash
-      prompt: prompt,
-      temperature: 0.7,
-    })
+    let textResult = ""
+    try {
+      const { text } = await generateText({
+        model: "google/gemini-2.5-flash",
+        prompt: prompt,
+        temperature: 0.7,
+      })
+      textResult = text
+    } catch (primaryError) {
+      console.warn("Gemini 2.5 Flash failed, trying fallback to 1.5 Flash", primaryError)
+      const { text } = await generateText({
+        model: "google/gemini-1.5-flash",
+        prompt: prompt,
+        temperature: 0.7,
+      })
+      textResult = text
+    }
 
-    const cleanText = text
+    const cleanText = textResult
       .replace(/```json/g, "")
       .replace(/```/g, "")
       .trim()
     analysis = JSON.parse(cleanText)
-  } catch (error) {
-    console.error("AI Strategy Analysis failed", error)
-    return { success: false, error: "Fallo al generar estrategia" }
+  } catch (error: any) {
+    console.error("AI Strategy Analysis failed via Gateway", error)
+    const errorMessage =
+      error.message?.includes("fetch failed") || error.message?.includes("Gateway")
+        ? "Fallo de conexión con AI Gateway. Verifique que 'Google Gemini' esté habilitado en su proyecto de Vercel."
+        : "Fallo al generar estrategia. Intente nuevamente."
+    return { success: false, error: errorMessage }
   }
 
   // Upsert
