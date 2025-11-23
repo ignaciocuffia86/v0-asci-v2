@@ -203,7 +203,7 @@ export async function generateIcebreaker(companyId: string, contactId: string | 
   let generatedText = ""
   try {
     const { text } = await generateText({
-      model: google("models/gemini-1.5-pro-latest"),
+      model: google("gemini-1.5-flash"), // Updated model
       prompt: finalPrompt,
       temperature: 0.7,
     })
@@ -308,7 +308,7 @@ export async function analyzeStrategy(companyId: string, website: string, sender
 
   try {
     const { text } = await generateText({
-      model: google("models/gemini-1.5-pro-latest"),
+      model: google("gemini-1.5-flash"), // Updated model
       prompt: prompt,
       temperature: 0.7,
     })
