@@ -133,18 +133,18 @@ export default function BookmarkWorkspacePage() {
               <Building2 className="h-4 w-4" />
               Resumen
             </TabsTrigger>
-            <TabsTrigger value="strategy" className="gap-2">
-              <BrainCircuit className="h-4 w-4" />
-              Estrategia
-              <Badge variant="secondary" className="ml-1 text-[10px] px-1 h-4">
-                AI
-              </Badge>
-            </TabsTrigger>
             <TabsTrigger value="signals" className="gap-2">
               <Search className="h-4 w-4" />
               Investigación
               <Badge variant="secondary" className="ml-1 text-[10px] px-1 h-4">
                 Privado
+              </Badge>
+            </TabsTrigger>
+            <TabsTrigger value="strategy" className="gap-2">
+              <BrainCircuit className="h-4 w-4" />
+              Estrategia
+              <Badge variant="secondary" className="ml-1 text-[10px] px-1 h-4">
+                AI
               </Badge>
             </TabsTrigger>
             <TabsTrigger value="prospects" className="gap-2">
@@ -167,12 +167,12 @@ export default function BookmarkWorkspacePage() {
             <BookmarkOverview company={company} />
           </TabsContent>
 
-          <TabsContent value="strategy" className="m-0 focus-visible:ring-0">
-            <BookmarkStrategy companyId={companyId} companyName={company.name} website={company.website} />
-          </TabsContent>
-
           <TabsContent value="signals" className="m-0 focus-visible:ring-0">
             <BookmarkSignals companyId={companyId} />
+          </TabsContent>
+
+          <TabsContent value="strategy" className="m-0 focus-visible:ring-0">
+            <BookmarkStrategy companyId={companyId} companyName={company.name} website={company.website} />
           </TabsContent>
 
           <TabsContent value="prospects" className="m-0 focus-visible:ring-0">

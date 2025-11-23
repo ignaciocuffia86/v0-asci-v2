@@ -288,6 +288,18 @@ export async function analyzeStrategy(companyId: string, website: string, sender
   } = await supabase.auth.getUser()
   if (!user) throw new Error("Unauthorized")
 
+  const { data: signals } = await supabase
+    .from("user_company_signals")
+    .select("title, content, type")
+    .eq("company_id", companyId)
+    .eq("user_id", user.id)
+    .limit(10)
+
+  let signalsContext = "No hay señales adicionales."
+  if (signals && signals.length > 0) {
+    signalsContext = signals.map((s) => `- [${s.type}] ${s.title}: ${s.content}`).join("\n")
+  }
+
   // 1. Simular Scraping (En producción usaríamos Puppeteer/Firecrawl)
   // Aquí usamos la IA para "alucinar" un análisis basado en el dominio, lo cual es muy efectivo con modelos grandes
   // O idealmente le pasamos el contenido real si lo tuviéramos.
@@ -298,10 +310,13 @@ export async function analyzeStrategy(companyId: string, website: string, sender
     Analiza la siguiente empresa basada en su sitio web: ${website}
     
     Y este es mi contexto (lo que yo vendo): ${senderContext}
+
+    Adicionalmente, he recopilado estas señales clave sobre la empresa que debes considerar en tu análisis:
+    ${signalsContext}
     
     Genera un JSON con estos dos campos:
     1. "target_summary": Un resumen ejecutivo de 2 oraciones sobre qué hace realmente esta empresa y cómo gana dinero.
-    2. "recommended_pitch": Una propuesta de valor única (1 párrafo) de cómo MI producto/servicio puede ayudar específicamente a ESTA empresa. Sé específico, no genérico.
+    2. "recommended_pitch": Una propuesta de valor única (1 párrafo) de cómo MI producto/servicio puede ayudar específicamente a ESTA empresa, conectando mi oferta con las señales encontradas (si son relevantes) o su modelo de negocio. Sé específico, no genérico.
   `
 
   let analysis = { target_summary: "", recommended_pitch: "" }
