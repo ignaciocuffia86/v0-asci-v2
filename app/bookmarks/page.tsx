@@ -2,14 +2,14 @@
 
 import type React from "react"
 import { useRouter } from "next/navigation"
-
 import { useState, useEffect } from "react"
 import { createClient } from "@/lib/supabase/client"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Trash2, Edit2, Building2 } from "lucide-react"
+import { Trash2, Edit2, Building2, Search, ArrowLeft } from "lucide-react"
+import { Input } from "@/components/ui/input"
 import {
   Dialog,
   DialogContent,
@@ -28,6 +28,13 @@ type Bookmark = {
   notes: string
   priority: "alta" | "transaccional" | "baja" | null
   created_at: string
+  search_context: {
+    filtersUsed?: {
+      process?: string[]
+      technology?: string[]
+      role?: string[]
+    }
+  } | null
   company: {
     id: string
     name: string
@@ -39,6 +46,8 @@ type Bookmark = {
 
 export default function BookmarksPage() {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
+  const [filteredBookmarks, setFilteredBookmarks] = useState<Bookmark[]>([])
+  const [searchQuery, setSearchQuery] = useState("")
   const [isLoading, setIsLoading] = useState(true)
   const router = useRouter()
 
@@ -59,6 +68,7 @@ export default function BookmarksPage() {
         notes,
         priority,
         created_at,
+        search_context,
         company:company_id (
           id,
           name,
@@ -71,6 +81,7 @@ export default function BookmarksPage() {
       .order("created_at", { ascending: false })
 
     setBookmarks((data as any) || [])
+    setFilteredBookmarks((data as any) || [])
     setIsLoading(false)
   }
 
@@ -78,13 +89,29 @@ export default function BookmarksPage() {
     fetchBookmarks()
   }, [])
 
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setFilteredBookmarks(bookmarks)
+      return
+    }
+
+    const query = searchQuery.toLowerCase()
+    const filtered = bookmarks.filter(
+      (b) =>
+        b.company.name.toLowerCase().includes(query) ||
+        (b.notes && b.notes.toLowerCase().includes(query)) ||
+        (b.company.industry && b.company.industry.toLowerCase().includes(query)),
+    )
+    setFilteredBookmarks(filtered)
+  }, [searchQuery, bookmarks])
+
   const updateBookmark = async (id: string, notes: string, priority: string) => {
     await supabase.from("bookmarks").update({ notes, priority }).eq("id", id)
     fetchBookmarks()
   }
 
   const deleteBookmark = async (id: string) => {
-    if (confirm("¿Estás seguro de eliminar este bookmark?")) {
+    if (confirm("¿Estás seguro de eliminar este bookmark? Se borrarán también las estrategias y señales privadas.")) {
       await supabase.from("bookmarks").delete().eq("id", id)
       fetchBookmarks()
     }
@@ -103,11 +130,62 @@ export default function BookmarksPage() {
     }
   }
 
+  const renderContext = (context: any) => {
+    if (!context || !context.filtersUsed) return <span className="text-muted-foreground text-xs">-</span>
+
+    const filters = context.filtersUsed
+    const items = []
+
+    if (filters.technology && filters.technology.length > 0) {
+      items.push(
+        <Badge key="tech" variant="outline" className="text-[10px] border-blue-200 text-blue-700 bg-blue-50">
+          Tech: {filters.technology[0]} {filters.technology.length > 1 && `+${filters.technology.length - 1}`}
+        </Badge>,
+      )
+    }
+    if (filters.process && filters.process.length > 0) {
+      items.push(
+        <Badge key="process" variant="outline" className="text-[10px] border-purple-200 text-purple-700 bg-purple-50">
+          Proc: {filters.process[0]} {filters.process.length > 1 && `+${filters.process.length - 1}`}
+        </Badge>,
+      )
+    }
+
+    if (items.length === 0) return <span className="text-muted-foreground text-xs">General</span>
+
+    return <div className="flex flex-wrap gap-1">{items}</div>
+  }
+
   return (
     <div className="p-8 space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Mis Bookmarks</h1>
-        <p className="text-muted-foreground">Gestiona tus empresas guardadas y su seguimiento.</p>
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Mis Bookmarks</h1>
+          <p className="text-muted-foreground">Gestiona tus empresas guardadas y sus diferentes estrategias.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => router.push("/")}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Volver al Home
+          </Button>
+          <Button onClick={() => router.push("/search")}>
+            <Search className="mr-2 h-4 w-4" />
+            Nueva Búsqueda
+          </Button>
+        </div>
+      </div>
+
+      {/* Search Bar */}
+      <div className="flex items-center space-x-2 max-w-md">
+        <div className="relative flex-1">
+          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Buscar por nombre, notas o industria..."
+            className="pl-9"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
       </div>
 
       <div className="rounded-md border bg-card">
@@ -115,6 +193,7 @@ export default function BookmarksPage() {
           <TableHeader>
             <TableRow>
               <TableHead>Empresa</TableHead>
+              <TableHead>Contexto de Búsqueda</TableHead>
               <TableHead>Prioridad</TableHead>
               <TableHead>Notas</TableHead>
               <TableHead>Fecha</TableHead>
@@ -122,7 +201,7 @@ export default function BookmarksPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {bookmarks.map((bookmark) => (
+            {filteredBookmarks.map((bookmark) => (
               <TableRow key={bookmark.id}>
                 <TableCell>
                   <div className="flex items-center gap-3">
@@ -140,7 +219,7 @@ export default function BookmarksPage() {
                     <div>
                       <div
                         className="font-medium hover:underline cursor-pointer text-primary"
-                        onClick={() => router.push(`/bookmarks/${bookmark.company.id}`)}
+                        onClick={() => router.push(`/bookmarks/${bookmark.id}`)}
                       >
                         {bookmark.company.name}
                       </div>
@@ -148,6 +227,7 @@ export default function BookmarksPage() {
                     </div>
                   </div>
                 </TableCell>
+                <TableCell>{renderContext(bookmark.search_context)}</TableCell>
                 <TableCell>
                   <Badge variant="outline" className={getPriorityColor(bookmark.priority)}>
                     {bookmark.priority
@@ -172,10 +252,12 @@ export default function BookmarksPage() {
                 </TableCell>
               </TableRow>
             ))}
-            {!isLoading && bookmarks.length === 0 && (
+            {!isLoading && filteredBookmarks.length === 0 && (
               <TableRow>
-                <TableCell colSpan={5} className="text-center h-32 text-muted-foreground">
-                  No tienes bookmarks guardados.
+                <TableCell colSpan={6} className="text-center h-32 text-muted-foreground">
+                  {bookmarks.length === 0
+                    ? "No tienes bookmarks guardados."
+                    : "No se encontraron resultados para tu búsqueda."}
                 </TableCell>
               </TableRow>
             )}

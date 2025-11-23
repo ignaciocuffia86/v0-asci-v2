@@ -263,7 +263,22 @@ export function CompanyDrawer({
       await unbookmarkCompany(user.id, companyId)
       setIsBookmarked(false)
     } else {
-      await bookmarkCompany(user.id, companyId)
+      // Extract signal names to save as context for the bookmarks list
+      const signalNames = signals
+        .filter((s) => filterSignalIds?.includes(s.signal_id))
+        .map((s) => s.keyword_matched)
+        .filter((value, index, self) => self.indexOf(value) === index) // Deduplicate
+
+      const filtersUsed = {
+        technology: filterType === "technology" ? signalNames : [],
+        process: filterType === "process" ? signalNames : [],
+      }
+
+      await bookmarkCompany(user.id, companyId, {
+        filterSignalIds: filterSignalIds || [],
+        filterType: filterType || "generic",
+        filtersUsed, // Add filtersUsed with human-readable names
+      })
       setIsBookmarked(true)
     }
   }

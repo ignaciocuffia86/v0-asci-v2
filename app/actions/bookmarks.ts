@@ -3,13 +3,14 @@
 import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
 
-export async function bookmarkCompany(userId: string, companyId: string) {
+export async function bookmarkCompany(userId: string, companyId: string, searchContext: any = {}) {
   const supabase = await createClient()
 
   try {
     const { error } = await supabase.from("bookmarks").insert({
       user_id: userId,
       company_id: companyId,
+      search_context: searchContext,
     })
 
     if (error) throw error

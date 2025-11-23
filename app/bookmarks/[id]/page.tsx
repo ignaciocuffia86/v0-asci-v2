@@ -9,7 +9,6 @@ import { Badge } from "@/components/ui/badge"
 import { ArrowLeft, Building2, Globe, Linkedin, Search, Users, Sparkles, BrainCircuit } from "lucide-react"
 import Link from "next/link"
 
-// Components for each tab (will be implemented fully in next steps)
 import { BookmarkOverview } from "./_components/overview-tab"
 import { BookmarkSignals } from "./_components/signals-tab"
 import { BookmarkContacts } from "./_components/contacts-tab"
@@ -19,29 +18,50 @@ import { BookmarkStrategy } from "./_components/strategy-tab"
 export default function BookmarkWorkspacePage() {
   const params = useParams()
   const router = useRouter()
-  const companyId = params.id as string
+  const bookmarkId = params.id as string
+  const [bookmark, setBookmark] = useState<any>(null)
   const [company, setCompany] = useState<any>(null)
   const [isLoading, setIsLoading] = useState(true)
   const supabase = createClient()
 
   useEffect(() => {
-    const fetchCompany = async () => {
+    const fetchBookmarkAndCompany = async () => {
       setIsLoading(true)
-      const { data, error } = await supabase.from("companies").select("*").eq("id", companyId).single()
 
-      if (error) {
-        console.error("Error fetching company:", error)
-        // Handle error (maybe redirect back to bookmarks)
-      } else {
-        setCompany(data)
+      // 1. Fetch Bookmark to get company_id
+      const { data: bookmarkData, error: bookmarkError } = await supabase
+        .from("bookmarks")
+        .select("*")
+        .eq("id", bookmarkId)
+        .single()
+
+      if (bookmarkError || !bookmarkData) {
+        console.error("Error fetching bookmark:", bookmarkError)
+        router.push("/bookmarks")
+        return
       }
+      setBookmark(bookmarkData)
+
+      // 2. Fetch Company Details
+      const { data: companyData, error: companyError } = await supabase
+        .from("companies")
+        .select("*")
+        .eq("id", bookmarkData.company_id)
+        .single()
+
+      if (companyError) {
+        console.error("Error fetching company:", companyError)
+      } else {
+        setCompany(companyData)
+      }
+
       setIsLoading(false)
     }
 
-    if (companyId) {
-      fetchCompany()
+    if (bookmarkId) {
+      fetchBookmarkAndCompany()
     }
-  }, [companyId])
+  }, [bookmarkId, router])
 
   if (isLoading) {
     return (
@@ -51,10 +71,10 @@ export default function BookmarkWorkspacePage() {
     )
   }
 
-  if (!company) {
+  if (!company || !bookmark) {
     return (
       <div className="flex flex-col items-center justify-center h-screen space-y-4">
-        <h2 className="text-xl font-semibold">Empresa no encontrada</h2>
+        <h2 className="text-xl font-semibold">Bookmark no encontrado</h2>
         <Button onClick={() => router.push("/bookmarks")}>Volver a mis bookmarks</Button>
       </div>
     )
@@ -72,7 +92,7 @@ export default function BookmarkWorkspacePage() {
             className="pl-0 hover:pl-2 transition-all"
           >
             <ArrowLeft className="h-4 w-4 mr-2" />
-            Volver
+            Volver a la lista
           </Button>
         </div>
 
@@ -90,7 +110,13 @@ export default function BookmarkWorkspacePage() {
               )}
             </div>
             <div>
-              <h1 className="text-2xl font-bold tracking-tight">{company.name}</h1>
+              <div className="flex items-center gap-2">
+                <h1 className="text-2xl font-bold tracking-tight">{company.name}</h1>
+                <Badge variant="outline" className="text-xs">
+                  {bookmark.notes || "Sin notas"}
+                </Badge>
+              </div>
+
               <div className="flex items-center gap-2 text-muted-foreground mt-1">
                 <span>{company.industry || "Industria no especificada"}</span>
                 {company.country && (
@@ -120,8 +146,6 @@ export default function BookmarkWorkspacePage() {
               </div>
             </div>
           </div>
-
-          <div className="flex items-center gap-2">{/* Future global actions */}</div>
         </div>
       </header>
 
@@ -164,23 +188,24 @@ export default function BookmarkWorkspacePage() {
           </TabsList>
 
           <TabsContent value="overview" className="m-0 focus-visible:ring-0">
-            <BookmarkOverview company={company} />
+            {/* Pass bookmarkId instead of company.id where needed, or both */}
+            <BookmarkOverview bookmarkId={bookmarkId} company={company} />
           </TabsContent>
 
           <TabsContent value="signals" className="m-0 focus-visible:ring-0">
-            <BookmarkSignals companyId={companyId} />
+            <BookmarkSignals bookmarkId={bookmarkId} />
           </TabsContent>
 
           <TabsContent value="strategy" className="m-0 focus-visible:ring-0">
-            <BookmarkStrategy companyId={companyId} companyName={company.name} website={company.website} />
+            <BookmarkStrategy bookmarkId={bookmarkId} companyName={company.name} website={company.website} />
           </TabsContent>
 
           <TabsContent value="prospects" className="m-0 focus-visible:ring-0">
-            <BookmarkContacts companyId={companyId} />
+            <BookmarkContacts bookmarkId={bookmarkId} />
           </TabsContent>
 
           <TabsContent value="icebreakers" className="m-0 focus-visible:ring-0">
-            <BookmarkIcebreakers companyId={companyId} companyName={company.name} />
+            <BookmarkIcebreakers bookmarkId={bookmarkId} companyName={company.name} />
           </TabsContent>
         </Tabs>
       </main>

@@ -1,42 +1,34 @@
 "use client"
 
-import type React from "react"
-
 import { useState, useEffect } from "react"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Search, ExternalLink, Loader2 } from "lucide-react"
+import { ExternalLink, Loader2, Newspaper, Trophy, Briefcase } from "lucide-react"
 import { getPrivateSignals, searchWebSignals } from "@/app/actions/workspace"
 import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
 
-export function BookmarkSignals({ companyId }: { companyId: string }) {
+export function BookmarkSignals({ bookmarkId }: { bookmarkId: string }) {
   const [signals, setSignals] = useState<any[]>([])
-  const [query, setQuery] = useState("")
   const [isLoading, setIsLoading] = useState(false)
-  const [isSearching, setIsSearching] = useState(false)
+  const [activeSearch, setActiveSearch] = useState<string | null>(null)
 
   const loadSignals = async () => {
     setIsLoading(true)
-    const data = await getPrivateSignals(companyId)
+    const data = await getPrivateSignals(bookmarkId)
     setSignals(data)
     setIsLoading(false)
   }
 
   useEffect(() => {
     loadSignals()
-  }, [companyId])
+  }, [bookmarkId])
 
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!query.trim()) return
-
-    setIsSearching(true)
-    await searchWebSignals(companyId, query)
+  const handleSearch = async (category: string) => {
+    setActiveSearch(category)
+    await searchWebSignals(bookmarkId, category)
     await loadSignals()
-    setIsSearching(false)
-    setQuery("")
+    setActiveSearch(null)
   }
 
   return (
@@ -45,30 +37,100 @@ export function BookmarkSignals({ companyId }: { companyId: string }) {
         <div>
           <h2 className="text-lg font-semibold">Investigación Web Privada</h2>
           <p className="text-sm text-muted-foreground">
-            Busca señales, noticias y casos de éxito específicos. Solo tú verás estos resultados.
+            Busca señales, noticias y casos de éxito específicos para este bookmark.
           </p>
         </div>
       </div>
 
-      {/* Search Bar */}
-      <Card>
-        <CardContent className="pt-6">
-          <form onSubmit={handleSearch} className="flex gap-4">
-            <Input
-              placeholder="Ej: Transformación digital, Implementación SAP, Recortes de presupuesto..."
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              disabled={isSearching}
-            />
-            <Button type="submit" disabled={isSearching || !query.trim()}>
-              {isSearching ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Search className="h-4 w-4 mr-2" />}
-              Buscar en la Web
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Card
+          className="hover:border-blue-500/50 transition-colors cursor-pointer"
+          onClick={() => !activeSearch && handleSearch("news")}
+        >
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Newspaper className="h-4 w-4 text-blue-500" />
+              Noticias y Señales
+            </CardTitle>
+            <CardDescription className="text-xs">
+              Busca noticias recientes, cambios corporativos y señales de mercado.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              className="w-full"
+              variant="secondary"
+              size="sm"
+              disabled={activeSearch !== null}
+              onClick={(e) => {
+                e.stopPropagation()
+                handleSearch("news")
+              }}
+            >
+              {activeSearch === "news" ? <Loader2 className="h-3 w-3 animate-spin mr-2" /> : "Buscar Noticias"}
             </Button>
-          </form>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
 
-      {/* Results List */}
+        <Card
+          className="hover:border-amber-500/50 transition-colors cursor-pointer"
+          onClick={() => !activeSearch && handleSearch("success_story")}
+        >
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Trophy className="h-4 w-4 text-amber-500" />
+              Casos de Éxito
+            </CardTitle>
+            <CardDescription className="text-xs">
+              Encuentra implementaciones tecnológicas previas y resultados.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              className="w-full"
+              variant="secondary"
+              size="sm"
+              disabled={activeSearch !== null}
+              onClick={(e) => {
+                e.stopPropagation()
+                handleSearch("success_story")
+              }}
+            >
+              {activeSearch === "success_story" ? <Loader2 className="h-3 w-3 animate-spin mr-2" /> : "Buscar Casos"}
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card
+          className="hover:border-green-500/50 transition-colors cursor-pointer"
+          onClick={() => !activeSearch && handleSearch("job_posting")}
+        >
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Briefcase className="h-4 w-4 text-green-500" />
+              Job Postings
+            </CardTitle>
+            <CardDescription className="text-xs">
+              Detecta tecnologías y dolores a través de sus búsquedas laborales.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              className="w-full"
+              variant="secondary"
+              size="sm"
+              disabled={activeSearch !== null}
+              onClick={(e) => {
+                e.stopPropagation()
+                handleSearch("job_posting")
+              }}
+            >
+              {activeSearch === "job_posting" ? <Loader2 className="h-3 w-3 animate-spin mr-2" /> : "Buscar Vacantes"}
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+
       <div className="space-y-4">
         {isLoading ? (
           <div className="flex justify-center py-8">
@@ -78,7 +140,7 @@ export function BookmarkSignals({ companyId }: { companyId: string }) {
           <Card className="border-dashed">
             <CardContent className="flex flex-col items-center justify-center py-10 space-y-4 text-center">
               <div className="bg-muted p-3 rounded-full">
-                <Search className="h-6 w-6 text-muted-foreground" />
+                <Newspaper className="h-6 w-6 text-muted-foreground" />
               </div>
               <div>
                 <h3 className="font-medium">Sin señales privadas aún</h3>

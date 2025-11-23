@@ -6,16 +6,17 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { BrainCircuit, Lightbulb, Target, RefreshCw } from "lucide-react"
+import { Checkbox } from "@/components/ui/checkbox"
 import { getStrategy, analyzeStrategy, saveSenderContext } from "@/app/actions/workspace"
 import { toast } from "sonner"
 
 interface BookmarkStrategyProps {
-  companyId: string
+  bookmarkId: string
   companyName: string
   website?: string
 }
 
-export function BookmarkStrategy({ companyId, companyName, website }: BookmarkStrategyProps) {
+export function BookmarkStrategy({ bookmarkId, companyName, website }: BookmarkStrategyProps) {
   const [strategy, setStrategy] = useState<any>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
@@ -23,18 +24,28 @@ export function BookmarkStrategy({ companyId, companyName, website }: BookmarkSt
 
   // Sender context state
   const [senderContext, setSenderContext] = useState("")
+  const [saveAsDefault, setSaveAsDefault] = useState(false)
 
   useEffect(() => {
     loadStrategy()
-  }, [companyId])
+  }, [bookmarkId])
 
   const loadStrategy = async () => {
     setIsLoading(true)
     try {
-      const data = await getStrategy(companyId)
-      if (data) {
-        setStrategy(data)
-        setSenderContext(data.sender_context_override || "") // Or fall back to global profile later
+      const result = await getStrategy(bookmarkId)
+
+      if (result) {
+        const strategyData = result.strategy
+        const defaultContext = result.defaultContext || ""
+
+        setStrategy(strategyData)
+
+        if (strategyData?.sender_context_override) {
+          setSenderContext(strategyData.sender_context_override)
+        } else if (defaultContext) {
+          setSenderContext(defaultContext)
+        }
       }
     } catch (error) {
       console.error("Error loading strategy:", error)
@@ -51,7 +62,7 @@ export function BookmarkStrategy({ companyId, companyName, website }: BookmarkSt
 
     setIsAnalyzing(true)
     try {
-      const result = await analyzeStrategy(companyId, website, senderContext)
+      const result = await analyzeStrategy(bookmarkId, website, senderContext)
       if (result.success) {
         setStrategy(result.data)
         toast.success("Estrategia generada con éxito")
@@ -68,8 +79,13 @@ export function BookmarkStrategy({ companyId, companyName, website }: BookmarkSt
   const handleSaveContext = async () => {
     setIsSaving(true)
     try {
-      await saveSenderContext(companyId, senderContext)
-      toast.success("Contexto guardado")
+      await saveSenderContext(bookmarkId, senderContext, saveAsDefault)
+
+      let successMsg = "Contexto guardado"
+      if (saveAsDefault) {
+        successMsg += " y establecido como predeterminado"
+      }
+      toast.success(successMsg)
     } catch (error) {
       toast.error("Error al guardar contexto")
     } finally {
@@ -105,7 +121,7 @@ export function BookmarkStrategy({ companyId, companyName, website }: BookmarkSt
                   </>
                 ) : (
                   <>
-                    <Sparkles className="mr-2 h-4 w-4" />
+                    <Target className="mr-2 h-4 w-4" />
                     {strategy ? "Regenerar Análisis" : "Analizar Web"}
                   </>
                 )}
@@ -160,7 +176,7 @@ export function BookmarkStrategy({ companyId, companyName, website }: BookmarkSt
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Mi Contexto</CardTitle>
-            <CardDescription>Define quién eres para este prospecto.</CardDescription>
+            <CardDescription>Define quién eres para este prospecto específico.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
@@ -173,8 +189,22 @@ export function BookmarkStrategy({ companyId, companyName, website }: BookmarkSt
                 className="h-[300px] resize-none text-sm"
               />
               <p className="text-xs text-muted-foreground">
-                Este contexto se usará para generar la estrategia y los icebreakers.
+                Este contexto se usará para generar la estrategia y los icebreakers de ESTE bookmark.
               </p>
+            </div>
+
+            <div className="flex items-center space-x-2 pt-2">
+              <Checkbox
+                id="save-default"
+                checked={saveAsDefault}
+                onCheckedChange={(checked) => setSaveAsDefault(checked as boolean)}
+              />
+              <label
+                htmlFor="save-default"
+                className="text-xs font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 text-muted-foreground"
+              >
+                Guardar como mi propuesta de valor predeterminada para futuros bookmarks
+              </label>
             </div>
           </CardContent>
           <CardFooter>
@@ -185,24 +215,5 @@ export function BookmarkStrategy({ companyId, companyName, website }: BookmarkSt
         </Card>
       </div>
     </div>
-  )
-}
-
-function Sparkles(props: any) {
-  return (
-    <svg
-      {...props}
-      xmlns="http://www.w3.org/2000/svg"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" />
-    </svg>
   )
 }

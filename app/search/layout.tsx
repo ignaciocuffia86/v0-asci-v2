@@ -1,20 +1,22 @@
-import { createClient } from "@/lib/supabase/server";
-import { redirect } from 'next/navigation';
-import { MainSidebar } from "@/components/main-sidebar";
+import type React from "react"
+import { createClient } from "@/lib/supabase/server"
+import { redirect } from "next/navigation"
+import { MainSidebar } from "@/components/main-sidebar"
 
 export default async function SearchLayout({
   children,
 }: {
-  children: React.ReactNode;
+  children: React.ReactNode
 }) {
-  const supabase = await createClient();
+  const supabase = await createClient()
 
   const {
     data: { user },
-  } = await supabase.auth.getUser();
+  } = await supabase.auth.getUser()
 
   if (!user) {
-    redirect("/auth/login");
+    console.log("[v0] Search Layout: No user found, redirecting to /auth/login")
+    redirect("/auth/login")
   }
 
   return (
@@ -22,5 +24,5 @@ export default async function SearchLayout({
       <MainSidebar />
       <main className="flex-1 overflow-y-auto">{children}</main>
     </div>
-  );
+  )
 }

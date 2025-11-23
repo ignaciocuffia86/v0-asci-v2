@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label"
 import { getIcebreakers, generateIcebreaker, getPrivateContacts } from "@/app/actions/workspace"
 import { getActiveIcebreakerTemplates } from "@/app/actions/templates"
 
-export function BookmarkIcebreakers({ companyId, companyName }: { companyId: string; companyName: string }) {
+export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: string; companyName: string }) {
   const [icebreakers, setIcebreakers] = useState<any[]>([])
   const [contacts, setContacts] = useState<any[]>([])
   const [templates, setTemplates] = useState<any[]>([])
@@ -23,8 +23,8 @@ export function BookmarkIcebreakers({ companyId, companyName }: { companyId: str
   const loadData = async () => {
     setIsLoading(true)
     const [ibData, cData, tData] = await Promise.all([
-      getIcebreakers(companyId),
-      getPrivateContacts(companyId),
+      getIcebreakers(bookmarkId),
+      getPrivateContacts(bookmarkId),
       getActiveIcebreakerTemplates(),
     ])
     setIcebreakers(ibData)
@@ -40,7 +40,7 @@ export function BookmarkIcebreakers({ companyId, companyName }: { companyId: str
 
   useEffect(() => {
     loadData()
-  }, [companyId])
+  }, [bookmarkId])
 
   const handleGenerate = async () => {
     if (!selectedTemplate) {
@@ -50,7 +50,7 @@ export function BookmarkIcebreakers({ companyId, companyName }: { companyId: str
 
     setIsGenerating(true)
     try {
-      await generateIcebreaker(companyId, selectedContact === "general" ? null : selectedContact, selectedTemplate)
+      await generateIcebreaker(bookmarkId, selectedContact === "general" ? null : selectedContact, selectedTemplate)
       await loadData()
     } catch (error) {
       console.error("Failed to generate", error)
@@ -61,7 +61,6 @@ export function BookmarkIcebreakers({ companyId, companyName }: { companyId: str
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text)
-    // Could add toast here
   }
 
   return (
@@ -91,11 +90,6 @@ export function BookmarkIcebreakers({ companyId, companyName }: { companyId: str
                   ))}
                 </SelectContent>
               </Select>
-              {contacts.length === 0 && (
-                <p className="text-xs text-muted-foreground">
-                  Tip: Agrega contactos en la pestaña "Prospectos" para personalizar más.
-                </p>
-              )}
             </div>
 
             <div className="space-y-2">
@@ -109,19 +103,11 @@ export function BookmarkIcebreakers({ companyId, companyName }: { companyId: str
                     <SelectItem key={template.id} value={template.id}>
                       <div className="flex flex-col items-start">
                         <span>{template.name}</span>
-                        {template.description && (
-                          <span className="text-xs text-muted-foreground">{template.description}</span>
-                        )}
                       </div>
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              {templates.length === 0 && (
-                <p className="text-xs text-muted-foreground text-amber-700">
-                  No hay templates disponibles. Contacta al admin para crear templates.
-                </p>
-              )}
             </div>
 
             <Button
@@ -160,9 +146,7 @@ export function BookmarkIcebreakers({ companyId, companyName }: { companyId: str
           <Card className="border-dashed">
             <CardContent className="flex flex-col items-center justify-center py-12 text-center">
               <Sparkles className="h-8 w-8 text-muted-foreground mb-4" />
-              <p className="text-muted-foreground max-w-sm">
-                Aún no has generado mensajes. Selecciona una estrategia a la izquierda para comenzar.
-              </p>
+              <p className="text-muted-foreground max-w-sm">Aún no has generado mensajes para este bookmark.</p>
             </CardContent>
           </Card>
         ) : (

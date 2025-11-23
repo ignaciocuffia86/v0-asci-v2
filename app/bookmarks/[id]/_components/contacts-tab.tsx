@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 
-export function BookmarkContacts({ companyId }: { companyId: string }) {
+export function BookmarkContacts({ bookmarkId }: { bookmarkId: string }) {
   const [contacts, setContacts] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [isSearching, setIsSearching] = useState(false)
@@ -31,14 +31,14 @@ export function BookmarkContacts({ companyId }: { companyId: string }) {
 
   const loadContacts = async () => {
     setIsLoading(true)
-    const data = await getPrivateContacts(companyId)
+    const data = await getPrivateContacts(bookmarkId)
     setContacts(data)
     setIsLoading(false)
   }
 
   useEffect(() => {
     loadContacts()
-  }, [companyId])
+  }, [bookmarkId])
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -46,7 +46,7 @@ export function BookmarkContacts({ companyId }: { companyId: string }) {
 
     setIsSearching(true)
     try {
-      await searchDecisionMakers(companyId, roleQuery)
+      await searchDecisionMakers(bookmarkId, roleQuery)
       await loadContacts()
       setDialogOpen(false)
       setRoleQuery("")
@@ -62,7 +62,7 @@ export function BookmarkContacts({ companyId }: { companyId: string }) {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-semibold">Tomadores de Decisión</h2>
-          <p className="text-sm text-muted-foreground">Prospectos guardados específicamente para tu estrategia.</p>
+          <p className="text-sm text-muted-foreground">Prospectos guardados específicamente para este bookmark.</p>
         </div>
 
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
