@@ -1,5 +1,17 @@
 import Link from "next/link"
-import { ArrowRight, BrainCircuit, CheckCircle2, Database, Globe, LineChart, Search, Users, Zap } from "lucide-react"
+import {
+  ArrowRight,
+  Bot,
+  BrainCircuit,
+  CheckCircle2,
+  Database,
+  Globe,
+  LineChart,
+  MessageSquareText,
+  Search,
+  Target,
+  Users,
+} from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -19,8 +31,8 @@ export default function HomePage() {
             <Link href="#features" className="hover:text-blue-600 transition-colors">
               Funcionalidades
             </Link>
-            <Link href="#roadmap" className="hover:text-blue-600 transition-colors">
-              Roadmap
+            <Link href="#workspace" className="hover:text-blue-600 transition-colors">
+              Workspace Inteligente
             </Link>
             <Link href="#pricing" className="hover:text-blue-600 transition-colors">
               Precios
@@ -52,7 +64,7 @@ export default function HomePage() {
               variant="outline"
               className="mb-4 py-1.5 px-4 border-blue-200 bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300 dark:border-blue-800"
             >
-              <span className="mr-2">✨</span> Nuevo: Búsqueda Facetada y Detección de Alumni
+              <span className="mr-2">🚀</span> Nuevo: Workspace Inteligente con IA Generativa
             </Badge>
             <h1 className="mx-auto mb-6 max-w-4xl text-4xl font-extrabold tracking-tight text-slate-900 sm:text-5xl md:text-6xl dark:text-white">
               Transforma Señales en <br className="hidden md:block" />
@@ -92,58 +104,62 @@ export default function HomePage() {
                 </div>
                 <div className="p-8 grid grid-cols-1 md:grid-cols-3 gap-6">
                   {/* Fake UI Cards */}
-                  <div className="rounded-lg bg-white p-4 shadow-sm border dark:bg-slate-950 dark:border-slate-800">
+                  <div className="rounded-lg bg-white p-4 shadow-sm border dark:bg-slate-950 dark:border-slate-800 text-left">
                     <div className="flex items-center gap-3 mb-3">
                       <div className="h-8 w-8 rounded bg-orange-100 flex items-center justify-center text-orange-600">
-                        <Zap size={16} />
+                        <Target size={16} />
                       </div>
-                      <div className="font-semibold text-sm">AWS Integration</div>
+                      <div className="font-semibold text-sm">Estrategia de Cuenta</div>
                     </div>
                     <div className="space-y-2">
+                      <div className="text-xs text-slate-500">"Enfocar en reducción de costos operativos..."</div>
                       <div className="h-2 w-3/4 rounded bg-slate-100 dark:bg-slate-800"></div>
+                    </div>
+                    <div className="mt-4 flex items-center gap-2 text-xs text-slate-500">
+                      <Badge variant="secondary" className="text-[10px] bg-green-100 text-green-700">
+                        IA Analysis
+                      </Badge>
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-white p-4 shadow-sm border dark:bg-slate-950 dark:border-slate-800 text-left">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="h-8 w-8 rounded bg-blue-100 flex items-center justify-center text-blue-600">
+                        <MessageSquareText size={16} />
+                      </div>
+                      <div className="font-semibold text-sm">Icebreakers</div>
+                    </div>
+                    <div className="space-y-2">
+                      <div className="text-xs text-slate-500">"Hola Juan, vi que usan AWS y..."</div>
                       <div className="h-2 w-1/2 rounded bg-slate-100 dark:bg-slate-800"></div>
                     </div>
                     <div className="mt-4 flex items-center gap-2 text-xs text-slate-500">
-                      <Badge variant="secondary" className="text-[10px]">
-                        Cloud
+                      <Badge variant="secondary" className="text-[10px] bg-blue-50 text-blue-600">
+                        Personalizado
                       </Badge>
-                      <span>+12 Señales</span>
                     </div>
                   </div>
-                  <div className="rounded-lg bg-white p-4 shadow-sm border dark:bg-slate-950 dark:border-slate-800">
-                    <div className="flex items-center gap-3 mb-3">
-                      <div className="h-8 w-8 rounded bg-blue-100 flex items-center justify-center text-blue-600">
-                        <Database size={16} />
-                      </div>
-                      <div className="font-semibold text-sm">Salesforce CRM</div>
-                    </div>
-                    <div className="space-y-2">
-                      <div className="h-2 w-full rounded bg-slate-100 dark:bg-slate-800"></div>
-                      <div className="h-2 w-2/3 rounded bg-slate-100 dark:bg-slate-800"></div>
-                    </div>
-                    <div className="mt-4 flex items-center gap-2 text-xs text-slate-500">
-                      <Badge variant="secondary" className="text-[10px]">
-                        CRM
-                      </Badge>
-                      <span>+8 Señales</span>
-                    </div>
-                  </div>
-                  <div className="rounded-lg bg-white p-4 shadow-sm border dark:bg-slate-950 dark:border-slate-800">
+                  <div className="rounded-lg bg-white p-4 shadow-sm border dark:bg-slate-950 dark:border-slate-800 text-left">
                     <div className="flex items-center gap-3 mb-3">
                       <div className="h-8 w-8 rounded bg-green-100 flex items-center justify-center text-green-600">
                         <Users size={16} />
                       </div>
-                      <div className="font-semibold text-sm">Agile Methodologies</div>
+                      <div className="font-semibold text-sm">Decision Makers</div>
                     </div>
                     <div className="space-y-2">
-                      <div className="h-2 w-5/6 rounded bg-slate-100 dark:bg-slate-800"></div>
-                      <div className="h-2 w-1/2 rounded bg-slate-100 dark:bg-slate-800"></div>
+                      <div className="flex items-center gap-2">
+                        <div className="h-4 w-4 rounded-full bg-slate-200"></div>
+                        <div className="h-2 w-2/3 rounded bg-slate-100 dark:bg-slate-800"></div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="h-4 w-4 rounded-full bg-slate-200"></div>
+                        <div className="h-2 w-1/2 rounded bg-slate-100 dark:bg-slate-800"></div>
+                      </div>
                     </div>
                     <div className="mt-4 flex items-center gap-2 text-xs text-slate-500">
                       <Badge variant="secondary" className="text-[10px]">
-                        Process
+                        Contacts
                       </Badge>
-                      <span>+24 Señales</span>
+                      <span>+5 Leads</span>
                     </div>
                   </div>
                 </div>
@@ -240,62 +256,87 @@ export default function HomePage() {
           </div>
         </section>
 
-        {/* Roadmap Section */}
-        <section id="roadmap" className="py-20 border-t dark:border-slate-800">
+        {/* Workspace Inteligente Section */}
+        <section id="workspace" className="py-20 border-t dark:border-slate-800 bg-white dark:bg-slate-950">
           <div className="container mx-auto px-4">
             <div className="flex flex-col md:flex-row items-start justify-between gap-12">
-              <div className="md:w-1/3">
-                <Badge variant="secondary" className="mb-4">
-                  Roadmap 2025
+              <div className="md:w-1/3 sticky top-24">
+                <Badge variant="secondary" className="mb-4 bg-indigo-100 text-indigo-700 border-indigo-200">
+                  Nuevo: Workspace 2.0
                 </Badge>
                 <h2 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white mb-4">
-                  El Futuro de la Prospección es <span className="text-blue-600">Hiper-Personalizado</span>
+                  Tu Centro de Comando para <span className="text-indigo-600">Venta Consultativa</span>
                 </h2>
-                <p className="text-slate-600 dark:text-slate-400 mb-8">
-                  Estamos construyendo la próxima generación de herramientas de inteligencia de ventas. Esto es lo que
-                  llegará pronto a ASCI.
+                <p className="text-slate-600 dark:text-slate-400 mb-8 text-lg leading-relaxed">
+                  Ya no es solo buscar datos. Ahora tienes un espacio de trabajo privado por cada cuenta donde la IA
+                  trabaja para ti.
                 </p>
-                <Button variant="outline" className="gap-2 bg-transparent">
-                  Ver Roadmap Completo <ArrowRight className="h-4 w-4" />
-                </Button>
+                <div className="flex flex-col gap-3">
+                  <div className="flex items-center gap-3 text-slate-700 dark:text-slate-300">
+                    <div className="h-8 w-8 rounded-full bg-green-100 text-green-600 flex items-center justify-center">
+                      <Bot size={18} />
+                    </div>
+                    <span className="font-medium">Powered by Gemini 1.5 Pro</span>
+                  </div>
+                  <div className="flex items-center gap-3 text-slate-700 dark:text-slate-300">
+                    <div className="h-8 w-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center">
+                      <Database size={18} />
+                    </div>
+                    <span className="font-medium">Datos 100% Privados y Seguros</span>
+                  </div>
+                </div>
               </div>
 
-              <div className="md:w-2/3 grid gap-6">
-                <div className="flex gap-4 p-4 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-900 transition-colors">
-                  <div className="mt-1 h-10 w-10 shrink-0 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">
-                    <Globe className="h-5 w-5" />
+              <div className="md:w-2/3 grid gap-8">
+                <div className="group relative overflow-hidden rounded-2xl border bg-slate-50 p-8 transition-all hover:shadow-lg dark:bg-slate-950/50">
+                  <div className="mb-4 inline-flex h-12 w-12 items-center justify-center rounded-xl bg-blue-600 text-white shadow-lg shadow-blue-600/20">
+                    <Target className="h-6 w-6" />
                   </div>
-                  <div>
-                    <h3 className="font-semibold text-slate-900 dark:text-white">Enrichment Web en Tiempo Real</h3>
-                    <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
-                      No solo nos basamos en CSVs. Escanearemos la web para enriquecer perfiles y empresas con datos
-                      frescos al instante.
-                    </p>
-                  </div>
+                  <h3 className="mb-3 text-xl font-bold text-slate-900 dark:text-white">Estrategia de Cuenta con IA</h3>
+                  <p className="text-slate-600 dark:text-slate-400">
+                    Nuestra IA analiza el sitio web de tu prospecto y tu propia propuesta de valor para generar
+                    automáticamente <strong>ángulos de venta únicos</strong>. Olvídate de investigar manualmente qué
+                    hacen; el sistema te da el resumen ejecutivo y cómo venderles.
+                  </p>
                 </div>
 
-                <div className="flex gap-4 p-4 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-900 transition-colors">
-                  <div className="mt-1 h-10 w-10 shrink-0 rounded-full bg-amber-100 flex items-center justify-center text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
-                    <Users className="h-5 w-5" />
+                <div className="group relative overflow-hidden rounded-2xl border bg-slate-50 p-8 transition-all hover:shadow-lg dark:bg-slate-950/50">
+                  <div className="mb-4 inline-flex h-12 w-12 items-center justify-center rounded-xl bg-purple-600 text-white shadow-lg shadow-purple-600/20">
+                    <BrainCircuit className="h-6 w-6" />
                   </div>
-                  <div>
-                    <h3 className="font-semibold text-slate-900 dark:text-white">Búsqueda de Decision Makers</h3>
-                    <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
-                      Identificación automática de los tomadores de decisión clave para cada oportunidad detectada, con
-                      sus datos de contacto.
-                    </p>
-                  </div>
+                  <h3 className="mb-3 text-xl font-bold text-slate-900 dark:text-white">
+                    Icebreakers Hiper-Personalizados
+                  </h3>
+                  <p className="text-slate-600 dark:text-slate-400">
+                    Genera mensajes de apertura que convierten. El sistema cruza las señales detectadas (tecnologías,
+                    procesos) con el perfil del contacto para redactar emails que demuestran que hiciste tu tarea.
+                    <br />
+                    <span className="mt-2 inline-block text-sm font-medium text-purple-600 dark:text-purple-400">
+                      Incluye Templates de Tonos y Estilos
+                    </span>
+                  </p>
                 </div>
 
-                <div className="flex gap-4 p-4 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-900 transition-colors">
-                  <div className="mt-1 h-10 w-10 shrink-0 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 dark:bg-purple-900/30 dark:text-purple-400">
-                    <BrainCircuit className="h-5 w-5" />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="rounded-2xl border bg-white p-6 shadow-sm dark:bg-slate-950">
+                    <div className="mb-3 h-10 w-10 rounded-lg bg-amber-100 text-amber-600 flex items-center justify-center">
+                      <Users className="h-5 w-5" />
+                    </div>
+                    <h4 className="font-bold text-slate-900 dark:text-white">Decision Makers</h4>
+                    <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+                      Buscador integrado de personas clave. Filtra por cargo y departamento directamente en tu
+                      workspace.
+                    </p>
                   </div>
-                  <div>
-                    <h3 className="font-semibold text-slate-900 dark:text-white">Icebreakers con IA</h3>
-                    <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
-                      Generación automática de mensajes de apertura hiper-personalizados basados en las señales
-                      detectadas (ej: "Vi que usas AWS y están migrando a...").
+
+                  <div className="rounded-2xl border bg-white p-6 shadow-sm dark:bg-slate-950">
+                    <div className="mb-3 h-10 w-10 rounded-lg bg-cyan-100 text-cyan-600 flex items-center justify-center">
+                      <Globe className="h-5 w-5" />
+                    </div>
+                    <h4 className="font-bold text-slate-900 dark:text-white">Web Signals</h4>
+                    <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+                      Investigación profunda en la web para encontrar noticias, lanzamientos y señales recientes del
+                      mercado.
                     </p>
                   </div>
                 </div>

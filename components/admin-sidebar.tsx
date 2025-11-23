@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { Upload, BookOpen, Activity, FileText, LogOut, Search, Building2 } from "lucide-react"
+import { Upload, BookOpen, Activity, FileText, LogOut, Search, Building2, MessageSquare } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { createClient } from "@/lib/supabase/client"
 import { useRouter } from "next/navigation"
@@ -23,6 +23,11 @@ const sidebarItems = [
     title: "Compañías",
     href: "/admin/companies/duplicates",
     icon: Building2,
+  },
+  {
+    title: "Templates de Mensajes",
+    href: "/admin/templates",
+    icon: MessageSquare,
   },
   {
     title: "Procesamiento",

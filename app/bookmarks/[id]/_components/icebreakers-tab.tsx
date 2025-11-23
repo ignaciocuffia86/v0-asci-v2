@@ -1,7 +1,6 @@
 "use client"
 
 import { Badge } from "@/components/ui/badge"
-
 import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -9,22 +8,33 @@ import { Sparkles, Loader2, Copy, MessageSquare } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Label } from "@/components/ui/label"
 import { getIcebreakers, generateIcebreaker, getPrivateContacts } from "@/app/actions/workspace"
+import { getActiveIcebreakerTemplates } from "@/app/actions/templates"
 
 export function BookmarkIcebreakers({ companyId, companyName }: { companyId: string; companyName: string }) {
   const [icebreakers, setIcebreakers] = useState<any[]>([])
   const [contacts, setContacts] = useState<any[]>([])
+  const [templates, setTemplates] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
 
-  // Form State
   const [selectedContact, setSelectedContact] = useState<string>("")
-  const [selectedTemplate, setSelectedTemplate] = useState<string>("value_prop")
+  const [selectedTemplate, setSelectedTemplate] = useState<string>("")
 
   const loadData = async () => {
     setIsLoading(true)
-    const [ibData, cData] = await Promise.all([getIcebreakers(companyId), getPrivateContacts(companyId)])
+    const [ibData, cData, tData] = await Promise.all([
+      getIcebreakers(companyId),
+      getPrivateContacts(companyId),
+      getActiveIcebreakerTemplates(),
+    ])
     setIcebreakers(ibData)
     setContacts(cData)
+    setTemplates(tData)
+
+    if (tData.length > 0 && !selectedTemplate) {
+      setSelectedTemplate(tData[0].id)
+    }
+
     setIsLoading(false)
   }
 
@@ -33,6 +43,11 @@ export function BookmarkIcebreakers({ companyId, companyName }: { companyId: str
   }, [companyId])
 
   const handleGenerate = async () => {
+    if (!selectedTemplate) {
+      alert("Por favor selecciona un template")
+      return
+    }
+
     setIsGenerating(true)
     try {
       await generateIcebreaker(companyId, selectedContact === "general" ? null : selectedContact, selectedTemplate)
@@ -87,21 +102,32 @@ export function BookmarkIcebreakers({ companyId, companyName }: { companyId: str
               <Label>Estrategia / Template</Label>
               <Select value={selectedTemplate} onValueChange={setSelectedTemplate}>
                 <SelectTrigger>
-                  <SelectValue />
+                  <SelectValue placeholder="Selecciona un template..." />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="value_prop">Propuesta de Valor Directa</SelectItem>
-                  <SelectItem value="recent_news">Mencionar Noticia Reciente</SelectItem>
-                  <SelectItem value="role_relevance">Relevancia por Cargo</SelectItem>
-                  <SelectItem value="pain_point">Punto de Dolor Común</SelectItem>
+                  {templates.map((template) => (
+                    <SelectItem key={template.id} value={template.id}>
+                      <div className="flex flex-col items-start">
+                        <span>{template.name}</span>
+                        {template.description && (
+                          <span className="text-xs text-muted-foreground">{template.description}</span>
+                        )}
+                      </div>
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
+              {templates.length === 0 && (
+                <p className="text-xs text-muted-foreground text-amber-700">
+                  No hay templates disponibles. Contacta al admin para crear templates.
+                </p>
+              )}
             </div>
 
             <Button
               className="w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white border-0"
               onClick={handleGenerate}
-              disabled={isGenerating}
+              disabled={isGenerating || !selectedTemplate}
             >
               {isGenerating ? (
                 <>
@@ -150,8 +176,11 @@ export function BookmarkIcebreakers({ companyId, companyName }: { companyId: str
                         <Badge variant="outline" className="text-xs font-normal">
                           {ib.contact ? `Para: ${ib.contact.full_name}` : `Para: ${companyName}`}
                         </Badge>
-                        <Badge variant="secondary" className="text-xs font-normal capitalize">
-                          {ib.template_used.replace("_", " ")}
+                        <Badge variant="secondary" className="text-xs font-normal">
+                          {ib.template_name || ib.template_used}
+                        </Badge>
+                        <Badge variant="outline" className="text-xs font-normal capitalize">
+                          {ib.tone}
                         </Badge>
                       </div>
                       <span className="text-xs text-muted-foreground">{new Date(ib.created_at).toLocaleString()}</span>

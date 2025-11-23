@@ -6,7 +6,7 @@ import { createClient } from "@/lib/supabase/client"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { ArrowLeft, Building2, Globe, Linkedin, Search, Users, Sparkles } from "lucide-react"
+import { ArrowLeft, Building2, Globe, Linkedin, Search, Users, Sparkles, BrainCircuit } from "lucide-react"
 import Link from "next/link"
 
 // Components for each tab (will be implemented fully in next steps)
@@ -14,6 +14,7 @@ import { BookmarkOverview } from "./_components/overview-tab"
 import { BookmarkSignals } from "./_components/signals-tab"
 import { BookmarkContacts } from "./_components/contacts-tab"
 import { BookmarkIcebreakers } from "./_components/icebreakers-tab"
+import { BookmarkStrategy } from "./_components/strategy-tab"
 
 export default function BookmarkWorkspacePage() {
   const params = useParams()
@@ -132,6 +133,13 @@ export default function BookmarkWorkspacePage() {
               <Building2 className="h-4 w-4" />
               Resumen
             </TabsTrigger>
+            <TabsTrigger value="strategy" className="gap-2">
+              <BrainCircuit className="h-4 w-4" />
+              Estrategia
+              <Badge variant="secondary" className="ml-1 text-[10px] px-1 h-4">
+                AI
+              </Badge>
+            </TabsTrigger>
             <TabsTrigger value="signals" className="gap-2">
               <Search className="h-4 w-4" />
               Investigación
@@ -157,6 +165,10 @@ export default function BookmarkWorkspacePage() {
 
           <TabsContent value="overview" className="m-0 focus-visible:ring-0">
             <BookmarkOverview company={company} />
+          </TabsContent>
+
+          <TabsContent value="strategy" className="m-0 focus-visible:ring-0">
+            <BookmarkStrategy companyId={companyId} companyName={company.name} website={company.website} />
           </TabsContent>
 
           <TabsContent value="signals" className="m-0 focus-visible:ring-0">
