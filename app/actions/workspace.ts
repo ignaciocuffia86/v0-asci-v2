@@ -3,7 +3,7 @@
 import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
 import { generateText } from "ai"
-import { getGeminiModel, getPerplexityModel, debugAIConfiguration } from "@/lib/ai-service"
+import { getPerplexityModel, debugAIConfiguration, generateGeminiContent } from "@/lib/ai-service"
 
 const perplexity = getPerplexityModel()
 
@@ -264,52 +264,67 @@ export async function generateIcebreaker(bookmarkId: string, contactId: string |
     .eq("user_id", user.id)
     .limit(3)
 
-  // 5. Preparar variables
+  const { data: strategyData } = await supabase
+    .from("user_company_strategies")
+    .select("sender_context_override")
+    .eq("bookmark_id", bookmarkId)
+    .eq("user_id", user.id)
+    .maybeSingle()
+
+  const { data: profileData } = await supabase.from("profiles").select("value_proposition").eq("id", user.id).single()
+
+  const valueProposition =
+    strategyData?.sender_context_override ||
+    profileData?.value_proposition ||
+    "una propuesta de valor centrada en mejorar la eficiencia"
+
+  // 6. Preparar variables con valores seguros
   const variables = {
     company_name: company?.name || "la empresa",
     industry: company?.industry || "su industria",
     contact_name: contact?.full_name || "Equipo",
     contact_role: contact?.role || "Líder",
     signal: signals && signals.length > 0 ? signals[0].title : "sus recientes iniciativas",
-    tone: templateData.tone,
+    strategy: valueProposition,
+    // In the future, this could be extracted dynamically from the strategy analysis.
+    pain_point: "su eficiencia operativa",
+    tone: templateData.tone || "profesional",
   }
 
-  // 6. Prompt
-  let finalPrompt = templateData.prompt_template
+  // 7. Prompt Construction
+  let finalPrompt = templateData.prompt_template || ""
+  // Replace known variables
   Object.entries(variables).forEach(([key, value]) => {
     finalPrompt = finalPrompt.replace(new RegExp(`{{${key}}}`, "g"), value)
   })
 
+  // Ensure prompt isn't empty or broken
+  if (!finalPrompt.trim()) {
+    finalPrompt = `Genera un mensaje de introducción para ${variables.contact_name} de ${variables.company_name} sobre ${variables.signal}. Tono: ${variables.tone}.`
+  }
+
+  console.log("[v0] Generating Icebreaker with context:", JSON.stringify(variables, null, 2))
+  console.log("[v0] Final Prompt sent to AI:", finalPrompt)
   debugAIConfiguration()
 
-  // 7. Generar con IA
+  // 8. Generar con IA
   let generatedText = ""
   try {
-    const { text } = await generateText({
-      model: getGeminiModel("2.5"),
-      prompt: finalPrompt,
-      temperature: 0.7,
-    })
-    generatedText = text
+    generatedText = await generateGeminiContent(finalPrompt, "gemini-2.0-flash", 0.7)
   } catch (error: any) {
-    console.error("AI Generation failed (Gemini 2.5)", error)
+    console.error("AI Generation failed (Gemini 2.0 Direct)", error)
 
-    // Fallback to 2.0 if 2.5 fails
+    // Try fallback to 1.5 if 2.0 fails (sometimes 2.0 is busy or region locked)
     try {
-      console.log("[v0] Falling back to Gemini 2.0 Flash")
-      const { text } = await generateText({
-        model: getGeminiModel("2.0"),
-        prompt: finalPrompt,
-        temperature: 0.7,
-      })
-      generatedText = text
-    } catch (fallbackError) {
-      console.error("AI Generation failed (Gemini 2.0 Fallback)", fallbackError)
-      generatedText = `[Error de IA] Hola ${variables.contact_name}, me gustaría conectar respecto a ${variables.company_name}. (Por favor verifique su Google API Key en los logs de la consola)`
+      console.log("[v0] Attempting fallback to Gemini 1.5 Pro...")
+      generatedText = await generateGeminiContent(finalPrompt, "gemini-1.5-pro", 0.7)
+    } catch (fallbackError: any) {
+      console.error("Fallback AI Generation failed", fallbackError)
+      generatedText = `[Error de IA] Hola ${variables.contact_name}, me gustaría conectar respecto a ${variables.company_name}. (Detalle: ${error.message})`
     }
   }
 
-  // 8. Guardar resultado
+  // 9. Guardar resultado
   await supabase.from("user_icebreakers").insert({
     user_id: user.id,
     company_id: bookmark.company_id,
@@ -440,11 +455,7 @@ export async function analyzeStrategy(bookmarkId: string, website: string, sende
   debugAIConfiguration()
 
   try {
-    const { text } = await generateText({
-      model: getGeminiModel("2.5"),
-      prompt: prompt,
-      temperature: 0.7,
-    })
+    const text = await generateGeminiContent(prompt, "gemini-2.0-flash", 0.7)
 
     const cleanText = text
       .replace(/```json/g, "")

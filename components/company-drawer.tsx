@@ -96,6 +96,7 @@ export function CompanyDrawer({
   const [signals, setSignals] = useState<Signal[]>([])
   const [contacts, setContacts] = useState<Contact[]>([])
   const [isBookmarked, setIsBookmarked] = useState(false)
+  const [dictionaryNames, setDictionaryNames] = useState<string[]>([])
   const supabase = createClient()
   const { toast } = useToast()
 
@@ -110,6 +111,17 @@ export function CompanyDrawer({
     const { data: companyData } = await supabase.from("companies").select("*").eq("id", companyId).single()
 
     setCompany(companyData)
+
+    if (filterSignalIds && filterSignalIds.length > 0 && filterType) {
+      const table = filterType === "process" ? "dictionary_processes" : "dictionary_products"
+      const { data: dictData } = await supabase.from(table).select("name").in("id", filterSignalIds)
+
+      if (dictData) {
+        setDictionaryNames(dictData.map((d) => d.name))
+      }
+    } else {
+      setDictionaryNames([])
+    }
 
     // Fetch signals with contact and signal name
     let signalsQuery = supabase
@@ -263,15 +275,21 @@ export function CompanyDrawer({
       await unbookmarkCompany(user.id, companyId)
       setIsBookmarked(false)
     } else {
-      // Extract signal names to save as context for the bookmarks list
-      const signalNames = signals
-        .filter((s) => filterSignalIds?.includes(s.signal_id))
-        .map((s) => s.keyword_matched)
-        .filter((value, index, self) => self.indexOf(value) === index) // Deduplicate
+      let contextNames: string[] = []
+
+      if (dictionaryNames.length > 0) {
+        contextNames = dictionaryNames
+      } else {
+        // Fallback to existing logic using keywords
+        contextNames = signals
+          .filter((s) => filterSignalIds?.includes(s.signal_id))
+          .map((s) => s.keyword_matched)
+          .filter((value, index, self) => self.indexOf(value) === index)
+      }
 
       const filtersUsed = {
-        technology: filterType === "technology" ? signalNames : [],
-        process: filterType === "process" ? signalNames : [],
+        technology: filterType === "technology" ? contextNames : [],
+        process: filterType === "process" ? contextNames : [],
       }
 
       await bookmarkCompany(user.id, companyId, {
