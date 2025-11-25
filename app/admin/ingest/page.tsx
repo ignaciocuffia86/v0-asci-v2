@@ -9,16 +9,31 @@ import { Progress } from "@/components/ui/progress"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { createImportBatch, uploadBatchRows, triggerBatchProcessing, getBatchStatus } from "@/app/actions/ingest"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Label } from "@/components/ui/label"
 
-// Define the expected CSV structure based on the provided file
-const REQUIRED_HEADERS = ["person_linkedin_url", "full_name", "company_name", "current_position"]
+const BATCH_TYPES = {
+  contacts: {
+    label: "Contactos (Personas)",
+    requiredHeaders: ["person_linkedin_url", "full_name", "company_name", "current_position"],
+    description: "CSV de contactos con perfiles de LinkedIn",
+  },
+  job_postings: {
+    label: "Ofertas de Empleo (Job Postings)",
+    requiredHeaders: ["company_linkedin_url", "title", "description"],
+    description: "CSV de ofertas laborales con datos de empresas",
+  },
+} as const
+
+type BatchType = keyof typeof BATCH_TYPES
 
 export default function IngestPage() {
   const [file, setFile] = useState<File | null>(null)
+  const [batchType, setBatchType] = useState<BatchType>("contacts")
   const [isUploading, setIsUploading] = useState(false)
   const [progress, setProgress] = useState(0)
   const [status, setStatus] = useState<"idle" | "parsing" | "uploading" | "processing" | "completed" | "error">("idle")
-  const [stats, setStats] = useState({ total: 0, processed: 0, failed: 0, errors: 0 }) // Added failed to stats
+  const [stats, setStats] = useState({ total: 0, processed: 0, failed: 0, errors: 0 })
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [batchId, setBatchId] = useState<string | null>(null)
 
@@ -52,7 +67,7 @@ export default function IngestPage() {
           setStats((prev) => ({
             ...prev,
             processed: batchStatus.processed_rows || 0,
-            failed: batchStatus.failed_rows || 0, // Update failed count
+            failed: batchStatus.failed_rows || 0,
           }))
 
           if (batchStatus.status === "completed") {
@@ -78,10 +93,12 @@ export default function IngestPage() {
   const processFile = async () => {
     if (!file) return
 
-    console.log("[v0] Starting file processing")
+    console.log("[v0] Starting file processing for batch type:", batchType)
     setIsUploading(true)
     setStatus("parsing")
-    setStats({ total: 0, processed: 0, failed: 0, errors: 0 }) // Reset failed count
+    setStats({ total: 0, processed: 0, failed: 0, errors: 0 })
+
+    const REQUIRED_HEADERS = BATCH_TYPES[batchType].requiredHeaders
 
     // 1. Parse CSV
     Papa.parse(file, {
@@ -99,15 +116,17 @@ export default function IngestPage() {
 
         if (missingHeaders.length > 0) {
           console.error("[v0] Missing headers:", missingHeaders)
-          setErrorMessage(`Faltan columnas requeridas: ${missingHeaders.join(", ")}`)
+          setErrorMessage(
+            `Faltan columnas requeridas para ${BATCH_TYPES[batchType].label}: ${missingHeaders.join(", ")}`,
+          )
           setStatus("error")
           setIsUploading(false)
           return
         }
 
-        // 2. Create Import Batch
-        console.log("[v0] Creating import batch...")
-        const newBatchId = await createImportBatch(file.name, totalRows)
+        // 2. Create Import Batch (with batch_type)
+        console.log("[v0] Creating import batch with type:", batchType)
+        const newBatchId = await createImportBatch(file.name, totalRows, batchType)
         if (!newBatchId) {
           console.error("[v0] Failed to create import batch")
           setErrorMessage("Error al crear el lote de importación.")
@@ -119,15 +138,15 @@ export default function IngestPage() {
         setBatchId(newBatchId)
         setStatus("uploading")
 
-        // 3. Upload to Raw Tables in Batches
-        const BATCH_SIZE = 500 // Increased batch size from 100 to 500 to speed up large uploads
+        // 3. Upload to Raw Tables in Batches (with batch_type)
+        const BATCH_SIZE = 50 // Reduced batch size from 500 to 50 to avoid "Request Entity Too Large" errors with large HTML job descriptions
         console.log("[v0] Starting upload of", totalRows, "rows in batches of", BATCH_SIZE)
 
         for (let i = 0; i < totalRows; i += BATCH_SIZE) {
           const batch = rows.slice(i, i + BATCH_SIZE)
 
           console.log("[v0] Uploading batch", Math.floor(i / BATCH_SIZE) + 1, "with", batch.length, "rows")
-          const result = await uploadBatchRows(newBatchId, batch)
+          const result = await uploadBatchRows(newBatchId, batch, batchType)
           if (!result.success) {
             console.error("[v0] Upload failed:", result.error)
             setErrorMessage(`Error al subir filas: ${result.error}`)
@@ -145,11 +164,9 @@ export default function IngestPage() {
         console.log("[v0] Starting background processing")
         setStatus("processing")
 
-        // Trigger one immediate chunk to verify everything works and give immediate feedback
         const triggerResult = await triggerBatchProcessing(newBatchId)
 
         if (!triggerResult.success) {
-          // If immediate trigger fails, warn but don't stop (cron might pick it up)
           console.warn("[v0] Immediate trigger warning:", triggerResult.error)
         } else {
           setStats((prev) => ({
@@ -157,9 +174,6 @@ export default function IngestPage() {
             processed: (prev.processed || 0) + (triggerResult.processedCount || 0),
           }))
         }
-
-        // The UI now relies on the polling useEffect to update stats,
-        // and the backend pg_cron job to do the actual work.
       },
       error: (error) => {
         console.error("[v0] CSV parsing error:", error)
@@ -204,6 +218,23 @@ export default function IngestPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
+            <div className="mb-6 space-y-2">
+              <Label htmlFor="batch-type">Tipo de Datos</Label>
+              <Select value={batchType} onValueChange={(value) => setBatchType(value as BatchType)}>
+                <SelectTrigger id="batch-type">
+                  <SelectValue placeholder="Selecciona el tipo de archivo" />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(BATCH_TYPES).map(([key, config]) => (
+                    <SelectItem key={key} value={key}>
+                      {config.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-sm text-muted-foreground">{BATCH_TYPES[batchType].description}</p>
+            </div>
+
             <div
               {...getRootProps()}
               className={`border-2 border-dashed rounded-lg p-10 text-center cursor-pointer transition-colors ${

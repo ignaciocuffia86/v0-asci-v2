@@ -5,7 +5,7 @@ import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
-import { Search, X, Building2, MapPin, Loader2, Users, GraduationCap } from "lucide-react"
+import { Search, X, Building2, MapPin, Loader2, Users, GraduationCap, Flame } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { searchByTechnology, type TechnologySearchResult } from "@/app/actions/search-v2"
 import { COUNTRIES } from "@/lib/constants"
@@ -175,6 +175,17 @@ export function TechnologySearch() {
                       </div>
                       <div className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Alumni</div>
                     </div>
+                    {company.job_postings_count > 0 && (
+                      <div className="text-center">
+                        <div className="flex items-center justify-center gap-1 text-orange-600 font-bold text-2xl">
+                          <Flame className="h-5 w-5" />
+                          {company.job_postings_count}
+                        </div>
+                        <div className="text-xs text-muted-foreground font-medium uppercase tracking-wider">
+                          Posiciones
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

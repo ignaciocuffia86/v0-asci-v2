@@ -517,20 +517,24 @@ export async function getBookmarkSmartContext(bookmarkId: string) {
   const { filterType, filterSignalIds } = bookmark.search_context
   if (!filterType || !filterSignalIds || filterSignalIds.length === 0) return null
 
-  // 2. Build Query for Smart Signals (Fetching from global signals table based on company)
-  // Smart signals are from the GLOBAL ASCI database, so we query by company_id, not bookmark_id
   let query = supabase
     .from("signals")
     .select(`
       keyword_matched, 
-      is_current_employee, 
+      is_current_employee,
+      contact_id,
+      job_posting_id,
       contacts:contact_id (
         full_name,
+        first_name,
+        last_name,
         profile_picture_url,
-        current_position_title
+        current_position_title,
+        headline
       )
     `)
     .eq("company_id", bookmark.company_id)
+    .not("contact_id", "is", null) // Only get signals with contacts (not job postings)
 
   if (filterSignalIds.length > 0) {
     query = query.in("signal_id", filterSignalIds)
@@ -540,17 +544,44 @@ export async function getBookmarkSmartContext(bookmarkId: string) {
     query = query.eq("is_current_employee", true)
   }
 
-  const { data: signals } = await query
+  const { data: signals, error } = await query
+
+  if (error) {
+    console.error("[v0] Error fetching smart context signals:", error)
+    return null
+  }
 
   if (!signals) return null
 
-  const enrichedSignals = signals.map((s: any) => ({
-    keyword: s.keyword_matched,
-    contactName: s.contacts?.full_name || "Unknown",
-    contactRole: s.contacts?.current_position_title || "Unknown Role",
-    contactPhoto: s.contacts?.profile_picture_url,
-    isCurrent: s.is_current_employee,
-  }))
+  const enrichedSignals = signals.map((s: any) => {
+    const contact = s.contacts
+    let contactName = "Unknown"
+    let contactRole = "Unknown Role"
+
+    if (contact) {
+      // Try full_name first, then build from first/last name
+      if (contact.full_name && contact.full_name.trim()) {
+        contactName = contact.full_name
+      } else if (contact.first_name || contact.last_name) {
+        contactName = [contact.first_name, contact.last_name].filter(Boolean).join(" ") || "Unknown"
+      }
+
+      // Try current_position_title first, then headline
+      if (contact.current_position_title && contact.current_position_title.trim()) {
+        contactRole = contact.current_position_title
+      } else if (contact.headline && contact.headline.trim()) {
+        contactRole = contact.headline
+      }
+    }
+
+    return {
+      keyword: s.keyword_matched,
+      contactName,
+      contactRole,
+      contactPhoto: contact?.profile_picture_url || null,
+      isCurrent: s.is_current_employee,
+    }
+  })
 
   return {
     filterType,

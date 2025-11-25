@@ -6,7 +6,7 @@ import { createClient } from "@/lib/supabase/client"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { ArrowLeft, Building2, Globe, Linkedin, Search, Users, Sparkles, BrainCircuit } from "lucide-react"
+import { ArrowLeft, Building2, Globe, Linkedin, Search, Users, Sparkles, BrainCircuit, Flame } from "lucide-react"
 import Link from "next/link"
 
 import { BookmarkOverview } from "./_components/overview-tab"
@@ -14,6 +14,7 @@ import { BookmarkSignals } from "./_components/signals-tab"
 import { BookmarkContacts } from "./_components/contacts-tab"
 import { BookmarkIcebreakers } from "./_components/icebreakers-tab"
 import { BookmarkStrategy } from "./_components/strategy-tab"
+import { BookmarkJobPostings } from "./_components/job-postings-tab"
 
 export default function BookmarkWorkspacePage() {
   const params = useParams()
@@ -157,6 +158,10 @@ export default function BookmarkWorkspacePage() {
               <Building2 className="h-4 w-4" />
               Resumen
             </TabsTrigger>
+            <TabsTrigger value="jobpostings" className="gap-2">
+              <Flame className="h-4 w-4 text-orange-500" />
+              Posiciones Abiertas
+            </TabsTrigger>
             <TabsTrigger value="signals" className="gap-2">
               <Search className="h-4 w-4" />
               Investigación
@@ -190,6 +195,10 @@ export default function BookmarkWorkspacePage() {
           <TabsContent value="overview" className="m-0 focus-visible:ring-0">
             {/* Pass bookmarkId instead of company.id where needed, or both */}
             <BookmarkOverview bookmarkId={bookmarkId} company={company} />
+          </TabsContent>
+
+          <TabsContent value="jobpostings" className="m-0 focus-visible:ring-0">
+            <BookmarkJobPostings bookmarkId={bookmarkId} />
           </TabsContent>
 
           <TabsContent value="signals" className="m-0 focus-visible:ring-0">

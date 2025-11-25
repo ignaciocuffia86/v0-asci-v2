@@ -5,7 +5,7 @@ import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
-import { Search, X, Building2, MapPin, Loader2 } from "lucide-react"
+import { Search, X, Building2, MapPin, Loader2, Flame } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { searchByProcess, type ProcessSearchResult } from "@/app/actions/search-v2"
 import { COUNTRIES } from "@/lib/constants"
@@ -181,11 +181,24 @@ export function ProcessSearch() {
                       )}
                     </div>
                   </div>
-                  <div className="text-center px-4">
-                    <div className="text-3xl font-bold text-primary">{company.signal_count}</div>
-                    <div className="text-xs text-muted-foreground font-medium uppercase tracking-wider">
-                      Empleados Actuales
+                  <div className="flex gap-6">
+                    <div className="text-center px-4">
+                      <div className="text-3xl font-bold text-primary">{company.signal_count}</div>
+                      <div className="text-xs text-muted-foreground font-medium uppercase tracking-wider">
+                        Empleados Actuales
+                      </div>
                     </div>
+                    {company.job_postings_count > 0 && (
+                      <div className="text-center px-4">
+                        <div className="flex items-center justify-center gap-1 text-2xl font-bold text-orange-600">
+                          <Flame className="h-5 w-5" />
+                          {company.job_postings_count}
+                        </div>
+                        <div className="text-xs text-muted-foreground font-medium uppercase tracking-wider">
+                          Posiciones Abiertas
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

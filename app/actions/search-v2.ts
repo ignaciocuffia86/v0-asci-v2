@@ -10,6 +10,7 @@ export type ProcessSearchResult = {
   company_linkedin_url: string | null
   company_country: string | null
   signal_count: number
+  job_postings_count: number // Added job postings counter
   sample_signals: any[]
 }
 
@@ -23,6 +24,7 @@ export type TechnologySearchResult = {
   total_count: number
   current_count: number
   alumni_count: number
+  job_postings_count: number // Added job postings counter
 }
 
 export type CompanySignalSummary = {
@@ -46,6 +48,9 @@ export async function searchByProcess(processIds: string[], countries: string[])
     throw new Error("Failed to search companies by process")
   }
 
+  console.log("[v0] Process search results sample:", data?.[0])
+  console.log("[v0] Job postings count in first result:", data?.[0]?.job_postings_count)
+
   return data || []
 }
 
@@ -61,6 +66,9 @@ export async function searchByTechnology(productId: string, countries: string[])
     console.error("Error searching by technology:", error)
     throw new Error("Failed to search companies by technology")
   }
+
+  console.log("[v0] Technology search results sample:", data?.[0])
+  console.log("[v0] Job postings count in first result:", data?.[0]?.job_postings_count)
 
   return data || []
 }

@@ -7,7 +7,18 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Building2, ExternalLink, Linkedin, Bookmark, Mail, Phone, CheckCircle2, LinkedinIcon } from "lucide-react"
+import {
+  Building2,
+  ExternalLink,
+  Linkedin,
+  Bookmark,
+  Mail,
+  Phone,
+  CheckCircle2,
+  LinkedinIcon,
+  Flame,
+  Briefcase,
+} from "lucide-react"
 import { bookmarkCompany, unbookmarkCompany } from "@/app/actions/bookmarks"
 import { useToast } from "@/hooks/use-toast"
 
@@ -29,14 +40,16 @@ type Signal = {
   snippet: string
   is_current_employee: boolean
   company_id: string
-  contact_id: string
+  contact_id: string | null // Made nullable for job posting signals
+  job_posting_id: string | null // Added job_posting_id field
   signal_id: string
+  source_url: string | null // Added source_url for apply links
   contact: {
-    id?: string // Added id to contact
-    name: string // Changed full_name to name for consistency or handle mapping
+    id?: string
+    name: string
     full_name: string
     headline: string
-    linkedin_url?: string // Added linkedin_url
+    linkedin_url?: string
     profile_picture_url: string | null
     current_position_title: string | null
     current_company_id: string | null
@@ -54,8 +67,14 @@ type Signal = {
     phone1_type?: string | null
     phone2?: string | null
     phone2_type?: string | null
-    company_id?: string // Added for comparison
-  }
+    company_id?: string
+  } | null // Made contact nullable for job posting signals
+  job_posting?: {
+    id: string
+    title: string
+    posted_at: string
+    apply_url: string | null
+  } | null
   signal_name: string
 }
 
@@ -79,6 +98,15 @@ type Contact = {
   phone2_type: string | null
 }
 
+type JobPosting = {
+  id: string
+  title: string
+  posted_at: string
+  apply_url: string | null
+  detected_keywords: any[]
+  is_recent: boolean
+}
+
 export function CompanyDrawer({
   companyId,
   isOpen,
@@ -97,6 +125,7 @@ export function CompanyDrawer({
   const [contacts, setContacts] = useState<Contact[]>([])
   const [isBookmarked, setIsBookmarked] = useState(false)
   const [dictionaryNames, setDictionaryNames] = useState<string[]>([])
+  const [jobPostings, setJobPostings] = useState<JobPosting[]>([])
   const supabase = createClient()
   const { toast } = useToast()
 
@@ -123,38 +152,17 @@ export function CompanyDrawer({
       setDictionaryNames([])
     }
 
-    // Fetch signals with contact and signal name
     let signalsQuery = supabase
       .from("signals")
       .select(`
-        id,
-        signal_type,
-        keyword_matched,
-        source_field,
-        snippet,
-        is_current_employee,
-        company_id,
-        contact_id,
-        signal_id,
-        contacts:contact_id (
-          id,
-          full_name,
-          headline,
-          linkedin_url,
-          profile_picture_url,
-          current_position_title,
-          current_company_id,
-          previous_positions,
-          email1, email1_type, email1_status, 
-          email2, email2_type, email2_status, 
-          phone1, phone1_type, 
-          phone2, phone2_type,
-          current_company:current_company_id (
-            name
-          )
-        )
+        *,
+        contact:contacts(*),
+        job_posting:job_postings(id, title, posted_at, apply_url)
       `)
       .eq("company_id", companyId)
+      .or(
+        `contact_id.not.is.null,job_posted_at.gte.${new Date(Date.now() - 6 * 30 * 24 * 60 * 60 * 1000).toISOString()}`,
+      )
 
     if (filterSignalIds && filterSignalIds.length > 0) {
       signalsQuery = signalsQuery.in("signal_id", filterSignalIds)
@@ -166,29 +174,30 @@ export function CompanyDrawer({
 
     const { data: signalsData, error: signalsError } = await signalsQuery.limit(200)
 
-    console.log("[v0] Signals fetched:", signalsData?.length, "Error:", signalsError)
-    console.log("[v0] Filter type:", filterType, "Filter IDs:", filterSignalIds)
-
     // Enrich with signal names
     if (signalsData) {
-      const enrichedSignals = await Promise.all(
-        signalsData.map(async (signal: any) => {
-          const signalName = signal.keyword_matched
-
-          return {
-            ...signal,
-            contact: {
-              ...signal.contacts,
-              name: signal.contacts?.full_name || "Unknown", // Map full_name to name for SignalCard
-              company_id: signal.company_id, // Pass company_id to contact object for easy comparison in SignalCard
-            },
-            signal_name: signalName,
+      const signalsWithNames = await Promise.all(
+        signalsData.map(async (signal) => {
+          let signalName = signal.keyword_matched
+          if (signal.signal_type === "technology" && signal.signal_id) {
+            const { data: product } = await supabase
+              .from("dictionary_products")
+              .select("name")
+              .eq("id", signal.signal_id)
+              .single()
+            if (product) signalName = product.name
+          } else if (signal.signal_type === "process" && signal.signal_id) {
+            const { data: process } = await supabase
+              .from("dictionary_processes")
+              .select("name")
+              .eq("id", signal.signal_id)
+              .single()
+            if (process) signalName = process.name
           }
+          return { ...signal, signal_name: signalName }
         }),
       )
-
-      console.log("[v0] Enriched signals after filter:", enrichedSignals.length)
-      setSignals(enrichedSignals as any)
+      setSignals(signalsWithNames)
     } else {
       setSignals([])
     }
@@ -201,26 +210,14 @@ export function CompanyDrawer({
       .eq("current_company_id", companyId)
 
     // Optimization: Get contact IDs from the filtered signals first
-    const filteredContactIds = signals.map((s) => s.contact_id).filter(Boolean) || []
+    const filteredContactIds = signalsData?.map((s) => s.contact_id).filter(Boolean) || []
 
     // If we have a filter active, only show contacts that have those signals
     if (filterSignalIds && filterSignalIds.length > 0) {
       // If no signals found for filter, no contacts to show
       if (filteredContactIds.length === 0) {
         setContacts([])
-        return
       }
-      // Only fetch contacts that are in our filtered list (and are current employees)
-      // We already filtered by current_company_id above, which implies current employees only.
-      // If we want alumni for tech search, we need to remove that constraint or handle it differently.
-      // However, the drawer currently only shows "Contactos" tab which seems to imply current roster.
-      // Let's stick to the current behavior but filtered by signal.
-
-      // Actually, a better approach for the "Contacts" tab when filtering is:
-      // "Show me people at this company who match the search criteria"
-
-      // Let's fetch all current contacts, and then for each, count the RELEVANT signals.
-      // If signal_count > 0, keep them.
     }
 
     const { data: contactsData } = await contactsQuery
@@ -263,6 +260,58 @@ export function CompanyDrawer({
         .single()
       setIsBookmarked(!!bookmark)
     }
+
+    const sixMonthsAgo = new Date(Date.now() - 6 * 30 * 24 * 60 * 60 * 1000).toISOString()
+
+    let jobPostingsQuery = supabase
+      .from("signals")
+      .select("*, job_posting:job_postings(*)")
+      .eq("company_id", companyId)
+      .not("job_posting_id", "is", null)
+
+    // Also apply signal_id filter if present (to match search results)
+    if (filterSignalIds && filterSignalIds.length > 0) {
+      jobPostingsQuery = jobPostingsQuery.in("signal_id", filterSignalIds)
+    }
+
+    const { data: jobPostingsData, error: jobPostingsError } = await jobPostingsQuery
+
+    if (jobPostingsData) {
+      const jobPostingsList: JobPosting[] = jobPostingsData
+        .filter((s) => s.job_posting_id !== null && s.job_posting !== null)
+        .map((s) => {
+          const oneMonthAgo = new Date()
+          oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1)
+          const postedDate = new Date(s.job_posting!.posted_at)
+
+          return {
+            id: s.job_posting!.id,
+            title: s.job_posting!.title,
+            posted_at: s.job_posting!.posted_at,
+            apply_url: s.source_url || s.job_posting!.apply_url,
+            detected_keywords: [
+              {
+                keyword: s.keyword_matched,
+                signal_name: s.signal_name,
+                snippet: s.snippet,
+              },
+            ],
+            is_recent: postedDate >= oneMonthAgo,
+          }
+        })
+        .reduce((acc, curr) => {
+          const existing = acc.find((jp) => jp.id === curr.id)
+          if (existing) {
+            existing.detected_keywords.push(...curr.detected_keywords)
+          } else {
+            acc.push(curr)
+          }
+          return acc
+        }, [] as JobPosting[])
+        .sort((a, b) => new Date(b.posted_at).getTime() - new Date(a.posted_at).getTime())
+
+      setJobPostings(jobPostingsList)
+    }
   }
 
   const handleBookmark = async () => {
@@ -302,14 +351,45 @@ export function CompanyDrawer({
   }
 
   const getTagCloud = () => {
-    const tagCounts = new Map<string, number>()
+    const tagCounts = new Map<string, Set<string>>()
     signals.forEach((signal) => {
       const keyword = signal.keyword_matched
-      tagCounts.set(keyword, (tagCounts.get(keyword) || 0) + 1)
+      if (!tagCounts.has(keyword)) {
+        tagCounts.set(keyword, new Set())
+      }
+      if (signal.contact_id) {
+        tagCounts.get(keyword)!.add(`contact_${signal.contact_id}`)
+      }
+      if (signal.job_posting_id) {
+        tagCounts.get(keyword)!.add(`job_${signal.job_posting_id}`)
+      }
     })
+    // Convert Sets to counts
     return Array.from(tagCounts.entries())
+      .map(([keyword, itemSet]) => [keyword, itemSet.size] as [string, number])
       .sort((a, b) => b[1] - a[1])
       .slice(0, 10)
+  }
+
+  const getJobPostingTags = () => {
+    const tagCounts = new Map<string, Set<string>>()
+    signals.forEach((signal) => {
+      if (signal.job_posting_id !== null && signal.job_posting !== null) {
+        signal.job_posting.detected_keywords?.forEach((kw: any) => {
+          const keyword = kw.signal_name || kw.keyword
+          if (!tagCounts.has(keyword)) {
+            tagCounts.set(keyword, new Set())
+          }
+          // Count unique job posting IDs for each keyword
+          tagCounts.get(keyword)!.add(signal.job_posting_id)
+        })
+      }
+    })
+    // Convert Sets to counts
+    return Array.from(tagCounts.entries())
+      .map(([keyword, jobPostingSet]) => [keyword, jobPostingSet.size] as [string, number])
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
   }
 
   if (!company) return null
@@ -319,13 +399,13 @@ export function CompanyDrawer({
       index ===
       self.findIndex(
         (t) =>
-          t.contact.id === signal.contact.id &&
+          t.contact?.id === signal.contact?.id &&
           t.keyword_matched.toLowerCase() === signal.keyword_matched.toLowerCase(),
       ),
   )
 
-  const currentEmployeeSignals = uniqueSignals.filter((s) => s.is_current_employee)
-  const alumniSignals = uniqueSignals.filter((s) => !s.is_current_employee)
+  const currentEmployeeSignals = uniqueSignals.filter((s) => s.is_current_employee && s.contact_id)
+  const alumniSignals = uniqueSignals.filter((s) => !s.is_current_employee && s.contact_id)
 
   return (
     <Sheet open={isOpen} onOpenChange={onClose}>
@@ -416,6 +496,28 @@ export function CompanyDrawer({
                       </Badge>
                     ))}
                   </div>
+
+                  {jobPostings.length > 0 && getJobPostingTags().length > 0 && (
+                    <div className="mt-4 pt-4 border-t border-orange-100 dark:border-orange-900/30">
+                      <h4 className="text-xs font-medium text-orange-600 dark:text-orange-500 mb-3 uppercase tracking-wider flex items-center gap-1.5">
+                        <Flame className="h-3.5 w-3.5" />
+                        Ahora Buscando
+                      </h4>
+                      <div className="flex flex-wrap gap-2">
+                        {getJobPostingTags().map(([keyword, count]) => (
+                          <Badge
+                            key={keyword}
+                            variant="secondary"
+                            className="bg-orange-50 hover:bg-orange-100 text-orange-700 dark:bg-orange-950/30 dark:text-orange-400 border border-orange-200 dark:border-orange-900/50 px-2.5 py-1 text-xs"
+                          >
+                            <Flame className="h-3 w-3 mr-1" />
+                            {keyword}
+                            <span className="ml-1.5 text-orange-400 dark:text-orange-600 font-normal">{count}</span>
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {filterType && (
@@ -460,6 +562,21 @@ export function CompanyDrawer({
                   {alumniSignals.length}
                 </Badge>
               </TabsTrigger>
+              {jobPostings.length > 0 && (
+                <TabsTrigger
+                  value="jobpostings"
+                  className="h-full rounded-none border-b-2 border-transparent px-0 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none font-medium"
+                >
+                  <Flame className="h-4 w-4 mr-1.5 text-orange-500" />
+                  Posiciones Abiertas
+                  <Badge
+                    variant="secondary"
+                    className="ml-2 bg-orange-100 text-orange-700 dark:bg-orange-950/30 dark:text-orange-300 text-xs hover:bg-orange-200"
+                  >
+                    {jobPostings.length}
+                  </Badge>
+                </TabsTrigger>
+              )}
             </TabsList>
           </div>
 
@@ -483,6 +600,14 @@ export function CompanyDrawer({
                 </div>
               )}
             </TabsContent>
+
+            {jobPostings.length > 0 && (
+              <TabsContent value="jobpostings" className="p-6 space-y-4 m-0">
+                {jobPostings.map((jp) => (
+                  <JobPostingCard key={jp.id} jobPosting={jp} />
+                ))}
+              </TabsContent>
+            )}
           </div>
         </Tabs>
       </SheetContent>
@@ -490,7 +615,7 @@ export function CompanyDrawer({
   )
 }
 
-function SignalCard({ signal }: { signal: Signal }) {
+const SignalCard = ({ signal }: { signal: Signal }) => {
   const { toast } = useToast()
 
   const formatSourceField = (field: string) => {
@@ -499,6 +624,11 @@ function SignalCard({ signal }: { signal: Signal }) {
       current_position: "Posición Actual",
       headline: "Titular",
       previous_position: "Posición Anterior",
+      job_description: "Descripción del Puesto",
+      job_title: "Título del Puesto",
+      summary: "Resumen",
+      experience: "Experiencia",
+      skills: "Habilidades",
     }
     return map[field] || field
   }
@@ -506,7 +636,7 @@ function SignalCard({ signal }: { signal: Signal }) {
   const getPreviousCompanyContext = (signal: Signal) => {
     if (signal.source_field !== "previous_position") return null
 
-    const positions = signal.contact.previous_positions || []
+    const positions = signal.contact?.previous_positions || []
 
     // Find the position that likely generated this signal
     const matchingPosition = positions.find((pos: any) => {
@@ -518,7 +648,7 @@ function SignalCard({ signal }: { signal: Signal }) {
       // Only show "misma empresa" logic if they are CURRENTLY working there and referring to a previous role there
       // We check if they are marked as current employee AND the previous role company ID matches current company ID
       const isInternalPromotion =
-        signal.is_current_employee && matchingPosition.company_id === signal.contact.current_company_id
+        signal.is_current_employee && matchingPosition.company_id === signal.contact?.current_company_id
 
       if (isInternalPromotion) {
         return `en Posición Anterior (misma empresa)`
@@ -530,6 +660,8 @@ function SignalCard({ signal }: { signal: Signal }) {
     return "en Posición Anterior"
   }
 
+  const contactInitials = signal.contact?.full_name
+
   const prevContext = getPreviousCompanyContext(signal)
   const sourceLabel = formatSourceField(signal.source_field)
 
@@ -540,26 +672,26 @@ function SignalCard({ signal }: { signal: Signal }) {
           <div className="flex gap-4 w-full">
             <Avatar className="h-14 w-14 border-2 border-white shadow-sm ring-1 ring-slate-100 shrink-0">
               <AvatarImage
-                src={signal.contact.profile_picture_url || ""}
-                alt={signal.contact.name}
+                src={signal.contact?.profile_picture_url || ""}
+                alt={signal.contact?.full_name || "Contact"}
                 className="object-cover"
               />
               <AvatarFallback className="text-lg bg-primary/10 text-primary font-medium">
-                {signal.contact.name.slice(0, 2).toUpperCase()}
+                {contactInitials}
               </AvatarFallback>
             </Avatar>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-0.5">
-                <h4 className="font-bold text-base truncate">{signal.contact.name}</h4>
+                <h4 className="font-bold text-base truncate">{signal.contact?.full_name}</h4>
                 {/* LinkedIn Button */}
-                {signal.contact.linkedin_url && !signal.contact.linkedin_url.includes("placeholder") && (
+                {signal.contact?.linkedin_url && !signal.contact.linkedin_url.includes("placeholder") && (
                   <Button
                     variant="ghost"
                     size="icon"
                     className="h-6 w-6 text-[#0077b5] hover:text-[#0077b5]/80 -my-1 shrink-0"
                     asChild
                   >
-                    <a href={signal.contact.linkedin_url} target="_blank" rel="noopener noreferrer">
+                    <a href={signal.contact?.linkedin_url} target="_blank" rel="noopener noreferrer">
                       <LinkedinIcon className="h-4 w-4" />
                     </a>
                   </Button>
@@ -575,22 +707,22 @@ function SignalCard({ signal }: { signal: Signal }) {
               </div>
 
               {/* Job Title Logic: Prefer Current Title > Headline */}
-              {signal.contact.current_position_title ? (
+              {signal.contact?.current_position_title ? (
                 <>
                   <p className="text-sm font-medium text-slate-900 dark:text-slate-100 truncate">
                     {signal.contact.current_position_title}
-                    {signal.is_current_employee && signal.contact.current_company && (
+                    {signal.is_current_employee && signal.contact?.current_company && (
                       <span className="text-slate-500 font-normal ml-1">en {signal.contact.current_company.name}</span>
                     )}
                   </p>
                   {/* Show headline as secondary info if different and exists */}
-                  {signal.contact.headline && signal.contact.headline !== signal.contact.current_position_title && (
+                  {signal.contact?.headline && signal.contact.headline !== signal.contact.current_position_title && (
                     <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{signal.contact.headline}</p>
                   )}
                 </>
               ) : (
                 <p className="text-sm text-muted-foreground line-clamp-1">
-                  {signal.contact.headline || "Sin cargo definido"}
+                  {signal.contact?.headline || "Sin cargo definido"}
                 </p>
               )}
 
@@ -603,12 +735,12 @@ function SignalCard({ signal }: { signal: Signal }) {
                     3. Fallback to personal/other
                   */}
                   {(() => {
-                    const e1 = signal.contact.email1
-                    const e1t = signal.contact.email1_type
-                    const e1s = signal.contact.email1_status
-                    const e2 = signal.contact.email2
-                    const e2t = signal.contact.email2_type
-                    const e2s = signal.contact.email2_status
+                    const e1 = signal.contact?.email1
+                    const e1t = signal.contact?.email1_type
+                    const e1s = signal.contact?.email1_status
+                    const e2 = signal.contact?.email2
+                    const e2t = signal.contact?.email2_type
+                    const e2s = signal.contact?.email2_status
 
                     let primaryEmail = null
                     let primaryEmailStatus = null
@@ -681,7 +813,7 @@ function SignalCard({ signal }: { signal: Signal }) {
                   })()}
 
                   {/* Personal Phone */}
-                  {signal.contact.phone1_type === "personal" && signal.contact.phone1 && (
+                  {signal.contact?.phone1_type === "personal" && signal.contact.phone1 && (
                     <Badge
                       variant="outline"
                       className="font-normal bg-slate-50 text-slate-600 border-slate-100 hover:bg-slate-100 cursor-pointer gap-1.5 py-0.5 px-2 h-6 transition-colors"
@@ -700,7 +832,7 @@ function SignalCard({ signal }: { signal: Signal }) {
               {!signal.is_current_employee && (
                 <div className="flex items-center mt-2 text-amber-600/90 text-xs font-medium bg-amber-50 px-2 py-1 rounded-md w-fit border border-amber-100/50">
                   Ex-empleado
-                  {signal.contact.current_position_title && signal.contact.current_company && (
+                  {signal.contact?.current_position_title && signal.contact.current_company && (
                     <span className="text-amber-600/70 font-normal ml-1">
                       • Actualmente {signal.contact.current_position_title} en {signal.contact.current_company.name}
                     </span>
@@ -731,6 +863,92 @@ function SignalCard({ signal }: { signal: Signal }) {
             </p>
           </div>
         </div>
+      </div>
+    </div>
+  )
+}
+
+function JobPostingCard({ jobPosting }: { jobPosting: JobPosting }) {
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString)
+    const now = new Date()
+    const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24))
+
+    // Show "Hoy" only if it's actually today
+    if (diffDays === 0) {
+      return `Hoy, ${date.toLocaleDateString("es-ES", { day: "numeric", month: "short" })}`
+    }
+
+    // For recent posts (less than 7 days), show date with year if needed
+    const currentYear = now.getFullYear()
+    const postYear = date.getFullYear()
+
+    if (currentYear === postYear) {
+      return date.toLocaleDateString("es-ES", { day: "numeric", month: "short" })
+    } else {
+      return date.toLocaleDateString("es-ES", { day: "numeric", month: "short", year: "numeric" })
+    }
+  }
+
+  return (
+    <div className="rounded-xl border bg-card text-card-foreground shadow-sm overflow-hidden transition-all hover:shadow-md bg-white dark:bg-slate-900">
+      <div className="p-6">
+        <div className="flex items-start justify-between gap-4 mb-4">
+          <div className="flex gap-3 items-start flex-1 min-w-0">
+            <div className="bg-orange-100 dark:bg-orange-950/30 p-2 rounded-lg shrink-0">
+              <Briefcase className="h-5 w-5 text-orange-600 dark:text-orange-500" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-start gap-2 mb-1">
+                <h4 className="font-semibold text-base leading-tight">{jobPosting.title}</h4>
+                {jobPosting.is_recent && (
+                  <Badge
+                    variant="outline"
+                    className="bg-green-50 text-green-700 border-green-200 text-[10px] px-1.5 py-0 h-5 shrink-0"
+                  >
+                    Reciente
+                  </Badge>
+                )}
+              </div>
+              <p className="text-sm text-muted-foreground">Publicado {formatDate(jobPosting.posted_at)}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Detected Keywords */}
+        {jobPosting.detected_keywords && jobPosting.detected_keywords.length > 0 && (
+          <div className="mb-4">
+            <div className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wider">
+              Tecnologías/Procesos Detectados:
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {jobPosting.detected_keywords.map((kw: any, idx: number) => (
+                <Badge
+                  key={idx}
+                  variant="secondary"
+                  className="bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 text-xs"
+                >
+                  {kw.signal_name || kw.keyword}
+                </Badge>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Apply Button */}
+        {jobPosting.apply_url && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full bg-orange-50 hover:bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-950/20 dark:hover:bg-orange-950/30"
+            asChild
+          >
+            <a href={jobPosting.apply_url} target="_blank" rel="noopener noreferrer">
+              <ExternalLink className="h-3.5 w-3.5 mr-2" />
+              Ver Publicación Completa
+            </a>
+          </Button>
+        )}
       </div>
     </div>
   )
