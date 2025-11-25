@@ -182,8 +182,8 @@ export function EditKeywordsDialog({
 
             {/* Current keywords */}
             <div className="space-y-2">
-              <Label>Keywords actuales</Label>
-              <div className="flex flex-wrap gap-2 p-3 border rounded-md min-h-[60px] bg-muted/30">
+              <Label>Keywords actuales ({keywords.length})</Label>
+              <div className="flex flex-wrap gap-2 p-3 border rounded-md min-h-[60px] max-h-[200px] overflow-y-auto bg-muted/30">
                 {keywords.length === 0 ? (
                   <span className="text-sm text-muted-foreground">Sin keywords</span>
                 ) : (
