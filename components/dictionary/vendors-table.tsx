@@ -1,18 +1,13 @@
-"use client";
+"use client"
 
-import { useState, useEffect } from "react";
-import { createClient } from "@/lib/supabase/client";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Plus, Trash2, ChevronRight, ChevronDown, Save, X } from 'lucide-react';
+import type React from "react"
+
+import { useState, useEffect } from "react"
+import { createClient } from "@/lib/supabase/client"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Plus, Trash2, ChevronRight, ChevronDown, X, Pencil } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -21,36 +16,34 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
+} from "@/components/ui/dialog"
+import { Label } from "@/components/ui/label"
+import { Badge } from "@/components/ui/badge"
+import { EditKeywordsDialog } from "./edit-keywords-dialog"
 
 type Vendor = {
-  id: string;
-  name: string;
-  products?: Product[];
-};
+  id: string
+  name: string
+  products?: Product[]
+}
 
 type Product = {
-  id: string;
-  name: string;
-  keywords: string[];
-  vendor_id: string;
-};
+  id: string
+  name: string
+  keywords: string[]
+  vendor_id: string
+}
 
 export function VendorsTable() {
-  const [vendors, setVendors] = useState<Vendor[]>([]);
-  const [expandedVendor, setExpandedVendor] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const supabase = createClient();
+  const [vendors, setVendors] = useState<Vendor[]>([])
+  const [expandedVendor, setExpandedVendor] = useState<string | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null)
+  const supabase = createClient()
 
-  // Fetch data
   const fetchData = async () => {
-    setIsLoading(true);
-    const { data: vendorsData } = await supabase
-      .from("dictionary_vendors")
-      .select("*")
-      .order("name");
+    setIsLoading(true)
+    const { data: vendorsData } = await supabase.from("dictionary_vendors").select("*").order("name")
 
     if (vendorsData) {
       const vendorsWithProducts = await Promise.all(
@@ -59,46 +52,44 @@ export function VendorsTable() {
             .from("dictionary_products")
             .select("*")
             .eq("vendor_id", vendor.id)
-            .order("name");
-          return { ...vendor, products: products || [] };
-        })
-      );
-      setVendors(vendorsWithProducts);
+            .order("name")
+          return { ...vendor, products: products || [] }
+        }),
+      )
+      setVendors(vendorsWithProducts)
     }
-    setIsLoading(false);
-  };
+    setIsLoading(false)
+  }
 
   useEffect(() => {
-    fetchData();
-  }, []);
+    fetchData()
+  }, [])
 
-  // Vendor Actions
   const addVendor = async (name: string) => {
-    await supabase.from("dictionary_vendors").insert({ name });
-    fetchData();
-  };
+    await supabase.from("dictionary_vendors").insert({ name })
+    fetchData()
+  }
 
   const deleteVendor = async (id: string) => {
     if (confirm("¿Estás seguro? Esto eliminará todos los productos asociados.")) {
-      await supabase.from("dictionary_vendors").delete().eq("id", id);
-      fetchData();
+      await supabase.from("dictionary_vendors").delete().eq("id", id)
+      fetchData()
     }
-  };
+  }
 
-  // Product Actions
   const addProduct = async (vendorId: string, name: string, keywords: string[]) => {
     await supabase.from("dictionary_products").insert({
       vendor_id: vendorId,
       name,
       keywords,
-    });
-    fetchData();
-  };
+    })
+    fetchData()
+  }
 
   const deleteProduct = async (id: string) => {
-    await supabase.from("dictionary_products").delete().eq("id", id);
-    fetchData();
-  };
+    await supabase.from("dictionary_products").delete().eq("id", id)
+    fetchData()
+  }
 
   return (
     <div className="space-y-4">
@@ -154,12 +145,15 @@ export function VendorsTable() {
                           <h4 className="text-sm font-semibold">Productos de {vendor.name}</h4>
                           <AddProductDialog vendorId={vendor.id} onAdd={addProduct} />
                         </div>
-                        
+
                         {vendor.products && vendor.products.length > 0 ? (
                           <div className="grid gap-4">
                             {vendor.products.map((product) => (
-                              <div key={product.id} className="flex items-start justify-between p-3 bg-background border rounded-md">
-                                <div>
+                              <div
+                                key={product.id}
+                                className="flex items-start justify-between p-3 bg-background border rounded-md"
+                              >
+                                <div className="flex-1">
                                   <div className="font-medium text-sm">{product.name}</div>
                                   <div className="flex flex-wrap gap-1 mt-2">
                                     {product.keywords?.map((kw, i) => (
@@ -169,21 +163,29 @@ export function VendorsTable() {
                                     ))}
                                   </div>
                                 </div>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="text-destructive h-6 w-6 p-0"
-                                  onClick={() => deleteProduct(product.id)}
-                                >
-                                  <X className="h-3 w-3" />
-                                </Button>
+                                <div className="flex gap-1">
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-6 w-6 p-0"
+                                    onClick={() => setEditingProduct(product)}
+                                  >
+                                    <Pencil className="h-3 w-3" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="text-destructive h-6 w-6 p-0"
+                                    onClick={() => deleteProduct(product.id)}
+                                  >
+                                    <X className="h-3 w-3" />
+                                  </Button>
+                                </div>
                               </div>
                             ))}
                           </div>
                         ) : (
-                          <div className="text-sm text-muted-foreground italic">
-                            No hay productos configurados.
-                          </div>
+                          <div className="text-sm text-muted-foreground italic">No hay productos configurados.</div>
                         )}
                       </div>
                     </TableCell>
@@ -201,22 +203,34 @@ export function VendorsTable() {
           </TableBody>
         </Table>
       </div>
+
+      {editingProduct && (
+        <EditKeywordsDialog
+          open={!!editingProduct}
+          onOpenChange={(open) => !open && setEditingProduct(null)}
+          itemId={editingProduct.id}
+          itemName={editingProduct.name}
+          itemType="product"
+          currentKeywords={editingProduct.keywords || []}
+          onSave={fetchData}
+        />
+      )}
     </div>
-  );
+  )
 }
 
 function AddVendorDialog({ onAdd }: { onAdd: (name: string) => void }) {
-  const [name, setName] = useState("");
-  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("")
+  const [open, setOpen] = useState(false)
 
   const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+    e.preventDefault()
     if (name.trim()) {
-      onAdd(name);
-      setName("");
-      setOpen(false);
+      onAdd(name)
+      setName("")
+      setOpen(false)
     }
-  };
+  }
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -229,9 +243,7 @@ function AddVendorDialog({ onAdd }: { onAdd: (name: string) => void }) {
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Agregar Nuevo Vendor</DialogTitle>
-          <DialogDescription>
-            Ingresa el nombre de la empresa proveedora de tecnología.
-          </DialogDescription>
+          <DialogDescription>Ingresa el nombre de la empresa proveedora de tecnología.</DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
           <div className="grid gap-4 py-4">
@@ -247,33 +259,40 @@ function AddVendorDialog({ onAdd }: { onAdd: (name: string) => void }) {
             </div>
           </div>
           <DialogFooter>
-            <Button type="submit" disabled={!name.trim()}>Guardar</Button>
+            <Button type="submit" disabled={!name.trim()}>
+              Guardar
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>
     </Dialog>
-  );
+  )
 }
 
-function AddProductDialog({ vendorId, onAdd }: { vendorId: string, onAdd: (vid: string, name: string, kws: string[]) => void }) {
-  const [name, setName] = useState("");
-  const [keywords, setKeywords] = useState("");
-  const [open, setOpen] = useState(false);
+function AddProductDialog({
+  vendorId,
+  onAdd,
+}: { vendorId: string; onAdd: (vid: string, name: string, kws: string[]) => void }) {
+  const [name, setName] = useState("")
+  const [keywords, setKeywords] = useState("")
+  const [open, setOpen] = useState(false)
 
   const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+    e.preventDefault()
     if (name.trim()) {
-      const kwList = keywords.split(",").map(k => k.trim()).filter(k => k);
-      // Add product name itself as a keyword if not present
+      const kwList = keywords
+        .split(/[,;]/)
+        .map((k) => k.trim())
+        .filter((k) => k)
       if (!kwList.includes(name.trim())) {
-        kwList.unshift(name.trim());
+        kwList.unshift(name.trim())
       }
-      onAdd(vendorId, name, kwList);
-      setName("");
-      setKeywords("");
-      setOpen(false);
+      onAdd(vendorId, name, kwList)
+      setName("")
+      setKeywords("")
+      setOpen(false)
     }
-  };
+  }
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -286,9 +305,7 @@ function AddProductDialog({ vendorId, onAdd }: { vendorId: string, onAdd: (vid: 
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Agregar Producto</DialogTitle>
-          <DialogDescription>
-            Define el producto y sus sinónimos (separados por coma).
-          </DialogDescription>
+          <DialogDescription>Define el producto y sus sinónimos.</DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
           <div className="grid gap-4 py-4">
@@ -307,18 +324,20 @@ function AddProductDialog({ vendorId, onAdd }: { vendorId: string, onAdd: (vid: 
                 id="keywords"
                 value={keywords}
                 onChange={(e) => setKeywords(e.target.value)}
-                placeholder="Ej: SFDC, Salesforce CRM (separar por comas)"
+                placeholder="Ej: SFDC; Salesforce CRM (separar por ; o ,)"
               />
               <p className="text-xs text-muted-foreground">
-                El nombre del producto se incluye automáticamente como keyword.
+                El nombre del producto se incluye automáticamente. Usa punto y coma (;) o coma (,) para separar.
               </p>
             </div>
           </div>
           <DialogFooter>
-            <Button type="submit" disabled={!name.trim()}>Guardar</Button>
+            <Button type="submit" disabled={!name.trim()}>
+              Guardar
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>
     </Dialog>
-  );
+  )
 }

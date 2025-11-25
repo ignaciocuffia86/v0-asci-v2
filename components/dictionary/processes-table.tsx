@@ -1,18 +1,13 @@
-"use client";
+"use client"
 
-import { useState, useEffect } from "react";
-import { createClient } from "@/lib/supabase/client";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Plus, Trash2, X } from 'lucide-react';
+import type React from "react"
+
+import { useState, useEffect } from "react"
+import { createClient } from "@/lib/supabase/client"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Plus, Trash2, Pencil } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -21,49 +16,48 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
+} from "@/components/ui/dialog"
+import { Label } from "@/components/ui/label"
+import { Badge } from "@/components/ui/badge"
+import { EditKeywordsDialog } from "./edit-keywords-dialog"
 
 type Process = {
-  id: string;
-  name: string;
-  keywords: string[];
-};
+  id: string
+  name: string
+  keywords: string[]
+}
 
 export function ProcessesTable() {
-  const [processes, setProcesses] = useState<Process[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const supabase = createClient();
+  const [processes, setProcesses] = useState<Process[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [editingProcess, setEditingProcess] = useState<Process | null>(null)
+  const supabase = createClient()
 
   const fetchData = async () => {
-    setIsLoading(true);
-    const { data } = await supabase
-      .from("dictionary_processes")
-      .select("*")
-      .order("name");
-    setProcesses(data || []);
-    setIsLoading(false);
-  };
+    setIsLoading(true)
+    const { data } = await supabase.from("dictionary_processes").select("*").order("name")
+    setProcesses(data || [])
+    setIsLoading(false)
+  }
 
   useEffect(() => {
-    fetchData();
-  }, []);
+    fetchData()
+  }, [])
 
   const addProcess = async (name: string, keywords: string[]) => {
     await supabase.from("dictionary_processes").insert({
       name,
       keywords,
-    });
-    fetchData();
-  };
+    })
+    fetchData()
+  }
 
   const deleteProcess = async (id: string) => {
     if (confirm("¿Estás seguro de eliminar este proceso?")) {
-      await supabase.from("dictionary_processes").delete().eq("id", id);
-      fetchData();
+      await supabase.from("dictionary_processes").delete().eq("id", id)
+      fetchData()
     }
-  };
+  }
 
   return (
     <div className="space-y-4">
@@ -94,14 +88,19 @@ export function ProcessesTable() {
                   </div>
                 </TableCell>
                 <TableCell className="text-right align-top pt-3">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-destructive hover:text-destructive"
-                    onClick={() => deleteProcess(process.id)}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                  <div className="flex justify-end gap-1">
+                    <Button variant="ghost" size="sm" onClick={() => setEditingProcess(process)}>
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-destructive hover:text-destructive"
+                      onClick={() => deleteProcess(process.id)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </TableCell>
               </TableRow>
             ))}
@@ -115,28 +114,43 @@ export function ProcessesTable() {
           </TableBody>
         </Table>
       </div>
+
+      {editingProcess && (
+        <EditKeywordsDialog
+          open={!!editingProcess}
+          onOpenChange={(open) => !open && setEditingProcess(null)}
+          itemId={editingProcess.id}
+          itemName={editingProcess.name}
+          itemType="process"
+          currentKeywords={editingProcess.keywords || []}
+          onSave={fetchData}
+        />
+      )}
     </div>
-  );
+  )
 }
 
 function AddProcessDialog({ onAdd }: { onAdd: (name: string, kws: string[]) => void }) {
-  const [name, setName] = useState("");
-  const [keywords, setKeywords] = useState("");
-  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("")
+  const [keywords, setKeywords] = useState("")
+  const [open, setOpen] = useState(false)
 
   const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+    e.preventDefault()
     if (name.trim()) {
-      const kwList = keywords.split(",").map(k => k.trim()).filter(k => k);
+      const kwList = keywords
+        .split(/[,;]/)
+        .map((k) => k.trim())
+        .filter((k) => k)
       if (!kwList.includes(name.trim())) {
-        kwList.unshift(name.trim());
+        kwList.unshift(name.trim())
       }
-      onAdd(name, kwList);
-      setName("");
-      setKeywords("");
-      setOpen(false);
+      onAdd(name, kwList)
+      setName("")
+      setKeywords("")
+      setOpen(false)
     }
-  };
+  }
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -149,9 +163,7 @@ function AddProcessDialog({ onAdd }: { onAdd: (name: string, kws: string[]) => v
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Agregar Nuevo Proceso</DialogTitle>
-          <DialogDescription>
-            Define el proceso de negocio y sus palabras clave asociadas.
-          </DialogDescription>
+          <DialogDescription>Define el proceso de negocio y sus palabras clave asociadas.</DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
           <div className="grid gap-4 py-4">
@@ -171,15 +183,20 @@ function AddProcessDialog({ onAdd }: { onAdd: (name: string, kws: string[]) => v
                 id="proc-keywords"
                 value={keywords}
                 onChange={(e) => setKeywords(e.target.value)}
-                placeholder="Ej: Digital Transformation, Digitalización (separar por comas)"
+                placeholder="Ej: Digital Transformation; Digitalización (separar por ; o ,)"
               />
+              <p className="text-xs text-muted-foreground">
+                El nombre se incluye automáticamente. Usa punto y coma (;) o coma (,) para separar.
+              </p>
             </div>
           </div>
           <DialogFooter>
-            <Button type="submit" disabled={!name.trim()}>Guardar</Button>
+            <Button type="submit" disabled={!name.trim()}>
+              Guardar
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>
     </Dialog>
-  );
+  )
 }
