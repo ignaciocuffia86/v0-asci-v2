@@ -17,31 +17,37 @@ export async function GET(request: Request) {
   const MAX_EXECUTION_TIME = 55000 // 55 seconds max
   let totalJobsProcessed = 0
   let totalSignalsAffected = 0
+  let consecutiveEmptyPolls = 0
 
   try {
     console.log("[Cron Dictionary] Starting dictionary jobs processing...")
 
     while (Date.now() - startTime < MAX_EXECUTION_TIME) {
-      // Get pending dictionary jobs
       const { data: jobs, error: jobsError } = await supabase
         .from("dictionary_jobs")
         .select("*")
         .in("status", ["pending", "processing"])
         .order("created_at", { ascending: true })
-        .limit(5)
+        .limit(20)
 
       if (jobsError) {
         console.error("[Cron Dictionary] Error fetching jobs:", jobsError)
-        await new Promise((resolve) => setTimeout(resolve, 5000))
+        await new Promise((resolve) => setTimeout(resolve, 1000))
         continue
       }
 
       if (!jobs || jobs.length === 0) {
-        // No pending jobs, wait before checking again
-        console.log("[Cron Dictionary] No pending jobs, waiting...")
-        await new Promise((resolve) => setTimeout(resolve, 10000))
+        consecutiveEmptyPolls++
+        if (consecutiveEmptyPolls >= 3) {
+          console.log("[Cron Dictionary] No pending jobs after 3 polls, exiting early")
+          break
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2000))
         continue
       }
+
+      // Reset counter when we find jobs
+      consecutiveEmptyPolls = 0
 
       // Process each job
       for (const job of jobs) {
@@ -50,15 +56,13 @@ export async function GET(request: Request) {
         console.log(`[Cron Dictionary] Processing job ${job.id} (${job.job_type})...`)
 
         try {
-          // Call the RPC to process the job
           const { data: result, error: rpcError } = await supabase.rpc("process_dictionary_job", {
             p_job_id: job.id,
-            p_batch_size: 500, // Process 500 records per batch
+            p_batch_size: 1000,
           })
 
           if (rpcError) {
             console.error(`[Cron Dictionary] Error processing job ${job.id}:`, rpcError)
-            // Mark job as failed
             await supabase
               .from("dictionary_jobs")
               .update({
@@ -88,12 +92,6 @@ export async function GET(request: Request) {
                 jobResult.signals_created || jobResult.deleted_count || 0
               } signals affected`,
             )
-
-            // If there's more work to do, continue processing
-            if (jobResult.has_more) {
-              // Small delay between batches
-              await new Promise((resolve) => setTimeout(resolve, 500))
-            }
           } else {
             console.error(`[Cron Dictionary] Job ${job.id} failed:`, jobResult.error)
             await supabase
@@ -118,8 +116,7 @@ export async function GET(request: Request) {
         }
       }
 
-      // Small delay between job batches
-      await new Promise((resolve) => setTimeout(resolve, 1000))
+      await new Promise((resolve) => setTimeout(resolve, 100))
     }
 
     console.log(

@@ -14,12 +14,15 @@ import {
   Activity,
   Users,
   Briefcase,
+  AlertTriangle,
+  ShieldAlert,
 } from "lucide-react"
 import { processSignals, getProcessingStats } from "@/app/actions/processing"
 import { Progress } from "@/components/ui/progress"
 import { createClient } from "@/lib/supabase/client"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 
 type DictionaryJob = {
   id: string
@@ -41,6 +44,14 @@ type DictionaryJob = {
   error_message: string | null
 }
 
+type SystemAlert = {
+  id: string
+  level: "critical" | "warning" | "info"
+  title: string
+  message: string
+  context?: Record<string, unknown>
+}
+
 export default function ProcessingPage() {
   const [stats, setStats] = useState({ pending: 0, signals: 0, isSystemProcessing: false })
   const [isProcessing, setIsProcessing] = useState(false)
@@ -49,6 +60,9 @@ export default function ProcessingPage() {
   const [dictionaryJobs, setDictionaryJobs] = useState<DictionaryJob[]>([])
   const [dictPending, setDictPending] = useState(0)
   const [dictProcessing, setDictProcessing] = useState(0)
+  const [dictFailed, setDictFailed] = useState(0)
+  const [alerts, setAlerts] = useState<SystemAlert[]>([])
+  const [totalPendingJobs, setTotalPendingJobs] = useState(0)
 
   const supabase = createClient()
 
@@ -62,12 +76,132 @@ export default function ProcessingPage() {
       .from("dictionary_jobs")
       .select("*")
       .order("created_at", { ascending: false })
-      .limit(20)
+      .limit(100)
 
     if (!error && data) {
-      setDictionaryJobs(data)
-      setDictPending(data.filter((j) => j.status === "pending").length)
-      setDictProcessing(data.filter((j) => j.status === "processing").length)
+      setDictionaryJobs(data.slice(0, 20)) // Show only 20 in table
+
+      const pending = data.filter((j) => j.status === "pending").length
+      const processing = data.filter((j) => j.status === "processing")
+      const failed = data.filter((j) => j.status === "failed")
+
+      setDictPending(pending)
+      setDictProcessing(processing.length)
+      setDictFailed(failed.length)
+
+      const { count } = await supabase
+        .from("dictionary_jobs")
+        .select("*", { count: "exact", head: true })
+        .eq("status", "pending")
+
+      setTotalPendingJobs(count || 0)
+
+      const newAlerts: SystemAlert[] = []
+
+      // Check for stuck jobs (processing > 30 min)
+      const now = new Date()
+      const stuckJobs = processing.filter((j) => {
+        if (!j.started_at) return false
+        const started = new Date(j.started_at)
+        const diffMinutes = (now.getTime() - started.getTime()) / 60000
+        return diffMinutes > 30
+      })
+
+      if (stuckJobs.length > 0) {
+        newAlerts.push({
+          id: "stuck-jobs",
+          level: "critical",
+          title: `${stuckJobs.length} job(s) estancados`,
+          message: `Jobs en "processing" por más de 30 minutos: ${stuckJobs.map((j) => j.keyword).join(", ")}`,
+        })
+      }
+
+      // Check for failed jobs
+      if (failed.length > 0) {
+        newAlerts.push({
+          id: "failed-jobs",
+          level: failed.length >= 10 ? "critical" : "warning",
+          title: `${failed.length} job(s) fallidos`,
+          message: `Errores: ${[...new Set(failed.map((j) => j.error_message))].slice(0, 3).join("; ")}`,
+          context: { keywords: failed.slice(0, 5).map((j) => j.keyword) },
+        })
+      }
+
+      // Check pending queue
+      if ((count || 0) >= 500) {
+        newAlerts.push({
+          id: "queue-critical",
+          level: "critical",
+          title: `Cola crítica: ${count} jobs pendientes`,
+          message: "El sistema puede estar detenido o procesando muy lento",
+        })
+      } else if ((count || 0) >= 100) {
+        newAlerts.push({
+          id: "queue-warning",
+          level: "warning",
+          title: `Cola alta: ${count} jobs pendientes`,
+          message: "Considerar revisar el estado del procesamiento",
+        })
+      }
+
+      // Check if no processing and pending exist
+      if (processing.length === 0 && (count || 0) > 0) {
+        // Check last completed job
+        const { data: lastCompleted } = await supabase
+          .from("dictionary_jobs")
+          .select("completed_at")
+          .eq("status", "completed")
+          .order("completed_at", { ascending: false })
+          .limit(1)
+          .single()
+
+        if (lastCompleted?.completed_at) {
+          const lastCompletedTime = new Date(lastCompleted.completed_at)
+          const hoursSince = (now.getTime() - lastCompletedTime.getTime()) / 3600000
+
+          if (hoursSince > 2) {
+            newAlerts.push({
+              id: "no-progress",
+              level: "critical",
+              title: "Sistema posiblemente detenido",
+              message: `No se ha completado ningún job en ${Math.round(hoursSince)} horas y hay ${count} pendientes`,
+            })
+          }
+        }
+      }
+
+      setAlerts(newAlerts)
+    }
+  }
+
+  const handleRetryFailed = async () => {
+    const { error } = await supabase
+      .from("dictionary_jobs")
+      .update({ status: "pending", error_message: null, started_at: null })
+      .eq("status", "failed")
+
+    if (!error) {
+      setLogs((prev) => ["Jobs fallidos reseteados a pendiente", ...prev])
+      fetchDictionaryJobs()
+    } else {
+      setLogs((prev) => [`Error al resetear jobs: ${error.message}`, ...prev])
+    }
+  }
+
+  const handleUnstickJobs = async () => {
+    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString()
+
+    const { error } = await supabase
+      .from("dictionary_jobs")
+      .update({ status: "pending", started_at: null })
+      .eq("status", "processing")
+      .lt("started_at", thirtyMinutesAgo)
+
+    if (!error) {
+      setLogs((prev) => ["Jobs estancados reseteados a pendiente", ...prev])
+      fetchDictionaryJobs()
+    } else {
+      setLogs((prev) => [`Error al resetear jobs: ${error.message}`, ...prev])
     }
   }
 
@@ -208,6 +342,8 @@ export default function ProcessingPage() {
   }
 
   const activeStats = getActiveJobsStats()
+  const hasCriticalAlerts = alerts.some((a) => a.level === "critical")
+  const hasWarningAlerts = alerts.some((a) => a.level === "warning")
 
   return (
     <div className="space-y-6">
@@ -228,6 +364,56 @@ export default function ProcessingPage() {
           <RefreshCw className={`h-4 w-4 ${isProcessing ? "animate-spin" : ""}`} />
         </Button>
       </div>
+
+      {alerts.length > 0 && (
+        <div className="space-y-3">
+          {alerts.map((alert) => (
+            <Alert
+              key={alert.id}
+              variant={alert.level === "critical" ? "destructive" : "default"}
+              className={
+                alert.level === "critical"
+                  ? "border-red-500 bg-red-50 dark:bg-red-950/20"
+                  : alert.level === "warning"
+                    ? "border-amber-500 bg-amber-50 dark:bg-amber-950/20"
+                    : ""
+              }
+            >
+              {alert.level === "critical" ? <ShieldAlert className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
+              <AlertTitle className="flex items-center gap-2">
+                {alert.title}
+                <Badge variant={alert.level === "critical" ? "destructive" : "secondary"} className="text-xs">
+                  {alert.level === "critical" ? "Crítico" : "Advertencia"}
+                </Badge>
+              </AlertTitle>
+              <AlertDescription className="mt-1">
+                {alert.message}
+                {alert.context && (
+                  <span className="block text-xs mt-1 opacity-70">
+                    Keywords: {(alert.context.keywords as string[])?.join(", ")}
+                  </span>
+                )}
+              </AlertDescription>
+            </Alert>
+          ))}
+
+          {/* Quick action buttons for alerts */}
+          <div className="flex gap-2">
+            {alerts.some((a) => a.id === "failed-jobs") && (
+              <Button variant="outline" size="sm" onClick={handleRetryFailed}>
+                <RefreshCw className="h-3 w-3 mr-1" />
+                Reintentar Jobs Fallidos
+              </Button>
+            )}
+            {alerts.some((a) => a.id === "stuck-jobs") && (
+              <Button variant="outline" size="sm" onClick={handleUnstickJobs}>
+                <Play className="h-3 w-3 mr-1" />
+                Desbloquear Jobs Estancados
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
 
       {activeStats && (
         <Card className="border-blue-500 bg-blue-500/5">
@@ -290,14 +476,32 @@ export default function ProcessingPage() {
         </Card>
       )}
 
-      <div className="grid gap-6 md:grid-cols-3">
-        <Card>
+      <div className="grid gap-6 md:grid-cols-4">
+        <Card
+          className={totalPendingJobs >= 500 ? "border-red-500" : totalPendingJobs >= 100 ? "border-amber-500" : ""}
+        >
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Pendientes de Procesar</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Jobs Pendientes (Total)</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{stats.pending}</div>
-            <p className="text-xs text-muted-foreground">Filas en cola (import_rows)</p>
+            <div
+              className={`text-2xl font-bold ${totalPendingJobs >= 500 ? "text-red-600" : totalPendingJobs >= 100 ? "text-amber-600" : ""}`}
+            >
+              {totalPendingJobs.toLocaleString()}
+            </div>
+            <p className="text-xs text-muted-foreground">En cola de dictionary_jobs</p>
+          </CardContent>
+        </Card>
+
+        <Card className={dictFailed > 0 ? "border-red-500" : ""}>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Jobs Fallidos</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className={`text-2xl font-bold ${dictFailed > 0 ? "text-red-600" : "text-green-600"}`}>
+              {dictFailed}
+            </div>
+            <p className="text-xs text-muted-foreground">{dictFailed > 0 ? "Requieren atención" : "Sin errores"}</p>
           </CardContent>
         </Card>
 
@@ -306,7 +510,7 @@ export default function ProcessingPage() {
             <CardTitle className="text-sm font-medium text-muted-foreground">Señales Detectadas</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{stats.signals}</div>
+            <div className="text-2xl font-bold">{stats.signals.toLocaleString()}</div>
             <p className="text-xs text-muted-foreground">Total histórico</p>
           </CardContent>
         </Card>
@@ -318,29 +522,25 @@ export default function ProcessingPage() {
           <CardContent>
             <div
               className={`text-2xl font-bold ${
-                dictProcessing > 0 || stats.isSystemProcessing
-                  ? "text-blue-600"
-                  : dictPending > 0
+                hasCriticalAlerts
+                  ? "text-red-600"
+                  : hasWarningAlerts
                     ? "text-amber-600"
-                    : "text-green-600"
+                    : dictProcessing > 0
+                      ? "text-blue-600"
+                      : "text-green-600"
               }`}
             >
-              {dictProcessing > 0
-                ? `Procesando (${dictProcessing} jobs)`
-                : stats.isSystemProcessing
-                  ? "Ejecutando (Background)"
-                  : dictPending > 0
-                    ? `${dictPending} jobs pendientes`
-                    : "Inactivo"}
+              {hasCriticalAlerts
+                ? "Crítico"
+                : hasWarningAlerts
+                  ? "Advertencia"
+                  : dictProcessing > 0
+                    ? "Procesando"
+                    : "Saludable"}
             </div>
             <p className="text-xs text-muted-foreground">
-              {dictProcessing > 0
-                ? "Jobs de diccionario en ejecución..."
-                : stats.isSystemProcessing
-                  ? "El sistema está procesando datos..."
-                  : dictPending > 0
-                    ? "Jobs en cola esperando turno"
-                    : "Esperando nuevos datos"}
+              {alerts.length > 0 ? `${alerts.length} alerta(s) activa(s)` : "Sin alertas"}
             </p>
           </CardContent>
         </Card>
@@ -354,6 +554,11 @@ export default function ProcessingPage() {
               {(dictPending > 0 || dictProcessing > 0) && (
                 <Badge variant="secondary" className="ml-2">
                   {dictPending + dictProcessing} activos
+                </Badge>
+              )}
+              {dictFailed > 0 && (
+                <Badge variant="destructive" className="ml-2">
+                  {dictFailed} fallidos
                 </Badge>
               )}
             </CardTitle>
@@ -381,7 +586,12 @@ export default function ProcessingPage() {
                 </TableHeader>
                 <TableBody>
                   {dictionaryJobs.map((job) => (
-                    <TableRow key={job.id} className={job.status === "processing" ? "bg-blue-500/5" : ""}>
+                    <TableRow
+                      key={job.id}
+                      className={
+                        job.status === "processing" ? "bg-blue-500/5" : job.status === "failed" ? "bg-red-500/5" : ""
+                      }
+                    >
                       <TableCell>
                         <div className="flex flex-col">
                           <span className="font-medium text-sm">{formatJobType(job.job_type)}</span>
@@ -409,6 +619,8 @@ export default function ProcessingPage() {
                           </Badge>
                         ) : job.status === "completed" ? (
                           <span className="text-xs text-green-600">Finalizado</span>
+                        ) : job.status === "failed" ? (
+                          <span className="text-xs text-red-600">Error</span>
                         ) : (
                           <span className="text-xs text-muted-foreground">-</span>
                         )}
@@ -437,7 +649,10 @@ export default function ProcessingPage() {
                             <div>{job.job_postings_total?.toLocaleString() || 0} postings</div>
                           </div>
                         ) : job.status === "failed" ? (
-                          <span className="text-xs text-red-600 max-w-[150px] truncate block">
+                          <span
+                            className="text-xs text-red-600 max-w-[150px] truncate block"
+                            title={job.error_message || "Error"}
+                          >
                             {job.error_message || "Error"}
                           </span>
                         ) : (
