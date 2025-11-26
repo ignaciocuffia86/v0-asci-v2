@@ -1,6 +1,7 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useMemo, useCallback } from "react"
+import useSWR from "swr"
 import { createClient } from "@/lib/supabase/client"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Badge } from "@/components/ui/badge"
@@ -18,9 +19,11 @@ import {
   LinkedinIcon,
   Flame,
   Briefcase,
+  Loader2,
 } from "lucide-react"
 import { bookmarkCompany, unbookmarkCompany } from "@/app/actions/bookmarks"
 import { useToast } from "@/hooks/use-toast"
+import type React from "react"
 
 type CompanyDetails = {
   id: string
@@ -40,10 +43,10 @@ type Signal = {
   snippet: string
   is_current_employee: boolean
   company_id: string
-  contact_id: string | null // Made nullable for job posting signals
-  job_posting_id: string | null // Added job_posting_id field
+  contact_id: string | null
+  job_posting_id: string | null
   signal_id: string
-  source_url: string | null // Added source_url for apply links
+  source_url: string | null
   contact: {
     id?: string
     name: string
@@ -68,7 +71,7 @@ type Signal = {
     phone2?: string | null
     phone2_type?: string | null
     company_id?: string
-  } | null // Made contact nullable for job posting signals
+  } | null
   job_posting?: {
     id: string
     title: string
@@ -107,6 +110,15 @@ type JobPosting = {
   is_recent: boolean
 }
 
+type DrawerData = {
+  company: CompanyDetails
+  dictionary_names: string[]
+  signals: Signal[]
+  contacts: Contact[]
+  job_postings: any[]
+  alumni_signals: Signal[]
+}
+
 export function CompanyDrawer({
   companyId,
   isOpen,
@@ -120,134 +132,88 @@ export function CompanyDrawer({
   filterSignalIds?: string[]
   filterType?: "process" | "technology"
 }) {
-  const [company, setCompany] = useState<CompanyDetails | null>(null)
-  const [signals, setSignals] = useState<Signal[]>([])
-  const [contacts, setContacts] = useState<Contact[]>([])
   const [isBookmarked, setIsBookmarked] = useState(false)
-  const [dictionaryNames, setDictionaryNames] = useState<string[]>([])
-  const [jobPostings, setJobPostings] = useState<JobPosting[]>([])
   const supabase = createClient()
   const { toast } = useToast()
 
+  const cacheKey = useMemo(() => {
+    if (!isOpen || !companyId) return null
+    const filterKey = filterSignalIds?.sort().join(",") || "none"
+    return `drawer-${companyId}-${filterType || "none"}-${filterKey}`
+  }, [companyId, isOpen, filterSignalIds, filterType])
+
+  const fetcher = useCallback(async () => {
+    const { data, error } = await supabase.rpc("get_company_drawer_data", {
+      p_company_id: companyId,
+      p_filter_signal_ids: filterSignalIds || null,
+      p_filter_type: filterType || null,
+    })
+
+    if (error) {
+      console.error("Error fetching drawer data:", error)
+      throw error
+    }
+
+    return data as DrawerData
+  }, [companyId, filterSignalIds, filterType, supabase])
+
+  const {
+    data: drawerData,
+    error,
+    isLoading,
+  } = useSWR(cacheKey, fetcher, {
+    revalidateOnFocus: false,
+    revalidateOnReconnect: false,
+    dedupingInterval: 60000, // 1 minute deduplication
+    keepPreviousData: true,
+  })
+
+  const company = drawerData?.company || null
+  const signals = drawerData?.signals || []
+  const contacts = drawerData?.contacts || []
+  const dictionaryNames = drawerData?.dictionary_names || []
+  const alumniSignalsData = drawerData?.alumni_signals || []
+
+  const jobPostings = useMemo(() => {
+    if (!drawerData?.job_postings) return []
+
+    const oneMonthAgo = new Date()
+    oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1)
+
+    // Group by job posting ID and collect all keywords
+    const grouped = drawerData.job_postings.reduce((acc: Record<string, JobPosting>, jp: any) => {
+      const postedDate = new Date(jp.posted_at)
+
+      if (!acc[jp.id]) {
+        acc[jp.id] = {
+          id: jp.id,
+          title: jp.title,
+          posted_at: jp.posted_at,
+          apply_url: jp.apply_url,
+          detected_keywords: [],
+          is_recent: postedDate >= oneMonthAgo,
+        }
+      }
+
+      acc[jp.id].detected_keywords.push({
+        keyword: jp.keyword_matched,
+        signal_name: jp.signal_name,
+        snippet: jp.snippet,
+      })
+
+      return acc
+    }, {})
+
+    return Object.values(grouped).sort((a, b) => new Date(b.posted_at).getTime() - new Date(a.posted_at).getTime())
+  }, [drawerData?.job_postings])
+
   useEffect(() => {
     if (isOpen && companyId) {
-      fetchCompanyData()
+      checkBookmarkStatus()
     }
   }, [companyId, isOpen])
 
-  const fetchCompanyData = async () => {
-    // Fetch company details
-    const { data: companyData } = await supabase.from("companies").select("*").eq("id", companyId).single()
-
-    setCompany(companyData)
-
-    if (filterSignalIds && filterSignalIds.length > 0 && filterType) {
-      const table = filterType === "process" ? "dictionary_processes" : "dictionary_products"
-      const { data: dictData } = await supabase.from(table).select("name").in("id", filterSignalIds)
-
-      if (dictData) {
-        setDictionaryNames(dictData.map((d) => d.name))
-      }
-    } else {
-      setDictionaryNames([])
-    }
-
-    let signalsQuery = supabase
-      .from("signals")
-      .select(`
-        *,
-        contact:contacts(*),
-        job_posting:job_postings(id, title, posted_at, apply_url)
-      `)
-      .eq("company_id", companyId)
-      .or(
-        `contact_id.not.is.null,job_posted_at.gte.${new Date(Date.now() - 6 * 30 * 24 * 60 * 60 * 1000).toISOString()}`,
-      )
-
-    if (filterSignalIds && filterSignalIds.length > 0) {
-      signalsQuery = signalsQuery.in("signal_id", filterSignalIds)
-    }
-
-    if (filterType === "process") {
-      signalsQuery = signalsQuery.eq("is_current_employee", true)
-    }
-
-    const { data: signalsData, error: signalsError } = await signalsQuery.limit(200)
-
-    // Enrich with signal names
-    if (signalsData) {
-      const signalsWithNames = await Promise.all(
-        signalsData.map(async (signal) => {
-          let signalName = signal.keyword_matched
-          if (signal.signal_type === "technology" && signal.signal_id) {
-            const { data: product } = await supabase
-              .from("dictionary_products")
-              .select("name")
-              .eq("id", signal.signal_id)
-              .single()
-            if (product) signalName = product.name
-          } else if (signal.signal_type === "process" && signal.signal_id) {
-            const { data: process } = await supabase
-              .from("dictionary_processes")
-              .select("name")
-              .eq("id", signal.signal_id)
-              .single()
-            if (process) signalName = process.name
-          }
-          return { ...signal, signal_name: signalName }
-        }),
-      )
-      setSignals(signalsWithNames)
-    } else {
-      setSignals([])
-    }
-
-    const contactsQuery = supabase
-      .from("contacts")
-      .select(
-        "id, full_name, headline, linkedin_url, profile_picture_url, current_position_title, email1, email1_type, email1_status, email2, email2_type, email2_status, phone1, phone1_type, phone2, phone2_type",
-      )
-      .eq("current_company_id", companyId)
-
-    // Optimization: Get contact IDs from the filtered signals first
-    const filteredContactIds = signalsData?.map((s) => s.contact_id).filter(Boolean) || []
-
-    // If we have a filter active, only show contacts that have those signals
-    if (filterSignalIds && filterSignalIds.length > 0) {
-      // If no signals found for filter, no contacts to show
-      if (filteredContactIds.length === 0) {
-        setContacts([])
-      }
-    }
-
-    const { data: contactsData } = await contactsQuery
-
-    if (contactsData) {
-      const contactsWithSignals = await Promise.all(
-        contactsData.map(async (contact) => {
-          let countQuery = supabase
-            .from("signals")
-            .select("id", { count: "exact", head: true })
-            .eq("contact_id", contact.id)
-
-          if (filterSignalIds && filterSignalIds.length > 0) {
-            countQuery = countQuery.in("signal_id", filterSignalIds)
-          }
-
-          const { count } = await countQuery
-          return { ...contact, signal_count: count || 0 }
-        }),
-      )
-
-      const activeContacts =
-        filterSignalIds && filterSignalIds.length > 0
-          ? contactsWithSignals.filter((c) => c.signal_count > 0)
-          : contactsWithSignals
-
-      setContacts(activeContacts)
-    }
-
-    // Check if bookmarked
+  const checkBookmarkStatus = async () => {
     const {
       data: { user },
     } = await supabase.auth.getUser()
@@ -259,58 +225,6 @@ export function CompanyDrawer({
         .eq("company_id", companyId)
         .single()
       setIsBookmarked(!!bookmark)
-    }
-
-    const sixMonthsAgo = new Date(Date.now() - 6 * 30 * 24 * 60 * 60 * 1000).toISOString()
-
-    let jobPostingsQuery = supabase
-      .from("signals")
-      .select("*, job_posting:job_postings(*)")
-      .eq("company_id", companyId)
-      .not("job_posting_id", "is", null)
-
-    // Also apply signal_id filter if present (to match search results)
-    if (filterSignalIds && filterSignalIds.length > 0) {
-      jobPostingsQuery = jobPostingsQuery.in("signal_id", filterSignalIds)
-    }
-
-    const { data: jobPostingsData, error: jobPostingsError } = await jobPostingsQuery
-
-    if (jobPostingsData) {
-      const jobPostingsList: JobPosting[] = jobPostingsData
-        .filter((s) => s.job_posting_id !== null && s.job_posting !== null)
-        .map((s) => {
-          const oneMonthAgo = new Date()
-          oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1)
-          const postedDate = new Date(s.job_posting!.posted_at)
-
-          return {
-            id: s.job_posting!.id,
-            title: s.job_posting!.title,
-            posted_at: s.job_posting!.posted_at,
-            apply_url: s.source_url || s.job_posting!.apply_url,
-            detected_keywords: [
-              {
-                keyword: s.keyword_matched,
-                signal_name: s.signal_name,
-                snippet: s.snippet,
-              },
-            ],
-            is_recent: postedDate >= oneMonthAgo,
-          }
-        })
-        .reduce((acc, curr) => {
-          const existing = acc.find((jp) => jp.id === curr.id)
-          if (existing) {
-            existing.detected_keywords.push(...curr.detected_keywords)
-          } else {
-            acc.push(curr)
-          }
-          return acc
-        }, [] as JobPosting[])
-        .sort((a, b) => new Date(b.posted_at).getTime() - new Date(a.posted_at).getTime())
-
-      setJobPostings(jobPostingsList)
     }
   }
 
@@ -329,7 +243,6 @@ export function CompanyDrawer({
       if (dictionaryNames.length > 0) {
         contextNames = dictionaryNames
       } else {
-        // Fallback to existing logic using keywords
         contextNames = signals
           .filter((s) => filterSignalIds?.includes(s.signal_id))
           .map((s) => s.keyword_matched)
@@ -344,7 +257,7 @@ export function CompanyDrawer({
       await bookmarkCompany(user.id, companyId, {
         filterSignalIds: filterSignalIds || [],
         filterType: filterType || "generic",
-        filtersUsed, // Add filtersUsed with human-readable names
+        filtersUsed,
       })
       setIsBookmarked(true)
     }
@@ -364,7 +277,6 @@ export function CompanyDrawer({
         tagCounts.get(keyword)!.add(`job_${signal.job_posting_id}`)
       }
     })
-    // Convert Sets to counts
     return Array.from(tagCounts.entries())
       .map(([keyword, itemSet]) => [keyword, itemSet.size] as [string, number])
       .sort((a, b) => b[1] - a[1])
@@ -373,23 +285,30 @@ export function CompanyDrawer({
 
   const getJobPostingTags = () => {
     const tagCounts = new Map<string, Set<string>>()
-    signals.forEach((signal) => {
-      if (signal.job_posting_id !== null && signal.job_posting !== null) {
-        signal.job_posting.detected_keywords?.forEach((kw: any) => {
-          const keyword = kw.signal_name || kw.keyword
-          if (!tagCounts.has(keyword)) {
-            tagCounts.set(keyword, new Set())
-          }
-          // Count unique job posting IDs for each keyword
-          tagCounts.get(keyword)!.add(signal.job_posting_id)
-        })
-      }
+    jobPostings.forEach((jp) => {
+      jp.detected_keywords?.forEach((kw: any) => {
+        const keyword = kw.signal_name || kw.keyword
+        if (!tagCounts.has(keyword)) {
+          tagCounts.set(keyword, new Set())
+        }
+        tagCounts.get(keyword)!.add(jp.id)
+      })
     })
-    // Convert Sets to counts
     return Array.from(tagCounts.entries())
       .map(([keyword, jobPostingSet]) => [keyword, jobPostingSet.size] as [string, number])
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5)
+  }
+
+  if (isLoading && !drawerData) {
+    return (
+      <Sheet open={isOpen} onOpenChange={onClose}>
+        <SheetContent className="w-full sm:max-w-3xl overflow-y-auto bg-white dark:bg-slate-950 p-0 flex flex-col h-full items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          <p className="mt-4 text-muted-foreground">Cargando información...</p>
+        </SheetContent>
+      </Sheet>
+    )
   }
 
   if (!company) return null
@@ -405,11 +324,25 @@ export function CompanyDrawer({
   )
 
   const currentEmployeeSignals = uniqueSignals.filter((s) => s.is_current_employee && s.contact_id)
-  const alumniSignals = uniqueSignals.filter((s) => !s.is_current_employee && s.contact_id)
+
+  const uniqueAlumniSignals = alumniSignalsData.filter(
+    (signal, index, self) =>
+      index ===
+      self.findIndex(
+        (t) =>
+          t.contact?.id === signal.contact?.id &&
+          t.keyword_matched.toLowerCase() === signal.keyword_matched.toLowerCase(),
+      ),
+  )
 
   return (
     <Sheet open={isOpen} onOpenChange={onClose}>
       <SheetContent className="w-full sm:max-w-3xl overflow-y-auto bg-white dark:bg-slate-950 p-0 flex flex-col h-full">
+        {isLoading && drawerData && (
+          <div className="absolute top-4 right-14 z-10">
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          </div>
+        )}
         <div className="p-6 pb-0">
           <SheetHeader className="space-y-4 pb-6">
             <div className="flex items-start gap-6">
@@ -559,7 +492,7 @@ export function CompanyDrawer({
                   variant="secondary"
                   className="ml-2 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 text-xs hover:bg-blue-200"
                 >
-                  {alumniSignals.length}
+                  {uniqueAlumniSignals.length}
                 </Badge>
               </TabsTrigger>
               {jobPostings.length > 0 && (
@@ -583,7 +516,9 @@ export function CompanyDrawer({
           <div className="flex-1 overflow-y-auto bg-slate-50/30 dark:bg-slate-900">
             <TabsContent value="current" className="p-6 space-y-4 m-0">
               {currentEmployeeSignals.length > 0 ? (
-                currentEmployeeSignals.map((signal) => <SignalCard key={`${signal.id}-current`} signal={signal} />)
+                currentEmployeeSignals.map((signal) => (
+                  <SignalCard key={`${signal.id}-current`} signal={signal} company={company} />
+                ))
               ) : (
                 <div className="text-center py-12 text-muted-foreground bg-white dark:bg-slate-900 rounded-xl border border-dashed">
                   No se encontraron empleados actuales con estas señales.
@@ -592,8 +527,10 @@ export function CompanyDrawer({
             </TabsContent>
 
             <TabsContent value="alumni" className="p-6 space-y-4 m-0">
-              {alumniSignals.length > 0 ? (
-                alumniSignals.map((signal) => <SignalCard key={`${signal.id}-alumni`} signal={signal} />)
+              {uniqueAlumniSignals.length > 0 ? (
+                uniqueAlumniSignals.map((signal) => (
+                  <SignalCard key={`${signal.id}-alumni`} signal={signal} company={company} />
+                ))
               ) : (
                 <div className="text-center py-12 text-muted-foreground bg-white dark:bg-slate-900 rounded-xl border border-dashed">
                   No se encontraron ex-empleados con estas señales.
@@ -615,13 +552,37 @@ export function CompanyDrawer({
   )
 }
 
-const SignalCard = ({ signal }: { signal: Signal }) => {
+function highlightKeyword(text: string, keyword: string): React.ReactNode {
+  if (!keyword || !text) return <>...{text}...</>
+
+  const regex = new RegExp(`(${keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi")
+  const parts = text.split(regex)
+
+  return (
+    <>
+      ...
+      {parts.map((part, index) =>
+        regex.test(part) ? (
+          <span key={index} className="bg-primary/20 text-primary font-medium px-0.5 rounded not-italic">
+            {part}
+          </span>
+        ) : (
+          <span key={index}>{part}</span>
+        ),
+      )}
+      ...
+    </>
+  )
+}
+
+const SignalCard = ({ signal, company }: { signal: Signal; company: CompanyDetails }) => {
   const { toast } = useToast()
 
   const formatSourceField = (field: string) => {
     const map: Record<string, string> = {
       about: "Acerca de",
       current_position: "Posición Actual",
+      current_position_description: "Descripción del Puesto Actual",
       headline: "Titular",
       previous_position: "Posición Anterior",
       job_description: "Descripción del Puesto",
@@ -853,13 +814,18 @@ const SignalCard = ({ signal }: { signal: Signal }) => {
               {signal.keyword_matched}
             </Badge>
             <span>
-              {prevContext ? <span className="font-medium text-foreground">{prevContext}</span> : sourceLabel}
+              {signal.contact?.previous_positions &&
+              signal.contact.previous_positions.some((pos: any) => pos.company_id === company.id) ? (
+                <span className="font-medium text-foreground">en Posición Anterior en {company.name}</span>
+              ) : (
+                signal.source_field
+              )}
             </span>
           </div>
 
           <div className="relative pl-3 border-l-2 border-primary/20">
             <p className="text-sm text-slate-600 dark:text-slate-300 italic leading-relaxed line-clamp-4">
-              "{signal.snippet}"
+              {highlightKeyword(signal.snippet, signal.keyword_matched)}
             </p>
           </div>
         </div>
