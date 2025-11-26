@@ -195,7 +195,7 @@ export function ProcessSearch() {
                           {company.job_postings_count}
                         </div>
                         <div className="text-xs text-muted-foreground font-medium uppercase tracking-wider">
-                          Posiciones Abiertas
+                          Búsquedas Laborales
                         </div>
                       </div>
                     )}

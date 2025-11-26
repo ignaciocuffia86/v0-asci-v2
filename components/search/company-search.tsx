@@ -5,10 +5,11 @@ import { Badge } from "@/components/ui/badge"
 import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Search, Building2, Loader2, Users, GraduationCap } from "lucide-react"
+import { Search, Building2, Loader2, Users, GraduationCap, Flame } from "lucide-react"
 import { searchCompaniesByName, getCompanySignalSummary, type CompanySignalSummary } from "@/app/actions/search-v2"
 import { CompanyDrawer } from "@/components/company-drawer"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { createClient } from "@/lib/supabase/client"
 
 export function CompanySearch() {
   const [query, setQuery] = useState("")
@@ -17,8 +18,8 @@ export function CompanySearch() {
   const [summary, setSummary] = useState<CompanySignalSummary | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
+  const [jobPostingsCount, setJobPostingsCount] = useState(0)
 
-  // Debounce search
   useEffect(() => {
     const timer = setTimeout(async () => {
       if (query.length >= 2 && !selectedCompany) {
@@ -41,6 +42,14 @@ export function CompanySearch() {
     try {
       const data = await getCompanySignalSummary(company.id)
       setSummary(data)
+
+      const supabase = createClient()
+      const { count } = await supabase
+        .from("job_postings")
+        .select("id", { count: "exact", head: true })
+        .eq("company_id", company.id)
+        .eq("is_active", true)
+      setJobPostingsCount(count || 0)
     } catch (error) {
       console.error(error)
     } finally {
@@ -53,6 +62,7 @@ export function CompanySearch() {
     setSelectedCompany(null)
     setSummary(null)
     setSuggestions([])
+    setJobPostingsCount(0)
   }
 
   return (
@@ -79,7 +89,6 @@ export function CompanySearch() {
             )}
           </div>
 
-          {/* Autocomplete Suggestions */}
           {suggestions.length > 0 && !selectedCompany && (
             <div className="absolute z-10 w-full mt-1 bg-popover border rounded-md shadow-md overflow-hidden">
               {suggestions.map((company) => (
@@ -109,7 +118,6 @@ export function CompanySearch() {
           )}
         </div>
 
-        {/* Company Summary */}
         {isLoading ? (
           <div className="flex justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -139,7 +147,7 @@ export function CompanySearch() {
               <Button onClick={() => setIsDrawerOpen(true)}>Ver Detalles Completos</Button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <Card>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-medium text-muted-foreground">Total Señales</CardTitle>
@@ -166,6 +174,20 @@ export function CompanySearch() {
                 </CardHeader>
                 <CardContent>
                   <div className="text-3xl font-bold text-muted-foreground">{summary.alumni_with_tech_signals}</div>
+                </CardContent>
+              </Card>
+              <Card className={jobPostingsCount > 0 ? "border-orange-200 bg-orange-50/50" : ""}>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                    <Flame className={`h-4 w-4 ${jobPostingsCount > 0 ? "text-orange-500" : ""}`} /> Búsquedas Laborales
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div
+                    className={`text-3xl font-bold ${jobPostingsCount > 0 ? "text-orange-600" : "text-muted-foreground"}`}
+                  >
+                    {jobPostingsCount}
+                  </div>
                 </CardContent>
               </Card>
             </div>

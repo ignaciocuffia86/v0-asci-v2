@@ -568,7 +568,7 @@ export function CompanyDrawer({
                   className="h-full rounded-none border-b-2 border-transparent px-0 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none font-medium"
                 >
                   <Flame className="h-4 w-4 mr-1.5 text-orange-500" />
-                  Posiciones Abiertas
+                  Búsquedas Laborales
                   <Badge
                     variant="secondary"
                     className="ml-2 bg-orange-100 text-orange-700 dark:bg-orange-950/30 dark:text-orange-300 text-xs hover:bg-orange-200"

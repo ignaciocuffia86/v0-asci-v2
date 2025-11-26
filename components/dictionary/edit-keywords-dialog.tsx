@@ -231,7 +231,7 @@ export function EditKeywordsDialog({
 
             {/* Pending changes summary */}
             {hasChanges && (
-              <div className="space-y-2 p-3 border rounded-md bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800">
+              <div className="space-y-2 p-3 border rounded-md bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800 max-h-[200px] overflow-y-auto">
                 <div className="flex items-center gap-2 text-amber-800 dark:text-amber-200">
                   <AlertTriangle className="h-4 w-4" />
                   <span className="text-sm font-medium">Cambios pendientes</span>
@@ -245,7 +245,7 @@ export function EditKeywordsDialog({
 
                 {addedKeywords.length > 0 && (
                   <div className="text-sm">
-                    <span className="text-green-700 dark:text-green-400">+ Agregar:</span>{" "}
+                    <span className="text-green-700 dark:text-green-400">+ Agregar ({addedKeywords.length}):</span>{" "}
                     <span className="text-green-600 dark:text-green-300">
                       {addedKeywords.map((c) => c.keyword).join(", ")}
                     </span>
@@ -257,7 +257,7 @@ export function EditKeywordsDialog({
 
                 {removedKeywords.length > 0 && (
                   <div className="text-sm">
-                    <span className="text-red-700 dark:text-red-400">- Eliminar:</span>{" "}
+                    <span className="text-red-700 dark:text-red-400">- Eliminar ({removedKeywords.length}):</span>{" "}
                     <span className="text-red-600 dark:text-red-300">
                       {removedKeywords.map((c) => c.keyword).join(", ")}
                     </span>
@@ -283,33 +283,35 @@ export function EditKeywordsDialog({
 
       {/* Confirmation dialog */}
       <AlertDialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
-        <AlertDialogContent>
+        <AlertDialogContent className="max-h-[90vh] flex flex-col">
           <AlertDialogHeader>
             <AlertDialogTitle>¿Confirmar cambios?</AlertDialogTitle>
-            <AlertDialogDescription className="space-y-2">
-              <p>Estás a punto de aplicar los siguientes cambios:</p>
+            <AlertDialogDescription asChild>
+              <div className="text-muted-foreground text-sm space-y-2 max-h-[50vh] overflow-y-auto">
+                <span className="block">Estás a punto de aplicar los siguientes cambios:</span>
 
-              {editingName !== itemName && (
-                <p className="text-sm">
-                  • Cambiar nombre de "{itemName}" a "{editingName}"
-                </p>
-              )}
+                {editingName !== itemName && (
+                  <span className="block text-sm">
+                    • Cambiar nombre de "{itemName}" a "{editingName}"
+                  </span>
+                )}
 
-              {addedKeywords.length > 0 && (
-                <p className="text-sm text-green-600">
-                  • Agregar {addedKeywords.length} keyword(s): {addedKeywords.map((c) => c.keyword).join(", ")}
-                </p>
-              )}
+                {addedKeywords.length > 0 && (
+                  <span className="block text-sm text-green-600">
+                    • Agregar {addedKeywords.length} keyword(s): {addedKeywords.map((c) => c.keyword).join(", ")}
+                  </span>
+                )}
 
-              {removedKeywords.length > 0 && (
-                <p className="text-sm text-red-600">
-                  • Eliminar {removedKeywords.length} keyword(s): {removedKeywords.map((c) => c.keyword).join(", ")}
-                </p>
-              )}
+                {removedKeywords.length > 0 && (
+                  <span className="block text-sm text-red-600">
+                    • Eliminar {removedKeywords.length} keyword(s): {removedKeywords.map((c) => c.keyword).join(", ")}
+                  </span>
+                )}
 
-              <p className="text-sm mt-4 font-medium">
-                Los cambios se procesarán en background. Puedes ver el progreso en Admin → Procesamiento.
-              </p>
+                <span className="block text-sm mt-4 font-medium">
+                  Los cambios se procesarán en background. Puedes ver el progreso en Admin → Procesamiento.
+                </span>
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

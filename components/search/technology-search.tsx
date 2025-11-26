@@ -11,8 +11,15 @@ import { searchByTechnology, type TechnologySearchResult } from "@/app/actions/s
 import { COUNTRIES } from "@/lib/constants"
 import { CompanyDrawer } from "@/components/company-drawer"
 
+type TechnologyWithVendor = {
+  id: string
+  name: string
+  vendor_name: string | null
+  display_name: string
+}
+
 export function TechnologySearch() {
-  const [technologies, setTechnologies] = useState<any[]>([])
+  const [technologies, setTechnologies] = useState<TechnologyWithVendor[]>([])
   const [selectedTech, setSelectedTech] = useState<string | null>(null)
   const [selectedCountries, setSelectedCountries] = useState<string[]>([])
   const [results, setResults] = useState<TechnologySearchResult[]>([])
@@ -22,8 +29,23 @@ export function TechnologySearch() {
 
   useEffect(() => {
     const fetchTechnologies = async () => {
-      const { data } = await supabase.from("dictionary_products").select("id, name").order("name")
-      setTechnologies(data || [])
+      const { data } = await supabase
+        .from("dictionary_products")
+        .select("id, name, vendor:dictionary_vendors(name)")
+        .order("name")
+
+      // Transform data to include display_name with vendor
+      const transformed: TechnologyWithVendor[] = (data || []).map((tech: any) => ({
+        id: tech.id,
+        name: tech.name,
+        vendor_name: tech.vendor?.name || null,
+        display_name: tech.vendor?.name ? `${tech.vendor.name} - ${tech.name}` : tech.name,
+      }))
+
+      // Sort by display_name to group by vendor
+      transformed.sort((a, b) => a.display_name.localeCompare(b.display_name))
+
+      setTechnologies(transformed)
     }
     fetchTechnologies()
   }, [])
@@ -50,6 +72,8 @@ export function TechnologySearch() {
     }
   }
 
+  const selectedTechDisplay = technologies.find((t) => t.id === selectedTech)?.display_name
+
   return (
     <div className="space-y-6">
       <div className="bg-card border rounded-lg p-6 space-y-6">
@@ -59,12 +83,12 @@ export function TechnologySearch() {
             <Label>Tecnología (Única)</Label>
             <Select onValueChange={setSelectedTech} value={selectedTech || undefined}>
               <SelectTrigger>
-                <SelectValue placeholder="Selecciona tecnología..." />
+                <SelectValue placeholder="Selecciona tecnología...">{selectedTechDisplay}</SelectValue>
               </SelectTrigger>
-              <SelectContent className="bg-white dark:bg-gray-950 border-border">
+              <SelectContent className="bg-white dark:bg-gray-950 border-border max-h-[300px]">
                 {technologies.map((tech) => (
                   <SelectItem key={tech.id} value={tech.id}>
-                    {tech.name}
+                    {tech.display_name}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -182,7 +206,7 @@ export function TechnologySearch() {
                           {company.job_postings_count}
                         </div>
                         <div className="text-xs text-muted-foreground font-medium uppercase tracking-wider">
-                          Posiciones
+                          Búsquedas Laborales
                         </div>
                       </div>
                     )}

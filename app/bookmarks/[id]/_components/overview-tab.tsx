@@ -9,7 +9,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 
 type SmartContext = {
-  filterType: "process" | "technology"
+  filterType: "process" | "technology" | "general"
   totalSignals: number
   detailedSignals: {
     keyword: string
@@ -46,6 +46,19 @@ export function BookmarkOverview({ bookmarkId, company }: { bookmarkId: string; 
     return <div className="p-4 text-center text-muted-foreground">Cargando contexto...</div>
   }
 
+  const getFilterTypeLabel = (filterType: string) => {
+    switch (filterType) {
+      case "process":
+        return "Proceso"
+      case "technology":
+        return "Tecnología"
+      case "general":
+        return "General"
+      default:
+        return "General"
+    }
+  }
+
   return (
     <div className="grid gap-6">
       {/* Context Card - Only shown if context exists */}
@@ -61,7 +74,7 @@ export function BookmarkOverview({ bookmarkId, company }: { bookmarkId: string; 
               size="sm"
               className="text-xs uppercase bg-white text-blue-700 border-blue-200 hover:bg-blue-50 h-7"
             >
-              Búsqueda por {smartContext.filterType === "process" ? "Proceso" : "Tecnología"}
+              Búsqueda {getFilterTypeLabel(smartContext.filterType)}
             </Button>
           </CardHeader>
           <CardContent>
@@ -70,7 +83,9 @@ export function BookmarkOverview({ bookmarkId, company }: { bookmarkId: string; 
                 <Info className="h-3.5 w-3.5 mt-0.5 text-blue-500" />
                 <span>
                   Criterio de Inteligencia: <strong className="text-foreground">{smartContext.logicUsed}</strong>.
-                  Mostrando señales que coinciden con tus filtros de búsqueda.
+                  {smartContext.filterType === "general"
+                    ? " Mostrando todas las señales de esta empresa."
+                    : " Mostrando señales que coinciden con tus filtros de búsqueda."}
                 </span>
               </div>
 
@@ -116,7 +131,7 @@ export function BookmarkOverview({ bookmarkId, company }: { bookmarkId: string; 
       ) : (
         <Card>
           <CardContent className="p-6 text-center text-muted-foreground text-sm">
-            No hay contexto de búsqueda guardado para este bookmark.
+            No hay señales disponibles para esta empresa.
           </CardContent>
         </Card>
       )}

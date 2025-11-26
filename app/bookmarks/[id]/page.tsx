@@ -6,15 +6,27 @@ import { createClient } from "@/lib/supabase/client"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { ArrowLeft, Building2, Globe, Linkedin, Search, Users, Sparkles, BrainCircuit, Flame } from "lucide-react"
+import {
+  ArrowLeft,
+  Building2,
+  Globe,
+  Linkedin,
+  Users,
+  Sparkles,
+  BrainCircuit,
+  Flame,
+  Newspaper,
+  Briefcase,
+} from "lucide-react"
 import Link from "next/link"
 
 import { BookmarkOverview } from "./_components/overview-tab"
-import { BookmarkSignals } from "./_components/signals-tab"
+import { BookmarkJobPostings } from "./_components/job-postings-tab"
+import { BookmarkNews } from "./_components/news-tab"
+import { ImplementationsTab } from "./_components/implementations-tab"
 import { BookmarkContacts } from "./_components/contacts-tab"
 import { BookmarkIcebreakers } from "./_components/icebreakers-tab"
 import { BookmarkStrategy } from "./_components/strategy-tab"
-import { BookmarkJobPostings } from "./_components/job-postings-tab"
 
 export default function BookmarkWorkspacePage() {
   const params = useParams()
@@ -113,7 +125,7 @@ export default function BookmarkWorkspacePage() {
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-2xl font-bold tracking-tight">{company.name}</h1>
-                <Badge variant="outline" className="text-xs">
+                <Badge variant="outline" className="text-xs px-2 py-0.5 whitespace-nowrap">
                   {bookmark.notes || "Sin notas"}
                 </Badge>
               </div>
@@ -129,17 +141,17 @@ export default function BookmarkWorkspacePage() {
               </div>
               <div className="flex items-center gap-2 mt-2">
                 {company.website && (
-                  <Button variant="outline" size="xs" asChild className="h-7 text-xs bg-transparent">
+                  <Button variant="outline" size="sm" asChild className="h-7 text-xs px-3 bg-transparent">
                     <Link href={company.website} target="_blank">
-                      <Globe className="h-3 w-3 mr-1" />
+                      <Globe className="h-3 w-3 mr-1.5" />
                       Website
                     </Link>
                   </Button>
                 )}
                 {company.linkedin_url && (
-                  <Button variant="outline" size="xs" asChild className="h-7 text-xs bg-transparent">
+                  <Button variant="outline" size="sm" asChild className="h-7 text-xs px-3 bg-transparent">
                     <Link href={company.linkedin_url} target="_blank">
-                      <Linkedin className="h-3 w-3 mr-1" />
+                      <Linkedin className="h-3 w-3 mr-1.5" />
                       LinkedIn
                     </Link>
                   </Button>
@@ -153,35 +165,30 @@ export default function BookmarkWorkspacePage() {
       {/* Main Content */}
       <main className="flex-1 p-6 overflow-auto">
         <Tabs defaultValue="overview" className="space-y-6">
-          <TabsList className="bg-muted/50 p-1">
+          <TabsList className="bg-muted/50 p-1 flex-wrap h-auto gap-1">
             <TabsTrigger value="overview" className="gap-2">
               <Building2 className="h-4 w-4" />
               Resumen
             </TabsTrigger>
             <TabsTrigger value="jobpostings" className="gap-2">
               <Flame className="h-4 w-4 text-orange-500" />
-              Posiciones Abiertas
+              Posiciones
             </TabsTrigger>
-            <TabsTrigger value="signals" className="gap-2">
-              <Search className="h-4 w-4" />
-              Investigación
-              <Badge variant="secondary" className="ml-1 text-[10px] px-1 h-4">
-                Privado
-              </Badge>
+            <TabsTrigger value="news" className="gap-2">
+              <Newspaper className="h-4 w-4 text-blue-500" />
+              Noticias
+            </TabsTrigger>
+            <TabsTrigger value="implementations" className="gap-2">
+              <Briefcase className="h-4 w-4 text-purple-500" />
+              Implementaciones
             </TabsTrigger>
             <TabsTrigger value="strategy" className="gap-2">
               <BrainCircuit className="h-4 w-4" />
               Estrategia
-              <Badge variant="secondary" className="ml-1 text-[10px] px-1 h-4">
-                AI
-              </Badge>
             </TabsTrigger>
             <TabsTrigger value="prospects" className="gap-2">
               <Users className="h-4 w-4" />
               Prospectos
-              <Badge variant="secondary" className="ml-1 text-[10px] px-1 h-4">
-                Privado
-              </Badge>
             </TabsTrigger>
             <TabsTrigger value="icebreakers" className="gap-2">
               <Sparkles className="h-4 w-4 text-amber-500" />
@@ -193,7 +200,6 @@ export default function BookmarkWorkspacePage() {
           </TabsList>
 
           <TabsContent value="overview" className="m-0 focus-visible:ring-0">
-            {/* Pass bookmarkId instead of company.id where needed, or both */}
             <BookmarkOverview bookmarkId={bookmarkId} company={company} />
           </TabsContent>
 
@@ -201,12 +207,16 @@ export default function BookmarkWorkspacePage() {
             <BookmarkJobPostings bookmarkId={bookmarkId} />
           </TabsContent>
 
-          <TabsContent value="signals" className="m-0 focus-visible:ring-0">
-            <BookmarkSignals bookmarkId={bookmarkId} />
+          <TabsContent value="news" className="m-0 focus-visible:ring-0">
+            <BookmarkNews bookmarkId={bookmarkId} companyId={company.id} companyName={company.name} />
+          </TabsContent>
+
+          <TabsContent value="implementations" className="m-0 focus-visible:ring-0">
+            <ImplementationsTab bookmarkId={bookmarkId} companyId={company.id} companyName={company.name} />
           </TabsContent>
 
           <TabsContent value="strategy" className="m-0 focus-visible:ring-0">
-            <BookmarkStrategy bookmarkId={bookmarkId} companyName={company.name} website={company.website} />
+            <BookmarkStrategy bookmarkId={bookmarkId} companyName={company.name} />
           </TabsContent>
 
           <TabsContent value="prospects" className="m-0 focus-visible:ring-0">

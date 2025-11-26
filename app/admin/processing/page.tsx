@@ -3,7 +3,18 @@
 import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Play, Loader2, RefreshCw, CheckCircle, XCircle, Clock, AlertCircle } from "lucide-react"
+import {
+  Play,
+  Loader2,
+  RefreshCw,
+  CheckCircle,
+  XCircle,
+  Clock,
+  AlertCircle,
+  Activity,
+  Users,
+  Briefcase,
+} from "lucide-react"
 import { processSignals, getProcessingStats } from "@/app/actions/processing"
 import { Progress } from "@/components/ui/progress"
 import { createClient } from "@/lib/supabase/client"
@@ -19,7 +30,13 @@ type DictionaryJob = {
   progress: number
   total_records: number
   processed_records: number
+  contacts_processed: number
+  contacts_total: number
+  job_postings_processed: number
+  job_postings_total: number
+  phase: string | null
   created_at: string
+  started_at: string | null
   completed_at: string | null
   error_message: string | null
 }
@@ -57,12 +74,15 @@ export default function ProcessingPage() {
   useEffect(() => {
     fetchStats()
     fetchDictionaryJobs()
-    const interval = setInterval(() => {
-      fetchStats()
-      fetchDictionaryJobs()
-    }, 5000)
+    const interval = setInterval(
+      () => {
+        fetchStats()
+        fetchDictionaryJobs()
+      },
+      dictProcessing > 0 ? 3000 : 5000,
+    )
     return () => clearInterval(interval)
-  }, [])
+  }, [dictProcessing])
 
   const handleProcess = async () => {
     setIsProcessing(true)
@@ -158,6 +178,37 @@ export default function ProcessingPage() {
     }
   }
 
+  const getElapsedTime = (startedAt: string | null) => {
+    if (!startedAt) return null
+    const started = new Date(startedAt)
+    const now = new Date()
+    const diffMs = now.getTime() - started.getTime()
+    const diffMins = Math.floor(diffMs / 60000)
+    const diffHours = Math.floor(diffMins / 60)
+    if (diffHours > 0) {
+      return `${diffHours}h ${diffMins % 60}m`
+    }
+    return `${diffMins}m`
+  }
+
+  const getActiveJobsStats = () => {
+    const activeJobs = dictionaryJobs.filter((j) => j.status === "processing")
+    if (activeJobs.length === 0) return null
+
+    const totalContacts = activeJobs.reduce((sum, j) => sum + (j.contacts_total || 0), 0)
+    const processedContacts = activeJobs.reduce((sum, j) => sum + (j.contacts_processed || 0), 0)
+    const totalJobPostings = activeJobs.reduce((sum, j) => sum + (j.job_postings_total || 0), 0)
+    const processedJobPostings = activeJobs.reduce((sum, j) => sum + (j.job_postings_processed || 0), 0)
+
+    return {
+      activeCount: activeJobs.length,
+      contacts: { processed: processedContacts, total: totalContacts },
+      jobPostings: { processed: processedJobPostings, total: totalJobPostings },
+    }
+  }
+
+  const activeStats = getActiveJobsStats()
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
@@ -177,6 +228,67 @@ export default function ProcessingPage() {
           <RefreshCw className={`h-4 w-4 ${isProcessing ? "animate-spin" : ""}`} />
         </Button>
       </div>
+
+      {activeStats && (
+        <Card className="border-blue-500 bg-blue-500/5">
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-4 mb-4">
+              <div className="p-2 rounded-full bg-blue-500/10">
+                <Activity className="h-5 w-5 text-blue-600 animate-pulse" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-blue-600">
+                  {activeStats.activeCount} {activeStats.activeCount === 1 ? "Job" : "Jobs"} de Diccionario Activos
+                </h3>
+                <p className="text-sm text-muted-foreground">Procesando cambios de keywords en segundo plano</p>
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="flex items-center gap-2">
+                    <Users className="h-4 w-4" />
+                    Contactos
+                  </span>
+                  <span className="font-medium">
+                    {activeStats.contacts.processed.toLocaleString()} / {activeStats.contacts.total.toLocaleString()}
+                  </span>
+                </div>
+                <Progress
+                  value={
+                    activeStats.contacts.total > 0
+                      ? (activeStats.contacts.processed / activeStats.contacts.total) * 100
+                      : 0
+                  }
+                  className="h-2"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="flex items-center gap-2">
+                    <Briefcase className="h-4 w-4" />
+                    Job Postings
+                  </span>
+                  <span className="font-medium">
+                    {activeStats.jobPostings.processed.toLocaleString()} /{" "}
+                    {activeStats.jobPostings.total.toLocaleString()}
+                  </span>
+                </div>
+                <Progress
+                  value={
+                    activeStats.jobPostings.total > 0
+                      ? (activeStats.jobPostings.processed / activeStats.jobPostings.total) * 100
+                      : 0
+                  }
+                  className="h-2"
+                />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-6 md:grid-cols-3">
         <Card>
@@ -201,14 +313,34 @@ export default function ProcessingPage() {
 
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Estado del Job</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Estado del Sistema</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className={`text-2xl font-bold ${stats.isSystemProcessing ? "text-blue-600" : "text-green-600"}`}>
-              {stats.isSystemProcessing ? "Ejecutando (Background)" : "Inactivo"}
+            <div
+              className={`text-2xl font-bold ${
+                dictProcessing > 0 || stats.isSystemProcessing
+                  ? "text-blue-600"
+                  : dictPending > 0
+                    ? "text-amber-600"
+                    : "text-green-600"
+              }`}
+            >
+              {dictProcessing > 0
+                ? `Procesando (${dictProcessing} jobs)`
+                : stats.isSystemProcessing
+                  ? "Ejecutando (Background)"
+                  : dictPending > 0
+                    ? `${dictPending} jobs pendientes`
+                    : "Inactivo"}
             </div>
             <p className="text-xs text-muted-foreground">
-              {stats.isSystemProcessing ? "El sistema está procesando datos..." : "Esperando nuevos datos"}
+              {dictProcessing > 0
+                ? "Jobs de diccionario en ejecución..."
+                : stats.isSystemProcessing
+                  ? "El sistema está procesando datos..."
+                  : dictPending > 0
+                    ? "Jobs en cola esperando turno"
+                    : "Esperando nuevos datos"}
             </p>
           </CardContent>
         </Card>
@@ -242,13 +374,14 @@ export default function ProcessingPage() {
                     <TableHead>Tipo</TableHead>
                     <TableHead>Keyword</TableHead>
                     <TableHead>Estado</TableHead>
+                    <TableHead>Fase</TableHead>
                     <TableHead>Progreso</TableHead>
-                    <TableHead>Fecha</TableHead>
+                    <TableHead>Tiempo</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {dictionaryJobs.map((job) => (
-                    <TableRow key={job.id}>
+                    <TableRow key={job.id} className={job.status === "processing" ? "bg-blue-500/5" : ""}>
                       <TableCell>
                         <div className="flex flex-col">
                           <span className="font-medium text-sm">{formatJobType(job.job_type)}</span>
@@ -262,32 +395,77 @@ export default function ProcessingPage() {
                       </TableCell>
                       <TableCell>{getStatusBadge(job.status)}</TableCell>
                       <TableCell>
-                        {job.status === "processing" ? (
-                          <div className="space-y-1 min-w-[100px]">
-                            <Progress value={job.progress} className="h-2" />
-                            <span className="text-xs text-muted-foreground">
-                              {job.processed_records}/{job.total_records}
-                            </span>
-                          </div>
+                        {job.status === "processing" && job.phase ? (
+                          <Badge variant="outline" className="gap-1">
+                            {job.phase === "contacts" ? (
+                              <>
+                                <Users className="h-3 w-3" /> Contactos
+                              </>
+                            ) : (
+                              <>
+                                <Briefcase className="h-3 w-3" /> Job Postings
+                              </>
+                            )}
+                          </Badge>
                         ) : job.status === "completed" ? (
-                          <span className="text-xs text-green-600">{job.processed_records} procesados</span>
-                        ) : job.status === "failed" ? (
-                          <span className="text-xs text-red-600 max-w-[150px] truncate block">
-                            {job.error_message || "Error"}
-                          </span>
+                          <span className="text-xs text-green-600">Finalizado</span>
                         ) : (
                           <span className="text-xs text-muted-foreground">-</span>
                         )}
                       </TableCell>
                       <TableCell>
-                        <span className="text-xs text-muted-foreground">
-                          {new Date(job.created_at).toLocaleString("es-AR", {
-                            day: "2-digit",
-                            month: "2-digit",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
-                        </span>
+                        {job.status === "processing" ? (
+                          <div className="space-y-1 min-w-[140px]">
+                            <Progress value={job.progress} className="h-2" />
+                            <div className="flex flex-col text-xs text-muted-foreground">
+                              {job.phase === "contacts" ? (
+                                <span>
+                                  {job.contacts_processed?.toLocaleString() || 0}/
+                                  {job.contacts_total?.toLocaleString() || 0} contactos
+                                </span>
+                              ) : (
+                                <span>
+                                  {job.job_postings_processed?.toLocaleString() || 0}/
+                                  {job.job_postings_total?.toLocaleString() || 0} postings
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ) : job.status === "completed" ? (
+                          <div className="text-xs text-green-600">
+                            <div>{job.contacts_total?.toLocaleString() || 0} contactos</div>
+                            <div>{job.job_postings_total?.toLocaleString() || 0} postings</div>
+                          </div>
+                        ) : job.status === "failed" ? (
+                          <span className="text-xs text-red-600 max-w-[150px] truncate block">
+                            {job.error_message || "Error"}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">En cola</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {job.status === "processing" && job.started_at ? (
+                          <span className="text-xs font-medium text-blue-600">{getElapsedTime(job.started_at)}</span>
+                        ) : job.status === "completed" && job.completed_at ? (
+                          <span className="text-xs text-muted-foreground">
+                            {new Date(job.completed_at).toLocaleString("es-AR", {
+                              day: "2-digit",
+                              month: "2-digit",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">
+                            {new Date(job.created_at).toLocaleString("es-AR", {
+                              day: "2-digit",
+                              month: "2-digit",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </span>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}

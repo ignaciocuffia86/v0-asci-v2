@@ -3,7 +3,18 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { Upload, BookOpen, Activity, FileText, LogOut, Search, Building2, MessageSquare } from "lucide-react"
+import {
+  Upload,
+  BookOpen,
+  Activity,
+  FileText,
+  LogOut,
+  Search,
+  Building2,
+  MessageSquare,
+  Users,
+  Sparkles,
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { createClient } from "@/lib/supabase/client"
 import { useRouter } from "next/navigation"
@@ -30,6 +41,11 @@ const sidebarItems = [
     icon: MessageSquare,
   },
   {
+    title: "Prompts AI",
+    href: "/admin/prompts",
+    icon: Sparkles,
+  },
+  {
     title: "Procesamiento",
     href: "/admin/processing",
     icon: Activity,
@@ -38,6 +54,11 @@ const sidebarItems = [
     title: "Logs",
     href: "/admin/logs",
     icon: FileText,
+  },
+  {
+    title: "Uso por Usuario",
+    href: "/admin/usage",
+    icon: Users,
   },
 ]
 

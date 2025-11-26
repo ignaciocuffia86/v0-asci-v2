@@ -14,14 +14,16 @@ export interface CompanyDuplicateGroup {
   }[]
 }
 
-export async function getPotentialDuplicates(): Promise<CompanyDuplicateGroup[]> {
+export async function getPotentialDuplicates(limit = 100): Promise<CompanyDuplicateGroup[]> {
   const supabase = await createClient()
 
-  const { data, error } = await supabase.rpc("get_duplicate_candidates")
+  const { data, error } = await supabase.rpc("get_duplicate_candidates", {
+    p_limit: limit,
+  })
 
   if (error) {
     console.error("Error fetching duplicates:", error)
-    return []
+    throw new Error(error.message)
   }
 
   return data as CompanyDuplicateGroup[]
@@ -49,9 +51,11 @@ export async function autoMergeSafeDuplicates() {
     if (error) throw error
 
     revalidatePath("/admin/companies/duplicates")
-    return { success: true, count: data }
+    return { success: true, merged: data }
   } catch (error) {
     console.error("Error auto-merging duplicates:", error)
-    return { success: false, error: "Failed to auto-merge duplicates" }
+    return { success: false, merged: 0, error: "Failed to auto-merge duplicates" }
   }
 }
+
+export const autoMergeDuplicates = autoMergeSafeDuplicates

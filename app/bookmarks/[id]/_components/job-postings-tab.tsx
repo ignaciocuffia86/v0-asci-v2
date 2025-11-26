@@ -43,10 +43,12 @@ export function BookmarkJobPostings({ bookmarkId }: { bookmarkId: string }) {
 
       const filterSignalIds = bookmark.search_context?.filterSignalIds || null
 
+      const isGeneralBookmark = !filterSignalIds || filterSignalIds.length === 0
+
       // Fetch job postings using RPC
       const { data: jobPostingsData } = await supabase.rpc("get_company_job_postings", {
         p_company_id: bookmark.company_id,
-        p_signal_ids: filterSignalIds,
+        p_signal_ids: isGeneralBookmark ? null : filterSignalIds,
         p_limit: 100,
       })
 
@@ -87,10 +89,9 @@ export function BookmarkJobPostings({ bookmarkId }: { bookmarkId: string }) {
             <Flame className="h-8 w-8 text-orange-600 dark:text-orange-500" />
           </div>
           <div>
-            <h3 className="font-medium text-lg">No hay posiciones abiertas recientes</h3>
+            <h3 className="font-medium text-lg">No hay búsquedas laborales recientes</h3>
             <p className="text-sm text-muted-foreground max-w-md mt-2">
-              Esta empresa no tiene ofertas laborales activas en los últimos 6 meses que coincidan con tus filtros de
-              búsqueda.
+              Esta empresa no tiene ofertas laborales activas en los últimos 6 meses.
             </p>
           </div>
         </CardContent>
@@ -104,14 +105,12 @@ export function BookmarkJobPostings({ bookmarkId }: { bookmarkId: string }) {
         <div>
           <h2 className="text-lg font-semibold flex items-center gap-2">
             <Flame className="h-5 w-5 text-orange-600" />
-            Posiciones Abiertas Recientemente
+            Búsquedas Laborales Recientes
           </h2>
-          <p className="text-sm text-muted-foreground mt-1">
-            Ofertas laborales de los últimos 6 meses donde mencionan las tecnologías o procesos de tu búsqueda.
-          </p>
+          <p className="text-sm text-muted-foreground mt-1">Ofertas laborales de los últimos 6 meses.</p>
         </div>
         <Badge variant="outline" className="bg-orange-50 text-orange-700 border-orange-200 text-sm px-3 py-1">
-          {jobPostings.length} {jobPostings.length === 1 ? "posición" : "posiciones"}
+          {jobPostings.length} {jobPostings.length === 1 ? "búsqueda" : "búsquedas"}
         </Badge>
       </div>
 
@@ -189,7 +188,7 @@ export function BookmarkJobPostings({ bookmarkId }: { bookmarkId: string }) {
       {jobPostings.length > 10 && (
         <div className="text-center py-4">
           <p className="text-sm text-muted-foreground">
-            Mostrando las primeras 10 posiciones. Total: {jobPostings.length}
+            Mostrando las primeras 10 búsquedas. Total: {jobPostings.length}
           </p>
         </div>
       )}

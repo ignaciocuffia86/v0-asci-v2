@@ -512,10 +512,12 @@ export async function getBookmarkSmartContext(bookmarkId: string) {
     .eq("user_id", user.id)
     .single()
 
-  if (!bookmark || !bookmark.search_context) return null
+  if (!bookmark) return null
 
-  const { filterType, filterSignalIds } = bookmark.search_context
-  if (!filterType || !filterSignalIds || filterSignalIds.length === 0) return null
+  const searchContext = bookmark.search_context || {}
+  const { filterType, filterSignalIds } = searchContext
+
+  const isGeneralBookmark = !filterType || !filterSignalIds || filterSignalIds.length === 0
 
   let query = supabase
     .from("signals")
@@ -536,13 +538,15 @@ export async function getBookmarkSmartContext(bookmarkId: string) {
     .eq("company_id", bookmark.company_id)
     .not("contact_id", "is", null) // Only get signals with contacts (not job postings)
 
-  if (filterSignalIds.length > 0) {
+  if (!isGeneralBookmark && filterSignalIds.length > 0) {
     query = query.in("signal_id", filterSignalIds)
   }
 
   if (filterType === "process") {
     query = query.eq("is_current_employee", true)
   }
+
+  query = query.limit(20)
 
   const { data: signals, error } = await query
 
@@ -551,7 +555,7 @@ export async function getBookmarkSmartContext(bookmarkId: string) {
     return null
   }
 
-  if (!signals) return null
+  if (!signals || signals.length === 0) return null
 
   const enrichedSignals = signals.map((s: any) => {
     const contact = s.contacts
@@ -584,9 +588,13 @@ export async function getBookmarkSmartContext(bookmarkId: string) {
   })
 
   return {
-    filterType,
+    filterType: isGeneralBookmark ? "general" : filterType,
     totalSignals: signals.length,
     detailedSignals: enrichedSignals,
-    logicUsed: filterType === "technology" ? "Incluye Alumni y Actuales" : "Solo Empleados Actuales",
+    logicUsed: isGeneralBookmark
+      ? "Todas las señales disponibles"
+      : filterType === "technology"
+        ? "Incluye Alumni y Actuales"
+        : "Solo Empleados Actuales",
   }
 }
