@@ -4,11 +4,29 @@ import { Badge } from "@/components/ui/badge"
 import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Sparkles, Loader2, Copy, MessageSquare } from "lucide-react"
+import { Sparkles, Loader2, Copy, MessageSquare, ChevronDown, ChevronUp } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Label } from "@/components/ui/label"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { getIcebreakers, generateIcebreaker, getPrivateContacts } from "@/app/actions/workspace"
 import { getActiveIcebreakerTemplates } from "@/app/actions/templates"
+
+const CONTEXT_VARIABLES = [
+  { id: "contact", label: "Datos del Contacto", description: "Nombre, cargo", default: true },
+  { id: "company", label: "Datos de Empresa", description: "Nombre, industria", default: true },
+  {
+    id: "search_context",
+    label: "Contexto de Búsqueda",
+    description: "Tecnología/proceso del bookmark",
+    default: true,
+  },
+  { id: "news", label: "Noticias", description: "Últimas noticias de la empresa", default: false },
+  { id: "implementations", label: "Casos de Éxito", description: "Implementaciones detectadas", default: false },
+  { id: "snippets", label: "Snippets", description: "Fragmentos de perfiles", default: false },
+  { id: "signals", label: "Señales", description: "Todas las señales detectadas", default: true },
+  { id: "strategy", label: "Estrategia", description: "Tu propuesta de valor", default: true },
+]
 
 export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: string; companyName: string }) {
   const [icebreakers, setIcebreakers] = useState<any[]>([])
@@ -16,9 +34,14 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
   const [templates, setTemplates] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
+  const [isContextOpen, setIsContextOpen] = useState(false)
 
   const [selectedContact, setSelectedContact] = useState<string>("")
   const [selectedTemplate, setSelectedTemplate] = useState<string>("")
+
+  const [selectedContext, setSelectedContext] = useState<Record<string, boolean>>(
+    CONTEXT_VARIABLES.reduce((acc, v) => ({ ...acc, [v.id]: v.default }), {}),
+  )
 
   const loadData = async () => {
     setIsLoading(true)
@@ -50,7 +73,16 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
 
     setIsGenerating(true)
     try {
-      await generateIcebreaker(bookmarkId, selectedContact === "general" ? null : selectedContact, selectedTemplate)
+      const contextOptions = Object.entries(selectedContext)
+        .filter(([_, enabled]) => enabled)
+        .map(([key]) => key)
+
+      await generateIcebreaker(
+        bookmarkId,
+        selectedContact === "general" ? null : selectedContact,
+        selectedTemplate,
+        contextOptions,
+      )
       await loadData()
     } catch (error) {
       console.error("Failed to generate", error)
@@ -63,10 +95,16 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
     navigator.clipboard.writeText(text)
   }
 
+  const toggleContext = (id: string) => {
+    setSelectedContext((prev) => ({ ...prev, [id]: !prev[id] }))
+  }
+
+  const selectedCount = Object.values(selectedContext).filter(Boolean).length
+
   return (
     <div className="grid gap-6 lg:grid-cols-3">
       {/* Generator Column */}
-      <div className="lg:col-span-1 space-y-6">
+      <div className="lg:col-span-1 space-y-4">
         <Card className="border-amber-200 dark:border-amber-900 bg-amber-50/50 dark:bg-amber-950/10">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-amber-700 dark:text-amber-500">
@@ -109,6 +147,35 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
                 </SelectContent>
               </Select>
             </div>
+
+            <Collapsible open={isContextOpen} onOpenChange={setIsContextOpen}>
+              <CollapsibleTrigger asChild>
+                <Button variant="ghost" className="w-full justify-between px-3 h-auto py-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">Contexto a incluir</span>
+                    <Badge variant="secondary" className="text-xs">
+                      {selectedCount} de {CONTEXT_VARIABLES.length}
+                    </Badge>
+                  </div>
+                  {isContextOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="pt-2">
+                <div className="space-y-2 p-3 rounded-lg bg-white dark:bg-slate-900 border">
+                  {CONTEXT_VARIABLES.map((v) => (
+                    <div key={v.id} className="flex items-start space-x-3">
+                      <Checkbox id={v.id} checked={selectedContext[v.id]} onCheckedChange={() => toggleContext(v.id)} />
+                      <div className="grid gap-0.5 leading-none">
+                        <label htmlFor={v.id} className="text-sm font-medium cursor-pointer">
+                          {v.label}
+                        </label>
+                        <p className="text-xs text-muted-foreground">{v.description}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
 
             <Button
               className="w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white border-0"

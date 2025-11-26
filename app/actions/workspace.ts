@@ -217,14 +217,23 @@ export async function getIcebreakers(bookmarkId: string) {
   return data || []
 }
 
-export async function generateIcebreaker(bookmarkId: string, contactId: string | null, templateId: string) {
+export async function generateIcebreaker(
+  bookmarkId: string,
+  contactId: string | null,
+  templateId: string,
+  contextOptions: string[] = ["contact", "company", "search_context", "signals", "strategy"],
+) {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) throw new Error("Unauthorized")
 
-  const { data: bookmark } = await supabase.from("bookmarks").select("company_id").eq("id", bookmarkId).single()
+  const { data: bookmark } = await supabase
+    .from("bookmarks")
+    .select("company_id, search_context")
+    .eq("id", bookmarkId)
+    .single()
   if (!bookmark) throw new Error("Bookmark not found")
 
   // 1. Obtener el template real
@@ -238,93 +247,264 @@ export async function generateIcebreaker(bookmarkId: string, contactId: string |
     throw new Error("Template no encontrado")
   }
 
-  // 2. Obtener contexto: Compañía
-  const { data: company } = await supabase
-    .from("companies")
-    .select("name, industry")
-    .eq("id", bookmark.company_id)
-    .single()
+  // 2. Obtener contexto: Compañía (solo si está habilitado)
+  let company = null
+  if (contextOptions.includes("company")) {
+    const { data: companyData } = await supabase
+      .from("companies")
+      .select("name, industry, website")
+      .eq("id", bookmark.company_id)
+      .single()
+    company = companyData
+  }
 
-  // 3. Obtener contexto: Contacto
+  // 3. Obtener contexto: Contacto (solo si está habilitado)
   let contact = null
-  if (contactId) {
+  if (contactId && contextOptions.includes("contact")) {
     const { data: contactData } = await supabase
       .from("user_company_contacts")
-      .select("full_name, role")
+      .select("full_name, first_name, last_name, role, linkedin_url")
       .eq("id", contactId)
       .single()
     contact = contactData
   }
 
-  // 4. Obtener contexto: Señales recientes (privadas) del bookmark específico
-  const { data: signals } = await supabase
-    .from("user_company_signals")
-    .select("title, content")
-    .eq("bookmark_id", bookmarkId)
-    .eq("user_id", user.id)
-    .limit(3)
+  const [signalsResult, newsResult, implementationsResult, snippetsResult] = await Promise.all([
+    // Señales privadas del bookmark
+    contextOptions.includes("signals")
+      ? supabase
+          .from("user_company_signals")
+          .select("title, content, signal_type")
+          .eq("bookmark_id", bookmarkId)
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false })
+          .limit(3)
+      : Promise.resolve({ data: [] }),
+    // Noticias de la empresa
+    contextOptions.includes("news")
+      ? supabase
+          .from("company_news")
+          .select("title, summary, source_url")
+          .eq("bookmark_id", bookmarkId)
+          .order("published_at", { ascending: false })
+          .limit(3)
+      : Promise.resolve({ data: [] }),
+    // Implementaciones/Casos de éxito
+    contextOptions.includes("implementations")
+      ? supabase
+          .from("company_implementations")
+          .select("title, summary, source_url")
+          .eq("bookmark_id", bookmarkId)
+          .order("created_at", { ascending: false })
+          .limit(3)
+      : Promise.resolve({ data: [] }),
+    // Snippets (señales tipo snippet o success_story)
+    contextOptions.includes("snippets")
+      ? supabase
+          .from("user_company_signals")
+          .select("title, content")
+          .eq("bookmark_id", bookmarkId)
+          .eq("user_id", user.id)
+          .in("signal_type", ["success_story", "snippet"])
+          .limit(2)
+      : Promise.resolve({ data: [] }),
+  ])
 
-  const { data: strategyData } = await supabase
-    .from("user_company_strategies")
-    .select("sender_context_override")
-    .eq("bookmark_id", bookmarkId)
-    .eq("user_id", user.id)
-    .maybeSingle()
+  const signals = signalsResult.data || []
+  const news = newsResult.data || []
+  const implementations = implementationsResult.data || []
+  const snippets = snippetsResult.data || []
 
-  const { data: profileData } = await supabase.from("profiles").select("value_proposition").eq("id", user.id).single()
+  let technologies: string[] = []
+  let processes: string[] = []
+  if (contextOptions.includes("search_context")) {
+    const searchContext = bookmark.search_context || {}
+    technologies = searchContext.filtersUsed?.technology || []
+    processes = searchContext.filtersUsed?.process || []
+  }
 
-  const valueProposition =
-    strategyData?.sender_context_override ||
-    profileData?.value_proposition ||
-    "una propuesta de valor centrada en mejorar la eficiencia"
+  let strategyData = null
+  let profileData = null
+  if (contextOptions.includes("strategy")) {
+    const [strategyResult, profileResult] = await Promise.all([
+      supabase
+        .from("user_company_strategies")
+        .select("sender_context_override, recommended_pitch")
+        .eq("bookmark_id", bookmarkId)
+        .eq("user_id", user.id)
+        .maybeSingle(),
+      supabase.from("profiles").select("value_proposition").eq("id", user.id).single(),
+    ])
+    strategyData = strategyResult.data
+    profileData = profileResult.data
+  }
 
-  // 6. Preparar variables con valores seguros
+  const valueProposition = contextOptions.includes("strategy")
+    ? strategyData?.sender_context_override ||
+      profileData?.value_proposition ||
+      "una propuesta de valor centrada en mejorar la eficiencia"
+    : ""
+
+  const formatNews =
+    news.length > 0
+      ? news.map((n) => `- ${n.title}: ${n.summary || ""}`).join("\n")
+      : "No hay noticias recientes disponibles"
+
+  const formatImplementations =
+    implementations.length > 0
+      ? implementations.map((i) => `- ${i.title}: ${i.summary || ""}`).join("\n")
+      : "No hay casos de éxito disponibles"
+
+  const formatSnippets =
+    snippets.length > 0
+      ? snippets.map((s) => `- ${s.title}: ${s.content || ""}`).join("\n")
+      : "No hay snippets disponibles"
+
+  const formatSignals =
+    signals.length > 0
+      ? signals.map((s) => `- [${s.signal_type}] ${s.title}: ${s.content || ""}`).join("\n")
+      : "No hay señales detectadas"
+
+  // Preparar variables con valores seguros
   const variables = {
     company_name: company?.name || "la empresa",
+    company_website: company?.website || "",
     industry: company?.industry || "su industria",
-    contact_name: contact?.full_name || "Equipo",
-    contact_role: contact?.role || "Líder",
-    signal: signals && signals.length > 0 ? signals[0].title : "sus recientes iniciativas",
+    contact_name: contact?.full_name || "",
+    contact_first_name: contact?.first_name || "",
+    contact_role: contact?.role || "",
+    contact_linkedin: contact?.linkedin_url || "",
+    technology: technologies.length > 0 ? technologies.join(", ") : "",
+    process: processes.length > 0 ? processes.join(", ") : "",
+    signal: signals.length > 0 ? signals[0].title : "",
+    signals_list: formatSignals,
+    news: formatNews,
+    implementations: formatImplementations,
+    snippets: formatSnippets,
     strategy: valueProposition,
-    // In the future, this could be extracted dynamically from the strategy analysis.
-    pain_point: "su eficiencia operativa",
+    recommended_pitch: strategyData?.recommended_pitch || "",
     tone: templateData.tone || "profesional",
   }
 
-  // 7. Prompt Construction
-  let finalPrompt = templateData.prompt_template || ""
-  // Replace known variables
-  Object.entries(variables).forEach(([key, value]) => {
-    finalPrompt = finalPrompt.replace(new RegExp(`{{${key}}}`, "g"), value)
-  })
+  const promptTemplate = templateData.prompt_template || ""
 
-  // Ensure prompt isn't empty or broken
-  if (!finalPrompt.trim()) {
-    finalPrompt = `Genera un mensaje de introducción para ${variables.contact_name} de ${variables.company_name} sobre ${variables.signal}. Tono: ${variables.tone}.`
+  let contextSections = ""
+
+  if (contextOptions.includes("contact")) {
+    contextSections += `
+👤 CONTACTO:
+- Nombre completo: ${variables.contact_name || "NO DISPONIBLE"}
+- Nombre de pila: ${variables.contact_first_name || "NO DISPONIBLE"}
+- Cargo/Rol: ${variables.contact_role || "NO DISPONIBLE"}
+- LinkedIn: ${variables.contact_linkedin || "NO DISPONIBLE"}
+`
   }
 
-  console.log("[v0] Generating Icebreaker with context:", JSON.stringify(variables, null, 2))
-  console.log("[v0] Final Prompt sent to AI:", finalPrompt)
-  debugAIConfiguration()
+  if (contextOptions.includes("company")) {
+    contextSections += `
+🏢 EMPRESA:
+- Nombre: ${variables.company_name}
+- Industria: ${variables.industry}
+- Website: ${variables.company_website || "NO DISPONIBLE"}
+`
+  }
 
-  // 8. Generar con IA
+  if (contextOptions.includes("search_context")) {
+    contextSections += `
+🎯 CONTEXTO DE BÚSQUEDA (por qué nos interesa):
+- Tecnología detectada: ${variables.technology || "NO ESPECIFICADA"}
+- Proceso de negocio: ${variables.process || "NO ESPECIFICADO"}
+`
+  }
+
+  if (contextOptions.includes("news")) {
+    contextSections += `
+📰 NOTICIAS RECIENTES DE LA EMPRESA:
+${variables.news}
+`
+  }
+
+  if (contextOptions.includes("implementations")) {
+    contextSections += `
+🏆 CASOS DE ÉXITO / IMPLEMENTACIONES:
+${variables.implementations}
+`
+  }
+
+  if (contextOptions.includes("snippets")) {
+    contextSections += `
+📝 SNIPPETS Y NOTAS:
+${variables.snippets}
+`
+  }
+
+  if (contextOptions.includes("signals")) {
+    contextSections += `
+🔍 SEÑALES DETECTADAS:
+${variables.signals_list}
+`
+  }
+
+  if (contextOptions.includes("strategy")) {
+    contextSections += `
+💼 MI PROPUESTA DE VALOR:
+${variables.strategy}
+${variables.recommended_pitch ? `\n📋 PITCH RECOMENDADO:\n${variables.recommended_pitch}` : ""}
+`
+  }
+
+  const finalPrompt = `Eres un experto en ventas B2B generando mensajes de prospección personalizados.
+
+INSTRUCCIONES ESTRICTAS:
+- Genera UN SOLO mensaje de icebreaker siguiendo el template proporcionado
+- Entrega ÚNICAMENTE el mensaje final listo para enviar
+- NO incluyas explicaciones, preámbulos, alternativas ni comentarios
+- NO empieces con "Claro", "Aquí está", "El mensaje es", etc.
+- El mensaje debe sonar natural, personalizado y usar los datos del contexto
+- Si una variable no está disponible, adapta el mensaje naturalmente sin mencionarla
+
+TEMPLATE Y REGLAS A SEGUIR:
+${promptTemplate}
+
+═══════════════════════════════════════
+CONTEXTO DEL PROSPECTO:
+═══════════════════════════════════════
+${contextSections}
+═══════════════════════════════════════
+
+TONO DEL MENSAJE: ${variables.tone}
+
+Ahora genera el mensaje de icebreaker (SOLO el mensaje, nada más):`
+
+  console.log("[v0] Generating Icebreaker with context options:", contextOptions)
+
+  // Generar con IA
   let generatedText = ""
   try {
     generatedText = await generateGeminiContent(finalPrompt, "gemini-2.0-flash", 0.7)
+
+    // Limpiar respuesta de preámbulos comunes
+    generatedText = generatedText
+      .replace(/^(Claro|Aquí está|Aquí tienes|Por supuesto|El mensaje es|Mensaje:|Icebreaker:)[\s,:]*/gi, "")
+      .replace(/^["']|["']$/g, "")
+      .trim()
   } catch (error: any) {
     console.error("AI Generation failed (Gemini 2.0 Direct)", error)
 
-    // Try fallback to 1.5 if 2.0 fails (sometimes 2.0 is busy or region locked)
     try {
       console.log("[v0] Attempting fallback to Gemini 1.5 Pro...")
       generatedText = await generateGeminiContent(finalPrompt, "gemini-1.5-pro", 0.7)
+      generatedText = generatedText
+        .replace(/^(Claro|Aquí está|Aquí tienes|Por supuesto|El mensaje es|Mensaje:|Icebreaker:)[\s,:]*/gi, "")
+        .replace(/^["']|["']$/g, "")
+        .trim()
     } catch (fallbackError: any) {
       console.error("Fallback AI Generation failed", fallbackError)
-      generatedText = `[Error de IA] Hola ${variables.contact_name}, me gustaría conectar respecto a ${variables.company_name}. (Detalle: ${error.message})`
+      generatedText = `[Error de IA] Hola ${variables.contact_first_name || "Equipo"}, me gustaría conectar respecto a ${variables.company_name}. (Detalle: ${error.message})`
     }
   }
 
-  // 9. Guardar resultado
+  // Guardar resultado con contexto expandido
   await supabase.from("user_icebreakers").insert({
     user_id: user.id,
     company_id: bookmark.company_id,
@@ -332,7 +512,15 @@ export async function generateIcebreaker(bookmarkId: string, contactId: string |
     contact_id: contactId,
     generated_text: generatedText,
     template_used: templateId,
-    context_used: JSON.stringify({ template_name: templateData.name, ...variables }),
+    context_used: JSON.stringify({
+      template_name: templateData.name,
+      context_options: contextOptions,
+      ...variables,
+      news_count: news.length,
+      implementations_count: implementations.length,
+      snippets_count: snippets.length,
+      signals_count: signals.length,
+    }),
     tone: templateData.tone,
     created_at: new Date().toISOString(),
   })
