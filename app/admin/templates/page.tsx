@@ -10,6 +10,11 @@ const AVAILABLE_VARIABLES = [
   { key: "{contact_first_name}", description: "Solo el nombre de pila", example: "Carlos" },
   { key: "{contact_role}", description: "Cargo del contacto", example: "CTO" },
   { key: "{company_name}", description: "Nombre de la empresa", example: "TechCorp" },
+  {
+    key: "{company_description}",
+    description: "Bio/descripción de la empresa",
+    example: "Empresa líder en soluciones cloud...",
+  },
   { key: "{industry}", description: "Industria de la empresa", example: "Tecnología" },
   { key: "{technology}", description: "Tecnología del contexto de búsqueda", example: "AWS" },
   { key: "{process}", description: "Proceso del contexto de búsqueda", example: "DevOps" },

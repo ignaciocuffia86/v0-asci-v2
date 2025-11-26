@@ -94,6 +94,7 @@ export async function uploadBatchRows(
         company_industry: row.company_industry,
         company_country: row.company_country,
         company_logo_url: row.company_logo_url,
+        company_description: row.company_description,
 
         linkedin_url: row.person_linkedin_url, // Note mapping
         first_name: row.first_name,

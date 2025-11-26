@@ -109,9 +109,9 @@ export default function BookmarkWorkspacePage() {
           </Button>
         </div>
 
-        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
           <div className="flex items-start gap-4">
-            <div className="h-16 w-16 bg-muted rounded-lg border flex items-center justify-center overflow-hidden">
+            <div className="h-16 w-16 bg-muted rounded-lg border flex items-center justify-center overflow-hidden flex-shrink-0">
               {company.logo_url ? (
                 <img
                   src={company.logo_url || "/placeholder.svg"}
@@ -159,6 +159,12 @@ export default function BookmarkWorkspacePage() {
               </div>
             </div>
           </div>
+
+          {company.description && (
+            <div className="lg:max-w-md xl:max-w-lg bg-muted/30 rounded-lg p-3 border">
+              <p className="text-sm text-muted-foreground leading-relaxed line-clamp-4">{company.description}</p>
+            </div>
+          )}
         </div>
       </header>
 

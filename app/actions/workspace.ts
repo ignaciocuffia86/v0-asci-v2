@@ -252,7 +252,7 @@ export async function generateIcebreaker(
   if (contextOptions.includes("company")) {
     const { data: companyData } = await supabase
       .from("companies")
-      .select("name, industry, website")
+      .select("name, industry, website, description")
       .eq("id", bookmark.company_id)
       .single()
     company = companyData
@@ -368,10 +368,12 @@ export async function generateIcebreaker(
   // Preparar variables con valores seguros
   const variables = {
     company_name: company?.name || "la empresa",
+    company_description: company?.description || "",
     company_website: company?.website || "",
     industry: company?.industry || "su industria",
     contact_name: contact?.full_name || "",
     contact_first_name: contact?.first_name || "",
+    contact_last_name: contact?.last_name || "",
     contact_role: contact?.role || "",
     contact_linkedin: contact?.linkedin_url || "",
     technology: technologies.length > 0 ? technologies.join(", ") : "",
@@ -395,6 +397,7 @@ export async function generateIcebreaker(
 👤 CONTACTO:
 - Nombre completo: ${variables.contact_name || "NO DISPONIBLE"}
 - Nombre de pila: ${variables.contact_first_name || "NO DISPONIBLE"}
+- Apellido: ${variables.contact_last_name || "NO DISPONIBLE"}
 - Cargo/Rol: ${variables.contact_role || "NO DISPONIBLE"}
 - LinkedIn: ${variables.contact_linkedin || "NO DISPONIBLE"}
 `
@@ -406,6 +409,7 @@ export async function generateIcebreaker(
 - Nombre: ${variables.company_name}
 - Industria: ${variables.industry}
 - Website: ${variables.company_website || "NO DISPONIBLE"}
+- Descripción: ${variables.company_description || "NO DISPONIBLE"}
 `
   }
 
@@ -459,7 +463,7 @@ INSTRUCCIONES ESTRICTAS:
 - Genera UN SOLO mensaje de icebreaker siguiendo el template proporcionado
 - Entrega ÚNICAMENTE el mensaje final listo para enviar
 - NO incluyas explicaciones, preámbulos, alternativas ni comentarios
-- NO empieces con "Claro", "Aquí está", "El mensaje es", etc.
+- NO empieces con "Claro", "Aquí está", "Aquí tienes", "Por supuesto", "El mensaje es", "Mensaje:", "Icebreaker:", etc.
 - El mensaje debe sonar natural, personalizado y usar los datos del contexto
 - Si una variable no está disponible, adapta el mensaje naturalmente sin mencionarla
 
