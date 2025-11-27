@@ -234,32 +234,49 @@ export function CompanyDrawer({
     } = await supabase.auth.getUser()
     if (!user) return
 
-    if (isBookmarked) {
-      await unbookmarkCompany(user.id, companyId)
-      setIsBookmarked(false)
-    } else {
-      let contextNames: string[] = []
+    // Guardar estado previo para rollback en caso de error
+    const wasBookmarked = isBookmarked
 
-      if (dictionaryNames.length > 0) {
-        contextNames = dictionaryNames
+    // Optimistic update - actualizar UI inmediatamente
+    setIsBookmarked(!wasBookmarked)
+
+    try {
+      if (wasBookmarked) {
+        // Ejecutar en background sin await
+        unbookmarkCompany(user.id, companyId).catch(() => {
+          // Rollback si falla
+          setIsBookmarked(true)
+        })
       } else {
-        contextNames = signals
-          .filter((s) => filterSignalIds?.includes(s.signal_id))
-          .map((s) => s.keyword_matched)
-          .filter((value, index, self) => self.indexOf(value) === index)
-      }
+        let contextNames: string[] = []
 
-      const filtersUsed = {
-        technology: filterType === "technology" ? contextNames : [],
-        process: filterType === "process" ? contextNames : [],
-      }
+        if (dictionaryNames.length > 0) {
+          contextNames = dictionaryNames
+        } else {
+          contextNames = signals
+            .filter((s) => filterSignalIds?.includes(s.signal_id))
+            .map((s) => s.keyword_matched)
+            .filter((value, index, self) => self.indexOf(value) === index)
+        }
 
-      await bookmarkCompany(user.id, companyId, {
-        filterSignalIds: filterSignalIds || [],
-        filterType: filterType || "generic",
-        filtersUsed,
-      })
-      setIsBookmarked(true)
+        const filtersUsed = {
+          technology: filterType === "technology" ? contextNames : [],
+          process: filterType === "process" ? contextNames : [],
+        }
+
+        // Ejecutar en background sin await
+        bookmarkCompany(user.id, companyId, {
+          filterSignalIds: filterSignalIds || [],
+          filterType: filterType || "generic",
+          filtersUsed,
+        }).catch(() => {
+          // Rollback si falla
+          setIsBookmarked(false)
+        })
+      }
+    } catch {
+      // Rollback en caso de error
+      setIsBookmarked(wasBookmarked)
     }
   }
 
@@ -337,7 +354,7 @@ export function CompanyDrawer({
 
   return (
     <Sheet open={isOpen} onOpenChange={onClose}>
-      <SheetContent className="w-full sm:max-w-3xl overflow-y-auto bg-white dark:bg-slate-950 p-0 flex flex-col h-full">
+      <SheetContent className="w-full sm:max-w-3xl overflow-y-auto bg-white dark:bg-slate-900 p-0 flex flex-col h-full">
         {isLoading && drawerData && (
           <div className="absolute top-4 right-14 z-10">
             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />

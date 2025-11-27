@@ -138,7 +138,7 @@ export default function HomePage() {
                     <div className="flex-1 flex justify-center">
                       <div className="flex items-center gap-2 px-4 py-1.5 bg-white rounded-lg border border-slate-200 text-sm text-slate-500">
                         <Search className="h-3.5 w-3.5" />
-                        app.asci.io/search
+                        asci.bigua.lat/search
                       </div>
                     </div>
                   </div>
