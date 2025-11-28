@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import Image from "next/image"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
 import {
@@ -76,9 +77,7 @@ export function AdminSidebar() {
     <aside className="w-64 bg-sidebar border-r border-sidebar-border flex flex-col h-screen sticky top-0">
       <div className="p-6 border-b border-sidebar-border">
         <div className="flex items-center gap-2">
-          <div className="h-8 w-8 bg-primary rounded-md flex items-center justify-center text-primary-foreground font-bold">
-            A
-          </div>
+          <Image src="/logo.png" alt="ASCI Logo" width={32} height={32} className="rounded-md" />
           <span className="font-bold text-lg">ASCI Admin</span>
         </div>
       </div>

@@ -1,4 +1,5 @@
 import Link from "next/link"
+import Image from "next/image"
 import {
   ArrowRight,
   Sparkles,
@@ -27,9 +28,7 @@ export default function HomePage() {
       <header className="sticky top-0 z-50 w-full border-b border-slate-200/80 bg-white/80 backdrop-blur-xl">
         <div className="container mx-auto flex h-16 items-center justify-between px-4">
           <div className="flex items-center gap-2.5 font-semibold text-lg text-slate-900">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-sm font-bold">
-              A
-            </div>
+            <Image src="/logo.png" alt="ASCI Logo" width={32} height={32} className="rounded-lg" />
             ASCI
           </div>
           <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-slate-600">
@@ -579,16 +578,14 @@ export default function HomePage() {
         </section>
 
         {/* Footer */}
-        <footer className="py-12 bg-white border-t border-slate-200">
+        <footer className="border-t border-slate-200 bg-white py-8">
           <div className="container mx-auto px-4">
             <div className="flex flex-col md:flex-row items-center justify-between gap-4">
               <div className="flex items-center gap-2 font-semibold text-slate-900">
-                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-xs font-bold">
-                  A
-                </div>
+                <Image src="/logo.png" alt="ASCI Logo" width={28} height={28} className="rounded-lg" />
                 ASCI
               </div>
-              <div className="text-sm text-slate-500">© 2025 ASCI. Inteligencia de señales para ventas B2B.</div>
+              <div className="text-sm text-slate-500">© 2025 ASCI. Asistente de Señales de Compra e Inferencias.</div>
             </div>
           </div>
         </footer>
