@@ -1,7 +1,6 @@
 "use client"
 
 import type React from "react"
-
 import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -42,12 +41,14 @@ import { Input } from "@/components/ui/input"
 interface Contact {
   id: string
   full_name: string
-  first_name: string | null
-  role: string | null
-  profile_picture_url: string | null
+  first_name?: string
+  headline?: string
+  current_position_title?: string
+  role?: string
+  profile_picture_url?: string | null
+  products?: string[]
   source: "signal" | "private"
-  has_signal: boolean
-  signal_products?: string[]
+  has_signal?: boolean
 }
 
 interface IcebreakerResult {
@@ -71,13 +72,20 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
 
   const loadData = async () => {
     setIsLoading(true)
-    const [contactsData, icebreakersData] = await Promise.all([
-      getContactsForIcebreaker(bookmarkId),
-      getIcebreakers(bookmarkId),
-    ])
-    setContacts(contactsData)
-    setIcebreakers(icebreakersData)
-    setIsLoading(false)
+    try {
+      const [contactsData, icebreakersData] = await Promise.all([
+        getContactsForIcebreaker(bookmarkId),
+        getIcebreakers(bookmarkId),
+      ])
+      setContacts(contactsData ?? [])
+      setIcebreakers(icebreakersData ?? [])
+    } catch (error) {
+      console.error("[v0] Error loading icebreaker data:", error)
+      setContacts([])
+      setIcebreakers([])
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   useEffect(() => {
@@ -129,11 +137,10 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
     setTimeout(() => setCopiedField(null), 2000)
   }
 
-  const selectedContactData = contacts.find((c) => c.id === selectedContact)
+  const selectedContactData = (contacts ?? []).find((c) => c.id === selectedContact)
 
-  // Separar contactos por tipo
-  const signalContacts = contacts.filter((c) => c.source === "signal")
-  const decisionMakerContacts = contacts.filter((c) => c.source === "private")
+  const signalContacts = (contacts ?? []).filter((c) => c.source === "signal")
+  const decisionMakerContacts = (contacts ?? []).filter((c) => c.source === "private")
 
   return (
     <div className="grid gap-6 lg:grid-cols-2">
@@ -207,9 +214,9 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
                         <SelectItem key={c.id} value={c.id}>
                           <div className="flex items-center gap-2">
                             <span>{c.full_name}</span>
-                            {c.signal_products && c.signal_products.length > 0 && (
+                            {(c.products ?? []).length > 0 && (
                               <Badge variant="secondary" className="text-[10px] px-1 h-4">
-                                {c.signal_products.slice(0, 2).join(", ")}
+                                {(c.products ?? []).slice(0, 2).join(", ")}
                               </Badge>
                             )}
                           </div>
@@ -235,7 +242,7 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
                     </>
                   )}
 
-                  {contacts.length === 0 && (
+                  {(contacts ?? []).length === 0 && (
                     <div className="px-2 py-4 text-center text-sm text-muted-foreground">
                       No hay contactos disponibles. Busca tomadores de decisión.
                     </div>
@@ -259,7 +266,12 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
                 </Avatar>
                 <div className="flex-1 min-w-0">
                   <p className="font-medium text-sm truncate">{selectedContactData.full_name}</p>
-                  <p className="text-xs text-muted-foreground truncate">{selectedContactData.role || "Sin cargo"}</p>
+                  <p className="text-xs text-muted-foreground truncate">
+                    {selectedContactData.current_position_title ||
+                      selectedContactData.headline ||
+                      selectedContactData.role ||
+                      "Sin cargo"}
+                  </p>
                 </div>
                 {selectedContactData.has_signal && (
                   <Badge variant="outline" className="text-xs shrink-0">
@@ -388,7 +400,7 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
           <div className="flex justify-center py-8">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
-        ) : icebreakers.length === 0 ? (
+        ) : (icebreakers ?? []).length === 0 ? (
           <Card className="border-dashed">
             <CardContent className="flex flex-col items-center justify-center py-12 text-center">
               <Sparkles className="h-8 w-8 text-muted-foreground mb-4" />
@@ -397,7 +409,7 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
           </Card>
         ) : (
           <div className="space-y-3 max-h-[600px] overflow-y-auto pr-2">
-            {icebreakers.map((ib) => (
+            {(icebreakers ?? []).map((ib) => (
               <Card key={ib.id} className="relative">
                 <CardHeader className="pb-2 pt-3 px-4">
                   <div className="flex items-center justify-between">
@@ -415,7 +427,7 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
                   </div>
                 </CardHeader>
                 <CardContent className="pt-0 px-4 pb-3">
-                  <div className="bg-muted/30 p-3 rounded-md text-sm whitespace-pre-wrap text-muted-foreground line-clamp-4">
+                  <div className="bg-muted/30 p-3 rounded-md text-sm whitespace-pre-wrap text-muted-foreground">
                     {ib.generated_text}
                   </div>
                   <Button

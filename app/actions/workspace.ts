@@ -19,7 +19,7 @@ export async function getPrivateSignals(bookmarkId: string) {
   const { data } = await supabase
     .from("user_company_signals")
     .select("*")
-    .eq("bookmark_id", bookmarkId) // Filter by bookmark_id
+    .eq("bookmark_id", bookmarkId)
     .eq("user_id", user.id)
     .order("created_at", { ascending: false })
 
@@ -492,7 +492,7 @@ Ahora genera el mensaje de icebreaker (SOLO el mensaje, nada más):`
       .replace(/^["']|["']$/g, "")
       .trim()
   } catch (error: any) {
-    console.error("AI Generation failed (Gemini 2.0 Direct)", error)
+    console.error("AI Generation failed (Gemini 2.0 Flash)", error)
 
     try {
       console.log("[v0] Attempting fallback to Gemini 1.5 Pro...")
@@ -539,18 +539,32 @@ export async function getContactsForIcebreaker(bookmarkId: string) {
   } = await supabase.auth.getUser()
   if (!user) return []
 
-  // Obtener el company_id del bookmark
-  const { data: bookmark } = await supabase.from("bookmarks").select("company_id").eq("id", bookmarkId).single()
+  const { data: bookmark } = await supabase
+    .from("bookmarks")
+    .select("company_id, search_context")
+    .eq("id", bookmarkId)
+    .single()
 
-  if (!bookmark) return []
+  if (!bookmark) {
+    return []
+  }
 
-  // 1. Obtener señales de la empresa con contactos
-  const { data: signalContacts } = await supabase
+  const searchContext = bookmark.search_context as {
+    filterType?: string
+    filtersUsed?: string[]
+    filterSignalIds?: string[]
+  } | null
+  const filterSignalIds = searchContext?.filterSignalIds || null
+
+  // 1. Obtener señales de la empresa con contactos (only current employees for icebreakers)
+  let signalQuery = supabase
     .from("signals")
     .select(`
       contact_id,
       signal_id,
       keyword_matched,
+      is_current_employee,
+      signal_type,
       contacts!inner (
         id,
         full_name,
@@ -563,21 +577,48 @@ export async function getContactsForIcebreaker(bookmarkId: string) {
     `)
     .eq("company_id", bookmark.company_id)
     .eq("is_current_employee", true)
-    .eq("signal_type", "technology")
 
-  // 2. Obtener nombres de productos para los signal_ids únicos
+  if (filterSignalIds && filterSignalIds.length > 0) {
+    signalQuery = signalQuery.in("signal_id", filterSignalIds)
+  }
+
+  const { data: signalContacts, error: signalError } = await signalQuery
+
+  // 2. Obtener nombres de productos Y procesos para los signal_ids únicos
   const signalIds = [...new Set((signalContacts || []).map((s) => s.signal_id).filter(Boolean))]
+  const techSignalIds = (signalContacts || [])
+    .filter((s) => s.signal_type === "technology")
+    .map((s) => s.signal_id)
+    .filter(Boolean)
+  const processSignalIds = (signalContacts || [])
+    .filter((s) => s.signal_type === "process")
+    .map((s) => s.signal_id)
+    .filter(Boolean)
 
   const productMap = new Map<string, string>()
-  if (signalIds.length > 0) {
-    const { data: products } = await supabase.from("dictionary_products").select("id, name").in("id", signalIds)
+  const processMap = new Map<string, string>()
 
+  if (techSignalIds.length > 0) {
+    const { data: products } = await supabase
+      .from("dictionary_products")
+      .select("id, name")
+      .in("id", [...new Set(techSignalIds)])
     for (const product of products || []) {
       productMap.set(product.id, product.name)
     }
   }
 
-  // 3. Agrupar por contacto y juntar productos
+  if (processSignalIds.length > 0) {
+    const { data: processes } = await supabase
+      .from("dictionary_processes")
+      .select("id, name")
+      .in("id", [...new Set(processSignalIds)])
+    for (const process of processes || []) {
+      processMap.set(process.id, process.name)
+    }
+  }
+
+  // 3. Agrupar por contacto y juntar productos/procesos
   const contactMap = new Map<string, any>()
 
   for (const signal of signalContacts || []) {
@@ -589,26 +630,23 @@ export async function getContactsForIcebreaker(bookmarkId: string) {
         id: contact.id,
         full_name: contact.full_name,
         first_name: contact.first_name,
-        role: contact.current_position_title || contact.headline,
         headline: contact.headline,
-        current_position_description: contact.current_position_description,
         profile_picture_url: contact.profile_picture_url,
+        current_position_title: contact.current_position_title,
+        current_position_description: contact.current_position_description,
+        products: [] as string[],
         source: "signal" as const,
-        has_signal: true,
-        signal_products: [],
-        keywords_matched: [],
       })
     }
 
-    // Agregar producto
-    const productName = productMap.get(signal.signal_id)
-    if (productName && !contactMap.get(contact.id).signal_products.includes(productName)) {
-      contactMap.get(contact.id).signal_products.push(productName)
-    }
+    const existingProducts = contactMap.get(contact.id).products
+    const signalName =
+      signal.signal_type === "technology" ? productMap.get(signal.signal_id) : processMap.get(signal.signal_id)
 
-    // Agregar keyword
-    if (signal.keyword_matched && !contactMap.get(contact.id).keywords_matched.includes(signal.keyword_matched)) {
-      contactMap.get(contact.id).keywords_matched.push(signal.keyword_matched)
+    if (signalName && !existingProducts.includes(signalName)) {
+      existingProducts.push(signalName)
+    } else if (signal.keyword_matched && !existingProducts.includes(signal.keyword_matched)) {
+      existingProducts.push(signal.keyword_matched)
     }
   }
 
@@ -630,7 +668,8 @@ export async function getContactsForIcebreaker(bookmarkId: string) {
         profile_picture_url: null,
         source: "private" as const,
         has_signal: false,
-        signal_products: [],
+        is_current: true, // Private contacts are assumed to be current
+        products: [],
         keywords_matched: [],
       })
     }
@@ -829,240 +868,79 @@ ${
 
 MENSAJE 2 - EMAIL DE SEGUIMIENTO:
 - Comienza con "Hola ${firstName}, te escribí por LinkedIn hace unos días."
-- Reformula la observación inicial con diferentes palabras
-- Incluye brevemente la propuesta de valor mencionando que eres de ${userCompanyName}
-- Call-to-action: proponer una llamada breve
-- Formato de email profesional pero cercano
-- NO uses emojis
-- Incluye un asunto sugerido al inicio entre corchetes [Asunto: ...]
+- Reformula la observación inicial con`
 
----
-
-FORMATO DE RESPUESTA (respeta exactamente este formato):
-
-===LINKEDIN===
-[mensaje de LinkedIn aquí]
-===EMAIL===
-[mensaje de email aquí, incluyendo asunto]`
-
+  // Generar con IA
   let generatedText = ""
   try {
     generatedText = await generateGeminiContent(prompt, "gemini-2.0-flash", 0.7)
+
+    // Limpiar respuesta de preámbulos comunes
+    generatedText = generatedText
+      .replace(/^(Claro|Aquí está|Aquí tienes|Por supuesto|El mensaje es|Mensaje:|Icebreaker:)[\s,:]*/gi, "")
+      .replace(/^["']|["']$/g, "")
+      .trim()
   } catch (error: any) {
-    console.error("AI Generation failed", error)
+    console.error("AI Generation failed (Gemini 2.0 Flash)", error)
+
     try {
+      console.log("[v0] Attempting fallback to Gemini 1.5 Pro...")
       generatedText = await generateGeminiContent(prompt, "gemini-1.5-pro", 0.7)
-    } catch (fallbackError) {
-      throw new Error("Error generando icebreaker: " + error.message)
+      generatedText = generatedText
+        .replace(/^(Claro|Aquí está|Aquí tienes|Por supuesto|El mensaje es|Mensaje:|Icebreaker:)[\s,:]*/gi, "")
+        .replace(/^["']|["']$/g, "")
+        .trim()
+    } catch (fallbackError: any) {
+      console.error("Fallback AI Generation failed", fallbackError)
+      generatedText = `[Error de IA] Hola ${firstName}, me gustaría conectar respecto a ${companyName}. (Detalle: ${error.message})`
     }
   }
 
-  // Parsear respuesta
-  const linkedinMatch = generatedText.match(/===LINKEDIN===\s*([\s\S]*?)\s*===EMAIL===/i)
-  const emailMatch = generatedText.match(/===EMAIL===\s*([\s\S]*?)$/i)
-
-  const linkedinMessage = linkedinMatch?.[1]?.trim() || generatedText.substring(0, 280)
-  const emailMessage = emailMatch?.[1]?.trim() || ""
-
-  // Guardar ambos en la base de datos
-  await Promise.all([
-    supabase.from("user_icebreakers").insert({
-      user_id: user.id,
-      company_id: bookmark.company_id,
-      bookmark_id: bookmarkId,
-      contact_id: contactId,
-      contact_source: contactSource, // "signal" o "private"
-      contact_name: contactData.full_name || contactData.first_name || null,
-      generated_text: linkedinMessage,
-      message_type: "linkedin",
-      context_used: JSON.stringify({
-        is_signal_contact: isSignalContact,
-        products: signalInfo.map((s) => s.product_name).filter(Boolean),
-      }),
-      tone: "profesional",
-      created_at: new Date().toISOString(),
+  // Guardar resultado con contexto expandido
+  await supabase.from("user_icebreakers").insert({
+    user_id: user.id,
+    company_id: bookmark.company_id,
+    bookmark_id: bookmarkId,
+    contact_id: contactId,
+    generated_text: generatedText,
+    template_used: "Simplified Icebreaker",
+    context_used: JSON.stringify({
+      template_name: "Simplified Icebreaker",
+      context_options: ["contact", "company", "search_context", "signals", "strategy"],
+      company_name: company?.name || "la empresa",
+      company_description: "",
+      company_website: "",
+      industry: "",
+      contact_name: contactData.full_name || "",
+      contact_first_name: contactData.first_name || "",
+      contact_last_name: "",
+      contact_role: contactData.role || "",
+      contact_linkedin: "",
+      technology: "",
+      process: "",
+      signal: "",
+      signals_list: "",
+      news: "",
+      implementations: "",
+      snippets: "",
+      strategy: valueProposition,
+      recommended_pitch: "",
+      tone: "professional",
+      user_company_name: userCompanyName,
+      news_count: 0,
+      implementations_count: 0,
+      snippets_count: 0,
+      signals_count: signalInfo.length,
     }),
-    supabase.from("user_icebreakers").insert({
-      user_id: user.id,
-      company_id: bookmark.company_id,
-      bookmark_id: bookmarkId,
-      contact_id: contactId,
-      contact_source: contactSource, // "signal" o "private"
-      contact_name: contactData.full_name || contactData.first_name || null,
-      generated_text: emailMessage,
-      message_type: "email",
-      context_used: JSON.stringify({
-        is_signal_contact: isSignalContact,
-        products: signalInfo.map((s) => s.product_name).filter(Boolean),
-      }),
-      tone: "profesional",
-      created_at: new Date().toISOString(),
-    }),
-  ])
-
-  revalidatePath(`/bookmarks/${bookmarkId}`)
-
-  return {
-    linkedin: linkedinMessage,
-    email: emailMessage,
-  }
-}
-
-// --- STRATEGY ---
-
-export async function getStrategy(bookmarkId: string) {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return null
-
-  const [strategyResult, profileResult] = await Promise.all([
-    supabase
-      .from("user_company_strategies")
-      .select("*")
-      .eq("bookmark_id", bookmarkId)
-      .eq("user_id", user.id)
-      .maybeSingle(),
-    supabase.from("profiles").select("value_proposition").eq("id", user.id).single(),
-  ])
-
-  return {
-    strategy: strategyResult.data,
-    defaultContext: profileResult.data?.value_proposition || "",
-  }
-}
-
-export async function saveSenderContext(bookmarkId: string, senderContext: string, saveAsDefault = false) {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) throw new Error("Unauthorized")
-
-  const { data: bookmark } = await supabase.from("bookmarks").select("company_id").eq("id", bookmarkId).single()
-  if (!bookmark) throw new Error("Bookmark not found")
-
-  if (saveAsDefault) {
-    // First check if profile exists to avoid errors (though it should exist)
-    const { error } = await supabase.from("profiles").update({ value_proposition: senderContext }).eq("id", user.id)
-
-    // If profile doesn't exist, we might need to insert, but usually auth triggers handle this.
-    // We'll assume profile exists or update fails gracefully.
-    if (error) {
-      console.error("Error updating profile default:", error)
-    }
-  }
-
-  // Upsert strategy using bookmark_id
-  const { data: existing } = await supabase
-    .from("user_company_strategies")
-    .select("id")
-    .eq("bookmark_id", bookmarkId)
-    .eq("user_id", user.id)
-    .maybeSingle()
-
-  if (existing) {
-    await supabase
-      .from("user_company_strategies")
-      .update({ sender_context_override: senderContext, updated_at: new Date().toISOString() })
-      .eq("id", existing.id)
-  } else {
-    await supabase.from("user_company_strategies").insert({
-      user_id: user.id,
-      company_id: bookmark.company_id,
-      bookmark_id: bookmarkId,
-      sender_context_override: senderContext,
-    })
-  }
+    tone: "professional",
+    created_at: new Date().toISOString(),
+  })
 
   revalidatePath(`/bookmarks/${bookmarkId}`)
   return { success: true }
 }
 
-export async function analyzeStrategy(bookmarkId: string, website: string, senderContext: string) {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) throw new Error("Unauthorized")
-
-  const { data: bookmark } = await supabase.from("bookmarks").select("company_id").eq("id", bookmarkId).single()
-  if (!bookmark) throw new Error("Bookmark not found")
-
-  const { data: signals } = await supabase
-    .from("user_company_signals")
-    .select("title, content, signal_type")
-    .eq("bookmark_id", bookmarkId) // Filter by bookmark specific signals
-    .eq("user_id", user.id)
-    .limit(10)
-
-  let signalsContext = "No hay señales adicionales."
-  if (signals && signals.length > 0) {
-    signalsContext = signals.map((s) => `- [${s.signal_type}] ${s.title}: ${s.content}`).join("\n")
-  }
-
-  const prompt = `
-    Eres un experto Estratega de Ventas B2B.
-    
-    Analiza la siguiente empresa basada en su sitio web: ${website}
-    
-    Y este es mi contexto (lo que yo vendo): ${senderContext}
-
-    Adicionalmente, he recopilado estas señales clave sobre la empresa que debes considerar en tu análisis:
-    ${signalsContext}
-    
-    Genera un JSON con estos dos campos:
-    1. "target_summary": Un resumen ejecutivo de 2 oraciones sobre qué hace realmente esta empresa y cómo gana dinero.
-    2. "recommended_pitch": Una propuesta de valor única (1 párrafo) de cómo MI producto/servicio puede ayudar específicamente a ESTA empresa, conectando mi oferta con las señales encontradas (si son relevantes) o su modelo de negocio. Sé específico, no genérico.
-  `
-
-  let analysis = { target_summary: "", recommended_pitch: "" }
-
-  debugAIConfiguration()
-
-  try {
-    const text = await generateGeminiContent(prompt, "gemini-2.0-flash", 0.7)
-
-    const cleanText = text
-      .replace(/```json/g, "")
-      .replace(/```/g, "")
-      .trim()
-    analysis = JSON.parse(cleanText)
-  } catch (error: any) {
-    console.error("AI Strategy Analysis failed", error)
-    return { success: false, error: "Fallo al generar estrategia. Verifique su Google API Key." }
-  }
-
-  // Upsert
-  const { data: existing } = await supabase
-    .from("user_company_strategies")
-    .select("id")
-    .eq("bookmark_id", bookmarkId)
-    .eq("user_id", user.id)
-    .maybeSingle()
-
-  const payload = {
-    user_id: user.id,
-    company_id: bookmark.company_id,
-    bookmark_id: bookmarkId, // IMPORTANT
-    target_summary: analysis.target_summary,
-    recommended_pitch: analysis.recommended_pitch,
-    updated_at: new Date().toISOString(),
-    sender_context_override: senderContext,
-  }
-
-  if (existing) {
-    await supabase.from("user_company_strategies").update(payload).eq("id", existing.id)
-  } else {
-    await supabase.from("user_company_strategies").insert(payload)
-  }
-
-  revalidatePath(`/bookmarks/${bookmarkId}`)
-  return { success: true, data: payload }
-}
-
-// --- BOOKMARK CONTEXT & SMART SIGNALS ---
+// --- SMART CONTEXT ---
 
 export async function getBookmarkSmartContext(bookmarkId: string) {
   const supabase = await createClient()
@@ -1071,97 +949,230 @@ export async function getBookmarkSmartContext(bookmarkId: string) {
   } = await supabase.auth.getUser()
   if (!user) return null
 
-  // 1. Fetch Bookmark Context by bookmarkId
+  // Obtener bookmark con search_context
   const { data: bookmark } = await supabase
     .from("bookmarks")
-    .select("search_context, company_id")
+    .select("company_id, search_context")
     .eq("id", bookmarkId)
-    .eq("user_id", user.id)
     .single()
 
   if (!bookmark) return null
 
   const searchContext = bookmark.search_context || {}
-  const { filterType, filterSignalIds } = searchContext
+  const filtersUsed = searchContext.filtersUsed || {}
+  const filterSignalIds = searchContext.filterSignalIds || []
 
-  const isGeneralBookmark = !filterType || !filterSignalIds || filterSignalIds.length === 0
+  // Determinar tipo de filtro usado
+  let filterType: "process" | "technology" | "general" = "general"
+  let logicUsed = "Todas las señales disponibles"
 
-  let query = supabase
+  if (filtersUsed.process && filtersUsed.process.length > 0) {
+    filterType = "process"
+    logicUsed = `Proceso: ${filtersUsed.process.join(", ")}`
+  } else if (filtersUsed.technology && filtersUsed.technology.length > 0) {
+    filterType = "technology"
+    logicUsed = `Tecnología: ${filtersUsed.technology.join(", ")}`
+  }
+
+  let signalsQuery = supabase
     .from("signals")
     .select(`
-      keyword_matched, 
-      is_current_employee,
+      id,
       contact_id,
-      job_posting_id,
-      contacts:contact_id (
+      signal_id,
+      signal_type,
+      keyword_matched,
+      is_current_employee,
+      contacts!inner (
+        id,
         full_name,
-        first_name,
-        last_name,
-        profile_picture_url,
         current_position_title,
-        headline
+        profile_picture_url
       )
     `)
     .eq("company_id", bookmark.company_id)
-    .not("contact_id", "is", null) // Only get signals with contacts (not job postings)
 
-  if (!isGeneralBookmark && filterSignalIds.length > 0) {
-    query = query.in("signal_id", filterSignalIds)
+  if (filterSignalIds.length > 0) {
+    signalsQuery = signalsQuery.in("signal_id", filterSignalIds)
   }
 
-  if (filterType === "process") {
-    query = query.eq("is_current_employee", true)
-  }
+  const { data: signals } = await signalsQuery
 
-  query = query.limit(20)
-
-  const { data: signals, error } = await query
-
-  if (error) {
-    console.error("[v0] Error fetching smart context signals:", error)
-    return null
-  }
-
-  if (!signals || signals.length === 0) return null
-
-  const enrichedSignals = signals.map((s: any) => {
-    const contact = s.contacts
-    let contactName = "Unknown"
-    let contactRole = "Unknown Role"
-
-    if (contact) {
-      // Try full_name first, then build from first/last name
-      if (contact.full_name && contact.full_name.trim()) {
-        contactName = contact.full_name
-      } else if (contact.first_name || contact.last_name) {
-        contactName = [contact.first_name, contact.last_name].filter(Boolean).join(" ") || "Unknown"
-      }
-
-      // Try current_position_title first, then headline
-      if (contact.current_position_title && contact.current_position_title.trim()) {
-        contactRole = contact.current_position_title
-      } else if (contact.headline && contact.headline.trim()) {
-        contactRole = contact.headline
-      }
-    }
-
+  if (!signals || signals.length === 0) {
     return {
-      keyword: s.keyword_matched,
-      contactName,
-      contactRole,
-      contactPhoto: contact?.profile_picture_url || null,
-      isCurrent: s.is_current_employee,
+      filterType,
+      totalSignals: 0,
+      currentEmployees: [],
+      alumni: [],
+      logicUsed,
     }
-  })
+  }
+
+  // Obtener nombres de productos y procesos
+  const techSignalIds = [
+    ...new Set(
+      signals
+        .filter((s) => s.signal_type === "technology")
+        .map((s) => s.signal_id)
+        .filter(Boolean),
+    ),
+  ]
+  const processSignalIds = [
+    ...new Set(
+      signals
+        .filter((s) => s.signal_type === "process")
+        .map((s) => s.signal_id)
+        .filter(Boolean),
+    ),
+  ]
+
+  const productMap = new Map<string, string>()
+  const processMap = new Map<string, string>()
+
+  if (techSignalIds.length > 0) {
+    const { data: products } = await supabase.from("dictionary_products").select("id, name").in("id", techSignalIds)
+    for (const p of products || []) {
+      productMap.set(p.id, p.name)
+    }
+  }
+
+  if (processSignalIds.length > 0) {
+    const { data: processes } = await supabase
+      .from("dictionary_processes")
+      .select("id, name")
+      .in("id", processSignalIds)
+    for (const p of processes || []) {
+      processMap.set(p.id, p.name)
+    }
+  }
+
+  // Agrupar por contacto
+  const contactMap = new Map<
+    string,
+    {
+      contactId: string
+      contactName: string
+      contactRole: string
+      contactPhoto: string | null
+      isCurrent: boolean
+      keywords: string[]
+    }
+  >()
+
+  for (const signal of signals) {
+    const contact = signal.contacts as any
+    if (!contact?.id) continue
+
+    if (!contactMap.has(contact.id)) {
+      contactMap.set(contact.id, {
+        contactId: contact.id,
+        contactName: contact.full_name || "Sin nombre",
+        contactRole: contact.current_position_title || "",
+        contactPhoto: contact.profile_picture_url,
+        isCurrent: signal.is_current_employee,
+        keywords: [],
+      })
+    }
+
+    const existing = contactMap.get(contact.id)!
+
+    // Actualizar is_current si alguna señal lo indica
+    if (signal.is_current_employee) {
+      existing.isCurrent = true
+    }
+
+    // Agregar keyword
+    let keywordName =
+      signal.signal_type === "technology" ? productMap.get(signal.signal_id) : processMap.get(signal.signal_id)
+
+    if (!keywordName) keywordName = signal.keyword_matched
+
+    if (keywordName && !existing.keywords.includes(keywordName)) {
+      existing.keywords.push(keywordName)
+    }
+  }
+
+  // Separar empleados actuales y alumni
+  const allContacts = Array.from(contactMap.values())
+  const currentEmployees = allContacts.filter((c) => c.isCurrent)
+  const alumni = allContacts.filter((c) => !c.isCurrent)
 
   return {
-    filterType: isGeneralBookmark ? "general" : filterType,
+    filterType,
     totalSignals: signals.length,
-    detailedSignals: enrichedSignals,
-    logicUsed: isGeneralBookmark
-      ? "Todas las señales disponibles"
-      : filterType === "technology"
-        ? "Incluye Alumni y Actuales"
-        : "Solo Empleados Actuales",
+    currentEmployees,
+    alumni,
+    logicUsed,
   }
+}
+
+export async function getStrategy(bookmarkId: string) {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return null
+
+  // Obtener estrategia específica del bookmark
+  const { data: strategy } = await supabase
+    .from("user_company_strategies")
+    .select("*")
+    .eq("bookmark_id", bookmarkId)
+    .eq("user_id", user.id)
+    .maybeSingle()
+
+  // Obtener contexto por defecto del perfil
+  const { data: profile } = await supabase.from("profiles").select("value_proposition").eq("id", user.id).single()
+
+  return {
+    strategy,
+    defaultContext: profile?.value_proposition || "",
+  }
+}
+
+export async function saveSenderContext(bookmarkId: string, senderContext: string, saveAsDefault: boolean) {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) throw new Error("Unauthorized")
+
+  // Obtener bookmark para company_id
+  const { data: bookmark } = await supabase.from("bookmarks").select("company_id").eq("id", bookmarkId).single()
+
+  if (!bookmark) throw new Error("Bookmark not found")
+
+  // Upsert estrategia del bookmark
+  const { error: strategyError } = await supabase.from("user_company_strategies").upsert(
+    {
+      user_id: user.id,
+      company_id: bookmark.company_id,
+      bookmark_id: bookmarkId,
+      sender_context_override: senderContext,
+      updated_at: new Date().toISOString(),
+    },
+    {
+      onConflict: "bookmark_id,user_id",
+    },
+  )
+
+  if (strategyError) {
+    console.error("Error saving strategy:", strategyError)
+    throw new Error("Error al guardar la estrategia")
+  }
+
+  // Si saveAsDefault, actualizar también el perfil
+  if (saveAsDefault) {
+    const { error: profileError } = await supabase
+      .from("profiles")
+      .update({ value_proposition: senderContext })
+      .eq("id", user.id)
+
+    if (profileError) {
+      console.error("Error updating profile:", profileError)
+    }
+  }
+
+  revalidatePath(`/bookmarks/${bookmarkId}`)
+  return { success: true }
 }
