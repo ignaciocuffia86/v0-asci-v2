@@ -209,7 +209,7 @@ export async function getIcebreakers(bookmarkId: string) {
 
   const { data } = await supabase
     .from("user_icebreakers")
-    .select("*, contact:contact_id(full_name, role)")
+    .select("*")
     .eq("bookmark_id", bookmarkId)
     .eq("user_id", user.id)
     .order("created_at", { ascending: false })
@@ -333,17 +333,15 @@ export async function generateIcebreaker(
         .eq("bookmark_id", bookmarkId)
         .eq("user_id", user.id)
         .maybeSingle(),
-      supabase.from("profiles").select("value_proposition").eq("id", user.id).single(),
+      supabase.from("profiles").select("company, value_proposition").eq("id", user.id).single(),
     ])
     strategyData = strategyResult.data
     profileData = profileResult.data
   }
 
-  const valueProposition = contextOptions.includes("strategy")
-    ? strategyData?.sender_context_override ||
-      profileData?.value_proposition ||
-      "una propuesta de valor centrada en mejorar la eficiencia"
-    : ""
+  const userCompanyName = profileData?.company || "nuestra empresa"
+  const valueProposition =
+    strategyData?.sender_context_override || profileData?.value_proposition || "soluciones tecnológicas"
 
   const formatNews =
     news.length > 0
@@ -386,6 +384,7 @@ export async function generateIcebreaker(
     strategy: valueProposition,
     recommended_pitch: strategyData?.recommended_pitch || "",
     tone: templateData.tone || "profesional",
+    user_company_name: userCompanyName,
   }
 
   const promptTemplate = templateData.prompt_template || ""
@@ -531,6 +530,382 @@ Ahora genera el mensaje de icebreaker (SOLO el mensaje, nada más):`
 
   revalidatePath(`/bookmarks/${bookmarkId}`)
   return { success: true }
+}
+
+export async function getContactsForIcebreaker(bookmarkId: string) {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return []
+
+  // Obtener el company_id del bookmark
+  const { data: bookmark } = await supabase.from("bookmarks").select("company_id").eq("id", bookmarkId).single()
+
+  if (!bookmark) return []
+
+  // 1. Obtener señales de la empresa con contactos
+  const { data: signalContacts } = await supabase
+    .from("signals")
+    .select(`
+      contact_id,
+      signal_id,
+      keyword_matched,
+      contacts!inner (
+        id,
+        full_name,
+        first_name,
+        headline,
+        profile_picture_url,
+        current_position_title,
+        current_position_description
+      )
+    `)
+    .eq("company_id", bookmark.company_id)
+    .eq("is_current_employee", true)
+    .eq("signal_type", "technology")
+
+  // 2. Obtener nombres de productos para los signal_ids únicos
+  const signalIds = [...new Set((signalContacts || []).map((s) => s.signal_id).filter(Boolean))]
+
+  const productMap = new Map<string, string>()
+  if (signalIds.length > 0) {
+    const { data: products } = await supabase.from("dictionary_products").select("id, name").in("id", signalIds)
+
+    for (const product of products || []) {
+      productMap.set(product.id, product.name)
+    }
+  }
+
+  // 3. Agrupar por contacto y juntar productos
+  const contactMap = new Map<string, any>()
+
+  for (const signal of signalContacts || []) {
+    const contact = signal.contacts as any
+    if (!contact?.id) continue
+
+    if (!contactMap.has(contact.id)) {
+      contactMap.set(contact.id, {
+        id: contact.id,
+        full_name: contact.full_name,
+        first_name: contact.first_name,
+        role: contact.current_position_title || contact.headline,
+        headline: contact.headline,
+        current_position_description: contact.current_position_description,
+        profile_picture_url: contact.profile_picture_url,
+        source: "signal" as const,
+        has_signal: true,
+        signal_products: [],
+        keywords_matched: [],
+      })
+    }
+
+    // Agregar producto
+    const productName = productMap.get(signal.signal_id)
+    if (productName && !contactMap.get(contact.id).signal_products.includes(productName)) {
+      contactMap.get(contact.id).signal_products.push(productName)
+    }
+
+    // Agregar keyword
+    if (signal.keyword_matched && !contactMap.get(contact.id).keywords_matched.includes(signal.keyword_matched)) {
+      contactMap.get(contact.id).keywords_matched.push(signal.keyword_matched)
+    }
+  }
+
+  // 4. Obtener contactos privados (decision makers agregados manualmente)
+  const { data: privateContacts } = await supabase
+    .from("user_company_contacts")
+    .select("id, full_name, first_name, role")
+    .eq("bookmark_id", bookmarkId)
+    .eq("user_id", user.id)
+
+  // Agregar contactos privados que no estén ya en el map
+  for (const pc of privateContacts || []) {
+    if (!contactMap.has(pc.id)) {
+      contactMap.set(pc.id, {
+        id: pc.id,
+        full_name: pc.full_name,
+        first_name: pc.first_name,
+        role: pc.role,
+        profile_picture_url: null,
+        source: "private" as const,
+        has_signal: false,
+        signal_products: [],
+        keywords_matched: [],
+      })
+    }
+  }
+
+  return Array.from(contactMap.values())
+}
+
+export async function generateSimplifiedIcebreaker(bookmarkId: string, contactId: string, contactSource: string) {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) throw new Error("Unauthorized")
+
+  // Obtener bookmark y empresa
+  const { data: bookmark } = await supabase.from("bookmarks").select("company_id").eq("id", bookmarkId).single()
+
+  if (!bookmark) throw new Error("Bookmark not found")
+
+  // Obtener nombre de empresa en query separada
+  const { data: company } = await supabase.from("companies").select("name").eq("id", bookmark.company_id).single()
+
+  let contactData: any = null
+  let signalInfo: any[] = []
+  let isSignalContact = false
+
+  if (contactSource === "signal") {
+    // Es un contacto de señales públicas - buscar en tabla contacts
+    const { data: publicContact } = await supabase
+      .from("contacts")
+      .select("id, full_name, first_name, headline, current_position_title, current_position_description")
+      .eq("id", contactId)
+      .single()
+
+    if (publicContact) {
+      contactData = {
+        id: publicContact.id,
+        full_name: publicContact.full_name,
+        first_name: publicContact.first_name,
+        role: publicContact.current_position_title || publicContact.headline,
+        current_position_description: publicContact.current_position_description,
+      }
+      isSignalContact = true
+
+      // Obtener señales del contacto
+      const { data: signals } = await supabase
+        .from("signals")
+        .select("signal_id, keyword_matched, snippet, source_field")
+        .eq("contact_id", contactId)
+        .eq("company_id", bookmark.company_id)
+        .eq("signal_type", "technology")
+        .limit(5)
+
+      if (signals && signals.length > 0) {
+        const signalIds = [...new Set(signals.map((s) => s.signal_id).filter(Boolean))]
+
+        if (signalIds.length > 0) {
+          const { data: products } = await supabase.from("dictionary_products").select("id, name").in("id", signalIds)
+
+          const productMap = new Map(products?.map((p) => [p.id, p.name]) || [])
+
+          signalInfo = signals.map((s) => ({
+            ...s,
+            product_name: s.signal_id ? productMap.get(s.signal_id) || undefined : undefined,
+          }))
+        } else {
+          signalInfo = signals
+        }
+      }
+    }
+  } else {
+    // Es un contacto privado (decision maker) - buscar en user_company_contacts
+    const { data: privateContact } = await supabase
+      .from("user_company_contacts")
+      .select("id, full_name, first_name, role")
+      .eq("id", contactId)
+      .eq("user_id", user.id)
+      .maybeSingle()
+
+    if (privateContact) {
+      contactData = privateContact
+      isSignalContact = false
+
+      // Obtener señales de la empresa para contexto
+      const { data: companySignals } = await supabase
+        .from("signals")
+        .select("signal_id, keyword_matched")
+        .eq("company_id", bookmark.company_id)
+        .eq("signal_type", "technology")
+        .eq("is_current_employee", true)
+        .limit(10)
+
+      if (companySignals && companySignals.length > 0) {
+        const signalIds = [...new Set(companySignals.map((s) => s.signal_id).filter(Boolean))]
+
+        if (signalIds.length > 0) {
+          const { data: products } = await supabase.from("dictionary_products").select("id, name").in("id", signalIds)
+
+          const productMap = new Map(products?.map((p) => [p.id, p.name]) || [])
+          const uniqueProducts = new Set<string>()
+
+          for (const s of companySignals) {
+            const name = s.signal_id ? productMap.get(s.signal_id) : null
+            if (name) uniqueProducts.add(name)
+          }
+
+          signalInfo = Array.from(uniqueProducts).map((name) => ({ product_name: name }))
+        }
+      }
+    }
+  }
+
+  if (!contactData) throw new Error("Contact not found")
+
+  const [strategyResult, profileResult] = await Promise.all([
+    supabase
+      .from("user_company_strategies")
+      .select("sender_context_override, recommended_pitch")
+      .eq("bookmark_id", bookmarkId)
+      .eq("user_id", user.id)
+      .maybeSingle(),
+    supabase.from("profiles").select("company, value_proposition").eq("id", user.id).single(),
+  ])
+
+  const userCompanyName = profileResult.data?.company || "nuestra empresa"
+  const valueProposition =
+    strategyResult.data?.sender_context_override || profileResult.data?.value_proposition || "soluciones tecnológicas"
+
+  // Construir contexto para el prompt
+  const firstName = contactData.first_name || contactData.full_name?.split(" ")[0] || ""
+  const companyName = company?.name || "la empresa"
+
+  let signalContext = ""
+  if (isSignalContact && signalInfo.length > 0) {
+    const productsList = signalInfo
+      .map((s) => s.product_name)
+      .filter(Boolean)
+      .slice(0, 3)
+      .join(", ")
+
+    const snippets = signalInfo
+      .filter((s) => s.snippet)
+      .map((s) => s.snippet)
+      .slice(0, 2)
+      .join("\n")
+
+    signalContext = `
+TIPO DE CONTACTO: Persona con señal detectada (mencionó tecnologías en su perfil)
+PRODUCTOS/TECNOLOGÍAS DETECTADAS: ${productsList}
+CONTEXTO DEL PERFIL:
+${snippets || "No hay snippets disponibles"}
+DESCRIPCIÓN DEL PUESTO:
+${contactData.current_position_description || "No disponible"}
+`
+  } else {
+    const productsList = signalInfo.map((s) => s.product_name).join(", ")
+    signalContext = `
+TIPO DE CONTACTO: Tomador de decisiones (sin señal directa)
+CARGO: ${contactData.role || "No especificado"}
+PRODUCTOS/TECNOLOGÍAS USADAS EN LA EMPRESA: ${productsList || "No especificadas"}
+`
+  }
+
+  const prompt = `Eres un experto en ventas B2B. Genera DOS mensajes de prospección en frío para la misma persona.
+
+REGLAS ESTRICTAS:
+1. Siempre inicia con "Hola ${firstName}," (si el nombre está disponible)
+2. NUNCA menciones el cargo/título de la persona
+3. Solo menciona el proceso de negocio si está EXPLÍCITAMENTE descrito en el contexto
+4. Si no hay proceso explícito, usa "en sus operaciones"
+5. NO incluyas explicaciones, preámbulos ni comentarios
+6. Entrega ÚNICAMENTE los dos mensajes en el formato especificado
+7. Cuando menciones MI empresa, usa "${userCompanyName}" (NUNCA uses placeholders como [Nombre de la empresa])
+
+CONTEXTO:
+- Empresa objetivo: ${companyName}
+- Nombre del contacto: ${firstName}
+- MI EMPRESA (quien envía el mensaje): ${userCompanyName}
+${signalContext}
+
+MI PROPUESTA DE VALOR:
+${valueProposition}
+
+---
+
+MENSAJE 1 - LINKEDIN (máximo 280 caracteres):
+${
+  isSignalContact
+    ? `Estilo: "Vi que participaste/trabajaste en [referencia específica del contexto] con [producto]..."`
+    : `Estilo: "Vi que en ${companyName} trabajan con [productos], quería saber cómo ser tenido en cuenta para necesidades futuras..."`
+}
+- Debe ser conciso, personal y terminar con una pregunta o call-to-action suave
+- NO uses emojis
+- Si mencionas tu empresa, usa "${userCompanyName}"
+
+MENSAJE 2 - EMAIL DE SEGUIMIENTO:
+- Comienza con "Hola ${firstName}, te escribí por LinkedIn hace unos días."
+- Reformula la observación inicial con diferentes palabras
+- Incluye brevemente la propuesta de valor mencionando que eres de ${userCompanyName}
+- Call-to-action: proponer una llamada breve
+- Formato de email profesional pero cercano
+- NO uses emojis
+- Incluye un asunto sugerido al inicio entre corchetes [Asunto: ...]
+
+---
+
+FORMATO DE RESPUESTA (respeta exactamente este formato):
+
+===LINKEDIN===
+[mensaje de LinkedIn aquí]
+===EMAIL===
+[mensaje de email aquí, incluyendo asunto]`
+
+  let generatedText = ""
+  try {
+    generatedText = await generateGeminiContent(prompt, "gemini-2.0-flash", 0.7)
+  } catch (error: any) {
+    console.error("AI Generation failed", error)
+    try {
+      generatedText = await generateGeminiContent(prompt, "gemini-1.5-pro", 0.7)
+    } catch (fallbackError) {
+      throw new Error("Error generando icebreaker: " + error.message)
+    }
+  }
+
+  // Parsear respuesta
+  const linkedinMatch = generatedText.match(/===LINKEDIN===\s*([\s\S]*?)\s*===EMAIL===/i)
+  const emailMatch = generatedText.match(/===EMAIL===\s*([\s\S]*?)$/i)
+
+  const linkedinMessage = linkedinMatch?.[1]?.trim() || generatedText.substring(0, 280)
+  const emailMessage = emailMatch?.[1]?.trim() || ""
+
+  // Guardar ambos en la base de datos
+  await Promise.all([
+    supabase.from("user_icebreakers").insert({
+      user_id: user.id,
+      company_id: bookmark.company_id,
+      bookmark_id: bookmarkId,
+      contact_id: contactId,
+      contact_source: contactSource, // "signal" o "private"
+      contact_name: contactData.full_name || contactData.first_name || null,
+      generated_text: linkedinMessage,
+      message_type: "linkedin",
+      context_used: JSON.stringify({
+        is_signal_contact: isSignalContact,
+        products: signalInfo.map((s) => s.product_name).filter(Boolean),
+      }),
+      tone: "profesional",
+      created_at: new Date().toISOString(),
+    }),
+    supabase.from("user_icebreakers").insert({
+      user_id: user.id,
+      company_id: bookmark.company_id,
+      bookmark_id: bookmarkId,
+      contact_id: contactId,
+      contact_source: contactSource, // "signal" o "private"
+      contact_name: contactData.full_name || contactData.first_name || null,
+      generated_text: emailMessage,
+      message_type: "email",
+      context_used: JSON.stringify({
+        is_signal_contact: isSignalContact,
+        products: signalInfo.map((s) => s.product_name).filter(Boolean),
+      }),
+      tone: "profesional",
+      created_at: new Date().toISOString(),
+    }),
+  ])
+
+  revalidatePath(`/bookmarks/${bookmarkId}`)
+
+  return {
+    linkedin: linkedinMessage,
+    email: emailMessage,
+  }
 }
 
 // --- STRATEGY ---
