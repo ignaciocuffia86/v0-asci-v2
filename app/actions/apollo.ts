@@ -299,12 +299,13 @@ async function enrichApolloContacts(personIds: string[], apiKey: string): Promis
       body: JSON.stringify({
         details: personIds.map((id) => ({ id })),
         reveal_personal_emails: true,
-        reveal_phone_number: true,
+        // reveal_phone_number requiere webhook_url, usamos los datos de la búsqueda inicial
       }),
     })
 
     if (!response.ok) {
-      console.error("Apollo bulk_match error:", response.status)
+      const errorBody = await response.text()
+      console.error("Apollo bulk_match error:", response.status, errorBody)
       return []
     }
 
