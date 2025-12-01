@@ -121,24 +121,34 @@ export async function getBookmarkSearchContext(bookmarkId: string): Promise<{
     .eq("id", bookmark.company_id)
     .single()
 
-  const searchContext = bookmark.search_context || {}
-  const filtersUsed = searchContext.filtersUsed || {}
+  const searchContext = bookmark.search_context as {
+    filterType?: string
+    filtersUsed?: string[]
+    filterSignalIds?: string[]
+  } | null
 
-  // Si hay filtros de tecnología/proceso guardados, obtener sus nombres
+  const filterSignalIds = searchContext?.filterSignalIds || []
+  const filterType = searchContext?.filterType || "general"
+  const filtersUsed = searchContext?.filtersUsed || []
+
   let technologies: string[] = []
   let processes: string[] = []
 
-  if (filtersUsed.technology?.length > 0) {
-    const { data: products } = await supabase
-      .from("dictionary_products")
-      .select("name")
-      .in("id", filtersUsed.technology)
-    technologies = products?.map((p) => p.name) || []
-  }
-
-  if (filtersUsed.process?.length > 0) {
-    const { data: procs } = await supabase.from("dictionary_processes").select("name").in("id", filtersUsed.process)
-    processes = procs?.map((p) => p.name) || []
+  if (filterSignalIds.length > 0) {
+    if (filterType === "process") {
+      const { data: procs } = await supabase.from("dictionary_processes").select("name").in("id", filterSignalIds)
+      processes = procs?.map((p) => p.name) || filtersUsed
+    } else if (filterType === "technology") {
+      const { data: products } = await supabase.from("dictionary_products").select("name").in("id", filterSignalIds)
+      technologies = products?.map((p) => p.name) || filtersUsed
+    }
+  } else if (filtersUsed.length > 0) {
+    // Fallback: usar filtersUsed directamente si no hay filterSignalIds
+    if (filterType === "process") {
+      processes = filtersUsed
+    } else if (filterType === "technology") {
+      technologies = filtersUsed
+    }
   }
 
   return {
