@@ -207,14 +207,50 @@ export async function getIcebreakers(bookmarkId: string) {
   } = await supabase.auth.getUser()
   if (!user) return []
 
-  const { data } = await supabase
+  const { data: icebreakers } = await supabase
     .from("user_icebreakers")
     .select("*")
     .eq("bookmark_id", bookmarkId)
     .eq("user_id", user.id)
     .order("created_at", { ascending: false })
 
-  return data || []
+  if (!icebreakers || icebreakers.length === 0) return []
+
+  // Obtener los contact_ids únicos
+  const contactIds = [...new Set(icebreakers.map((ib) => ib.contact_id).filter(Boolean))]
+
+  // Buscar información de contactos por separado
+  let contactsMap: Record<string, any> = {}
+  if (contactIds.length > 0) {
+    const { data: contacts } = await supabase
+      .from("contacts")
+      .select(
+        "id, full_name, first_name, headline, current_position_title, profile_picture_url, linkedin_url, email1, email1_status, phone1",
+      )
+      .in("id", contactIds)
+
+    if (contacts) {
+      contactsMap = contacts.reduce(
+        (acc, contact) => {
+          acc[contact.id] = contact
+          return acc
+        },
+        {} as Record<string, any>,
+      )
+    }
+  }
+
+  // Combinar icebreakers con datos de contacto y limpiar tags
+  return icebreakers.map((ib) => ({
+    ...ib,
+    contact: ib.contact_id ? contactsMap[ib.contact_id] || null : null,
+    generated_text: ib.generated_text
+      ?.replace(/---LINKEDIN---\s*/gi, "")
+      ?.replace(/---EMAIL---\s*/gi, "")
+      ?.replace(/\[LINKEDIN\]\s*/gi, "")
+      ?.replace(/\[EMAIL\]\s*/gi, "")
+      ?.trim(),
+  }))
 }
 
 export async function generateIcebreaker(
@@ -525,6 +561,7 @@ Ahora genera el mensaje de icebreaker (SOLO el mensaje, nada más):`
       signals_count: signals.length,
     }),
     tone: templateData.tone,
+    message_type: "single",
     created_at: new Date().toISOString(),
   })
 
@@ -1002,12 +1039,73 @@ RECUERDA: Cada mensaje debe ser ÚNICO y personalizado. Si el headline dice "Dev
     }
   }
 
+  let linkedinMessage = ""
+  let emailMessage = ""
+
+  // Limpiar respuesta de preámbulos comunes
+  generatedText = generatedText
+    .replace(/^(Claro|Aquí está|Aquí tienes|Por supuesto|El mensaje es|Mensaje:|Icebreaker:)[\s,:]*/gi, "")
+    .trim()
+
+  // Parse usando los nuevos delimitadores (más robustos)
+  const linkedinMatch =
+    generatedText.match(/---LINKEDIN---\s*([\s\S]*?)(?=---EMAIL---|$)/i) ||
+    generatedText.match(/\[LINKEDIN\]\s*([\s\S]*?)(?=\[EMAIL\]|---EMAIL---|$)/i)
+  const emailMatch =
+    generatedText.match(/---EMAIL---\s*([\s\S]*?)$/i) || generatedText.match(/\[EMAIL\]\s*([\s\S]*?)$/i)
+
+  if (linkedinMatch && linkedinMatch[1]) {
+    linkedinMessage = linkedinMatch[1]
+      .trim()
+      .replace(/^\[LINKEDIN\]\s*/i, "")
+      .replace(/^---LINKEDIN---\s*/i, "")
+  }
+
+  if (emailMatch && emailMatch[1]) {
+    emailMessage = emailMatch[1]
+      .trim()
+      .replace(/^\[EMAIL\]\s*/i, "")
+      .replace(/^---EMAIL---\s*/i, "")
+  }
+
+  // Fallback si el parsing fails
+  if (!linkedinMessage && !emailMessage) {
+    const parts = generatedText.split(/\n\n+/)
+    if (parts.length >= 2) {
+      linkedinMessage = parts[0]
+        .replace(/^\[LINKEDIN\]\s*/i, "")
+        .replace(/^---LINKEDIN---\s*/i, "")
+        .trim()
+      emailMessage = parts
+        .slice(1)
+        .join("\n\n")
+        .replace(/^\[EMAIL\]\s*/i, "")
+        .replace(/^---EMAIL---\s*/i, "")
+        .trim()
+    } else {
+      linkedinMessage = generatedText
+        .replace(/^\[LINKEDIN\]\s*/i, "")
+        .replace(/^---LINKEDIN---\s*/i, "")
+        .trim()
+      emailMessage = `Hola ${firstName}, te escribí por LinkedIn hace unos días sobre ${filterContextName || signalTypeLabel}. ¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?`
+    }
+  }
+
+  // Asegurar que el email siempre tenga contenido
+  if (!emailMessage || emailMessage.length < 20) {
+    emailMessage = `Hola ${firstName}, te escribí por LinkedIn hace unos días.\n\nNoté en tu perfil el trabajo con ${filterContextName || signalTypeLabel}. En ${userCompanyName}, ${valueProposition || "colaboramos con empresas para mejorar sus operaciones"}.\n\n¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?`
+  }
+
+  console.log("[v0] Final LinkedIn message:", linkedinMessage)
+  console.log("[v0] Final Email message:", emailMessage)
+
+  // Guardar resultados con contexto expandido
   await supabase.from("user_icebreakers").insert({
     user_id: user.id,
     company_id: bookmark.company_id,
     bookmark_id: bookmarkId,
     contact_id: contactId,
-    generated_text: generatedText,
+    generated_text: linkedinMessage,
     template_used: "Simplified Icebreaker",
     context_used: JSON.stringify({
       template_name: "Simplified Icebreaker",
@@ -1048,70 +1146,61 @@ RECUERDA: Cada mensaje debe ser ÚNICO y personalizado. Si el headline dice "Dev
       signals_count: signalInfo.length,
     }),
     tone: "professional",
+    message_type: "linkedin",
+    created_at: new Date().toISOString(),
+  })
+
+  await supabase.from("user_icebreakers").insert({
+    user_id: user.id,
+    company_id: bookmark.company_id,
+    bookmark_id: bookmarkId,
+    contact_id: contactId,
+    generated_text: emailMessage,
+    template_used: "Simplified Icebreaker",
+    context_used: JSON.stringify({
+      template_name: "Simplified Icebreaker",
+      context_options: ["contact", "company", "search_context", "signals", "strategy"],
+      company_name: company?.name || "la empresa",
+      company_description: "",
+      company_website: "",
+      industry: "",
+      contact_name: contactData.full_name || "",
+      contact_first_name: contactData.first_name || "",
+      contact_last_name: "",
+      contact_role: contactData.role || "",
+      contact_headline: contactData.headline || "",
+      contact_linkedin: "",
+      filter_type: filterType,
+      filter_context_name: filterContextName,
+      filter_signal_ids: filterSignalIds,
+      technology: filterType === "technology" ? filterContextName : "",
+      process: filterType === "process" ? filterContextName : "",
+      signal: "",
+      signals_list: signalInfo
+        .map((s) => s.signal_name)
+        .filter(Boolean)
+        .join(", "),
+      news: "",
+      implementations: "",
+      snippets: signalInfo
+        .filter((s) => s.snippet)
+        .map((s) => s.snippet)
+        .join("\n"),
+      strategy: valueProposition,
+      recommended_pitch: strategyResult.data?.recommended_pitch || "",
+      tone: "professional",
+      user_company_name: userCompanyName,
+      news_count: 0,
+      implementations_count: 0,
+      snippets_count: signalInfo.filter((s) => s.snippet).length,
+      signals_count: signalInfo.length,
+    }),
+    tone: "professional",
+    message_type: "email",
     created_at: new Date().toISOString(),
   })
 
   revalidatePath(`/bookmarks/${bookmarkId}`)
-
-  let linkedinMessage = ""
-  let emailMessage = ""
-
-  // Limpiar respuesta de preámbulos comunes
-  generatedText = generatedText
-    .replace(/^(Claro|Aquí está|Aquí tienes|Por supuesto|El mensaje es|Mensaje:|Icebreaker:)[\s,:]*/gi, "")
-    .trim()
-
-  // Parse usando los nuevos delimitadores (más robustos)
-  const linkedinMatch =
-    generatedText.match(/---LINKEDIN---\s*([\s\S]*?)(?=---EMAIL---|$)/i) ||
-    generatedText.match(/\[LINKEDIN\]\s*([\s\S]*?)(?=\[EMAIL\]|---EMAIL---|$)/i)
-  const emailMatch =
-    generatedText.match(/---EMAIL---\s*([\s\S]*?)$/i) || generatedText.match(/\[EMAIL\]\s*([\s\S]*?)$/i)
-
-  if (linkedinMatch && linkedinMatch[1]) {
-    linkedinMessage = linkedinMatch[1]
-      .trim()
-      .replace(/^\[LINKEDIN\]\s*/i, "")
-      .replace(/^---LINKEDIN---\s*/i, "")
-  }
-
-  if (emailMatch && emailMatch[1]) {
-    emailMessage = emailMatch[1]
-      .trim()
-      .replace(/^\[EMAIL\]\s*/i, "")
-      .replace(/^---EMAIL---\s*/i, "")
-  }
-
-  // Fallback si el parsing falla
-  if (!linkedinMessage && !emailMessage) {
-    const parts = generatedText.split(/\n\n+/)
-    if (parts.length >= 2) {
-      linkedinMessage = parts[0]
-        .replace(/^\[LINKEDIN\]\s*/i, "")
-        .replace(/^---LINKEDIN---\s*/i, "")
-        .trim()
-      emailMessage = parts
-        .slice(1)
-        .join("\n\n")
-        .replace(/^\[EMAIL\]\s*/i, "")
-        .replace(/^---EMAIL---\s*/i, "")
-        .trim()
-    } else {
-      linkedinMessage = generatedText
-        .replace(/^\[LINKEDIN\]\s*/i, "")
-        .replace(/^---LINKEDIN---\s*/i, "")
-        .trim()
-      emailMessage = `Hola ${firstName}, te escribí por LinkedIn hace unos días sobre ${filterContextName || signalTypeLabel}. ¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?`
-    }
-  }
-
-  // Asegurar que el email siempre tenga contenido
-  if (!emailMessage || emailMessage.length < 20) {
-    emailMessage = `Hola ${firstName}, te escribí por LinkedIn hace unos días.\n\nNoté en tu perfil el trabajo con ${filterContextName || signalTypeLabel}. En ${userCompanyName}, ${valueProposition || "colaboramos con empresas para mejorar sus operaciones"}.\n\n¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?`
-  }
-
-  console.log("[v0] Final LinkedIn message:", linkedinMessage)
-  console.log("[v0] Final Email message:", emailMessage)
 
   return {
     linkedin: linkedinMessage,

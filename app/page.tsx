@@ -48,9 +48,9 @@ export default function HomePage() {
                 Iniciar Sesión
               </Button>
             </Link>
-            <Link href="/search">
+            <Link href="#form-container">
               <Button size="sm" className="bg-slate-900 hover:bg-slate-800 text-white rounded-full px-4">
-                Comenzar Gratis
+                Saber más
                 <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
               </Button>
             </Link>
