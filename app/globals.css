@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -132,7 +133,7 @@
   --animate-accordion-up: accordion-up 0.2s ease-out;
   --animate-in: enter 150ms ease-out;
   --animate-out: exit 150ms ease-in;
-  --font-sans: var(--font-sans);
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
 
   @keyframes accordion-down {
     from {
