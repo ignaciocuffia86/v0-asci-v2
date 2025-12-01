@@ -261,5 +261,5 @@ Envía alertas por email vía Resend.
 | `085_add_company_description.sql` | Soporte para descripción de empresa |
 \`\`\`
 
-```md file="docs/ETL_PROCESS.md" isDeleted="true"
+\`\`\`md file="docs/ETL_PROCESS.md" isDeleted="true"
 ...deleted...
