@@ -1,8 +1,8 @@
 "use server"
 
 import { createClient } from "@/lib/supabase/server"
-import { generateText } from "ai"
 import { revalidatePath } from "next/cache"
+import { generateGeminiContent } from "@/lib/ai-service"
 
 // Tipos para Apollo API
 interface ApolloPersonSearchResult {
@@ -46,23 +46,39 @@ export async function inferJobTitles(
   technologies: string[],
   processes: string[],
 ): Promise<{ jobTitles: string[]; reasoning: string }> {
+  const isGeneralBookmark = technologies.length === 0 && processes.length === 0
+
   const prompt = `Eres un experto en estructuras organizacionales B2B.
 Dado el contexto de búsqueda (tecnologías y/o procesos), devuelve los job titles más relevantes de tomadores de decisión.
 
 Contexto de búsqueda:
 - Tecnologías: ${technologies.length > 0 ? technologies.join(", ") : "No especificadas"}
 - Procesos: ${processes.length > 0 ? processes.join(", ") : "No especificados"}
+- Tipo de búsqueda: ${isGeneralBookmark ? "BÚSQUEDA GENERAL (sin filtros específicos)" : "Búsqueda filtrada"}
 
 Reglas:
-1. Si son tecnologías de cloud/infraestructura (AWS, Azure, GCP, Kubernetes, Docker) → incluir CTO, VP Engineering, Cloud Architect, DevOps Manager, IT Director
-2. Si son tecnologías de datos (Snowflake, Databricks, BigQuery) → incluir CDO, Data Engineering Manager, Analytics Director, Head of Data
-3. Si son tecnologías de software/desarrollo → incluir CTO, VP Engineering, Engineering Manager, Software Architect
-4. Si son tecnologías de seguridad → incluir CISO, Security Director, VP Security
-5. Si son procesos de transformación digital → incluir COO, Digital Transformation Lead, Chief Digital Officer
-6. Si son procesos de RRHH → incluir CHRO, VP People, HR Director
-7. Si son procesos financieros → incluir CFO, VP Finance, Controller
-8. Siempre incluir variantes y sinónimos comunes (IT Manager = Technology Manager = Systems Manager)
-9. Máximo 8 job titles, ordenados por relevancia
+1. **SI ES BÚSQUEDA GENERAL (sin tecnologías ni procesos especificados)**: Recomendar C-Level y Directores de cada vertical de la empresa:
+   - CEO, COO, CFO, CMO, CTO, CHRO
+   - Y sus sinónimos: Chief Executive Officer, Chief Operating Officer, Chief Financial Officer, Chief Marketing Officer, Chief Technology Officer, Chief Human Resources Officer
+   - También incluir: Managing Director, General Manager, VP Operations, VP Finance, VP Marketing
+   
+2. Si son tecnologías de cloud/infraestructura (AWS, Azure, GCP, Kubernetes, Docker) → incluir CTO, VP Engineering, Cloud Architect, DevOps Manager, IT Director
+
+3. Si son tecnologías de datos (Snowflake, Databricks, BigQuery) → incluir CDO, Data Engineering Manager, Analytics Director, Head of Data
+
+4. Si son tecnologías de software/desarrollo → incluir CTO, VP Engineering, Engineering Manager, Software Architect
+
+5. Si son tecnologías de seguridad → incluir CISO, Security Director, VP Security
+
+6. Si son procesos de transformación digital → incluir COO, Digital Transformation Lead, Chief Digital Officer
+
+7. Si son procesos de RRHH → incluir CHRO, VP People, HR Director
+
+8. Si son procesos financieros → incluir CFO, VP Finance, Controller
+
+9. Siempre incluir variantes y sinónimos comunes (IT Manager = Technology Manager = Systems Manager)
+
+10. Máximo 10 job titles, ordenados por relevancia
 
 Devuelve SOLO un JSON válido con este formato exacto:
 {
@@ -71,12 +87,8 @@ Devuelve SOLO un JSON válido con este formato exacto:
 }`
 
   try {
-    const { text } = await generateText({
-      model: "openai/gpt-4o-mini",
-      prompt,
-    })
+    const text = await generateGeminiContent(prompt, "gemini-2.0-flash", 0.5)
 
-    // Parsear respuesta JSON
     const jsonMatch = text.match(/\{[\s\S]*\}/)
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0])
@@ -86,10 +98,30 @@ Devuelve SOLO un JSON válido con este formato exacto:
       }
     }
   } catch (error) {
-    console.error("Error inferring job titles:", error)
+    console.error("Error inferring job titles with Gemini:", error)
+
+    try {
+      const text = await generateGeminiContent(prompt, "gemini-1.5-pro", 0.5)
+      const jsonMatch = text.match(/\{[\s\S]*\}/)
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0])
+        return {
+          jobTitles: parsed.jobTitles || [],
+          reasoning: parsed.reasoning || "",
+        }
+      }
+    } catch (fallbackError) {
+      console.error("Fallback Gemini 1.5 Pro also failed:", fallbackError)
+    }
   }
 
-  // Fallback genérico si falla la IA
+  if (isGeneralBookmark) {
+    return {
+      jobTitles: ["CEO", "COO", "CFO", "CTO", "CMO", "CHRO", "Managing Director", "General Manager"],
+      reasoning: "Job titles de C-Level y directivos por defecto para búsqueda general",
+    }
+  }
+
   return {
     jobTitles: ["CTO", "VP Engineering", "IT Director", "Technology Manager"],
     reasoning: "Job titles genéricos por defecto",
@@ -114,7 +146,6 @@ export async function getBookmarkSearchContext(bookmarkId: string): Promise<{
     return { technologies: [], processes: [], company: null }
   }
 
-  // Obtener datos de la compañía
   const { data: company } = await supabase
     .from("companies")
     .select("name, website, linkedin_url")
@@ -143,7 +174,6 @@ export async function getBookmarkSearchContext(bookmarkId: string): Promise<{
       technologies = products?.map((p) => p.name) || filtersUsed
     }
   } else if (filtersUsed.length > 0) {
-    // Fallback: usar filtersUsed directamente si no hay filterSignalIds
     if (filterType === "process") {
       processes = filtersUsed
     } else if (filterType === "technology") {
@@ -168,16 +198,14 @@ async function searchApolloCache(
 
   let query = supabase.from("apollo_contacts_cache").select("*")
 
-  // Filtrar por compañía
   if (companyDomain) {
     query = query.eq("company_domain", companyDomain)
   } else if (companyLinkedIn) {
     query = query.eq("company_linkedin_url", companyLinkedIn)
   } else {
-    return [] // Sin identificador de compañía no podemos buscar en cache
+    return []
   }
 
-  // Verificar que no sea muy viejo (30 días)
   const thirtyDaysAgo = new Date()
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
   query = query.gte("created_at", thirtyDaysAgo.toISOString())
@@ -186,7 +214,6 @@ async function searchApolloCache(
 
   if (!cached || cached.length === 0) return []
 
-  // Filtrar por job titles (al menos uno debe coincidir parcialmente)
   const normalizedJobTitles = jobTitles.map((jt) => jt.toLowerCase())
 
   return cached
@@ -239,17 +266,14 @@ async function callApolloAPI(
   }
 
   try {
-    // Construir parámetros de búsqueda
     const params = new URLSearchParams()
 
-    // Filtrar por compañía usando dominio o nombre
     if (companyDomain) {
       params.append("q_organization_domains", companyDomain)
     } else {
       params.append("q_organization_name", companyName)
     }
 
-    // Agregar job titles
     jobTitles.forEach((title) => {
       params.append("person_titles[]", title)
     })
@@ -273,7 +297,6 @@ async function callApolloAPI(
 
     const data: ApolloSearchResponse = await response.json()
 
-    // Ahora enriquecemos los contactos con people/bulk_match para obtener emails y teléfonos
     if (data.people && data.people.length > 0) {
       const personIds = data.people.map((p) => p.id)
       const enrichedPeople = await enrichApolloContacts(personIds, apiKey)
@@ -299,7 +322,6 @@ async function enrichApolloContacts(personIds: string[], apiKey: string): Promis
       body: JSON.stringify({
         details: personIds.map((id) => ({ id })),
         reveal_personal_emails: true,
-        // reveal_phone_number requiere webhook_url, usamos los datos de la búsqueda inicial
       }),
     })
 
@@ -379,7 +401,6 @@ export async function searchApolloProspects(
     return { success: false, count: 0, error: "No autorizado" }
   }
 
-  // Obtener bookmark y compañía
   const { data: bookmark } = await supabase
     .from("bookmarks")
     .select("company_id, search_context")
@@ -400,41 +421,34 @@ export async function searchApolloProspects(
     return { success: false, count: 0, error: "Compañía no encontrada" }
   }
 
-  // Extraer dominio del website
   let companyDomain: string | null = null
   if (company.website) {
     try {
       const url = new URL(company.website.startsWith("http") ? company.website : `https://${company.website}`)
       companyDomain = url.hostname.replace("www.", "")
     } catch {
-      // Si no es URL válida, intentar usarlo como dominio directo
       companyDomain = company.website.replace("www.", "")
     }
   }
 
   const finalJobTitles = customJobTitles?.length ? customJobTitles : jobTitles
 
-  // 1. Primero buscar en cache
   let contacts = await searchApolloCache(companyDomain, company.linkedin_url, finalJobTitles)
 
-  // 2. Si no hay suficientes en cache, llamar a Apollo API
   if (contacts.length < 3) {
     const apiContacts = await callApolloAPI(companyDomain, company.name, finalJobTitles, 10)
 
     if (apiContacts.length > 0) {
-      // Guardar en cache para futuros usuarios
       await saveToApolloCache(apiContacts, companyDomain, company.linkedin_url, finalJobTitles)
       contacts = apiContacts
     }
   }
 
-  // 3. Guardar en user_company_contacts para este usuario
   let savedCount = 0
   for (const contact of contacts) {
     const phoneNumber = contact.phone_numbers?.find((p) => p.type === "mobile")?.raw_number
     const workPhone = contact.phone_numbers?.find((p) => p.type === "work")?.raw_number
 
-    // Verificar si ya existe este contacto para este usuario/bookmark
     const { data: existing } = await supabase
       .from("user_company_contacts")
       .select("id")
@@ -508,12 +522,10 @@ export async function getContactsForIcebreaker(bookmarkId: string) {
 
   if (!user) return { contacts: [], prospects: [] }
 
-  // Obtener el company_id del bookmark
   const { data: bookmark } = await supabase.from("bookmarks").select("company_id").eq("id", bookmarkId).single()
 
   if (!bookmark) return { contacts: [], prospects: [] }
 
-  // Obtener contactos normales de la compañía (de la tabla contacts)
   const { data: contacts } = await supabase
     .from("contacts")
     .select(
@@ -522,7 +534,6 @@ export async function getContactsForIcebreaker(bookmarkId: string) {
     .eq("current_company_id", bookmark.company_id)
     .limit(50)
 
-  // Obtener prospectos (DMs) del usuario
   const { data: prospects } = await supabase
     .from("user_company_contacts")
     .select("*")
@@ -534,7 +545,6 @@ export async function getContactsForIcebreaker(bookmarkId: string) {
     contacts: contacts || [],
     prospects: (prospects || []).map((p) => ({
       ...p,
-      // Normalizar campos para compatibilidad con UI
       current_position_title: p.role,
       email1: p.email,
       email1_status: p.email_status,
