@@ -11,12 +11,12 @@ import {
   Building2,
   Globe,
   Linkedin,
-  Users,
   Sparkles,
   BrainCircuit,
   Flame,
   Newspaper,
   Briefcase,
+  Target,
 } from "lucide-react"
 import Link from "next/link"
 
@@ -24,9 +24,9 @@ import { BookmarkOverview } from "./_components/overview-tab"
 import { BookmarkJobPostings } from "./_components/job-postings-tab"
 import { BookmarkNews } from "./_components/news-tab"
 import { ImplementationsTab } from "./_components/implementations-tab"
-import { BookmarkContacts } from "./_components/contacts-tab"
 import { BookmarkIcebreakers } from "./_components/icebreakers-tab"
 import { BookmarkStrategy } from "./_components/strategy-tab"
+import { ProspectsTab } from "./_components/prospects-tab"
 
 export default function BookmarkWorkspacePage() {
   const params = useParams()
@@ -193,8 +193,11 @@ export default function BookmarkWorkspacePage() {
               Estrategia
             </TabsTrigger>
             <TabsTrigger value="prospects" className="gap-2">
-              <Users className="h-4 w-4" />
+              <Target className="h-4 w-4 text-green-500" />
               Prospectos
+              <Badge variant="secondary" className="ml-1 text-[10px] px-1 h-4">
+                Apollo
+              </Badge>
             </TabsTrigger>
             <TabsTrigger value="icebreakers" className="gap-2">
               <Sparkles className="h-4 w-4 text-amber-500" />
@@ -226,7 +229,7 @@ export default function BookmarkWorkspacePage() {
           </TabsContent>
 
           <TabsContent value="prospects" className="m-0 focus-visible:ring-0">
-            <BookmarkContacts bookmarkId={bookmarkId} />
+            <ProspectsTab bookmarkId={bookmarkId} />
           </TabsContent>
 
           <TabsContent value="icebreakers" className="m-0 focus-visible:ring-0">

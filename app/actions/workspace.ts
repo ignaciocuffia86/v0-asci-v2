@@ -219,24 +219,52 @@ export async function getIcebreakers(bookmarkId: string) {
   // Obtener los contact_ids únicos
   const contactIds = [...new Set(icebreakers.map((ib) => ib.contact_id).filter(Boolean))]
 
-  // Buscar información de contactos por separado
-  let contactsMap: Record<string, any> = {}
+  const contactsMap: Record<string, any> = {}
   if (contactIds.length > 0) {
-    const { data: contacts } = await supabase
+    // 1. Buscar en tabla contacts (señales públicas)
+    const { data: publicContacts } = await supabase
       .from("contacts")
       .select(
         "id, full_name, first_name, headline, current_position_title, profile_picture_url, linkedin_url, email1, email1_status, phone1",
       )
       .in("id", contactIds)
 
-    if (contacts) {
-      contactsMap = contacts.reduce(
-        (acc, contact) => {
-          acc[contact.id] = contact
-          return acc
-        },
-        {} as Record<string, any>,
-      )
+    if (publicContacts) {
+      for (const contact of publicContacts) {
+        contactsMap[contact.id] = contact
+      }
+    }
+
+    // 2. Buscar en user_company_contacts (DMs de Apollo) para los IDs que no se encontraron
+    const foundIds = Object.keys(contactsMap)
+    const missingIds = contactIds.filter((id) => !foundIds.includes(id))
+
+    if (missingIds.length > 0) {
+      const { data: privateContacts } = await supabase
+        .from("user_company_contacts")
+        .select(
+          "id, full_name, first_name, last_name, role, headline, profile_picture_url, linkedin_url, email, email_status, phone",
+        )
+        .in("id", missingIds)
+        .eq("user_id", user.id)
+
+      if (privateContacts) {
+        for (const contact of privateContacts) {
+          // Mapear los campos de user_company_contacts al formato esperado
+          contactsMap[contact.id] = {
+            id: contact.id,
+            full_name: contact.full_name,
+            first_name: contact.first_name,
+            headline: contact.headline,
+            current_position_title: contact.role || contact.headline,
+            profile_picture_url: contact.profile_picture_url,
+            linkedin_url: contact.linkedin_url,
+            email1: contact.email,
+            email1_status: contact.email_status,
+            phone1: contact.phone,
+          }
+        }
+      }
     }
   }
 
@@ -607,7 +635,6 @@ export async function getContactsForIcebreaker(bookmarkId: string) {
         full_name,
         first_name,
         headline,
-        profile_picture_url,
         current_position_title,
         current_position_description
       )
@@ -715,6 +742,31 @@ export async function getContactsForIcebreaker(bookmarkId: string) {
   return Array.from(contactMap.values())
 }
 
+export async function getContactsForIcebreakerFromContacts(bookmarkId: string) {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  if (!user) return []
+
+  // Obtener el company_id del bookmark
+  const { data: bookmark } = await supabase.from("bookmarks").select("company_id").eq("id", bookmarkId).single()
+
+  if (!bookmark) return []
+
+  // Obtener contactos de la compañía (de la tabla contacts)
+  const { data: contacts } = await supabase
+    .from("contacts")
+    .select(
+      "id, full_name, first_name, headline, current_position_title, linkedin_url, email1, email1_status, phone1, profile_picture_url",
+    )
+    .eq("current_company_id", bookmark.company_id)
+    .limit(50)
+
+  return contacts || []
+}
+
 export async function generateSimplifiedIcebreaker(bookmarkId: string, contactId: string, contactSource: string) {
   const supabase = await createClient()
   const {
@@ -727,13 +779,12 @@ export async function generateSimplifiedIcebreaker(bookmarkId: string, contactId
     .select("company_id, search_context")
     .eq("id", bookmarkId)
     .single()
-
   if (!bookmark) throw new Error("Bookmark not found")
 
   const searchContext = bookmark.search_context as {
-    filterSignalIds?: string[]
-    filterType?: "process" | "technology" | "general"
+    filterType?: string
     filtersUsed?: string[]
+    filterSignalIds?: string[]
   } | null
 
   const filterSignalIds = searchContext?.filterSignalIds || []
@@ -897,8 +948,7 @@ export async function generateSimplifiedIcebreaker(bookmarkId: string, contactId
   ])
 
   const userCompanyName = profileResult.data?.company || "nuestra empresa"
-  const valueProposition =
-    strategyResult.data?.sender_context_override || profileResult.data?.value_proposition || "soluciones tecnológicas"
+  const valueProposition = strategyResult.data?.sender_context_override || profileResult.data?.value_proposition || ""
 
   // Construir contexto para el prompt
   const firstName = contactData.first_name || contactData.full_name?.split(" ")[0] || ""
@@ -1039,6 +1089,13 @@ RECUERDA: Cada mensaje debe ser ÚNICO y personalizado. Si el headline dice "Dev
     }
   }
 
+  // Parsear respuesta
+  const linkedinMatch =
+    generatedText.match(/---LINKEDIN---\s*([\s\S]*?)(?=---EMAIL---|$)/i) ||
+    generatedText.match(/\[LINKEDIN\]\s*([\s\S]*?)(?=\[EMAIL\]|---EMAIL---|$)/i)
+  const emailMatch =
+    generatedText.match(/---EMAIL---\s*([\s\S]*?)$/i) || generatedText.match(/\[EMAIL\]\s*([\s\S]*?)$/i)
+
   let linkedinMessage = ""
   let emailMessage = ""
 
@@ -1046,13 +1103,6 @@ RECUERDA: Cada mensaje debe ser ÚNICO y personalizado. Si el headline dice "Dev
   generatedText = generatedText
     .replace(/^(Claro|Aquí está|Aquí tienes|Por supuesto|El mensaje es|Mensaje:|Icebreaker:)[\s,:]*/gi, "")
     .trim()
-
-  // Parse usando los nuevos delimitadores (más robustos)
-  const linkedinMatch =
-    generatedText.match(/---LINKEDIN---\s*([\s\S]*?)(?=---EMAIL---|$)/i) ||
-    generatedText.match(/\[LINKEDIN\]\s*([\s\S]*?)(?=\[EMAIL\]|---EMAIL---|$)/i)
-  const emailMatch =
-    generatedText.match(/---EMAIL---\s*([\s\S]*?)$/i) || generatedText.match(/\[EMAIL\]\s*([\s\S]*?)$/i)
 
   if (linkedinMatch && linkedinMatch[1]) {
     linkedinMessage = linkedinMatch[1]

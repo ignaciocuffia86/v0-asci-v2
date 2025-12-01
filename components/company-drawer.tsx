@@ -20,9 +20,12 @@ import {
   Flame,
   Briefcase,
   Loader2,
+  FolderOpen,
 } from "lucide-react"
-import { bookmarkCompany, unbookmarkCompany } from "@/app/actions/bookmarks"
+import { bookmarkCompany, unbookmarkCompany, checkBookmarkWithContext } from "@/app/actions/bookmarks"
 import { useToast } from "@/hooks/use-toast"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { useRouter } from "next/navigation"
 import type React from "react"
 
 type CompanyDetails = {
@@ -133,8 +136,20 @@ export function CompanyDrawer({
   filterType?: "process" | "technology"
 }) {
   const [isBookmarked, setIsBookmarked] = useState(false)
+  const [bookmarkState, setBookmarkState] = useState<{
+    hasExactMatch: boolean
+    exactMatchId?: string
+    otherBookmarks: Array<{ id: string; context: string; created_at: string }>
+    isLoading: boolean
+  }>({
+    hasExactMatch: false,
+    otherBookmarks: [],
+    isLoading: true,
+  })
+
   const supabase = createClient()
   const { toast } = useToast()
+  const router = useRouter()
 
   const cacheKey = useMemo(() => {
     if (!isOpen || !companyId) return null
@@ -211,20 +226,26 @@ export function CompanyDrawer({
     if (isOpen && companyId) {
       checkBookmarkStatus()
     }
-  }, [companyId, isOpen])
+  }, [companyId, isOpen, filterSignalIds, filterType])
 
   const checkBookmarkStatus = async () => {
+    setBookmarkState((prev) => ({ ...prev, isLoading: true }))
+
     const {
       data: { user },
     } = await supabase.auth.getUser()
+
     if (user) {
-      const { data: bookmark } = await supabase
-        .from("bookmarks")
-        .select("id")
-        .eq("user_id", user.id)
-        .eq("company_id", companyId)
-        .single()
-      setIsBookmarked(!!bookmark)
+      const result = await checkBookmarkWithContext(user.id, companyId, filterSignalIds, filterType)
+
+      setBookmarkState({
+        hasExactMatch: result.hasExactMatch,
+        exactMatchId: result.exactMatchId,
+        otherBookmarks: result.otherBookmarks,
+        isLoading: false,
+      })
+    } else {
+      setBookmarkState((prev) => ({ ...prev, isLoading: false }))
     }
   }
 
@@ -234,18 +255,21 @@ export function CompanyDrawer({
     } = await supabase.auth.getUser()
     if (!user) return
 
-    // Guardar estado previo para rollback en caso de error
-    const wasBookmarked = isBookmarked
+    const wasBookmarked = bookmarkState.hasExactMatch
+    const previousState = { ...bookmarkState }
 
-    // Optimistic update - actualizar UI inmediatamente
-    setIsBookmarked(!wasBookmarked)
+    // Optimistic update
+    setBookmarkState((prev) => ({
+      ...prev,
+      hasExactMatch: !wasBookmarked,
+      exactMatchId: wasBookmarked ? undefined : prev.exactMatchId,
+    }))
 
     try {
-      if (wasBookmarked) {
-        // Ejecutar en background sin await
-        unbookmarkCompany(user.id, companyId).catch(() => {
-          // Rollback si falla
-          setIsBookmarked(true)
+      if (wasBookmarked && bookmarkState.exactMatchId) {
+        // Eliminar solo el bookmark específico de este contexto
+        unbookmarkCompany(user.id, companyId, bookmarkState.exactMatchId).catch(() => {
+          setBookmarkState(previousState)
         })
       } else {
         let contextNames: string[] = []
@@ -264,20 +288,22 @@ export function CompanyDrawer({
           process: filterType === "process" ? contextNames : [],
         }
 
-        // Ejecutar en background sin await
         bookmarkCompany(user.id, companyId, {
           filterSignalIds: filterSignalIds || [],
           filterType: filterType || "generic",
           filtersUsed,
         }).catch(() => {
-          // Rollback si falla
-          setIsBookmarked(false)
+          setBookmarkState(previousState)
         })
       }
     } catch {
-      // Rollback en caso de error
-      setIsBookmarked(wasBookmarked)
+      setBookmarkState(previousState)
     }
+  }
+
+  const goToBookmark = (bookmarkId: string) => {
+    onClose()
+    router.push(`/bookmarks/${bookmarkId}`)
   }
 
   const getTagCloud = () => {
@@ -419,15 +445,63 @@ export function CompanyDrawer({
                       </a>
                     </Button>
                   )}
-                  <Button
-                    variant={isBookmarked ? "default" : "outline"}
-                    size="sm"
-                    className={`h-9 ml-auto ${isBookmarked ? "bg-primary text-primary-foreground" : "bg-white dark:bg-slate-900"}`}
-                    onClick={handleBookmark}
-                  >
-                    <Bookmark className={`h-4 w-4 mr-2 ${isBookmarked ? "fill-current" : ""}`} />
-                    {isBookmarked ? "Guardado" : "Guardar"}
-                  </Button>
+
+                  <div className="flex items-center gap-2 ml-auto">
+                    {bookmarkState.otherBookmarks.length > 0 && (
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-9 text-muted-foreground hover:text-foreground"
+                              onClick={() => goToBookmark(bookmarkState.otherBookmarks[0].id)}
+                            >
+                              <FolderOpen className="h-4 w-4 mr-1" />+{bookmarkState.otherBookmarks.length}
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom" className="max-w-xs">
+                            <p className="font-medium mb-1">Otros workspaces guardados:</p>
+                            <ul className="text-xs space-y-1">
+                              {bookmarkState.otherBookmarks.map((b) => (
+                                <li key={b.id} className="flex items-center gap-1">
+                                  <span className="text-muted-foreground">•</span>
+                                  {b.context}
+                                </li>
+                              ))}
+                            </ul>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    )}
+
+                    {bookmarkState.hasExactMatch ? (
+                      <Button
+                        variant="default"
+                        size="sm"
+                        className="h-9 bg-primary text-primary-foreground"
+                        onClick={() => bookmarkState.exactMatchId && goToBookmark(bookmarkState.exactMatchId)}
+                      >
+                        <Bookmark className="h-4 w-4 mr-2 fill-current" />
+                        Ir al Workspace
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-9 bg-white dark:bg-slate-900"
+                        onClick={handleBookmark}
+                        disabled={bookmarkState.isLoading}
+                      >
+                        {bookmarkState.isLoading ? (
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        ) : (
+                          <Bookmark className="h-4 w-4 mr-2" />
+                        )}
+                        Guardar
+                      </Button>
+                    )}
+                  </div>
                 </div>
 
                 <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800">
