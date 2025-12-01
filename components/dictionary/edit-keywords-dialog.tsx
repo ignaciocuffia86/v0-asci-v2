@@ -58,6 +58,11 @@ export function EditKeywordsDialog({
   const [showConfirmDialog, setShowConfirmDialog] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
   const [editingName, setEditingName] = useState(itemName)
+  const [confirmData, setConfirmData] = useState<{
+    keywords: string[]
+    editingName: string
+    pendingChanges: PendingChange[]
+  } | null>(null)
   const supabase = createClient()
 
   // Reset state when dialog opens
@@ -125,7 +130,39 @@ export function EditKeywordsDialog({
   const addedKeywords = pendingChanges.filter((c) => c.type === "add")
   const removedKeywords = pendingChanges.filter((c) => c.type === "remove")
 
+  const confirmAddedKeywords = confirmData?.pendingChanges.filter((c) => c.type === "add") || []
+  const confirmRemovedKeywords = confirmData?.pendingChanges.filter((c) => c.type === "remove") || []
+
+  const handleShowConfirm = () => {
+    // Store the current data for the confirmation dialog
+    setConfirmData({
+      keywords: [...keywords],
+      editingName,
+      pendingChanges: [...pendingChanges],
+    })
+    // Close the main dialog first
+    onOpenChange(false)
+    // Then open the confirmation dialog after a brief delay to avoid aria-hidden conflict
+    setTimeout(() => {
+      setShowConfirmDialog(true)
+    }, 100)
+  }
+
+  const handleCancelConfirm = () => {
+    setShowConfirmDialog(false)
+    // Restore state and reopen main dialog
+    if (confirmData) {
+      setKeywords(confirmData.keywords)
+      setEditingName(confirmData.editingName)
+      setPendingChanges(confirmData.pendingChanges)
+    }
+    setTimeout(() => {
+      onOpenChange(true)
+    }, 100)
+  }
+
   const handleApplyChanges = async () => {
+    if (!confirmData) return
     setIsProcessing(true)
 
     try {
@@ -136,13 +173,13 @@ export function EditKeywordsDialog({
       await supabase
         .from(tableName)
         .update({
-          name: editingName,
-          keywords: keywords,
+          name: confirmData.editingName,
+          keywords: confirmData.keywords,
         })
         .eq("id", itemId)
 
       // 2. Create jobs for keyword changes
-      for (const change of pendingChanges) {
+      for (const change of confirmData.pendingChanges) {
         await supabase.from("dictionary_jobs").insert({
           job_type: change.type === "add" ? "add_keyword" : "remove_keyword",
           signal_id: itemId,
@@ -153,12 +190,12 @@ export function EditKeywordsDialog({
       }
 
       onSave()
-      onOpenChange(false)
+      setShowConfirmDialog(false)
+      setConfirmData(null)
     } catch (error) {
       console.error("Error applying changes:", error)
     } finally {
       setIsProcessing(false)
-      setShowConfirmDialog(false)
     }
   }
 
@@ -274,7 +311,7 @@ export function EditKeywordsDialog({
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Cancelar
             </Button>
-            <Button onClick={() => setShowConfirmDialog(true)} disabled={!hasChanges || keywords.length === 0}>
+            <Button onClick={handleShowConfirm} disabled={!hasChanges || keywords.length === 0}>
               Aplicar Cambios
             </Button>
           </DialogFooter>
@@ -282,7 +319,14 @@ export function EditKeywordsDialog({
       </Dialog>
 
       {/* Confirmation dialog */}
-      <AlertDialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
+      <AlertDialog
+        open={showConfirmDialog}
+        onOpenChange={(open) => {
+          if (!open && !isProcessing) {
+            handleCancelConfirm()
+          }
+        }}
+      >
         <AlertDialogContent className="max-h-[90vh] flex flex-col">
           <AlertDialogHeader>
             <AlertDialogTitle>¿Confirmar cambios?</AlertDialogTitle>
@@ -290,21 +334,23 @@ export function EditKeywordsDialog({
               <div className="text-muted-foreground text-sm space-y-2 max-h-[50vh] overflow-y-auto">
                 <span className="block">Estás a punto de aplicar los siguientes cambios:</span>
 
-                {editingName !== itemName && (
+                {confirmData && confirmData.editingName !== itemName && (
                   <span className="block text-sm">
-                    • Cambiar nombre de "{itemName}" a "{editingName}"
+                    • Cambiar nombre de "{itemName}" a "{confirmData.editingName}"
                   </span>
                 )}
 
-                {addedKeywords.length > 0 && (
+                {confirmAddedKeywords.length > 0 && (
                   <span className="block text-sm text-green-600">
-                    • Agregar {addedKeywords.length} keyword(s): {addedKeywords.map((c) => c.keyword).join(", ")}
+                    • Agregar {confirmAddedKeywords.length} keyword(s):{" "}
+                    {confirmAddedKeywords.map((c) => c.keyword).join(", ")}
                   </span>
                 )}
 
-                {removedKeywords.length > 0 && (
+                {confirmRemovedKeywords.length > 0 && (
                   <span className="block text-sm text-red-600">
-                    • Eliminar {removedKeywords.length} keyword(s): {removedKeywords.map((c) => c.keyword).join(", ")}
+                    • Eliminar {confirmRemovedKeywords.length} keyword(s):{" "}
+                    {confirmRemovedKeywords.map((c) => c.keyword).join(", ")}
                   </span>
                 )}
 
@@ -315,7 +361,9 @@ export function EditKeywordsDialog({
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={isProcessing}>Cancelar</AlertDialogCancel>
+            <AlertDialogCancel disabled={isProcessing} onClick={handleCancelConfirm}>
+              Cancelar
+            </AlertDialogCancel>
             <AlertDialogAction onClick={handleApplyChanges} disabled={isProcessing}>
               {isProcessing ? (
                 <>
