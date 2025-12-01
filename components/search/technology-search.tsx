@@ -72,7 +72,7 @@ export function TechnologySearch() {
     }
   }
 
-  const selectedTechDisplay = technologies.find((t) => t.id === selectedTech)?.display_name
+  const selectedTechData = selectedTech ? technologies.find((t) => t.id === selectedTech) : null
 
   return (
     <div className="space-y-6">
@@ -81,9 +81,13 @@ export function TechnologySearch() {
           {/* Technology Selection (Single) */}
           <div className="space-y-2">
             <Label>Tecnología (Única)</Label>
-            <Select onValueChange={setSelectedTech} value={selectedTech || undefined}>
+            <Select onValueChange={(value) => setSelectedTech(value)} value={selectedTech || ""}>
               <SelectTrigger>
-                <SelectValue placeholder="Selecciona tecnología...">{selectedTechDisplay}</SelectValue>
+                {selectedTechData ? (
+                  <span>{selectedTechData.display_name}</span>
+                ) : (
+                  <SelectValue placeholder="Selecciona tecnología..." />
+                )}
               </SelectTrigger>
               <SelectContent className="bg-white dark:bg-gray-950 border-border max-h-[300px]">
                 {technologies.map((tech) => (
