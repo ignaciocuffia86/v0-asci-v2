@@ -12,21 +12,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
-import { X, Plus, AlertTriangle, Loader2 } from "lucide-react"
+import { X, Plus, AlertTriangle, Loader2, ArrowLeft } from "lucide-react"
 
 type EditKeywordsDialogProps = {
   open: boolean
@@ -43,6 +33,8 @@ type PendingChange = {
   keyword: string
 }
 
+type DialogView = "edit" | "confirm"
+
 export function EditKeywordsDialog({
   open,
   onOpenChange,
@@ -55,14 +47,9 @@ export function EditKeywordsDialog({
   const [keywords, setKeywords] = useState<string[]>([])
   const [newKeyword, setNewKeyword] = useState("")
   const [pendingChanges, setPendingChanges] = useState<PendingChange[]>([])
-  const [showConfirmDialog, setShowConfirmDialog] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
   const [editingName, setEditingName] = useState(itemName)
-  const [confirmData, setConfirmData] = useState<{
-    keywords: string[]
-    editingName: string
-    pendingChanges: PendingChange[]
-  } | null>(null)
+  const [view, setView] = useState<DialogView>("edit")
   const supabase = createClient()
 
   // Reset state when dialog opens
@@ -72,6 +59,7 @@ export function EditKeywordsDialog({
       setPendingChanges([])
       setNewKeyword("")
       setEditingName(itemName)
+      setView("edit")
     }
   }, [open, currentKeywords, itemName])
 
@@ -130,39 +118,7 @@ export function EditKeywordsDialog({
   const addedKeywords = pendingChanges.filter((c) => c.type === "add")
   const removedKeywords = pendingChanges.filter((c) => c.type === "remove")
 
-  const confirmAddedKeywords = confirmData?.pendingChanges.filter((c) => c.type === "add") || []
-  const confirmRemovedKeywords = confirmData?.pendingChanges.filter((c) => c.type === "remove") || []
-
-  const handleShowConfirm = () => {
-    // Store the current data for the confirmation dialog
-    setConfirmData({
-      keywords: [...keywords],
-      editingName,
-      pendingChanges: [...pendingChanges],
-    })
-    // Close the main dialog first
-    onOpenChange(false)
-    // Then open the confirmation dialog after a brief delay to avoid aria-hidden conflict
-    setTimeout(() => {
-      setShowConfirmDialog(true)
-    }, 100)
-  }
-
-  const handleCancelConfirm = () => {
-    setShowConfirmDialog(false)
-    // Restore state and reopen main dialog
-    if (confirmData) {
-      setKeywords(confirmData.keywords)
-      setEditingName(confirmData.editingName)
-      setPendingChanges(confirmData.pendingChanges)
-    }
-    setTimeout(() => {
-      onOpenChange(true)
-    }, 100)
-  }
-
   const handleApplyChanges = async () => {
-    if (!confirmData) return
     setIsProcessing(true)
 
     try {
@@ -173,13 +129,13 @@ export function EditKeywordsDialog({
       await supabase
         .from(tableName)
         .update({
-          name: confirmData.editingName,
-          keywords: confirmData.keywords,
+          name: editingName,
+          keywords: keywords,
         })
         .eq("id", itemId)
 
       // 2. Create jobs for keyword changes
-      for (const change of confirmData.pendingChanges) {
+      for (const change of pendingChanges) {
         await supabase.from("dictionary_jobs").insert({
           job_type: change.type === "add" ? "add_keyword" : "remove_keyword",
           signal_id: itemId,
@@ -190,8 +146,7 @@ export function EditKeywordsDialog({
       }
 
       onSave()
-      setShowConfirmDialog(false)
-      setConfirmData(null)
+      onOpenChange(false)
     } catch (error) {
       console.error("Error applying changes:", error)
     } finally {
@@ -199,184 +154,201 @@ export function EditKeywordsDialog({
     }
   }
 
+  const handleOpenChange = (newOpen: boolean) => {
+    if (isProcessing) return
+    if (!newOpen) {
+      setView("edit")
+    }
+    onOpenChange(newOpen)
+  }
+
   return (
-    <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Editar {itemType === "product" ? "Producto" : "Proceso"}</DialogTitle>
-            <DialogDescription>
-              Modifica el nombre y las keywords. Los cambios se procesarán en background.
-            </DialogDescription>
-          </DialogHeader>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="max-w-lg">
+        {view === "edit" ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>Editar {itemType === "product" ? "Producto" : "Proceso"}</DialogTitle>
+              <DialogDescription>
+                Modifica el nombre y las keywords. Los cambios se procesarán en background.
+              </DialogDescription>
+            </DialogHeader>
 
-          <div className="space-y-4 py-4">
-            {/* Name editing */}
-            <div className="space-y-2">
-              <Label htmlFor="item-name">Nombre</Label>
-              <Input id="item-name" value={editingName} onChange={(e) => setEditingName(e.target.value)} />
-            </div>
+            <div className="space-y-4 py-4">
+              {/* Name editing */}
+              <div className="space-y-2">
+                <Label htmlFor="item-name">Nombre</Label>
+                <Input id="item-name" value={editingName} onChange={(e) => setEditingName(e.target.value)} />
+              </div>
 
-            {/* Current keywords */}
-            <div className="space-y-2">
-              <Label>Keywords actuales ({keywords.length})</Label>
-              <div className="flex flex-wrap gap-2 p-3 border rounded-md min-h-[60px] max-h-[200px] overflow-y-auto bg-muted/30">
-                {keywords.length === 0 ? (
-                  <span className="text-sm text-muted-foreground">Sin keywords</span>
-                ) : (
-                  keywords.map((kw) => {
-                    const isNew = !currentKeywords.includes(kw)
-                    return (
-                      <Badge
-                        key={kw}
-                        variant={isNew ? "default" : "secondary"}
-                        className={`gap-1 pr-1 ${isNew ? "bg-green-600 hover:bg-green-700" : ""}`}
-                      >
-                        {kw}
-                        <button
-                          onClick={() => handleRemoveKeyword(kw)}
-                          className="ml-1 hover:bg-black/20 rounded-full p-0.5"
+              {/* Current keywords */}
+              <div className="space-y-2">
+                <Label>Keywords actuales ({keywords.length})</Label>
+                <div className="flex flex-wrap gap-2 p-3 border rounded-md min-h-[60px] max-h-[200px] overflow-y-auto bg-muted/30">
+                  {keywords.length === 0 ? (
+                    <span className="text-sm text-muted-foreground">Sin keywords</span>
+                  ) : (
+                    keywords.map((kw) => {
+                      const isNew = !currentKeywords.includes(kw)
+                      return (
+                        <Badge
+                          key={kw}
+                          variant={isNew ? "default" : "secondary"}
+                          className={`gap-1 pr-1 ${isNew ? "bg-green-600 hover:bg-green-700" : ""}`}
                         >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </Badge>
-                    )
-                  })
-                )}
+                          {kw}
+                          <button
+                            onClick={() => handleRemoveKeyword(kw)}
+                            className="ml-1 hover:bg-black/20 rounded-full p-0.5"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </Badge>
+                      )
+                    })
+                  )}
+                </div>
               </div>
+
+              {/* Add new keyword */}
+              <div className="space-y-2">
+                <Label htmlFor="new-keyword">Agregar keywords</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="new-keyword"
+                    value={newKeyword}
+                    onChange={(e) => setNewKeyword(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="Separar múltiples con punto y coma (;)"
+                  />
+                  <Button type="button" onClick={handleAddKeyword} size="icon">
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Usa punto y coma (;) para agregar múltiples keywords a la vez.
+                </p>
+              </div>
+
+              {/* Pending changes summary */}
+              {hasChanges && (
+                <div className="space-y-2 p-3 border rounded-md bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800 max-h-[200px] overflow-y-auto">
+                  <div className="flex items-center gap-2 text-amber-800 dark:text-amber-200">
+                    <AlertTriangle className="h-4 w-4" />
+                    <span className="text-sm font-medium">Cambios pendientes</span>
+                  </div>
+
+                  {editingName !== itemName && (
+                    <p className="text-sm text-amber-700 dark:text-amber-300">
+                      Nombre: "{itemName}" → "{editingName}"
+                    </p>
+                  )}
+
+                  {addedKeywords.length > 0 && (
+                    <div className="text-sm">
+                      <span className="text-green-700 dark:text-green-400">+ Agregar ({addedKeywords.length}):</span>{" "}
+                      <span className="text-green-600 dark:text-green-300">
+                        {addedKeywords.map((c) => c.keyword).join(", ")}
+                      </span>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Se procesará la base de datos para detectar nuevas señales.
+                      </p>
+                    </div>
+                  )}
+
+                  {removedKeywords.length > 0 && (
+                    <div className="text-sm">
+                      <span className="text-red-700 dark:text-red-400">- Eliminar ({removedKeywords.length}):</span>{" "}
+                      <span className="text-red-600 dark:text-red-300">
+                        {removedKeywords.map((c) => c.keyword).join(", ")}
+                      </span>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Se eliminarán las señales existentes con estas keywords.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
-            {/* Add new keyword */}
-            <div className="space-y-2">
-              <Label htmlFor="new-keyword">Agregar keywords</Label>
-              <div className="flex gap-2">
-                <Input
-                  id="new-keyword"
-                  value={newKeyword}
-                  onChange={(e) => setNewKeyword(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Separar múltiples con punto y coma (;)"
-                />
-                <Button type="button" onClick={handleAddKeyword} size="icon">
-                  <Plus className="h-4 w-4" />
-                </Button>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Usa punto y coma (;) para agregar múltiples keywords a la vez.
+            <DialogFooter>
+              <Button variant="outline" onClick={() => onOpenChange(false)}>
+                Cancelar
+              </Button>
+              <Button onClick={() => setView("confirm")} disabled={!hasChanges || keywords.length === 0}>
+                Aplicar Cambios
+              </Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5 text-amber-500" />
+                ¿Confirmar cambios?
+              </DialogTitle>
+              <DialogDescription>Estás a punto de aplicar los siguientes cambios:</DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-3 py-4 max-h-[50vh] overflow-y-auto">
+              {editingName !== itemName && (
+                <p className="text-sm">
+                  • Cambiar nombre de "<span className="font-medium">{itemName}</span>" a "
+                  <span className="font-medium">{editingName}</span>"
+                </p>
+              )}
+
+              {addedKeywords.length > 0 && (
+                <div className="text-sm">
+                  <span className="text-green-600 dark:text-green-400 font-medium">
+                    • Agregar {addedKeywords.length} keyword(s):
+                  </span>
+                  <p className="text-green-600 dark:text-green-300 ml-3">
+                    {addedKeywords.map((c) => c.keyword).join(", ")}
+                  </p>
+                </div>
+              )}
+
+              {removedKeywords.length > 0 && (
+                <div className="text-sm">
+                  <span className="text-red-600 dark:text-red-400 font-medium">
+                    • Eliminar {removedKeywords.length} keyword(s):
+                  </span>
+                  <p className="text-red-600 dark:text-red-300 ml-3">
+                    {removedKeywords.map((c) => c.keyword).join(", ")}
+                  </p>
+                </div>
+              )}
+
+              <p className="text-sm text-muted-foreground pt-2 border-t">
+                Los cambios se procesarán en background. Puedes ver el progreso en Admin → Procesamiento.
               </p>
             </div>
 
-            {/* Pending changes summary */}
-            {hasChanges && (
-              <div className="space-y-2 p-3 border rounded-md bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800 max-h-[200px] overflow-y-auto">
-                <div className="flex items-center gap-2 text-amber-800 dark:text-amber-200">
-                  <AlertTriangle className="h-4 w-4" />
-                  <span className="text-sm font-medium">Cambios pendientes</span>
-                </div>
-
-                {editingName !== itemName && (
-                  <p className="text-sm text-amber-700 dark:text-amber-300">
-                    Nombre: "{itemName}" → "{editingName}"
-                  </p>
+            <DialogFooter className="flex-col sm:flex-row gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setView("edit")}
+                disabled={isProcessing}
+                className="w-full sm:w-auto"
+              >
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                Volver
+              </Button>
+              <Button onClick={handleApplyChanges} disabled={isProcessing} className="w-full sm:w-auto">
+                {isProcessing ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Procesando...
+                  </>
+                ) : (
+                  "Confirmar"
                 )}
-
-                {addedKeywords.length > 0 && (
-                  <div className="text-sm">
-                    <span className="text-green-700 dark:text-green-400">+ Agregar ({addedKeywords.length}):</span>{" "}
-                    <span className="text-green-600 dark:text-green-300">
-                      {addedKeywords.map((c) => c.keyword).join(", ")}
-                    </span>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Se procesará la base de datos para detectar nuevas señales.
-                    </p>
-                  </div>
-                )}
-
-                {removedKeywords.length > 0 && (
-                  <div className="text-sm">
-                    <span className="text-red-700 dark:text-red-400">- Eliminar ({removedKeywords.length}):</span>{" "}
-                    <span className="text-red-600 dark:text-red-300">
-                      {removedKeywords.map((c) => c.keyword).join(", ")}
-                    </span>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Se eliminarán las señales existentes con estas keywords.
-                    </p>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => onOpenChange(false)}>
-              Cancelar
-            </Button>
-            <Button onClick={handleShowConfirm} disabled={!hasChanges || keywords.length === 0}>
-              Aplicar Cambios
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Confirmation dialog */}
-      <AlertDialog
-        open={showConfirmDialog}
-        onOpenChange={(open) => {
-          if (!open && !isProcessing) {
-            handleCancelConfirm()
-          }
-        }}
-      >
-        <AlertDialogContent className="max-h-[90vh] flex flex-col">
-          <AlertDialogHeader>
-            <AlertDialogTitle>¿Confirmar cambios?</AlertDialogTitle>
-            <AlertDialogDescription asChild>
-              <div className="text-muted-foreground text-sm space-y-2 max-h-[50vh] overflow-y-auto">
-                <span className="block">Estás a punto de aplicar los siguientes cambios:</span>
-
-                {confirmData && confirmData.editingName !== itemName && (
-                  <span className="block text-sm">
-                    • Cambiar nombre de "{itemName}" a "{confirmData.editingName}"
-                  </span>
-                )}
-
-                {confirmAddedKeywords.length > 0 && (
-                  <span className="block text-sm text-green-600">
-                    • Agregar {confirmAddedKeywords.length} keyword(s):{" "}
-                    {confirmAddedKeywords.map((c) => c.keyword).join(", ")}
-                  </span>
-                )}
-
-                {confirmRemovedKeywords.length > 0 && (
-                  <span className="block text-sm text-red-600">
-                    • Eliminar {confirmRemovedKeywords.length} keyword(s):{" "}
-                    {confirmRemovedKeywords.map((c) => c.keyword).join(", ")}
-                  </span>
-                )}
-
-                <span className="block text-sm mt-4 font-medium">
-                  Los cambios se procesarán en background. Puedes ver el progreso en Admin → Procesamiento.
-                </span>
-              </div>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={isProcessing} onClick={handleCancelConfirm}>
-              Cancelar
-            </AlertDialogCancel>
-            <AlertDialogAction onClick={handleApplyChanges} disabled={isProcessing}>
-              {isProcessing ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Procesando...
-                </>
-              ) : (
-                "Confirmar"
-              )}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </>
+              </Button>
+            </DialogFooter>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }
