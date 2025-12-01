@@ -207,14 +207,50 @@ export async function getIcebreakers(bookmarkId: string) {
   } = await supabase.auth.getUser()
   if (!user) return []
 
-  const { data } = await supabase
+  const { data: icebreakers } = await supabase
     .from("user_icebreakers")
     .select("*")
     .eq("bookmark_id", bookmarkId)
     .eq("user_id", user.id)
     .order("created_at", { ascending: false })
 
-  return data || []
+  if (!icebreakers || icebreakers.length === 0) return []
+
+  // Obtener los contact_ids únicos
+  const contactIds = [...new Set(icebreakers.map((ib) => ib.contact_id).filter(Boolean))]
+
+  // Buscar información de contactos por separado
+  let contactsMap: Record<string, any> = {}
+  if (contactIds.length > 0) {
+    const { data: contacts } = await supabase
+      .from("contacts")
+      .select(
+        "id, full_name, first_name, headline, current_position_title, profile_picture_url, linkedin_url, email1, email1_status, phone1",
+      )
+      .in("id", contactIds)
+
+    if (contacts) {
+      contactsMap = contacts.reduce(
+        (acc, contact) => {
+          acc[contact.id] = contact
+          return acc
+        },
+        {} as Record<string, any>,
+      )
+    }
+  }
+
+  // Combinar icebreakers con datos de contacto y limpiar tags
+  return icebreakers.map((ib) => ({
+    ...ib,
+    contact: ib.contact_id ? contactsMap[ib.contact_id] || null : null,
+    generated_text: ib.generated_text
+      ?.replace(/---LINKEDIN---\s*/gi, "")
+      ?.replace(/---EMAIL---\s*/gi, "")
+      ?.replace(/\[LINKEDIN\]\s*/gi, "")
+      ?.replace(/\[EMAIL\]\s*/gi, "")
+      ?.trim(),
+  }))
 }
 
 export async function generateIcebreaker(
@@ -525,6 +561,7 @@ Ahora genera el mensaje de icebreaker (SOLO el mensaje, nada más):`
       signals_count: signals.length,
     }),
     tone: templateData.tone,
+    message_type: "single",
     created_at: new Date().toISOString(),
   })
 
@@ -685,10 +722,34 @@ export async function generateSimplifiedIcebreaker(bookmarkId: string, contactId
   } = await supabase.auth.getUser()
   if (!user) throw new Error("Unauthorized")
 
-  // Obtener bookmark y empresa
-  const { data: bookmark } = await supabase.from("bookmarks").select("company_id").eq("id", bookmarkId).single()
+  const { data: bookmark } = await supabase
+    .from("bookmarks")
+    .select("company_id, search_context")
+    .eq("id", bookmarkId)
+    .single()
 
   if (!bookmark) throw new Error("Bookmark not found")
+
+  const searchContext = bookmark.search_context as {
+    filterSignalIds?: string[]
+    filterType?: "process" | "technology" | "general"
+    filtersUsed?: string[]
+  } | null
+
+  const filterSignalIds = searchContext?.filterSignalIds || []
+  const filterType = searchContext?.filterType || "general"
+  const filtersUsed = searchContext?.filtersUsed || []
+
+  let filterContextName = ""
+  if (filterSignalIds.length > 0) {
+    if (filterType === "process") {
+      const { data: processes } = await supabase.from("dictionary_processes").select("name").in("id", filterSignalIds)
+      filterContextName = processes?.map((p) => p.name).join(", ") || filtersUsed.join(", ")
+    } else if (filterType === "technology") {
+      const { data: products } = await supabase.from("dictionary_products").select("name").in("id", filterSignalIds)
+      filterContextName = products?.map((p) => p.name).join(", ") || filtersUsed.join(", ")
+    }
+  }
 
   // Obtener nombre de empresa en query separada
   const { data: company } = await supabase.from("companies").select("name").eq("id", bookmark.company_id).single()
@@ -711,30 +772,52 @@ export async function generateSimplifiedIcebreaker(bookmarkId: string, contactId
         full_name: publicContact.full_name,
         first_name: publicContact.first_name,
         role: publicContact.current_position_title || publicContact.headline,
+        headline: publicContact.headline,
         current_position_description: publicContact.current_position_description,
       }
       isSignalContact = true
 
-      // Obtener señales del contacto
-      const { data: signals } = await supabase
+      let signalsQuery = supabase
         .from("signals")
-        .select("signal_id, keyword_matched, snippet, source_field")
+        .select("signal_id, keyword_matched, snippet, source_field, signal_type")
         .eq("contact_id", contactId)
         .eq("company_id", bookmark.company_id)
-        .eq("signal_type", "technology")
-        .limit(5)
+
+      // Filtrar por tipo de señal según el filterType del contexto
+      if (filterType === "process") {
+        signalsQuery = signalsQuery.eq("signal_type", "process")
+      } else if (filterType === "technology") {
+        signalsQuery = signalsQuery.eq("signal_type", "technology")
+      }
+      // Si es "general", no filtramos por tipo
+
+      // Filtrar por IDs específicos si existen
+      if (filterSignalIds.length > 0) {
+        signalsQuery = signalsQuery.in("signal_id", filterSignalIds)
+      }
+
+      const { data: signals } = await signalsQuery.limit(10)
 
       if (signals && signals.length > 0) {
         const signalIds = [...new Set(signals.map((s) => s.signal_id).filter(Boolean))]
 
         if (signalIds.length > 0) {
-          const { data: products } = await supabase.from("dictionary_products").select("id, name").in("id", signalIds)
+          let namesMap = new Map<string, string>()
 
-          const productMap = new Map(products?.map((p) => [p.id, p.name]) || [])
+          if (filterType === "process") {
+            const { data: processes } = await supabase
+              .from("dictionary_processes")
+              .select("id, name")
+              .in("id", signalIds)
+            namesMap = new Map(processes?.map((p) => [p.id, p.name]) || [])
+          } else {
+            const { data: products } = await supabase.from("dictionary_products").select("id, name").in("id", signalIds)
+            namesMap = new Map(products?.map((p) => [p.id, p.name]) || [])
+          }
 
           signalInfo = signals.map((s) => ({
             ...s,
-            product_name: s.signal_id ? productMap.get(s.signal_id) || undefined : undefined,
+            signal_name: s.signal_id ? namesMap.get(s.signal_id) || undefined : undefined,
           }))
         } else {
           signalInfo = signals
@@ -754,30 +837,48 @@ export async function generateSimplifiedIcebreaker(bookmarkId: string, contactId
       contactData = privateContact
       isSignalContact = false
 
-      // Obtener señales de la empresa para contexto
-      const { data: companySignals } = await supabase
+      let companySignalsQuery = supabase
         .from("signals")
-        .select("signal_id, keyword_matched")
+        .select("signal_id, keyword_matched, signal_type")
         .eq("company_id", bookmark.company_id)
-        .eq("signal_type", "technology")
         .eq("is_current_employee", true)
-        .limit(10)
+
+      if (filterType === "process") {
+        companySignalsQuery = companySignalsQuery.eq("signal_type", "process")
+      } else if (filterType === "technology") {
+        companySignalsQuery = companySignalsQuery.eq("signal_type", "technology")
+      }
+
+      if (filterSignalIds.length > 0) {
+        companySignalsQuery = companySignalsQuery.in("signal_id", filterSignalIds)
+      }
+
+      const { data: companySignals } = await companySignalsQuery.limit(10)
 
       if (companySignals && companySignals.length > 0) {
         const signalIds = [...new Set(companySignals.map((s) => s.signal_id).filter(Boolean))]
 
         if (signalIds.length > 0) {
-          const { data: products } = await supabase.from("dictionary_products").select("id, name").in("id", signalIds)
+          let namesMap = new Map<string, string>()
 
-          const productMap = new Map(products?.map((p) => [p.id, p.name]) || [])
-          const uniqueProducts = new Set<string>()
-
-          for (const s of companySignals) {
-            const name = s.signal_id ? productMap.get(s.signal_id) : null
-            if (name) uniqueProducts.add(name)
+          if (filterType === "process") {
+            const { data: processes } = await supabase
+              .from("dictionary_processes")
+              .select("id, name")
+              .in("id", signalIds)
+            namesMap = new Map(processes?.map((p) => [p.id, p.name]) || [])
+          } else {
+            const { data: products } = await supabase.from("dictionary_products").select("id, name").in("id", signalIds)
+            namesMap = new Map(products?.map((p) => [p.id, p.name]) || [])
           }
 
-          signalInfo = Array.from(uniqueProducts).map((name) => ({ product_name: name }))
+          const uniqueNames = new Set<string>()
+          for (const s of companySignals) {
+            const name = s.signal_id ? namesMap.get(s.signal_id) || null : null
+            if (name) uniqueNames.add(name)
+          }
+
+          signalInfo = Array.from(uniqueNames).map((name) => ({ signal_name: name }))
         }
       }
     }
@@ -804,105 +905,207 @@ export async function generateSimplifiedIcebreaker(bookmarkId: string, contactId
   const companyName = company?.name || "la empresa"
 
   let signalContext = ""
+  let filterDescription = ""
+
+  if (filterType === "process" && filterContextName) {
+    filterDescription = `PROCESO DE NEGOCIO FILTRADO: ${filterContextName}`
+  } else if (filterType === "technology" && filterContextName) {
+    filterDescription = `TECNOLOGÍA/PRODUCTO FILTRADO: ${filterContextName}`
+  }
+
   if (isSignalContact && signalInfo.length > 0) {
-    const productsList = signalInfo
-      .map((s) => s.product_name)
+    const signalsList = signalInfo
+      .map((s) => s.signal_name)
       .filter(Boolean)
-      .slice(0, 3)
+      .slice(0, 5)
       .join(", ")
 
     const snippets = signalInfo
       .filter((s) => s.snippet)
-      .map((s) => s.snippet)
-      .slice(0, 2)
+      .map((s) => `- ${s.snippet}`)
+      .slice(0, 3)
       .join("\n")
 
     signalContext = `
-TIPO DE CONTACTO: Persona con señal detectada (mencionó tecnologías en su perfil)
-PRODUCTOS/TECNOLOGÍAS DETECTADAS: ${productsList}
-CONTEXTO DEL PERFIL:
-${snippets || "No hay snippets disponibles"}
-DESCRIPCIÓN DEL PUESTO:
+TIPO DE CONTACTO: Persona con señal detectada
+${filterDescription ? filterDescription + "\n" : ""}${filterType === "process" ? "PROCESOS" : "TECNOLOGÍAS"} DETECTADAS EN SU PERFIL: ${signalsList || "No especificadas"}
+HEADLINE: ${contactData.headline || "No disponible"}
+DESCRIPCIÓN DEL PUESTO ACTUAL:
 ${contactData.current_position_description || "No disponible"}
+
+FRAGMENTOS RELEVANTES DEL PERFIL:
+${snippets || "No hay snippets disponibles"}
 `
   } else {
-    const productsList = signalInfo.map((s) => s.product_name).join(", ")
+    const signalsList = signalInfo
+      .map((s) => s.signal_name)
+      .filter(Boolean)
+      .join(", ")
     signalContext = `
 TIPO DE CONTACTO: Tomador de decisiones (sin señal directa)
-CARGO: ${contactData.role || "No especificado"}
-PRODUCTOS/TECNOLOGÍAS USADAS EN LA EMPRESA: ${productsList || "No especificadas"}
+${filterDescription ? filterDescription + "\n" : ""}CARGO: ${contactData.role || "No especificado"}
+${filterType === "process" ? "PROCESOS" : "TECNOLOGÍAS"} USADAS EN LA EMPRESA: ${signalsList || "No especificadas"}
 `
   }
 
-  const prompt = `Eres un experto en ventas B2B. Genera DOS mensajes de prospección en frío para la misma persona.
+  const signalTypeLabel = filterType === "process" ? "proceso" : "tecnología/producto"
+  const signalTypePlural = filterType === "process" ? "procesos" : "tecnologías"
 
-REGLAS ESTRICTAS:
-1. Siempre inicia con "Hola ${firstName}," (si el nombre está disponible)
-2. NUNCA menciones el cargo/título de la persona
-3. Solo menciona el proceso de negocio si está EXPLÍCITAMENTE descrito en el contexto
-4. Si no hay proceso explícito, usa "en sus operaciones"
-5. NO incluyas explicaciones, preámbulos ni comentarios
-6. Entrega ÚNICAMENTE los dos mensajes en el formato especificado
-7. Cuando menciones MI empresa, usa "${userCompanyName}" (NUNCA uses placeholders como [Nombre de la empresa])
+  const snippetsList = signalInfo
+    .filter((s) => s.snippet)
+    .map((s) => `- ${s.snippet}`)
+    .slice(0, 3)
+    .join("\n")
 
-CONTEXTO:
-- Empresa objetivo: ${companyName}
-- Nombre del contacto: ${firstName}
-- MI EMPRESA (quien envía el mensaje): ${userCompanyName}
-${signalContext}
+  const signalsList = signalInfo
+    .map((s) => s.signal_name)
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(", ")
 
-MI PROPUESTA DE VALOR:
-${valueProposition}
+  const prompt = `Eres un experto en ventas B2B que escribe mensajes de prospección ALTAMENTE PERSONALIZADOS.
 
----
+Tu tarea es generar DOS mensajes únicos basándote en la información ESPECÍFICA del perfil del contacto.
 
-MENSAJE 1 - LINKEDIN (máximo 280 caracteres):
+═══════════════════════════════════════════════════════════════
+INFORMACIÓN DEL CONTACTO (USA ESTO PARA PERSONALIZAR)
+═══════════════════════════════════════════════════════════════
+Nombre: ${firstName}
+Empresa: ${companyName}
+Headline: ${contactData.headline || "No disponible"}
+Descripción del puesto actual:
+${contactData.current_position_description || "No disponible"}
+
+${filterType === "process" ? "Proceso" : "Tecnología"} que nos interesa: ${filterContextName || signalsList || "No especificada"}
+
 ${
-  isSignalContact
-    ? `Estilo: "Vi que participaste/trabajaste en [referencia específica del contexto] con [producto]..."`
-    : `Estilo: "Vi que en ${companyName} trabajan con [productos], quería saber cómo ser tenido en cuenta para necesidades futuras..."`
+  snippetsList
+    ? `Fragmentos CLAVE encontrados en su perfil (ÚSALOS para personalizar):
+${snippetsList}`
+    : ""
 }
-- Debe ser conciso, personal y terminar con una pregunta o call-to-action suave
-- NO uses emojis
-- Si mencionas tu empresa, usa "${userCompanyName}"
 
-MENSAJE 2 - EMAIL DE SEGUIMIENTO:
-- Comienza con "Hola ${firstName}, te escribí por LinkedIn hace unos días."
-- Reformula la observación inicial con`
+═══════════════════════════════════════════════════════════════
+MI EMPRESA
+═══════════════════════════════════════════════════════════════
+Empresa: ${userCompanyName}
+Propuesta de valor: ${valueProposition}
+
+═══════════════════════════════════════════════════════════════
+INSTRUCCIONES CRÍTICAS
+═══════════════════════════════════════════════════════════════
+
+**MENSAJE 1 - LINKEDIN (máximo 280 caracteres)**
+Estructura:
+1. "Hola ${firstName}, vi en tu perfil que..."
+2. Menciona ESPECÍFICAMENTE algo de su headline, descripción del puesto, o los fragmentos encontrados
+3. Conecta eso con ${filterContextName || "lo que buscamos"}
+4. Cierra con: "¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?"
+
+IMPORTANTE: El mensaje debe ser ÚNICO para esta persona. No uses frases genéricas como "aplicado a sus operaciones". Extrae algo concreto de su perfil.
+
+**MENSAJE 2 - EMAIL DE SEGUIMIENTO (3-5 oraciones)**
+1. Comienza: "Hola ${firstName}, te escribí por LinkedIn hace unos días."
+2. Profundiza en lo que viste en su perfil - menciona algo ESPECÍFICO de su headline o descripción
+3. Explica cómo ${userCompanyName} puede ayudar concretamente con ${filterContextName || "sus necesidades"}
+4. Cierra: "¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?"
+
+═══════════════════════════════════════════════════════════════
+FORMATO DE RESPUESTA (SIN INCLUIR LOS TAGS EN EL MENSAJE FINAL)
+═══════════════════════════════════════════════════════════════
+---LINKEDIN---
+(mensaje de LinkedIn aquí, sin el tag)
+
+---EMAIL---
+(email de seguimiento aquí, sin el tag)
+
+RECUERDA: Cada mensaje debe ser ÚNICO y personalizado. Si el headline dice "DevOps Engineer enfocado en CI/CD para fintech", menciona CI/CD y fintech, no solo "DevOps".`
 
   // Generar con IA
   let generatedText = ""
   try {
+    console.log("[v0] Sending request to Gemini (gemini-2.0-flash)...")
     generatedText = await generateGeminiContent(prompt, "gemini-2.0-flash", 0.7)
-
-    // Limpiar respuesta de preámbulos comunes
-    generatedText = generatedText
-      .replace(/^(Claro|Aquí está|Aquí tienes|Por supuesto|El mensaje es|Mensaje:|Icebreaker:)[\s,:]*/gi, "")
-      .replace(/^["']|["']$/g, "")
-      .trim()
+    console.log("[v0] Raw generated text:", generatedText)
   } catch (error: any) {
     console.error("AI Generation failed (Gemini 2.0 Flash)", error)
 
     try {
       console.log("[v0] Attempting fallback to Gemini 1.5 Pro...")
       generatedText = await generateGeminiContent(prompt, "gemini-1.5-pro", 0.7)
-      generatedText = generatedText
-        .replace(/^(Claro|Aquí está|Aquí tienes|Por supuesto|El mensaje es|Mensaje:|Icebreaker:)[\s,:]*/gi, "")
-        .replace(/^["']|["']$/g, "")
-        .trim()
     } catch (fallbackError: any) {
       console.error("Fallback AI Generation failed", fallbackError)
-      generatedText = `[Error de IA] Hola ${firstName}, me gustaría conectar respecto a ${companyName}. (Detalle: ${error.message})`
+      generatedText = `[LINKEDIN]\nHola ${firstName}, vi en tu perfil que trabajan con ${filterContextName || signalTypeLabel}. ¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?\n\n[EMAIL]\nHola ${firstName}, te escribí por LinkedIn hace unos días. Me interesó tu perfil por el uso de ${filterContextName || signalTypeLabel}. ¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?`
     }
   }
 
-  // Guardar resultado con contexto expandido
+  let linkedinMessage = ""
+  let emailMessage = ""
+
+  // Limpiar respuesta de preámbulos comunes
+  generatedText = generatedText
+    .replace(/^(Claro|Aquí está|Aquí tienes|Por supuesto|El mensaje es|Mensaje:|Icebreaker:)[\s,:]*/gi, "")
+    .trim()
+
+  // Parse usando los nuevos delimitadores (más robustos)
+  const linkedinMatch =
+    generatedText.match(/---LINKEDIN---\s*([\s\S]*?)(?=---EMAIL---|$)/i) ||
+    generatedText.match(/\[LINKEDIN\]\s*([\s\S]*?)(?=\[EMAIL\]|---EMAIL---|$)/i)
+  const emailMatch =
+    generatedText.match(/---EMAIL---\s*([\s\S]*?)$/i) || generatedText.match(/\[EMAIL\]\s*([\s\S]*?)$/i)
+
+  if (linkedinMatch && linkedinMatch[1]) {
+    linkedinMessage = linkedinMatch[1]
+      .trim()
+      .replace(/^\[LINKEDIN\]\s*/i, "")
+      .replace(/^---LINKEDIN---\s*/i, "")
+  }
+
+  if (emailMatch && emailMatch[1]) {
+    emailMessage = emailMatch[1]
+      .trim()
+      .replace(/^\[EMAIL\]\s*/i, "")
+      .replace(/^---EMAIL---\s*/i, "")
+  }
+
+  // Fallback si el parsing fails
+  if (!linkedinMessage && !emailMessage) {
+    const parts = generatedText.split(/\n\n+/)
+    if (parts.length >= 2) {
+      linkedinMessage = parts[0]
+        .replace(/^\[LINKEDIN\]\s*/i, "")
+        .replace(/^---LINKEDIN---\s*/i, "")
+        .trim()
+      emailMessage = parts
+        .slice(1)
+        .join("\n\n")
+        .replace(/^\[EMAIL\]\s*/i, "")
+        .replace(/^---EMAIL---\s*/i, "")
+        .trim()
+    } else {
+      linkedinMessage = generatedText
+        .replace(/^\[LINKEDIN\]\s*/i, "")
+        .replace(/^---LINKEDIN---\s*/i, "")
+        .trim()
+      emailMessage = `Hola ${firstName}, te escribí por LinkedIn hace unos días sobre ${filterContextName || signalTypeLabel}. ¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?`
+    }
+  }
+
+  // Asegurar que el email siempre tenga contenido
+  if (!emailMessage || emailMessage.length < 20) {
+    emailMessage = `Hola ${firstName}, te escribí por LinkedIn hace unos días.\n\nNoté en tu perfil el trabajo con ${filterContextName || signalTypeLabel}. En ${userCompanyName}, ${valueProposition || "colaboramos con empresas para mejorar sus operaciones"}.\n\n¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?`
+  }
+
+  console.log("[v0] Final LinkedIn message:", linkedinMessage)
+  console.log("[v0] Final Email message:", emailMessage)
+
+  // Guardar resultados con contexto expandido
   await supabase.from("user_icebreakers").insert({
     user_id: user.id,
     company_id: bookmark.company_id,
     bookmark_id: bookmarkId,
     contact_id: contactId,
-    generated_text: generatedText,
+    generated_text: linkedinMessage,
     template_used: "Simplified Icebreaker",
     context_used: JSON.stringify({
       template_name: "Simplified Icebreaker",
@@ -915,29 +1118,94 @@ MENSAJE 2 - EMAIL DE SEGUIMIENTO:
       contact_first_name: contactData.first_name || "",
       contact_last_name: "",
       contact_role: contactData.role || "",
+      contact_headline: contactData.headline || "",
       contact_linkedin: "",
-      technology: "",
-      process: "",
+      filter_type: filterType,
+      filter_context_name: filterContextName,
+      filter_signal_ids: filterSignalIds,
+      technology: filterType === "technology" ? filterContextName : "",
+      process: filterType === "process" ? filterContextName : "",
       signal: "",
-      signals_list: "",
+      signals_list: signalInfo
+        .map((s) => s.signal_name)
+        .filter(Boolean)
+        .join(", "),
       news: "",
       implementations: "",
-      snippets: "",
+      snippets: signalInfo
+        .filter((s) => s.snippet)
+        .map((s) => s.snippet)
+        .join("\n"),
       strategy: valueProposition,
-      recommended_pitch: "",
+      recommended_pitch: strategyResult.data?.recommended_pitch || "",
       tone: "professional",
       user_company_name: userCompanyName,
       news_count: 0,
       implementations_count: 0,
-      snippets_count: 0,
+      snippets_count: signalInfo.filter((s) => s.snippet).length,
       signals_count: signalInfo.length,
     }),
     tone: "professional",
+    message_type: "linkedin",
+    created_at: new Date().toISOString(),
+  })
+
+  await supabase.from("user_icebreakers").insert({
+    user_id: user.id,
+    company_id: bookmark.company_id,
+    bookmark_id: bookmarkId,
+    contact_id: contactId,
+    generated_text: emailMessage,
+    template_used: "Simplified Icebreaker",
+    context_used: JSON.stringify({
+      template_name: "Simplified Icebreaker",
+      context_options: ["contact", "company", "search_context", "signals", "strategy"],
+      company_name: company?.name || "la empresa",
+      company_description: "",
+      company_website: "",
+      industry: "",
+      contact_name: contactData.full_name || "",
+      contact_first_name: contactData.first_name || "",
+      contact_last_name: "",
+      contact_role: contactData.role || "",
+      contact_headline: contactData.headline || "",
+      contact_linkedin: "",
+      filter_type: filterType,
+      filter_context_name: filterContextName,
+      filter_signal_ids: filterSignalIds,
+      technology: filterType === "technology" ? filterContextName : "",
+      process: filterType === "process" ? filterContextName : "",
+      signal: "",
+      signals_list: signalInfo
+        .map((s) => s.signal_name)
+        .filter(Boolean)
+        .join(", "),
+      news: "",
+      implementations: "",
+      snippets: signalInfo
+        .filter((s) => s.snippet)
+        .map((s) => s.snippet)
+        .join("\n"),
+      strategy: valueProposition,
+      recommended_pitch: strategyResult.data?.recommended_pitch || "",
+      tone: "professional",
+      user_company_name: userCompanyName,
+      news_count: 0,
+      implementations_count: 0,
+      snippets_count: signalInfo.filter((s) => s.snippet).length,
+      signals_count: signalInfo.length,
+    }),
+    tone: "professional",
+    message_type: "email",
     created_at: new Date().toISOString(),
   })
 
   revalidatePath(`/bookmarks/${bookmarkId}`)
-  return { success: true }
+
+  return {
+    linkedin: linkedinMessage,
+    email: emailMessage,
+  }
 }
 
 // --- SMART CONTEXT ---
