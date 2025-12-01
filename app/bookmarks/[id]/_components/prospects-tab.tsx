@@ -23,7 +23,6 @@ import {
 import { inferJobTitles, getBookmarkSearchContext, searchApolloProspects, getProspects } from "@/app/actions/apollo"
 import Link from "next/link"
 import { Input } from "@/components/ui/input"
-import { useRouter } from "next/navigation"
 
 interface Prospect {
   id: string
@@ -47,7 +46,6 @@ interface Prospect {
 }
 
 export function ProspectsTab({ bookmarkId }: { bookmarkId: string }) {
-  const router = useRouter()
   const [prospects, setProspects] = useState<Prospect[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isSearching, setIsSearching] = useState(false)
@@ -136,11 +134,6 @@ export function ProspectsTab({ bookmarkId }: { bookmarkId: string }) {
       console.error("Error searching prospects:", error)
     }
     setIsSearching(false)
-  }
-
-  // Navegar a icebreakers con el prospecto seleccionado
-  const goToIcebreaker = (prospectId: string) => {
-    router.push(`/bookmarks/${bookmarkId}?tab=icebreakers&prospect=${prospectId}`)
   }
 
   if (isLoading) {
@@ -432,20 +425,6 @@ export function ProspectsTab({ bookmarkId }: { bookmarkId: string }) {
                           </TooltipContent>
                         </Tooltip>
                       )}
-
-                      {/* Spacer */}
-                      <div className="flex-1" />
-
-                      {/* Generar Icebreaker */}
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button size="sm" className="h-8 gap-1.5" onClick={() => goToIcebreaker(prospect.id)}>
-                            <Sparkles className="h-3.5 w-3.5" />
-                            Icebreaker
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Generar mensaje personalizado</TooltipContent>
-                      </Tooltip>
                     </div>
                   </CardContent>
                 </Card>
