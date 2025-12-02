@@ -9,9 +9,15 @@ export type ProcessSearchResult = {
   company_website: string | null
   company_linkedin_url: string | null
   company_country: string | null
+  company_industry: string | null
   signal_count: number
-  job_postings_count: number // Added job postings counter
-  sample_signals: any[]
+  current_count: number
+  alumni_count: number
+  job_postings_count: number
+  relevance_score: number
+  current_score: number
+  alumni_score: number
+  job_postings_score: number
 }
 
 export type TechnologySearchResult = {
@@ -21,11 +27,18 @@ export type TechnologySearchResult = {
   company_website: string | null
   company_linkedin_url: string | null
   company_country: string | null
+  company_industry: string | null
   total_count: number
   current_count: number
   alumni_count: number
-  job_postings_count: number // Added job postings counter
+  job_postings_count: number
+  relevance_score: number
+  current_score: number
+  alumni_score: number
+  job_postings_score: number
 }
+
+export type SortOption = "relevance" | "current" | "alumni" | "job_postings"
 
 export type CompanySignalSummary = {
   total_signals: number
@@ -35,40 +48,78 @@ export type CompanySignalSummary = {
   top_technologies: { product_name: string; count: number }[]
 }
 
-export async function searchByProcess(processIds: string[], countries: string[]): Promise<ProcessSearchResult[]> {
+export async function searchByProcess(
+  processIds: string[],
+  countries: string[],
+  excludeProviders = false,
+): Promise<ProcessSearchResult[]> {
   const supabase = await createClient()
 
-  const { data, error } = await supabase.rpc("search_companies_by_process", {
+  const { data, error } = await supabase.rpc("search_companies_by_process_v2", {
     p_process_ids: processIds,
     p_countries: countries.length > 0 ? countries : null,
+    p_exclude_providers: excludeProviders,
   })
 
   if (error) {
     console.error("Error searching by process:", error)
-    throw new Error("Failed to search companies by process")
+    // Fallback a la versión anterior si la nueva RPC no existe
+    const { data: fallbackData, error: fallbackError } = await supabase.rpc("search_companies_by_process", {
+      p_process_ids: processIds,
+      p_countries: countries.length > 0 ? countries : null,
+    })
+    if (fallbackError) {
+      throw new Error("Failed to search companies by process")
+    }
+    // Agregar campos de score con valores por defecto
+    return (fallbackData || []).map((r: any) => ({
+      ...r,
+      company_industry: null,
+      current_count: r.signal_count || 0,
+      alumni_count: 0,
+      relevance_score: 0,
+      current_score: 0,
+      alumni_score: 0,
+      job_postings_score: 0,
+    }))
   }
-
-  console.log("[v0] Process search results sample:", data?.[0])
-  console.log("[v0] Job postings count in first result:", data?.[0]?.job_postings_count)
 
   return data || []
 }
 
-export async function searchByTechnology(productId: string, countries: string[]): Promise<TechnologySearchResult[]> {
+export async function searchByTechnology(
+  productId: string,
+  countries: string[],
+  excludeProviders = false,
+): Promise<TechnologySearchResult[]> {
   const supabase = await createClient()
 
-  const { data, error } = await supabase.rpc("search_companies_by_technology", {
+  const { data, error } = await supabase.rpc("search_companies_by_technology_v2", {
     p_product_id: productId,
     p_countries: countries.length > 0 ? countries : null,
+    p_exclude_providers: excludeProviders,
   })
 
   if (error) {
     console.error("Error searching by technology:", error)
-    throw new Error("Failed to search companies by technology")
+    // Fallback a la versión anterior si la nueva RPC no existe
+    const { data: fallbackData, error: fallbackError } = await supabase.rpc("search_companies_by_technology", {
+      p_product_id: productId,
+      p_countries: countries.length > 0 ? countries : null,
+    })
+    if (fallbackError) {
+      throw new Error("Failed to search companies by technology")
+    }
+    // Agregar campos de score con valores por defecto
+    return (fallbackData || []).map((r: any) => ({
+      ...r,
+      company_industry: null,
+      relevance_score: 0,
+      current_score: 0,
+      alumni_score: 0,
+      job_postings_score: 0,
+    }))
   }
-
-  console.log("[v0] Technology search results sample:", data?.[0])
-  console.log("[v0] Job postings count in first result:", data?.[0]?.job_postings_count)
 
   return data || []
 }
