@@ -42,27 +42,52 @@ export function BookmarkNews({ bookmarkId, companyId, companyName }: BookmarkNew
   const [news, setNews] = useState<CompanyNews[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isSearching, setIsSearching] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const supabase = createClient()
 
   const hasResults = news.length > 0
 
   useEffect(() => {
     loadNews()
-  }, [bookmarkId])
+  }, [bookmarkId, companyId]) // Added companyId to dependencies
 
   const loadNews = async () => {
     setIsLoading(true)
+    setError(null)
     try {
-      const { data, error } = await supabase
+      console.log("[v0] Loading news for bookmark:", bookmarkId, "company:", companyId)
+
+      let { data, error } = await supabase
         .from("company_news")
         .select("*")
         .eq("bookmark_id", bookmarkId)
         .order("published_at", { ascending: false, nullsFirst: false })
 
-      if (error) throw error
+      if (error) {
+        console.log("[v0] Supabase error loading news:", error)
+        throw error
+      }
+
+      if (!data || data.length === 0) {
+        console.log("[v0] No news by bookmark_id, trying company_id:", companyId)
+        const companyResult = await supabase
+          .from("company_news")
+          .select("*")
+          .eq("company_id", companyId)
+          .order("published_at", { ascending: false, nullsFirst: false })
+
+        if (companyResult.error) {
+          console.log("[v0] Supabase error loading news by company:", companyResult.error)
+        } else {
+          data = companyResult.data
+        }
+      }
+
+      console.log("[v0] Loaded news:", data?.length || 0)
       setNews(data || [])
-    } catch (error) {
-      console.error("Error loading news:", error)
+    } catch (error: any) {
+      console.error("[v0] Error loading news:", error)
+      setError(error.message || "Error al cargar noticias")
     } finally {
       setIsLoading(false)
     }
@@ -88,7 +113,12 @@ export function BookmarkNews({ bookmarkId, companyId, companyName }: BookmarkNew
 
       const result = await response.json()
       toast.success(`Se encontraron ${result.count || 0} noticias`)
-      loadNews()
+
+      if (result.news && result.news.length > 0) {
+        setNews(result.news)
+      } else {
+        loadNews()
+      }
     } catch (error: any) {
       console.error("Error searching news:", error)
       toast.error(error.message || "Error al buscar noticias")
@@ -110,6 +140,19 @@ export function BookmarkNews({ bookmarkId, companyId, companyName }: BookmarkNew
 
   if (isLoading) {
     return <div className="p-8 text-center text-muted-foreground">Cargando noticias...</div>
+  }
+
+  if (error) {
+    return (
+      <Card className="border-destructive">
+        <CardContent className="py-8 text-center">
+          <p className="text-destructive mb-4">{error}</p>
+          <Button variant="outline" onClick={loadNews}>
+            Reintentar
+          </Button>
+        </CardContent>
+      </Card>
+    )
   }
 
   return (

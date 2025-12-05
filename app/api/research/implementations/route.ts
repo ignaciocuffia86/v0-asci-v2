@@ -1,46 +1,282 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextResponse } from "next/server"
 
+const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 const PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions"
-const CACHE_DAYS = 7
+const CACHE_DAYS = 14
 
-function replaceVariables(
-  prompt: string,
-  context: {
-    company_name: string
-    website?: string
-    industry?: string
-    linkedin_url?: string
-    keywords?: string[]
-    vendors?: string[]
-    products?: string[]
-    processes?: string[]
-  },
-): string {
-  return prompt
-    .replace(/{company_name}/g, context.company_name || "")
-    .replace(/{website}/g, context.website || "")
-    .replace(/{industry}/g, context.industry || "tecnología")
-    .replace(/{linkedin_url}/g, context.linkedin_url || "")
-    .replace(/{keywords}/g, context.keywords?.join(", ") || "")
-    .replace(/{vendors}/g, context.vendors?.join(", ") || "")
-    .replace(/{products}/g, context.products?.join(", ") || "")
-    .replace(/{processes}/g, context.processes?.join(", ") || "")
+const IMPLEMENTATIONS_SYSTEM_PROMPT = `Eres un buscador de implementaciones tecnológicas. Tu ÚNICA tarea es buscar casos de éxito e implementaciones y devolverlas en formato JSON.
+
+INSTRUCCIONES CRÍTICAS:
+1. Tu respuesta debe ser ÚNICAMENTE un objeto JSON válido
+2. NO escribas explicaciones, análisis ni texto adicional
+3. NO uses markdown, solo JSON puro
+4. Si no encuentras implementaciones, devuelve {"implementations": []}
+
+Busca implementaciones de los últimos 24 meses:
+- ERP/Core: SAP, Oracle, Microsoft Dynamics
+- CRM: Salesforce, HubSpot, Zoho
+- Cloud: AWS, Azure, Google Cloud
+- Analytics: Tableau, Power BI, Looker
+- Ciberseguridad: firewalls, SOC, identity
+- Automatización: RPA, BPM
+- eCommerce: plataformas online
+- HR: Workday, SuccessFactors
+
+Niveles de evidencia:
+- strong: Caso de éxito oficial, comunicado de prensa
+- medium: Artículo con fuentes nombradas
+- weak: Inferencia indirecta
+
+FORMATO DE RESPUESTA (JSON OBLIGATORIO):
+{"implementations":[{"title":"string","provider_name":"string","technology":"string","area":"finanzas|ventas|logistica|rrhh|it|ciberseguridad|ecommerce|operaciones","summary":"string","results":"string o null","evidence_level":"strong|medium|weak","source_url":"string","source_name":"string","published_at":"YYYY-MM-DD o null","relevance_snippet":"string"}]}`
+
+function buildImplementationsUserPrompt(context: {
+  company_name: string
+  industry?: string
+  country?: string
+  website?: string
+  keywords?: string[]
+}): string {
+  const keywordsText = context.keywords?.length
+    ? `\n**Tecnologías/procesos de interés**: ${context.keywords.join(", ")}`
+    : ""
+
+  return `Busca implementaciones tecnológicas y casos de éxito realizados EN la siguiente organización (últimos 24 meses):
+
+**Organización**: ${context.company_name}
+**Industria**: ${context.industry || "No especificada"}
+**País principal**: ${context.country || "No especificado"}
+**Sitio web**: ${context.website || "No disponible"}${keywordsText}
+
+Busca en:
+1. Secciones de "casos de éxito" o "clientes" de consultoras grandes (Accenture, IBM, Deloitte, etc.)
+2. Notas de prensa del vendor o la organización
+3. Artículos en medios de tecnología y negocios
+
+Devuelve máximo 10 implementaciones ordenadas por nivel de evidencia (strong primero).`
 }
 
-async function getImplementationsFromCache(supabase: any, companyId: string) {
+async function getImplementationsFromCache(supabase: any, bookmarkId: string, companyId: string) {
   const cacheDate = new Date()
   cacheDate.setDate(cacheDate.getDate() - CACHE_DAYS)
 
-  const { data: cachedImplementations } = await supabase
+  let { data: cached } = await supabase
     .from("company_implementations")
     .select("*")
-    .eq("company_id", companyId)
+    .eq("bookmark_id", bookmarkId)
     .gte("created_at", cacheDate.toISOString())
     .order("published_at", { ascending: false, nullsFirst: false })
     .limit(10)
 
-  return cachedImplementations
+  if (!cached || cached.length === 0) {
+    const { data: companyCache } = await supabase
+      .from("company_implementations")
+      .select("*")
+      .eq("company_id", companyId)
+      .gte("created_at", cacheDate.toISOString())
+      .order("published_at", { ascending: false, nullsFirst: false })
+      .limit(10)
+
+    cached = companyCache
+  }
+
+  return cached
+}
+
+async function getOldCache(supabase: any, companyId: string) {
+  const { data: oldCache } = await supabase
+    .from("company_implementations")
+    .select("*")
+    .eq("company_id", companyId)
+    .order("published_at", { ascending: false, nullsFirst: false })
+    .limit(10)
+
+  return oldCache
+}
+
+async function searchWithGemini(
+  systemPrompt: string,
+  userPrompt: string,
+): Promise<{ success: boolean; data?: any; error?: string; needsFallback?: boolean }> {
+  try {
+    const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY
+    if (!apiKey) {
+      return { success: false, error: "GOOGLE_GENERATIVE_AI_API_KEY not configured" }
+    }
+
+    console.log("[v0] Implementations: Calling Gemini API...")
+
+    const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }],
+          },
+        ],
+        tools: [
+          {
+            google_search: {},
+          },
+        ],
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: 16384,
+        },
+      }),
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      console.error("[v0] Implementations: Gemini API error:", response.status, errorText)
+      return { success: false, error: `Gemini API error: ${response.status} - ${errorText}` }
+    }
+
+    const data = await response.json()
+
+    const finishReason = data.candidates?.[0]?.finishReason
+    console.log("[v0] Implementations: Gemini response status:", { finishReason })
+
+    if (finishReason === "MAX_TOKENS") {
+      console.error("[v0] Implementations: Gemini ran out of tokens")
+      return { success: false, error: "Gemini MAX_TOKENS reached" }
+    }
+
+    if (finishReason === "RECITATION") {
+      console.error("[v0] Implementations: Gemini RECITATION - trying fallback")
+      return { success: false, error: "RECITATION", needsFallback: true }
+    }
+
+    if (finishReason === "SAFETY") {
+      console.error("[v0] Implementations: Gemini SAFETY - trying fallback")
+      return { success: false, error: "SAFETY", needsFallback: true }
+    }
+
+    const content = data.candidates?.[0]?.content?.parts?.[0]?.text
+
+    if (!content) {
+      console.error("[v0] Implementations: Gemini no content in response", JSON.stringify(data).substring(0, 500))
+      return { success: false, error: "No content from Gemini" }
+    }
+
+    console.log("[v0] Implementations: Gemini content received", {
+      contentLength: content.length,
+      preview: content.substring(0, 200),
+    })
+
+    const jsonMatch =
+      content.match(/```json\n?([\s\S]*?)\n?```/) || content.match(/\{[\s\S]*"implementations"[\s\S]*\}/)
+    const jsonContent = jsonMatch ? jsonMatch[1] || jsonMatch[0] : content
+
+    const parsed = JSON.parse(jsonContent)
+
+    if (Array.isArray(parsed)) {
+      console.log("[v0] Implementations: Gemini returned direct array with", parsed.length, "items")
+      return { success: true, data: { implementations: parsed } }
+    }
+
+    return { success: true, data: parsed }
+  } catch (error) {
+    console.error("[v0] Implementations: Gemini error:", error)
+    return { success: false, error: String(error) }
+  }
+}
+
+async function searchWithPerplexity(
+  companyName: string,
+  industry?: string,
+  country?: string,
+  keywords?: string[],
+): Promise<{ success: boolean; data?: any; error?: string }> {
+  try {
+    const apiKey = process.env.PERPLEXITY_API_KEY
+    if (!apiKey) {
+      return { success: false, error: "PERPLEXITY_API_KEY not configured" }
+    }
+
+    console.log("[v0] Implementations: Calling Perplexity API as fallback...")
+
+    const twentyFourMonthsAgo = new Date()
+    twentyFourMonthsAgo.setMonth(twentyFourMonthsAgo.getMonth() - 24)
+    const dateFilter = `${String(twentyFourMonthsAgo.getMonth() + 1).padStart(2, "0")}/${String(twentyFourMonthsAgo.getDate()).padStart(2, "0")}/${twentyFourMonthsAgo.getFullYear()}`
+
+    const systemPrompt = `Eres un buscador de implementaciones tecnológicas. Responde SOLO con un objeto JSON válido, sin explicaciones ni texto adicional.
+
+FORMATO OBLIGATORIO:
+{"implementations":[{"title":"string","provider_name":"string","technology":"string","area":"finanzas|ventas|logistica|rrhh|it|ciberseguridad|ecommerce|operaciones","summary":"string","results":"string o null","evidence_level":"strong|medium|weak","source_url":"string","source_name":"string","published_at":"YYYY-MM-DD","relevance_snippet":"fragmento textual"}]}
+
+Si no encuentras implementaciones, responde: {"implementations":[]}`
+
+    const keywordsText = keywords?.length ? ` Tecnologías de interés: ${keywords.join(", ")}.` : ""
+    const userPrompt = `Busca implementaciones tecnológicas y casos de éxito realizados EN "${companyName}"${industry ? ` (industria: ${industry})` : ""}${country ? ` en ${country}` : ""}.${keywordsText} Máximo 10 resultados. Responde SOLO JSON.`
+
+    const response = await fetch(PERPLEXITY_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "sonar-pro",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0.1,
+        max_tokens: 4000,
+        search_after_date_filter: dateFilter,
+        web_search_options: {
+          search_context_size: "high",
+        },
+      }),
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      console.error("[v0] Implementations: Perplexity API error:", response.status, errorText)
+      return { success: false, error: `Perplexity API error: ${response.status}` }
+    }
+
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content
+
+    if (!content) {
+      console.error("[v0] Implementations: Perplexity no content in response")
+      return { success: false, error: "No content from Perplexity" }
+    }
+
+    console.log("[v0] Implementations: Perplexity content received", {
+      contentLength: content.length,
+      preview: content.substring(0, 200),
+    })
+
+    let jsonContent = content.trim()
+
+    if (!jsonContent.startsWith("{") && !jsonContent.startsWith("[")) {
+      const jsonMatch = jsonContent.match(/\{[\s\S]*"implementations"[\s\S]*\}/) || jsonContent.match(/\[[\s\S]*\]/)
+      if (jsonMatch) {
+        jsonContent = jsonMatch[0]
+      } else {
+        console.error("[v0] Implementations: Perplexity response is not JSON")
+        return { success: false, error: "Response is not valid JSON" }
+      }
+    }
+
+    const parsed = JSON.parse(jsonContent)
+
+    if (Array.isArray(parsed)) {
+      return { success: true, data: { implementations: parsed } }
+    }
+
+    return { success: true, data: parsed }
+  } catch (error) {
+    console.error("[v0] Implementations: Perplexity error:", error)
+    return { success: false, error: String(error) }
+  }
 }
 
 export async function POST(request: Request) {
@@ -55,6 +291,8 @@ export async function POST(request: Request) {
 
   const body = await request.json()
   const { bookmarkId, companyId, companyName } = body
+
+  console.log("[v0] Implementations: === Starting search ===", { bookmarkId, companyId, companyName })
 
   if (!bookmarkId || !companyName) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 })
@@ -71,339 +309,152 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Bookmark not found" }, { status: 404 })
   }
 
-  const cachedImplementations = await getImplementationsFromCache(supabase, bookmark.company_id)
+  console.log(
+    "[v0] Implementations: Step 1 - Checking cache for bookmark:",
+    bookmarkId,
+    "company:",
+    bookmark.company_id,
+  )
+  const cached = await getImplementationsFromCache(supabase, bookmarkId, bookmark.company_id)
 
-  if (cachedImplementations && cachedImplementations.length > 0) {
+  if (cached && cached.length > 0) {
+    console.log("[v0] Implementations: Cache HIT - Returning", cached.length, "cached items")
     return NextResponse.json({
       success: true,
-      count: cachedImplementations.length,
-      message: `Se encontraron ${cachedImplementations.length} implementaciones`,
-      implementations: cachedImplementations,
+      count: cached.length,
+      message: `Se encontraron ${cached.length} implementaciones (cache)`,
+      implementations: cached,
+      fromCache: true,
     })
   }
 
-  // Si no hay cache, buscar en Perplexity
-  const searchContext = bookmark.search_context as {
-    filterType?: string
-    filtersUsed?: {
-      technology?: string[]
-      process?: string[]
-    }
-  } | null
-
-  const bookmarkTechnologies = searchContext?.filtersUsed?.technology || []
-  const bookmarkProcesses = searchContext?.filtersUsed?.process || []
+  console.log("[v0] Implementations: Cache MISS - No valid cache found, proceeding to AI search")
 
   const { data: company } = await supabase
     .from("companies")
-    .select("industry, website, linkedin_url")
+    .select("industry, website, linkedin_url, country")
     .eq("id", companyId)
     .single()
 
-  const variableContext = {
+  const searchContext = bookmark.search_context as {
+    filtersUsed?: { technology?: string[]; process?: string[] }
+  } | null
+
+  const keywords = [...(searchContext?.filtersUsed?.technology || []), ...(searchContext?.filtersUsed?.process || [])]
+
+  const promptContext = {
     company_name: companyName,
-    website: company?.website || "",
-    industry: company?.industry || "tecnología",
-    linkedin_url: company?.linkedin_url || "",
-    keywords: [...bookmarkTechnologies, ...bookmarkProcesses],
-    vendors: bookmarkTechnologies,
-    products: bookmarkTechnologies,
-    processes: bookmarkProcesses,
+    industry: company?.industry,
+    country: company?.country,
+    website: company?.website,
+    keywords,
   }
 
-  const { data: promptConfig } = await supabase
-    .from("admin_prompts")
-    .select("prompt_text")
-    .eq("prompt_key", "implementations_research")
-    .eq("is_active", true)
-    .single()
+  const userPrompt = buildImplementationsUserPrompt(promptContext)
 
-  const basePrompt =
-    promptConfig?.prompt_text ||
-    "Busca casos de éxito, implementaciones o proyectos tecnológicos realizados EN {company_name}. Busca menciones de proveedores como Accenture, IBM, Deloitte, consultoras o vendors que hayan implementado soluciones."
+  console.log("[v0] Implementations: Step 2 - Calling Gemini with context:", promptContext)
+  let searchResult = await searchWithGemini(IMPLEMENTATIONS_SYSTEM_PROMPT, userPrompt)
+  let aiProvider = "gemini"
 
-  const prompt = replaceVariables(basePrompt, variableContext)
+  const geminiImplCount = searchResult.data?.implementations?.length || 0
+  const needsPerplexityFallback = searchResult.needsFallback || (searchResult.success && geminiImplCount === 0)
 
-  try {
-    const twentyFourMonthsAgo = new Date()
-    twentyFourMonthsAgo.setMonth(twentyFourMonthsAgo.getMonth() - 24)
-    const month = String(twentyFourMonthsAgo.getMonth() + 1).padStart(2, "0")
-    const day = String(twentyFourMonthsAgo.getDate()).padStart(2, "0")
-    const year = twentyFourMonthsAgo.getFullYear()
-    const searchAfterDate = `${month}/${day}/${year}`
-
-    const perplexityResponse = await fetch(PERPLEXITY_API_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.PERPLEXITY_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "sonar-pro",
-        messages: [
-          {
-            role: "system",
-            content: `Eres un investigador de negocios especializado en casos de éxito tecnológicos. 
-
-REGLAS IMPORTANTES:
-1. SIEMPRE responde en formato JSON válido, sin excepciones.
-2. Si no encuentras información, devuelve: {"implementations": [], "message": "No se encontraron implementaciones verificables"}
-3. NUNCA respondas con texto explicativo fuera del JSON.
-4. Solo incluye implementaciones con fuentes verificables.
-
-Formato de respuesta:
-{
-  "implementations": [
-    {
-      "title": "Título del proyecto o caso de éxito",
-      "provider_name": "Nombre del proveedor/consultora que implementó",
-      "technology": "Tecnología principal usada (SAP, Oracle, Salesforce, etc.)",
-      "summary": "Descripción breve del proyecto (2-3 oraciones)",
-      "results": "Resultados obtenidos si se mencionan",
-      "source_url": "URL de la fuente",
-      "source_name": "Nombre del medio/fuente",
-      "published_at": "YYYY-MM-DD o null si no se conoce"
-    }
-  ],
-  "message": "Mensaje opcional sobre la búsqueda"
-}
-
-Máximo 10 casos más relevantes.`,
-          },
-          {
-            role: "user",
-            content: prompt,
-          },
-        ],
-        temperature: 0.1,
-        max_tokens: 4000,
-        search_after_date_filter: searchAfterDate,
-        web_search_options: {
-          search_context_size: "high",
-        },
-      }),
+  if (needsPerplexityFallback) {
+    console.log("[v0] Implementations: Step 3 - Gemini blocked or empty, trying Perplexity fallback...", {
+      reason: searchResult.needsFallback ? searchResult.error : "0 results",
     })
+    searchResult = await searchWithPerplexity(companyName, company?.industry, company?.country, keywords)
+    aiProvider = "perplexity"
+  }
 
-    if (!perplexityResponse.ok) {
-      const error = await perplexityResponse.text()
-      console.error("Perplexity error:", error)
-
-      const { data: oldCache } = await supabase
-        .from("company_implementations")
-        .select("*")
-        .eq("company_id", bookmark.company_id)
-        .order("published_at", { ascending: false, nullsFirst: false })
-        .limit(10)
-
-      if (oldCache && oldCache.length > 0) {
-        return NextResponse.json({
-          success: true,
-          count: oldCache.length,
-          message: `Se encontraron ${oldCache.length} implementaciones`,
-          implementations: oldCache,
-        })
-      }
-
-      return NextResponse.json({ error: "Error en búsqueda AI" }, { status: 500 })
-    }
-
-    const perplexityData = await perplexityResponse.json()
-    const content = perplexityData.choices?.[0]?.message?.content
-
-    if (!content) {
-      const { data: oldCache } = await supabase
-        .from("company_implementations")
-        .select("*")
-        .eq("company_id", bookmark.company_id)
-        .order("published_at", { ascending: false, nullsFirst: false })
-        .limit(10)
-
-      if (oldCache && oldCache.length > 0) {
-        return NextResponse.json({
-          success: true,
-          count: oldCache.length,
-          message: `Se encontraron ${oldCache.length} implementaciones`,
-          implementations: oldCache,
-        })
-      }
-
-      return NextResponse.json({ error: "No se encontraron resultados" }, { status: 404 })
-    }
-
-    // Verificar si la respuesta empieza con JSON válido
-    const trimmedContent = content.trim()
-    const startsWithJson =
-      trimmedContent.startsWith("{") || trimmedContent.startsWith("[") || trimmedContent.startsWith("```")
-
-    const noAccessPhrases = [
-      "no es posible acceder",
-      "no puedo acceder",
-      "no tengo acceso",
-      "currently unable",
-      "cannot access",
-      "limitaciones actuales",
-      "sin acceso operativo",
-      "actualmente no es posible",
-      "actualmente no",
-      "en este momento no",
-      "en este momento, no",
-      "no se puede garantizar",
-      "no es posible verificar",
-      "no dispongo de acceso",
-      "no cuento con acceso",
-      "lo siento",
-      "i'm sorry",
-      "i cannot",
-      "no puedo",
-    ]
-
-    const contentLower = content.toLowerCase()
-    const isAccessError = !startsWithJson || noAccessPhrases.some((phrase) => contentLower.includes(phrase))
-
-    if (isAccessError && !startsWithJson) {
-      const { data: oldCache } = await supabase
-        .from("company_implementations")
-        .select("*")
-        .eq("company_id", bookmark.company_id)
-        .order("published_at", { ascending: false, nullsFirst: false })
-        .limit(10)
-
-      if (oldCache && oldCache.length > 0) {
-        return NextResponse.json({
-          success: true,
-          count: oldCache.length,
-          message: `Se encontraron ${oldCache.length} implementaciones`,
-          implementations: oldCache,
-        })
-      }
-
-      return NextResponse.json({
-        success: true,
-        count: 0,
-        message:
-          "No se pudieron encontrar implementaciones verificables en este momento. Intenta nuevamente más tarde.",
-        implementations: [],
-      })
-    }
-
-    let implementationsData
-    try {
-      const jsonMarkdownMatch = content.match(/```json\n?([\s\S]*?)\n?```/)
-      if (jsonMarkdownMatch) {
-        implementationsData = JSON.parse(jsonMarkdownMatch[1])
-      } else {
-        const jsonObjectMatch = content.match(/\{[\s\S]*"implementations"[\s\S]*\}/)
-        if (jsonObjectMatch) {
-          implementationsData = JSON.parse(jsonObjectMatch[0])
-        } else {
-          implementationsData = JSON.parse(content)
-        }
-      }
-    } catch (parseError) {
-      console.error("Error parsing Perplexity response:", parseError)
-
-      const { data: oldCache } = await supabase
-        .from("company_implementations")
-        .select("*")
-        .eq("company_id", bookmark.company_id)
-        .order("published_at", { ascending: false, nullsFirst: false })
-        .limit(10)
-
-      if (oldCache && oldCache.length > 0) {
-        return NextResponse.json({
-          success: true,
-          count: oldCache.length,
-          message: `Se encontraron ${oldCache.length} implementaciones`,
-          implementations: oldCache,
-        })
-      }
-
-      return NextResponse.json({
-        success: true,
-        count: 0,
-        message: "No se pudieron procesar los resultados. Intenta nuevamente más tarde.",
-        implementations: [],
-      })
-    }
-
-    const implementations = implementationsData.implementations || []
-
-    const itemsToInsert = implementations.map((item: any) => ({
-      bookmark_id: bookmarkId,
-      company_id: bookmark.company_id,
-      user_id: user.id,
-      requested_by: user.id,
-      title: item.title,
-      provider_name: item.provider_name,
-      technology: item.technology,
-      summary: item.summary,
-      results: item.results,
-      source_url: item.source_url,
-      source_name: item.source_name,
-      published_at: item.published_at || null,
-    }))
-
-    if (itemsToInsert.length > 0) {
-      for (const impl of itemsToInsert) {
-        const { data: existing } = await supabase
-          .from("company_implementations")
-          .select("id")
-          .eq("company_id", bookmark.company_id)
-          .eq("title", impl.title)
-          .maybeSingle()
-
-        if (!existing) {
-          await supabase.from("company_implementations").insert(impl)
-        }
-      }
-    }
-
-    const existingContext = bookmark.search_context || {}
-    await supabase
-      .from("bookmarks")
-      .update({
-        search_context: {
-          ...existingContext,
-          last_implementations_search: new Date().toISOString(),
-        },
-      })
-      .eq("id", bookmarkId)
-
-    const { data: insertedImplementations } = await supabase
-      .from("company_implementations")
-      .select("*")
-      .eq("company_id", bookmark.company_id)
-      .order("published_at", { ascending: false, nullsFirst: false })
-      .limit(10)
-
-    return NextResponse.json({
-      success: true,
-      count: insertedImplementations?.length || itemsToInsert.length,
-      message:
-        itemsToInsert.length > 0
-          ? `Se encontraron ${itemsToInsert.length} implementaciones`
-          : implementationsData.message || "No se encontraron implementaciones verificables",
-      implementations: insertedImplementations || [],
-    })
-  } catch (error) {
-    console.error("Research implementations error:", error)
-
-    const { data: oldCache } = await supabase
-      .from("company_implementations")
-      .select("*")
-      .eq("company_id", bookmark.company_id)
-      .order("published_at", { ascending: false, nullsFirst: false })
-      .limit(10)
+  if (!searchResult.success) {
+    console.log("[v0] Implementations: All providers FAILED:", searchResult.error)
+    console.log("[v0] Implementations: Step 4 - Checking old cache as last resort...")
+    const oldCache = await getOldCache(supabase, bookmark.company_id)
 
     if (oldCache && oldCache.length > 0) {
+      console.log("[v0] Implementations: Found old cache with", oldCache.length, "items")
       return NextResponse.json({
         success: true,
         count: oldCache.length,
-        message: `Se encontraron ${oldCache.length} implementaciones`,
+        message: `Se encontraron ${oldCache.length} implementaciones (cache antiguo)`,
         implementations: oldCache,
+        fromCache: true,
       })
     }
 
-    return NextResponse.json({ error: "Error interno" }, { status: 500 })
+    console.log("[v0] Implementations: No cache available, returning empty")
+    return NextResponse.json({
+      success: true,
+      count: 0,
+      message: "No se pudieron encontrar implementaciones en este momento. Intenta nuevamente más tarde.",
+      implementations: [],
+      error: searchResult.error,
+    })
   }
+
+  const items = searchResult.data?.implementations || []
+  console.log("[v0] Implementations: SUCCESS - Got", items.length, "results from", aiProvider)
+
+  const itemsToInsert = items.map((item: any) => ({
+    bookmark_id: bookmarkId,
+    company_id: bookmark.company_id,
+    user_id: user.id,
+    requested_by: user.id,
+    title: item.title,
+    provider_name: item.provider_name,
+    technology: item.technology,
+    area: item.area || null,
+    summary: item.summary,
+    results: item.results || null,
+    evidence_level: item.evidence_level || null,
+    source_url: item.source_url,
+    source_name: item.source_name,
+    published_at: item.published_at || null,
+    relevance_snippet: item.relevance_snippet || null,
+    ai_provider: aiProvider,
+  }))
+
+  if (itemsToInsert.length > 0) {
+    for (const impl of itemsToInsert) {
+      const { data: existing } = await supabase
+        .from("company_implementations")
+        .select("id")
+        .eq("company_id", bookmark.company_id)
+        .eq("title", impl.title)
+        .maybeSingle()
+
+      if (!existing) {
+        await supabase.from("company_implementations").insert(impl)
+      }
+    }
+  }
+
+  const existingContext = bookmark.search_context || {}
+  await supabase
+    .from("bookmarks")
+    .update({
+      search_context: {
+        ...existingContext,
+        last_implementations_search: new Date().toISOString(),
+      },
+    })
+    .eq("id", bookmarkId)
+
+  const { data: inserted } = await supabase
+    .from("company_implementations")
+    .select("*")
+    .eq("bookmark_id", bookmarkId)
+    .order("published_at", { ascending: false, nullsFirst: false })
+    .limit(10)
+
+  return NextResponse.json({
+    success: true,
+    count: inserted?.length || itemsToInsert.length,
+    message:
+      itemsToInsert.length > 0
+        ? `Se encontraron ${itemsToInsert.length} implementaciones`
+        : searchResult.data?.search_summary || "No se encontraron implementaciones verificables",
+    implementations: inserted || [],
+  })
 }

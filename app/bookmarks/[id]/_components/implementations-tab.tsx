@@ -36,16 +36,29 @@ export function ImplementationsTab({ bookmarkId, companyId, companyName }: Imple
 
   useEffect(() => {
     loadImplementations()
-  }, [bookmarkId])
+  }, [bookmarkId, companyId]) // Added companyId to dependencies
 
   async function loadImplementations() {
     setLoading(true)
     try {
-      const { data } = await supabase
+      let { data } = await supabase
         .from("company_implementations")
         .select("*")
         .eq("bookmark_id", bookmarkId)
         .order("published_at", { ascending: false, nullsFirst: false })
+
+      if (!data || data.length === 0) {
+        console.log("[v0] No implementations by bookmark_id, trying company_id:", companyId)
+        const companyResult = await supabase
+          .from("company_implementations")
+          .select("*")
+          .eq("company_id", companyId)
+          .order("published_at", { ascending: false, nullsFirst: false })
+
+        if (!companyResult.error) {
+          data = companyResult.data
+        }
+      }
 
       setImplementations(data || [])
     } catch (error) {
@@ -75,7 +88,12 @@ export function ImplementationsTab({ bookmarkId, companyId, companyName }: Imple
 
       const result = await response.json()
       toast.success(`Se encontraron ${result.count || 0} implementaciones`)
-      loadImplementations()
+
+      if (result.implementations && result.implementations.length > 0) {
+        setImplementations(result.implementations)
+      } else {
+        loadImplementations()
+      }
     } catch (error: any) {
       console.error("Error searching implementations:", error)
       toast.error(error.message || "Error al buscar implementaciones")

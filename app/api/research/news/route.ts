@@ -1,126 +1,274 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextResponse } from "next/server"
 
+const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 const PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions"
-const CACHE_DAYS = 7
+const CACHE_DAYS = 14
 
-function replaceVariables(
-  prompt: string,
-  context: {
-    company_name: string
-    website?: string
-    industry?: string
-    linkedin_url?: string
-    keywords?: string[]
-    vendors?: string[]
-    products?: string[]
-    processes?: string[]
-  },
-): string {
-  return prompt
-    .replace(/{company_name}/g, context.company_name || "")
-    .replace(/{website}/g, context.website || "")
-    .replace(/{industry}/g, context.industry || "tecnología")
-    .replace(/{linkedin_url}/g, context.linkedin_url || "")
-    .replace(/{keywords}/g, context.keywords?.join(", ") || "")
-    .replace(/{vendors}/g, context.vendors?.join(", ") || "")
-    .replace(/{products}/g, context.products?.join(", ") || "")
-    .replace(/{processes}/g, context.processes?.join(", ") || "")
+const NEWS_SYSTEM_PROMPT = `Eres un analista de inteligencia comercial especializado en detectar SEÑALES DE COMPRA y oportunidades de venta B2B.
+
+Tu objetivo es encontrar noticias que indiquen:
+- INVERSIONES: Nuevos proyectos, expansiones, presupuestos aprobados, capex
+- TRANSFORMACIÓN: Digitalización, modernización, cambio de sistemas
+- CRECIMIENTO: Expansión geográfica, nuevos mercados, adquisiciones
+- CAMBIOS EJECUTIVOS: Nuevos CxO, directores, reestructuraciones
+- PROBLEMAS/DESAFÍOS: Ineficiencias, multas, crisis que necesiten soluciones
+- ALIANZAS: Nuevos partners tecnológicos, integradores, proveedores
+
+EXCLUIR (no tienen valor comercial):
+- Aniversarios, celebraciones, eventos sociales
+- Notas de opinión o editoriales genéricas
+- Noticias de RSE o sustentabilidad sin impacto operativo
+- Comunicados de prensa vacíos sin información concreta
+- Rankings o premios sin contexto de negocio
+
+INSTRUCCIONES CRÍTICAS:
+1. Tu respuesta debe ser ÚNICAMENTE un objeto JSON válido
+2. NO escribas explicaciones, análisis ni texto adicional
+3. Si no encuentras noticias relevantes, devuelve {"news": []}
+
+FORMATO DE RESPUESTA (JSON OBLIGATORIO):
+{"news":[{"title":"string","summary":"string con contexto de por qué es relevante para ventas","source_url":"string","source_name":"string","published_at":"YYYY-MM-DD","category":"inversion|transformacion|crecimiento|ejecutivos|desafios|alianzas","relevance_snippet":"fragmento textual de la fuente"}]}`
+
+function buildNewsUserPrompt(context: {
+  company_name: string
+  industry?: string
+  country?: string
+  website?: string
+}): string {
+  return `Busca noticias de los últimos 6 meses sobre "${context.company_name}"${context.industry ? ` (industria: ${context.industry})` : ""}${context.country ? ` en ${context.country}` : ""}.
+
+ENFOQUE: Señales de compra, inversiones, transformación digital, cambios ejecutivos, expansiones, desafíos operativos.
+IGNORAR: Aniversarios, eventos sociales, RSE genérico, premios sin contexto.
+
+Devuelve máximo 10 noticias RELEVANTES PARA VENTAS B2B en JSON. SOLO JSON, sin texto adicional.`
 }
 
-function mapKeywordsToDictionary(
-  keywords: string[],
-  vendorsList: Array<{ id: string; name: string }> | null,
-  productMappings: Array<{ name: string; keywords: string[] | null; vendor_id: string }> | null,
-  processMappings: Array<{ name: string; keywords: string[] | null }> | null,
-) {
-  const vendors = new Set<string>()
-  const products = new Set<string>()
-  const processes = new Set<string>()
-
-  for (const keyword of keywords) {
-    const lowerKeyword = keyword.toLowerCase().trim()
-
-    // 1. Buscar en productos - match exacto o parcial en keywords
-    productMappings?.forEach((p) => {
-      const productKeywords = Array.isArray(p.keywords) ? p.keywords : []
-      const productNameLower = p.name.toLowerCase()
-
-      // Match exacto en nombre o keywords
-      const exactMatch =
-        productNameLower === lowerKeyword || productKeywords.some((k: string) => k.toLowerCase() === lowerKeyword)
-
-      // Match parcial - el keyword está contenido en algún keyword del producto o viceversa
-      const partialMatch =
-        productKeywords.some(
-          (k: string) => k.toLowerCase().includes(lowerKeyword) || lowerKeyword.includes(k.toLowerCase()),
-        ) ||
-        productNameLower.includes(lowerKeyword) ||
-        lowerKeyword.includes(productNameLower)
-
-      if (exactMatch || partialMatch) {
-        products.add(p.name)
-        // Encontrar el vendor asociado
-        const vendor = vendorsList?.find((v) => v.id === p.vendor_id)
-        if (vendor) {
-          vendors.add(vendor.name.trim())
-        }
-      }
-    })
-
-    // 2. Buscar en procesos - match exacto o parcial
-    processMappings?.forEach((p) => {
-      const processKeywords = Array.isArray(p.keywords) ? p.keywords : []
-      const processNameLower = p.name.toLowerCase()
-
-      const exactMatch =
-        processNameLower === lowerKeyword || processKeywords.some((k: string) => k.toLowerCase() === lowerKeyword)
-
-      const partialMatch =
-        processKeywords.some(
-          (k: string) => k.toLowerCase().includes(lowerKeyword) || lowerKeyword.includes(k.toLowerCase()),
-        ) ||
-        processNameLower.includes(lowerKeyword) ||
-        lowerKeyword.includes(processNameLower)
-
-      if (exactMatch || partialMatch) {
-        processes.add(p.name)
-      }
-    })
-
-    // 3. Buscar directamente en vendors por nombre
-    vendorsList?.forEach((v) => {
-      const vendorNameLower = v.name.toLowerCase().trim()
-      if (
-        vendorNameLower === lowerKeyword ||
-        vendorNameLower.includes(lowerKeyword) ||
-        lowerKeyword.includes(vendorNameLower)
-      ) {
-        vendors.add(v.name.trim())
-      }
-    })
-  }
-
-  return {
-    vendors: Array.from(vendors),
-    products: Array.from(products),
-    processes: Array.from(processes),
-  }
-}
-
-async function getNewsFromCache(supabase: any, companyId: string) {
+async function getNewsFromCache(supabase: any, bookmarkId: string, companyId: string) {
   const cacheDate = new Date()
   cacheDate.setDate(cacheDate.getDate() - CACHE_DAYS)
 
-  const { data: cachedNews } = await supabase
+  let { data: cachedNews } = await supabase
     .from("company_news")
     .select("*")
-    .eq("company_id", companyId)
+    .eq("bookmark_id", bookmarkId)
     .gte("created_at", cacheDate.toISOString())
     .order("published_at", { ascending: false, nullsFirst: false })
     .limit(10)
 
+  // Si no hay cache por bookmark, buscar por company_id (otros bookmarks de la misma empresa)
+  if (!cachedNews || cachedNews.length === 0) {
+    const { data: companyCache } = await supabase
+      .from("company_news")
+      .select("*")
+      .eq("company_id", companyId)
+      .gte("created_at", cacheDate.toISOString())
+      .order("published_at", { ascending: false, nullsFirst: false })
+      .limit(10)
+
+    cachedNews = companyCache
+  }
+
   return cachedNews
+}
+
+async function getOldCache(supabase: any, companyId: string) {
+  const { data: oldCache } = await supabase
+    .from("company_news")
+    .select("*")
+    .eq("company_id", companyId)
+    .order("published_at", { ascending: false, nullsFirst: false })
+    .limit(10)
+
+  return oldCache
+}
+
+async function searchWithGemini(
+  systemPrompt: string,
+  userPrompt: string,
+): Promise<{ success: boolean; data?: any; error?: string; needsFallback?: boolean }> {
+  try {
+    const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY
+    if (!apiKey) {
+      return { success: false, error: "GOOGLE_GENERATIVE_AI_API_KEY not configured" }
+    }
+
+    console.log("[v0] News: Calling Gemini API...")
+
+    const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }],
+          },
+        ],
+        tools: [
+          {
+            google_search: {},
+          },
+        ],
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: 16384,
+        },
+      }),
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      console.error("[v0] News: Gemini API error:", response.status, errorText)
+      return { success: false, error: `Gemini API error: ${response.status} - ${errorText}` }
+    }
+
+    const data = await response.json()
+
+    const finishReason = data.candidates?.[0]?.finishReason
+    console.log("[v0] News: Gemini response status:", { finishReason })
+
+    if (finishReason === "MAX_TOKENS") {
+      console.error("[v0] News: Gemini ran out of tokens")
+      return { success: false, error: "Gemini MAX_TOKENS reached" }
+    }
+
+    if (finishReason === "RECITATION") {
+      console.error("[v0] News: Gemini RECITATION - trying fallback")
+      return { success: false, error: "RECITATION", needsFallback: true }
+    }
+
+    if (finishReason === "SAFETY") {
+      console.error("[v0] News: Gemini SAFETY - trying fallback")
+      return { success: false, error: "SAFETY", needsFallback: true }
+    }
+
+    const content = data.candidates?.[0]?.content?.parts?.[0]?.text
+
+    if (!content) {
+      console.error("[v0] News: Gemini no content in response", JSON.stringify(data).substring(0, 500))
+      return { success: false, error: "No content from Gemini" }
+    }
+
+    console.log("[v0] News: Gemini content received", {
+      contentLength: content.length,
+      preview: content.substring(0, 200),
+    })
+
+    // Intentar parsear JSON
+    const jsonMatch = content.match(/```json\n?([\s\S]*?)\n?```/) || content.match(/\{[\s\S]*"news"[\s\S]*\}/)
+    const jsonContent = jsonMatch ? jsonMatch[1] || jsonMatch[0] : content
+
+    const parsed = JSON.parse(jsonContent)
+
+    if (Array.isArray(parsed)) {
+      console.log("[v0] News: Gemini returned direct array with", parsed.length, "items")
+      return { success: true, data: { news: parsed } }
+    }
+
+    return { success: true, data: parsed }
+  } catch (error) {
+    console.error("[v0] News: Gemini error:", error)
+    return { success: false, error: String(error) }
+  }
+}
+
+async function searchWithPerplexity(
+  companyName: string,
+  industry?: string,
+  country?: string,
+): Promise<{ success: boolean; data?: any; error?: string }> {
+  try {
+    const apiKey = process.env.PERPLEXITY_API_KEY
+    if (!apiKey) {
+      return { success: false, error: "PERPLEXITY_API_KEY not configured" }
+    }
+
+    console.log("[v0] News: Calling Perplexity API as fallback...")
+
+    // Calcular fecha de hace 6 meses en formato MM/DD/YYYY
+    const sixMonthsAgo = new Date()
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6)
+    const dateFilter = `${String(sixMonthsAgo.getMonth() + 1).padStart(2, "0")}/${String(sixMonthsAgo.getDate()).padStart(2, "0")}/${sixMonthsAgo.getFullYear()}`
+
+    const systemPrompt = `Eres un analista de inteligencia comercial especializado en detectar SEÑALES DE COMPRA y oportunidades de venta B2B. Responde SOLO con un objeto JSON válido, sin explicaciones ni texto adicional.
+
+FORMATO OBLIGATORIO:
+{"news":[{"title":"string","summary":"string con contexto de por qué es relevante para ventas","source_url":"string","source_name":"string","published_at":"YYYY-MM-DD","category":"inversion|transformacion|crecimiento|ejecutivos|desafios|alianzas","relevance_snippet":"fragmento textual de la fuente"}]}
+
+Categorías válidas: inversion, transformacion, crecimiento, ejecutivos, desafios, alianzas
+
+Si no encuentras noticias relevantes, responde: {"news":[]}`
+
+    const userPrompt = `Busca noticias de los últimos 6 meses sobre "${companyName}"${industry ? ` (industria: ${industry})` : ""}${country ? ` en ${country}` : ""}. Máximo 10 noticias RELEVANTES PARA VENTAS B2B. Responde SOLO JSON.`
+
+    const response = await fetch(PERPLEXITY_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "sonar-pro",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0.1,
+        max_tokens: 4000,
+        search_after_date_filter: dateFilter,
+        web_search_options: {
+          search_context_size: "high",
+        },
+      }),
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      console.error("[v0] News: Perplexity API error:", response.status, errorText)
+      return { success: false, error: `Perplexity API error: ${response.status}` }
+    }
+
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content
+
+    if (!content) {
+      console.error("[v0] News: Perplexity no content in response")
+      return { success: false, error: "No content from Perplexity" }
+    }
+
+    console.log("[v0] News: Perplexity content received", {
+      contentLength: content.length,
+      preview: content.substring(0, 200),
+    })
+
+    // Intentar extraer JSON del contenido
+    let jsonContent = content.trim()
+
+    // Si empieza con texto, buscar el JSON
+    if (!jsonContent.startsWith("{") && !jsonContent.startsWith("[")) {
+      const jsonMatch = jsonContent.match(/\{[\s\S]*"news"[\s\S]*\}/) || jsonContent.match(/\[[\s\S]*\]/)
+      if (jsonMatch) {
+        jsonContent = jsonMatch[0]
+      } else {
+        console.error("[v0] News: Perplexity response is not JSON")
+        return { success: false, error: "Response is not valid JSON" }
+      }
+    }
+
+    const parsed = JSON.parse(jsonContent)
+
+    // Normalizar respuesta
+    if (Array.isArray(parsed)) {
+      return { success: true, data: { news: parsed } }
+    }
+
+    return { success: true, data: parsed }
+  } catch (error) {
+    console.error("[v0] News: Perplexity error:", error)
+    return { success: false, error: String(error) }
+  }
 }
 
 export async function POST(request: Request) {
@@ -135,6 +283,8 @@ export async function POST(request: Request) {
 
   const body = await request.json()
   const { bookmarkId, companyId, companyName } = body
+
+  console.log("[v0] News: === Starting search ===", { bookmarkId, companyId, companyName })
 
   if (!bookmarkId || !companyName) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 })
@@ -151,337 +301,141 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Bookmark not found" }, { status: 404 })
   }
 
-  const cachedNews = await getNewsFromCache(supabase, bookmark.company_id)
+  console.log("[v0] News: Step 1 - Checking cache for bookmark:", bookmarkId, "company:", bookmark.company_id)
+  const cachedNews = await getNewsFromCache(supabase, bookmarkId, bookmark.company_id)
 
   if (cachedNews && cachedNews.length > 0) {
-    // Devolver noticias del cache
+    console.log("[v0] News: Cache HIT - Returning", cachedNews.length, "cached news items")
     return NextResponse.json({
       success: true,
       count: cachedNews.length,
-      message: `Se encontraron ${cachedNews.length} noticias`,
+      message: `Se encontraron ${cachedNews.length} noticias (cache)`,
       news: cachedNews,
+      fromCache: true,
     })
   }
 
-  // Si no hay cache, buscar en Perplexity
-  const searchContext = bookmark.search_context as {
-    filterType?: string
-    filtersUsed?: {
-      technology?: string[]
-      process?: string[]
-    }
-  } | null
+  console.log("[v0] News: Cache MISS - No valid cache found, proceeding to AI search")
 
-  const bookmarkTechnologies = searchContext?.filtersUsed?.technology || []
-  const bookmarkProcesses = searchContext?.filtersUsed?.process || []
-
+  // Obtener datos de la compañía para el contexto
   const { data: company } = await supabase
     .from("companies")
-    .select("industry, website, linkedin_url")
+    .select("industry, website, linkedin_url, country")
     .eq("id", companyId)
     .single()
 
-  const variableContext = {
+  const promptContext = {
     company_name: companyName,
-    website: company?.website || "",
-    industry: company?.industry || "tecnología",
-    linkedin_url: company?.linkedin_url || "",
-    keywords: [...bookmarkTechnologies, ...bookmarkProcesses],
-    vendors: bookmarkTechnologies,
-    products: bookmarkTechnologies,
-    processes: bookmarkProcesses,
+    industry: company?.industry,
+    country: company?.country,
+    website: company?.website,
   }
 
-  const { data: promptConfig } = await supabase
-    .from("admin_prompts")
-    .select("prompt_text")
-    .eq("prompt_key", "news_research")
-    .eq("is_active", true)
-    .single()
+  const userPrompt = buildNewsUserPrompt(promptContext)
 
-  const basePrompt =
-    promptConfig?.prompt_text ||
-    "Busca noticias recientes (últimos 6 meses) sobre {company_name} en {industry}. Enfócate en: expansión, nuevos productos/servicios, partnerships, inversiones tecnológicas, cambios de liderazgo, premios/reconocimientos."
+  console.log("[v0] News: Step 2 - Calling Gemini with context:", promptContext)
+  let searchResult = await searchWithGemini(NEWS_SYSTEM_PROMPT, userPrompt)
+  let aiProvider = "gemini"
 
-  const prompt = replaceVariables(basePrompt, variableContext)
+  const geminiNewsCount = searchResult.data?.news?.length || 0
+  const needsPerplexityFallback = searchResult.needsFallback || (searchResult.success && geminiNewsCount === 0)
 
-  try {
-    const sixMonthsAgo = new Date()
-    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6)
-    const month = String(sixMonthsAgo.getMonth() + 1).padStart(2, "0")
-    const day = String(sixMonthsAgo.getDate()).padStart(2, "0")
-    const year = sixMonthsAgo.getFullYear()
-    const searchAfterDate = `${month}/${day}/${year}`
-
-    const perplexityResponse = await fetch(PERPLEXITY_API_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.PERPLEXITY_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "sonar-pro",
-        messages: [
-          {
-            role: "system",
-            content: `Eres un investigador de negocios.
-
-REGLAS IMPORTANTES:
-1. SIEMPRE responde en formato JSON válido, sin excepciones.
-2. Si no encuentras información, devuelve: {"news": [], "message": "No se encontraron noticias verificables"}
-3. NUNCA respondas con texto explicativo fuera del JSON.
-4. Solo incluye noticias con fuentes verificables.
-
-Formato de respuesta:
-{
-  "news": [
-    {
-      "title": "Título de la noticia",
-      "summary": "Resumen de 2-3 oraciones",
-      "source_url": "URL de la fuente",
-      "source_name": "Nombre del medio",
-      "published_at": "YYYY-MM-DD",
-      "relevance_tags": ["expansion", "new_product", "partnership", "hiring", "funding", "award", "technology", "leadership"]
-    }
-  ],
-  "message": "Mensaje opcional sobre la búsqueda"
-}
-
-Máximo 10 noticias más relevantes.`,
-          },
-          {
-            role: "user",
-            content: prompt,
-          },
-        ],
-        temperature: 0.1,
-        max_tokens: 4000,
-        search_after_date_filter: searchAfterDate,
-        web_search_options: {
-          search_context_size: "high",
-        },
-      }),
+  if (needsPerplexityFallback) {
+    console.log("[v0] News: Step 3 - Gemini blocked or empty, trying Perplexity fallback...", {
+      reason: searchResult.needsFallback ? searchResult.error : "0 results",
     })
+    searchResult = await searchWithPerplexity(companyName, company?.industry, company?.country)
+    aiProvider = "perplexity"
+  }
 
-    if (!perplexityResponse.ok) {
-      const error = await perplexityResponse.text()
-      console.error("Perplexity error:", error)
-
-      const { data: oldCache } = await supabase
-        .from("company_news")
-        .select("*")
-        .eq("company_id", bookmark.company_id)
-        .order("published_at", { ascending: false, nullsFirst: false })
-        .limit(10)
-
-      if (oldCache && oldCache.length > 0) {
-        return NextResponse.json({
-          success: true,
-          count: oldCache.length,
-          message: `Se encontraron ${oldCache.length} noticias`,
-          news: oldCache,
-        })
-      }
-
-      return NextResponse.json({ error: "Error en búsqueda AI" }, { status: 500 })
-    }
-
-    const perplexityData = await perplexityResponse.json()
-    const content = perplexityData.choices?.[0]?.message?.content
-
-    if (!content) {
-      const { data: oldCache } = await supabase
-        .from("company_news")
-        .select("*")
-        .eq("company_id", bookmark.company_id)
-        .order("published_at", { ascending: false, nullsFirst: false })
-        .limit(10)
-
-      if (oldCache && oldCache.length > 0) {
-        return NextResponse.json({
-          success: true,
-          count: oldCache.length,
-          message: `Se encontraron ${oldCache.length} noticias`,
-          news: oldCache,
-        })
-      }
-
-      return NextResponse.json({ error: "No se encontraron resultados" }, { status: 404 })
-    }
-
-    // Verificar si la respuesta empieza con JSON válido
-    const trimmedContent = content.trim()
-    const startsWithJson =
-      trimmedContent.startsWith("{") || trimmedContent.startsWith("[") || trimmedContent.startsWith("```")
-
-    // Frases que indican que Perplexity no pudo acceder a fuentes
-    const noAccessPhrases = [
-      "no es posible acceder",
-      "no puedo acceder",
-      "no tengo acceso",
-      "currently unable",
-      "cannot access",
-      "limitaciones actuales",
-      "sin acceso operativo",
-      "actualmente no es posible",
-      "actualmente no",
-      "en este momento no",
-      "en este momento, no",
-      "no se puede garantizar",
-      "no es posible verificar",
-      "no dispongo de acceso",
-      "no cuento con acceso",
-      "lo siento",
-      "i'm sorry",
-      "i cannot",
-      "no puedo",
-    ]
-
-    const contentLower = content.toLowerCase()
-    const isAccessError = !startsWithJson || noAccessPhrases.some((phrase) => contentLower.includes(phrase))
-
-    if (isAccessError && !startsWithJson) {
-      // Respuesta no es JSON - intentar devolver cache viejo
-      const { data: oldCache } = await supabase
-        .from("company_news")
-        .select("*")
-        .eq("company_id", bookmark.company_id)
-        .order("published_at", { ascending: false, nullsFirst: false })
-        .limit(10)
-
-      if (oldCache && oldCache.length > 0) {
-        return NextResponse.json({
-          success: true,
-          count: oldCache.length,
-          message: `Se encontraron ${oldCache.length} noticias`,
-          news: oldCache,
-        })
-      }
-
-      return NextResponse.json({
-        success: true,
-        count: 0,
-        message: "No se pudieron encontrar noticias verificables en este momento. Intenta nuevamente más tarde.",
-        news: [],
-      })
-    }
-
-    let newsData
-    try {
-      const jsonMarkdownMatch = content.match(/```json\n?([\s\S]*?)\n?```/)
-      if (jsonMarkdownMatch) {
-        newsData = JSON.parse(jsonMarkdownMatch[1])
-      } else {
-        const jsonObjectMatch = content.match(/\{[\s\S]*"news"[\s\S]*\}/)
-        if (jsonObjectMatch) {
-          newsData = JSON.parse(jsonObjectMatch[0])
-        } else {
-          newsData = JSON.parse(content)
-        }
-      }
-    } catch (parseError) {
-      console.error("Error parsing Perplexity response:", parseError)
-
-      const { data: oldCache } = await supabase
-        .from("company_news")
-        .select("*")
-        .eq("company_id", bookmark.company_id)
-        .order("published_at", { ascending: false, nullsFirst: false })
-        .limit(10)
-
-      if (oldCache && oldCache.length > 0) {
-        return NextResponse.json({
-          success: true,
-          count: oldCache.length,
-          message: `Se encontraron ${oldCache.length} noticias`,
-          news: oldCache,
-        })
-      }
-
-      return NextResponse.json({
-        success: true,
-        count: 0,
-        message: "No se pudieron procesar los resultados. Intenta nuevamente más tarde.",
-        news: [],
-      })
-    }
-
-    const newsItems = newsData.news || []
-
-    const newsToInsert = newsItems.map((item: any) => ({
-      bookmark_id: bookmarkId,
-      company_id: bookmark.company_id,
-      user_id: user.id,
-      requested_by: user.id,
-      title: item.title,
-      summary: item.summary,
-      source_url: item.source_url,
-      source_name: item.source_name,
-      published_at: item.published_at || null,
-      relevance_tags: item.relevance_tags || [],
-    }))
-
-    if (newsToInsert.length > 0) {
-      for (const news of newsToInsert) {
-        const { data: existing } = await supabase
-          .from("company_news")
-          .select("id")
-          .eq("company_id", bookmark.company_id)
-          .eq("title", news.title)
-          .maybeSingle()
-
-        if (!existing) {
-          await supabase.from("company_news").insert(news)
-        }
-      }
-    }
-
-    const existingContext = bookmark.search_context || {}
-    await supabase
-      .from("bookmarks")
-      .update({
-        search_context: {
-          ...existingContext,
-          last_news_search: new Date().toISOString(),
-        },
-      })
-      .eq("id", bookmarkId)
-
-    const { data: insertedNews } = await supabase
-      .from("company_news")
-      .select("*")
-      .eq("company_id", bookmark.company_id)
-      .order("published_at", { ascending: false, nullsFirst: false })
-      .limit(10)
-
-    return NextResponse.json({
-      success: true,
-      count: insertedNews?.length || newsToInsert.length,
-      message:
-        newsToInsert.length > 0
-          ? `Se encontraron ${newsToInsert.length} noticias`
-          : newsData.message || "No se encontraron noticias verificables",
-      news: insertedNews || [],
-    })
-  } catch (error) {
-    console.error("Research news error:", error)
-
-    const { data: oldCache } = await supabase
-      .from("company_news")
-      .select("*")
-      .eq("company_id", bookmark.company_id)
-      .order("published_at", { ascending: false, nullsFirst: false })
-      .limit(10)
+  if (!searchResult.success) {
+    console.log("[v0] News: All providers FAILED:", searchResult.error)
+    console.log("[v0] News: Step 4 - Checking old cache as last resort...")
+    const oldCache = await getOldCache(supabase, bookmark.company_id)
 
     if (oldCache && oldCache.length > 0) {
+      console.log("[v0] News: Found old cache with", oldCache.length, "items")
       return NextResponse.json({
         success: true,
         count: oldCache.length,
-        message: `Se encontraron ${oldCache.length} noticias`,
+        message: `Se encontraron ${oldCache.length} noticias (cache antiguo)`,
         news: oldCache,
+        fromCache: true,
       })
     }
 
-    return NextResponse.json({ error: "Error interno" }, { status: 500 })
+    console.log("[v0] News: No cache available, returning empty")
+    return NextResponse.json({
+      success: true,
+      count: 0,
+      message: "No se pudieron encontrar noticias en este momento. Intenta nuevamente más tarde.",
+      news: [],
+      error: searchResult.error,
+    })
   }
+
+  // Procesar resultados exitosos
+  const newsItems = searchResult.data?.news || []
+  console.log("[v0] News: SUCCESS - Got", newsItems.length, "results from", aiProvider)
+
+  const newsToInsert = newsItems.map((item: any) => ({
+    bookmark_id: bookmarkId,
+    company_id: bookmark.company_id,
+    user_id: user.id,
+    requested_by: user.id,
+    title: item.title,
+    summary: item.summary,
+    source_url: item.source_url,
+    source_name: item.source_name,
+    published_at: item.published_at || null,
+    category: item.category || null,
+    relevance_snippet: item.relevance_snippet || null,
+    ai_provider: aiProvider,
+  }))
+
+  // Insertar evitando duplicados
+  if (newsToInsert.length > 0) {
+    for (const news of newsToInsert) {
+      const { data: existing } = await supabase
+        .from("company_news")
+        .select("id")
+        .eq("company_id", bookmark.company_id)
+        .eq("title", news.title)
+        .maybeSingle()
+
+      if (!existing) {
+        await supabase.from("company_news").insert(news)
+      }
+    }
+  }
+
+  // Actualizar contexto del bookmark
+  const existingContext = bookmark.search_context || {}
+  await supabase
+    .from("bookmarks")
+    .update({
+      search_context: {
+        ...existingContext,
+        last_news_search: new Date().toISOString(),
+      },
+    })
+    .eq("id", bookmarkId)
+
+  // Obtener noticias insertadas
+  const { data: insertedNews } = await supabase
+    .from("company_news")
+    .select("*")
+    .eq("bookmark_id", bookmarkId)
+    .order("published_at", { ascending: false, nullsFirst: false })
+    .limit(10)
+
+  return NextResponse.json({
+    success: true,
+    count: insertedNews?.length || newsToInsert.length,
+    message:
+      newsToInsert.length > 0
+        ? `Se encontraron ${newsToInsert.length} noticias`
+        : searchResult.data?.search_summary || "No se encontraron noticias verificables",
+    news: insertedNews || [],
+  })
 }
