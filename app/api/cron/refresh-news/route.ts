@@ -1,6 +1,7 @@
 import { createClient } from "@supabase/supabase-js"
 import { NextResponse } from "next/server"
-import { SYSTEM_USER_ID } from "@/app/actions/digest"
+
+const SYSTEM_USER_ID = "00000000-0000-0000-0000-000000000000"
 
 const PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions"
 
