@@ -5,7 +5,18 @@ import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { ExternalLink, Trash2, Building2, Cpu, TrendingUp, Calendar, Loader2, Sparkles, Search } from "lucide-react"
+import {
+  ExternalLink,
+  Trash2,
+  Building2,
+  Cpu,
+  TrendingUp,
+  Calendar,
+  Loader2,
+  Sparkles,
+  Search,
+  RefreshCw,
+} from "lucide-react"
 import { toast } from "sonner"
 
 interface Implementation {
@@ -44,12 +55,25 @@ export function ImplementationsTab({ bookmarkId, companyId, companyName }: Imple
   const [implementations, setImplementations] = useState<Implementation[]>([])
   const [loading, setLoading] = useState(true)
   const [isSearching, setIsSearching] = useState(false)
+  const [isRegenerating, setIsRegenerating] = useState(false)
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false)
 
   const supabase = createClient()
 
   useEffect(() => {
     loadImplementations()
+    checkUserRole()
   }, [companyId])
+
+  const checkUserRole = async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    if (user) {
+      const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single()
+      setIsSuperAdmin(profile?.role === "superadmin")
+    }
+  }
 
   async function loadImplementations() {
     setLoading(true)
@@ -69,8 +93,12 @@ export function ImplementationsTab({ bookmarkId, companyId, companyName }: Imple
     }
   }
 
-  const handleSearchImplementations = async () => {
-    setIsSearching(true)
+  const handleSearchImplementations = async (forceRefresh = false) => {
+    if (forceRefresh) {
+      setIsRegenerating(true)
+    } else {
+      setIsSearching(true)
+    }
     try {
       const response = await fetch("/api/research/implementations", {
         method: "POST",
@@ -79,6 +107,7 @@ export function ImplementationsTab({ bookmarkId, companyId, companyName }: Imple
           bookmarkId,
           companyId,
           companyName,
+          forceRefresh,
         }),
       })
 
@@ -88,7 +117,7 @@ export function ImplementationsTab({ bookmarkId, companyId, companyName }: Imple
       }
 
       const result = await response.json()
-      toast.success(`Se encontraron ${result.count || 0} implementaciones`)
+      toast.success(`Se encontraron ${result.count || 0} implementaciones${forceRefresh ? " (regenerado)" : ""}`)
 
       if (result.implementations && result.implementations.length > 0) {
         setImplementations(result.implementations)
@@ -100,17 +129,22 @@ export function ImplementationsTab({ bookmarkId, companyId, companyName }: Imple
       toast.error(error.message || "Error al buscar implementaciones")
     } finally {
       setIsSearching(false)
+      setIsRegenerating(false)
     }
   }
 
   async function handleDelete(id: string) {
+    if (!isSuperAdmin) {
+      toast.error("Solo administradores pueden eliminar implementaciones")
+      return
+    }
     try {
       const { error } = await supabase.from("company_implementations").delete().eq("id", id)
 
       if (error) throw error
 
       setImplementations(implementations.filter((impl) => impl.id !== id))
-      toast.success("Implementación eliminada")
+      toast.success("Implementación eliminada del cache")
     } catch (error) {
       toast.error("Error al eliminar")
     }
@@ -136,28 +170,50 @@ export function ImplementationsTab({ bookmarkId, companyId, companyName }: Imple
           </h3>
           <p className="text-sm text-muted-foreground">Proyectos realizados por otros proveedores en esta empresa</p>
         </div>
-        <Button
-          onClick={handleSearchImplementations}
-          disabled={isSearching || hasResults}
-          variant={hasResults ? "outline" : "default"}
-        >
-          {isSearching ? (
-            <>
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              Buscando...
-            </>
-          ) : hasResults ? (
-            <>
-              <Sparkles className="h-4 w-4 mr-2 opacity-50" />
-              Búsqueda completada
-            </>
-          ) : (
-            <>
-              <Sparkles className="h-4 w-4 mr-2" />
-              Buscar con AI
-            </>
+        <div className="flex items-center gap-2">
+          {isSuperAdmin && hasResults && (
+            <Button
+              onClick={() => handleSearchImplementations(true)}
+              disabled={isSearching || isRegenerating}
+              variant="outline"
+              size="sm"
+            >
+              {isRegenerating ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Regenerando...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Regenerar
+                </>
+              )}
+            </Button>
           )}
-        </Button>
+          <Button
+            onClick={() => handleSearchImplementations(false)}
+            disabled={isSearching || isRegenerating || hasResults}
+            variant={hasResults ? "outline" : "default"}
+          >
+            {isSearching ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Buscando...
+              </>
+            ) : hasResults ? (
+              <>
+                <Sparkles className="h-4 w-4 mr-2 opacity-50" />
+                Búsqueda completada
+              </>
+            ) : (
+              <>
+                <Sparkles className="h-4 w-4 mr-2" />
+                Buscar con AI
+              </>
+            )}
+          </Button>
+        </div>
       </div>
 
       {implementations.length === 0 ? (
@@ -260,14 +316,16 @@ export function ImplementationsTab({ bookmarkId, companyId, companyName }: Imple
                     )}
                   </div>
 
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8 text-muted-foreground hover:text-destructive"
-                    onClick={() => handleDelete(item.id)}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                  {isSuperAdmin && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8 text-muted-foreground hover:text-destructive"
+                      onClick={() => handleDelete(item.id)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  )}
                 </div>
               </CardContent>
             </Card>

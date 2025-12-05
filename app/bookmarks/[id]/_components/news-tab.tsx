@@ -5,7 +5,7 @@ import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Newspaper, ExternalLink, Calendar, Trash2, Tag, Search, Loader2, Sparkles } from "lucide-react"
+import { Newspaper, ExternalLink, Calendar, Trash2, Tag, Search, Loader2, Sparkles, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 import { formatDistanceToNow } from "date-fns"
 import { es } from "date-fns/locale"
@@ -41,14 +41,27 @@ export function BookmarkNews({ bookmarkId, companyId, companyName }: BookmarkNew
   const [news, setNews] = useState<CompanyNews[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isSearching, setIsSearching] = useState(false)
+  const [isRegenerating, setIsRegenerating] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false)
   const supabase = createClient()
 
   const hasResults = news.length > 0
 
   useEffect(() => {
     loadNews()
+    checkUserRole()
   }, [companyId])
+
+  const checkUserRole = async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    if (user) {
+      const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single()
+      setIsSuperAdmin(profile?.role === "superadmin")
+    }
+  }
 
   const loadNews = async () => {
     setIsLoading(true)
@@ -72,8 +85,12 @@ export function BookmarkNews({ bookmarkId, companyId, companyName }: BookmarkNew
     }
   }
 
-  const handleSearchNews = async () => {
-    setIsSearching(true)
+  const handleSearchNews = async (forceRefresh = false) => {
+    if (forceRefresh) {
+      setIsRegenerating(true)
+    } else {
+      setIsSearching(true)
+    }
     try {
       const response = await fetch("/api/research/news", {
         method: "POST",
@@ -82,6 +99,7 @@ export function BookmarkNews({ bookmarkId, companyId, companyName }: BookmarkNew
           bookmarkId,
           companyId,
           companyName,
+          forceRefresh,
         }),
       })
 
@@ -91,7 +109,7 @@ export function BookmarkNews({ bookmarkId, companyId, companyName }: BookmarkNew
       }
 
       const result = await response.json()
-      toast.success(`Se encontraron ${result.count || 0} noticias`)
+      toast.success(`Se encontraron ${result.count || 0} noticias${forceRefresh ? " (regenerado)" : ""}`)
 
       if (result.news && result.news.length > 0) {
         setNews(result.news)
@@ -103,14 +121,19 @@ export function BookmarkNews({ bookmarkId, companyId, companyName }: BookmarkNew
       toast.error(error.message || "Error al buscar noticias")
     } finally {
       setIsSearching(false)
+      setIsRegenerating(false)
     }
   }
 
   const handleDelete = async (id: string) => {
+    if (!isSuperAdmin) {
+      toast.error("Solo administradores pueden eliminar noticias")
+      return
+    }
     try {
       const { error } = await supabase.from("company_news").delete().eq("id", id)
       if (error) throw error
-      toast.success("Noticia eliminada")
+      toast.success("Noticia eliminada del cache")
       setNews(news.filter((n) => n.id !== id))
     } catch (error) {
       toast.error("Error al eliminar")
@@ -146,28 +169,50 @@ export function BookmarkNews({ bookmarkId, companyId, companyName }: BookmarkNew
           <p className="text-sm text-muted-foreground">Noticias relevantes para personalizar tu acercamiento</p>
         </div>
 
-        <Button
-          onClick={handleSearchNews}
-          disabled={isSearching || hasResults}
-          variant={hasResults ? "outline" : "default"}
-        >
-          {isSearching ? (
-            <>
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              Buscando...
-            </>
-          ) : hasResults ? (
-            <>
-              <Sparkles className="h-4 w-4 mr-2 opacity-50" />
-              Búsqueda completada
-            </>
-          ) : (
-            <>
-              <Sparkles className="h-4 w-4 mr-2" />
-              Buscar con AI
-            </>
+        <div className="flex items-center gap-2">
+          {isSuperAdmin && hasResults && (
+            <Button
+              onClick={() => handleSearchNews(true)}
+              disabled={isSearching || isRegenerating}
+              variant="outline"
+              size="sm"
+            >
+              {isRegenerating ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Regenerando...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Regenerar
+                </>
+              )}
+            </Button>
           )}
-        </Button>
+          <Button
+            onClick={() => handleSearchNews(false)}
+            disabled={isSearching || isRegenerating || hasResults}
+            variant={hasResults ? "outline" : "default"}
+          >
+            {isSearching ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Buscando...
+              </>
+            ) : hasResults ? (
+              <>
+                <Sparkles className="h-4 w-4 mr-2 opacity-50" />
+                Búsqueda completada
+              </>
+            ) : (
+              <>
+                <Sparkles className="h-4 w-4 mr-2" />
+                Buscar con AI
+              </>
+            )}
+          </Button>
+        </div>
       </div>
 
       {/* News List */}
@@ -179,7 +224,7 @@ export function BookmarkNews({ bookmarkId, companyId, companyName }: BookmarkNew
             <p className="text-sm text-muted-foreground mt-1 mb-4">
               Usa la búsqueda con AI para encontrar noticias recientes sobre {companyName}
             </p>
-            <Button onClick={handleSearchNews} disabled={isSearching}>
+            <Button onClick={() => handleSearchNews(false)} disabled={isSearching}>
               {isSearching ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -249,14 +294,16 @@ export function BookmarkNews({ bookmarkId, companyId, companyName }: BookmarkNew
                       </div>
                     </div>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0"
-                    onClick={() => handleDelete(item.id)}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                  {isSuperAdmin && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0"
+                      onClick={() => handleDelete(item.id)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  )}
                 </div>
               </CardContent>
             </Card>

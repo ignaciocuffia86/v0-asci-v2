@@ -5,9 +5,45 @@ const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/
 const PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions"
 const CACHE_DAYS = 14
 
-const NEWS_SYSTEM_PROMPT = `Eres un analista de inteligencia comercial especializado en detectar SEÑALES DE COMPRA y oportunidades de venta B2B.
+function sanitizeDate(dateStr: string | null | undefined): string | null {
+  if (!dateStr) return null
 
-Tu objetivo es encontrar noticias que indiquen:
+  // Rechazar fechas con placeholders como "XX", "TBD", etc.
+  if (/XX|TBD|unknown/i.test(dateStr)) {
+    return null
+  }
+
+  // Intentar parsear la fecha
+  const date = new Date(dateStr)
+  if (isNaN(date.getTime())) {
+    return null
+  }
+
+  // Verificar que sea una fecha razonable (no en el futuro lejano ni muy antigua)
+  const now = new Date()
+  const twoYearsAgo = new Date()
+  twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2)
+
+  if (date > now || date < twoYearsAgo) {
+    return null
+  }
+
+  return date.toISOString().split("T")[0] // Retornar solo YYYY-MM-DD
+}
+
+function buildNewsPrompt(context: {
+  company_name: string
+  industry?: string
+  country?: string
+}): string {
+  const industryText = context.industry ? `(industria: ${context.industry})` : ""
+  const countryText = context.country ? `en ${context.country}` : ""
+
+  return `Eres un analista de inteligencia comercial especializado en detectar SEÑALES DE COMPRA y oportunidades de venta B2B.
+
+OBJETIVO: Encontrar noticias que indiquen oportunidades comerciales para equipos de ventas.
+
+SEÑALES DE COMPRA A BUSCAR:
 - INVERSIONES: Nuevos proyectos, expansiones, presupuestos aprobados, capex
 - TRANSFORMACIÓN: Digitalización, modernización, cambio de sistemas
 - CRECIMIENTO: Expansión geográfica, nuevos mercados, adquisiciones
@@ -15,33 +51,48 @@ Tu objetivo es encontrar noticias que indiquen:
 - PROBLEMAS/DESAFÍOS: Ineficiencias, multas, crisis que necesiten soluciones
 - ALIANZAS: Nuevos partners tecnológicos, integradores, proveedores
 
-EXCLUIR (no tienen valor comercial):
+EXCLUIR (sin valor comercial):
 - Aniversarios, celebraciones, eventos sociales
 - Notas de opinión o editoriales genéricas
-- Noticias de RSE o sustentabilidad sin impacto operativo
-- Comunicados de prensa vacíos sin información concreta
+- RSE o sustentabilidad sin impacto operativo
+- Comunicados vacíos sin información concreta
 - Rankings o premios sin contexto de negocio
 
-INSTRUCCIONES CRÍTICAS:
-1. Tu respuesta debe ser ÚNICAMENTE un objeto JSON válido
-2. NO escribas explicaciones, análisis ni texto adicional
+INSTRUCCIONES CRÍTICAS DE FORMATO:
+1. Responde ÚNICAMENTE con un objeto JSON válido
+2. NO escribas explicaciones, análisis ni texto adicional antes o después del JSON
 3. Si no encuentras noticias relevantes, devuelve {"news": []}
 
-FORMATO DE RESPUESTA (JSON OBLIGATORIO):
-{"news":[{"title":"string","summary":"string con contexto de por qué es relevante para ventas","source_url":"string","source_name":"string","published_at":"YYYY-MM-DD","category":"inversion|transformacion|crecimiento|ejecutivos|desafios|alianzas","relevance_snippet":"fragmento textual de la fuente"}]}`
+INSTRUCCIONES DE CONTENIDO - MUY IMPORTANTE:
+4. RESUME cada noticia con TUS PROPIAS PALABRAS - NO copies texto literal de las fuentes
+5. El summary debe ser tu ANÁLISIS de por qué la noticia es relevante para ventas B2B
+6. Interpreta y sintetiza la información, no la reproduzcas textualmente
 
-function buildNewsUserPrompt(context: {
-  company_name: string
-  industry?: string
-  country?: string
-  website?: string
-}): string {
-  return `Busca noticias de los últimos 6 meses sobre "${context.company_name}"${context.industry ? ` (industria: ${context.industry})` : ""}${context.country ? ` en ${context.country}` : ""}.
+INSTRUCCIONES DE URLs - CRÍTICO:
+7. COPIA las URLs EXACTAMENTE como aparecen en las fuentes originales
+8. NO modifiques, reconstruyas ni inventes URLs
+9. Si no tienes la URL exacta, usa el dominio principal del medio (ej: "https://www.df.cl")
 
-ENFOQUE: Señales de compra, inversiones, transformación digital, cambios ejecutivos, expansiones, desafíos operativos.
-IGNORAR: Aniversarios, eventos sociales, RSE genérico, premios sin contexto.
+FORMATO JSON OBLIGATORIO:
+{
+  "news": [
+    {
+      "title": "Título descriptivo de la noticia",
+      "summary": "Tu análisis en 2-3 oraciones de qué pasó y por qué es relevante para ventas B2B",
+      "source_url": "URL EXACTA de la fuente - NO MODIFICAR",
+      "source_name": "Nombre del medio",
+      "published_at": "YYYY-MM-DD",
+      "category": "inversion|transformacion|crecimiento|ejecutivos|desafios|alianzas"
+    }
+  ]
+}
 
-Devuelve máximo 10 noticias RELEVANTES PARA VENTAS B2B en JSON. SOLO JSON, sin texto adicional.`
+BÚSQUEDA:
+Empresa: "${context.company_name}" ${industryText} ${countryText}
+Período: últimos 6 meses
+Máximo: 10 noticias relevantes para ventas B2B
+
+Responde SOLO con el JSON, sin texto adicional.`
 }
 
 async function getNewsFromCache(supabase: any, companyId: string) {
@@ -105,10 +156,65 @@ async function getUserViewedNewsIds(supabase: any, userId: string, companyId: st
   return new Set(data?.map((r: any) => r.news_id) || [])
 }
 
+function extractGroundingUrls(groundingMetadata: any): Map<string, string> {
+  const urlMap = new Map<string, string>()
+
+  try {
+    // groundingChunks contiene las fuentes reales usadas por Gemini
+    const chunks = groundingMetadata?.groundingChunks || []
+    for (const chunk of chunks) {
+      if (chunk.web?.uri && chunk.web?.title) {
+        // Mapear título (o parte de él) a URL real
+        const title = chunk.web.title.toLowerCase()
+        urlMap.set(title, chunk.web.uri)
+      }
+    }
+
+    // También revisar groundingSupports que tiene referencias más específicas
+    const supports = groundingMetadata?.groundingSupports || []
+    for (const support of supports) {
+      if (support.groundingChunkIndices) {
+        for (const idx of support.groundingChunkIndices) {
+          const chunk = chunks[idx]
+          if (chunk?.web?.uri) {
+            urlMap.set(`chunk_${idx}`, chunk.web.uri)
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.log("[v0] News: Error extracting grounding URLs:", e)
+  }
+
+  return urlMap
+}
+
+function findBestUrl(providedUrl: string, groundingUrls: Map<string, string>, sourceName: string): string {
+  // Si la URL parece válida (tiene dominio conocido), usarla
+  try {
+    const url = new URL(providedUrl)
+    const domain = url.hostname.replace("www.", "")
+
+    // Buscar en grounding URLs una que coincida con el mismo dominio
+    for (const [_, realUrl] of groundingUrls) {
+      try {
+        const realUrlObj = new URL(realUrl)
+        const realDomain = realUrlObj.hostname.replace("www.", "")
+        if (realDomain === domain) {
+          // Encontramos una URL real del mismo dominio, usarla
+          return realUrl
+        }
+      } catch {}
+    }
+  } catch {}
+
+  // Si no encontramos match, devolver la URL original
+  return providedUrl
+}
+
 async function searchWithGemini(
-  systemPrompt: string,
-  userPrompt: string,
-): Promise<{ success: boolean; data?: any; error?: string; needsFallback?: boolean }> {
+  prompt: string,
+): Promise<{ success: boolean; data?: any; error?: string; needsFallback?: boolean; groundingMetadata?: any }> {
   try {
     const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY
     if (!apiKey) {
@@ -125,7 +231,7 @@ async function searchWithGemini(
       body: JSON.stringify({
         contents: [
           {
-            parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }],
+            parts: [{ text: prompt }],
           },
         ],
         tools: [
@@ -149,7 +255,13 @@ async function searchWithGemini(
     const data = await response.json()
 
     const finishReason = data.candidates?.[0]?.finishReason
-    console.log("[v0] News: Gemini response status:", { finishReason })
+    const groundingMetadata = data.candidates?.[0]?.groundingMetadata
+
+    console.log("[v0] News: Gemini response status:", {
+      finishReason,
+      hasGroundingMetadata: !!groundingMetadata,
+      groundingChunksCount: groundingMetadata?.groundingChunks?.length || 0,
+    })
 
     if (finishReason === "MAX_TOKENS") {
       console.error("[v0] News: Gemini ran out of tokens")
@@ -157,12 +269,12 @@ async function searchWithGemini(
     }
 
     if (finishReason === "RECITATION") {
-      console.error("[v0] News: Gemini RECITATION - trying fallback")
+      console.log("[v0] News: Gemini RECITATION - will try fallback")
       return { success: false, error: "RECITATION", needsFallback: true }
     }
 
     if (finishReason === "SAFETY") {
-      console.error("[v0] News: Gemini SAFETY - trying fallback")
+      console.log("[v0] News: Gemini SAFETY - will try fallback")
       return { success: false, error: "SAFETY", needsFallback: true }
     }
 
@@ -185,10 +297,10 @@ async function searchWithGemini(
 
     if (Array.isArray(parsed)) {
       console.log("[v0] News: Gemini returned direct array with", parsed.length, "items")
-      return { success: true, data: { news: parsed } }
+      return { success: true, data: { news: parsed }, groundingMetadata }
     }
 
-    return { success: true, data: parsed }
+    return { success: true, data: parsed, groundingMetadata }
   } catch (error) {
     console.error("[v0] News: Gemini error:", error)
     return { success: false, error: String(error) }
@@ -212,16 +324,16 @@ async function searchWithPerplexity(
     sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6)
     const dateFilter = `${String(sixMonthsAgo.getMonth() + 1).padStart(2, "0")}/${String(sixMonthsAgo.getDate()).padStart(2, "0")}/${sixMonthsAgo.getFullYear()}`
 
-    const systemPrompt = `Eres un analista de inteligencia comercial especializado en detectar SEÑALES DE COMPRA y oportunidades de venta B2B. Responde SOLO con un objeto JSON válido, sin explicaciones ni texto adicional.
+    const systemPrompt = `Eres un analista de inteligencia comercial. Responde SOLO con un objeto JSON válido.
+
+IMPORTANTE: Resume cada noticia con TUS PROPIAS PALABRAS. NO copies texto literal de las fuentes. Analiza e interpreta la relevancia para ventas B2B.
 
 FORMATO OBLIGATORIO:
-{"news":[{"title":"string","summary":"string con contexto de por qué es relevante para ventas","source_url":"string","source_name":"string","published_at":"YYYY-MM-DD","category":"inversion|transformacion|crecimiento|ejecutivos|desafios|alianzas","relevance_snippet":"fragmento textual de la fuente"}]}
+{"news":[{"title":"string","summary":"Tu análisis de la noticia y por qué es relevante para ventas","source_url":"string","source_name":"string","published_at":"YYYY-MM-DD","category":"inversion|transformacion|crecimiento|ejecutivos|desafios|alianzas"}]}
 
-Categorías válidas: inversion, transformacion, crecimiento, ejecutivos, desafios, alianzas
+Si no encuentras noticias, responde: {"news":[]}`
 
-Si no encuentras noticias relevantes, responde: {"news":[]}`
-
-    const userPrompt = `Busca noticias de los últimos 6 meses sobre "${companyName}"${industry ? ` (industria: ${industry})` : ""}${country ? ` en ${country}` : ""}. Máximo 10 noticias RELEVANTES PARA VENTAS B2B. Responde SOLO JSON.`
+    const userPrompt = `Busca noticias de los últimos 6 meses sobre "${companyName}"${industry ? ` (industria: ${industry})` : ""}${country ? ` en ${country}` : ""}. Máximo 10 noticias RELEVANTES PARA VENTAS B2B. Resume con tus propias palabras. Responde SOLO JSON.`
 
     const response = await fetch(PERPLEXITY_API_URL, {
       method: "POST",
@@ -299,12 +411,21 @@ export async function POST(request: Request) {
   }
 
   const body = await request.json()
-  const { bookmarkId, companyId, companyName } = body
+  const { bookmarkId, companyId, companyName, forceRefresh } = body
 
-  console.log("[v0] News: === Starting search ===", { bookmarkId, companyId, companyName })
+  console.log("[v0] News: === Starting search ===", { bookmarkId, companyId, companyName, forceRefresh })
 
   if (!bookmarkId || !companyName) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 })
+  }
+
+  if (forceRefresh) {
+    const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single()
+
+    if (profile?.role !== "superadmin") {
+      return NextResponse.json({ error: "Only superadmins can force refresh" }, { status: 403 })
+    }
+    console.log("[v0] News: Force refresh requested by superadmin")
   }
 
   const { data: bookmark } = await supabase
@@ -318,25 +439,28 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Bookmark not found" }, { status: 404 })
   }
 
-  console.log("[v0] News: Step 1 - Checking cache for company:", bookmark.company_id)
-  const cachedNews = await getNewsFromCache(supabase, bookmark.company_id)
+  if (!forceRefresh) {
+    console.log("[v0] News: Step 1 - Checking cache for company:", bookmark.company_id)
+    const cachedNews = await getNewsFromCache(supabase, bookmark.company_id)
 
-  if (cachedNews && cachedNews.length > 0) {
-    console.log("[v0] News: Cache HIT - Returning", cachedNews.length, "cached news items")
+    if (cachedNews && cachedNews.length > 0) {
+      console.log("[v0] News: Cache HIT - Returning", cachedNews.length, "cached news items")
 
-    const newsIds = cachedNews.map((n: any) => n.id)
-    await registerUserInteractions(supabase, user.id, bookmark.company_id, newsIds, "search")
+      const newsIds = cachedNews.map((n: any) => n.id)
+      await registerUserInteractions(supabase, user.id, bookmark.company_id, newsIds, "search")
 
-    return NextResponse.json({
-      success: true,
-      count: cachedNews.length,
-      message: `Se encontraron ${cachedNews.length} noticias (cache)`,
-      news: cachedNews,
-      fromCache: true,
-    })
+      return NextResponse.json({
+        success: true,
+        count: cachedNews.length,
+        message: `Se encontraron ${cachedNews.length} noticias (cache)`,
+        news: cachedNews,
+        fromCache: true,
+      })
+    }
+    console.log("[v0] News: Cache MISS - No valid cache found, proceeding to AI search")
+  } else {
+    console.log("[v0] News: Skipping cache due to forceRefresh")
   }
-
-  console.log("[v0] News: Cache MISS - No valid cache found, proceeding to AI search")
 
   const { data: company } = await supabase
     .from("companies")
@@ -348,14 +472,14 @@ export async function POST(request: Request) {
     company_name: companyName,
     industry: company?.industry,
     country: company?.country,
-    website: company?.website,
   }
 
-  const userPrompt = buildNewsUserPrompt(promptContext)
+  const prompt = buildNewsPrompt(promptContext)
 
   console.log("[v0] News: Step 2 - Calling Gemini with context:", promptContext)
-  let searchResult = await searchWithGemini(NEWS_SYSTEM_PROMPT, userPrompt)
+  let searchResult = await searchWithGemini(prompt)
   let aiProvider = "gemini"
+  let groundingMetadata = searchResult.groundingMetadata
 
   const geminiNewsCount = searchResult.data?.news?.length || 0
   const needsPerplexityFallback = searchResult.needsFallback || (searchResult.success && geminiNewsCount === 0)
@@ -366,6 +490,7 @@ export async function POST(request: Request) {
     })
     searchResult = await searchWithPerplexity(companyName, company?.industry, company?.country)
     aiProvider = "perplexity"
+    groundingMetadata = null // Perplexity no tiene groundingMetadata
   }
 
   if (!searchResult.success) {
@@ -401,17 +526,26 @@ export async function POST(request: Request) {
   const newsItems = searchResult.data?.news || []
   console.log("[v0] News: SUCCESS - Got", newsItems.length, "results from", aiProvider)
 
-  const newsToInsert = newsItems.map((item: any) => ({
-    company_id: bookmark.company_id,
-    title: item.title,
-    summary: item.summary,
-    source_url: item.source_url,
-    source_name: item.source_name,
-    published_at: item.published_at || null,
-    category: item.category || null,
-    relevance_snippet: item.relevance_snippet || null,
-    ai_provider: aiProvider,
-  }))
+  const groundingUrls = groundingMetadata ? extractGroundingUrls(groundingMetadata) : new Map()
+  if (groundingUrls.size > 0) {
+    console.log("[v0] News: Extracted", groundingUrls.size, "grounding URLs for validation")
+  }
+
+  const newsToInsert = newsItems.map((item: any) => {
+    const bestUrl =
+      groundingUrls.size > 0 ? findBestUrl(item.source_url, groundingUrls, item.source_name) : item.source_url
+
+    return {
+      company_id: bookmark.company_id,
+      title: item.title,
+      summary: item.summary,
+      source_url: bestUrl,
+      source_name: item.source_name,
+      published_at: sanitizeDate(item.published_at),
+      category: item.category || null,
+      ai_provider: aiProvider,
+    }
+  })
 
   const insertedIds: string[] = []
 

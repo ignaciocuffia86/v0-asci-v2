@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Trash2, Edit2, Building2, Search, ArrowLeft } from "lucide-react"
+import { Trash2, Edit2, Building2, Search } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import {
   Dialog,
@@ -164,10 +164,6 @@ export default function BookmarksPage() {
           <p className="text-muted-foreground">Gestiona tus empresas guardadas y sus diferentes estrategias.</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => router.push("/")}>
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            Volver al Home
-          </Button>
           <Button onClick={() => router.push("/search")}>
             <Search className="mr-2 h-4 w-4" />
             Nueva Búsqueda

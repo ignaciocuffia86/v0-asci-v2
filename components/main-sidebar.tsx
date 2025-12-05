@@ -35,6 +35,19 @@ export function MainSidebar() {
   const [isAdmin, setIsAdmin] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
+  const [isLoggingOut, setIsLoggingOut] = useState(false)
+
+  const handleSignOut = async () => {
+    try {
+      setIsLoggingOut(true)
+      await supabase.auth.signOut()
+      router.push("/auth/login")
+    } catch (error) {
+      console.error("Error signing out:", error)
+    } finally {
+      setIsLoggingOut(false)
+    }
+  }
 
   useEffect(() => {
     const checkAdmin = async () => {
@@ -134,10 +147,11 @@ export function MainSidebar() {
         <Button
           variant="ghost"
           className="w-full justify-start gap-2 text-destructive hover:text-destructive hover:bg-destructive/10"
-          onClick={() => router.push("/auth/login")}
+          onClick={handleSignOut}
+          disabled={isLoggingOut}
         >
-          <LogOut className="h-4 w-4" />
-          Cerrar Sesión
+          {isLoggingOut ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
+          {isLoggingOut ? "Cerrando..." : "Cerrar Sesión"}
         </Button>
       </div>
     </aside>

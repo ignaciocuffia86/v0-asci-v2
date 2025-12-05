@@ -5,13 +5,44 @@ const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/
 const PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions"
 const CACHE_DAYS = 14
 
+function sanitizeDate(dateStr: string | null | undefined): string | null {
+  if (!dateStr) return null
+
+  // Rechazar fechas con placeholders como "XX", "TBD", etc.
+  if (/XX|TBD|unknown/i.test(dateStr)) {
+    return null
+  }
+
+  // Intentar parsear la fecha
+  const date = new Date(dateStr)
+  if (isNaN(date.getTime())) {
+    return null
+  }
+
+  // Verificar que sea una fecha razonable (no en el futuro lejano ni muy antigua)
+  const now = new Date()
+  const threeYearsAgo = new Date()
+  threeYearsAgo.setFullYear(threeYearsAgo.getFullYear() - 3)
+
+  if (date > now || date < threeYearsAgo) {
+    return null
+  }
+
+  return date.toISOString().split("T")[0] // Retornar solo YYYY-MM-DD
+}
+
 const IMPLEMENTATIONS_SYSTEM_PROMPT = `Eres un buscador de implementaciones tecnológicas. Tu ÚNICA tarea es buscar casos de éxito e implementaciones y devolverlas en formato JSON.
 
-INSTRUCCIONES CRÍTICAS:
-1. Tu respuesta debe ser ÚNICAMENTE un objeto JSON válido
+INSTRUCCIONES CRÍTICAS DE FORMATO:
+1. Responde ÚNICAMENTE con un objeto JSON válido
 2. NO escribas explicaciones, análisis ni texto adicional
 3. NO uses markdown, solo JSON puro
 4. Si no encuentras implementaciones, devuelve {"implementations": []}
+
+INSTRUCCIONES DE CONTENIDO - MUY IMPORTANTE:
+5. RESUME cada implementación con TUS PROPIAS PALABRAS - NO copies texto literal de las fuentes
+6. Analiza e interpreta la información, sintetiza los puntos clave
+7. El summary debe ser tu descripción del caso, no una cita textual
 
 Busca implementaciones de los últimos 24 meses:
 - ERP/Core: SAP, Oracle, Microsoft Dynamics
@@ -28,8 +59,23 @@ Niveles de evidencia:
 - medium: Artículo con fuentes nombradas
 - weak: Inferencia indirecta
 
-FORMATO DE RESPUESTA (JSON OBLIGATORIO):
-{"implementations":[{"title":"string","provider_name":"string","technology":"string","area":"finanzas|ventas|logistica|rrhh|it|ciberseguridad|ecommerce|operaciones","summary":"string","results":"string o null","evidence_level":"strong|medium|weak","source_url":"string","source_name":"string","published_at":"YYYY-MM-DD o null","relevance_snippet":"string"}]}`
+FORMATO JSON OBLIGATORIO:
+{
+  "implementations": [
+    {
+      "title": "Título descriptivo del caso",
+      "provider_name": "Nombre del proveedor/implementador",
+      "technology": "Tecnología implementada",
+      "area": "finanzas|ventas|logistica|rrhh|it|ciberseguridad|ecommerce|operaciones",
+      "summary": "Tu descripción del caso en 2-3 oraciones",
+      "results": "Resultados obtenidos si están disponibles, o null",
+      "evidence_level": "strong|medium|weak",
+      "source_url": "URL de la fuente",
+      "source_name": "Nombre del medio/sitio",
+      "published_at": "YYYY-MM-DD o null"
+    }
+  ]
+}`
 
 function buildImplementationsUserPrompt(context: {
   company_name: string
@@ -107,10 +153,59 @@ async function registerUserInteractions(
   }
 }
 
+function extractGroundingUrls(groundingMetadata: any): Map<string, string> {
+  const urlMap = new Map<string, string>()
+
+  try {
+    const chunks = groundingMetadata?.groundingChunks || []
+    for (const chunk of chunks) {
+      if (chunk.web?.uri && chunk.web?.title) {
+        const title = chunk.web.title.toLowerCase()
+        urlMap.set(title, chunk.web.uri)
+      }
+    }
+
+    const supports = groundingMetadata?.groundingSupports || []
+    for (const support of supports) {
+      if (support.groundingChunkIndices) {
+        for (const idx of support.groundingChunkIndices) {
+          const chunk = chunks[idx]
+          if (chunk?.web?.uri) {
+            urlMap.set(`chunk_${idx}`, chunk.web.uri)
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.log("[v0] Implementations: Error extracting grounding URLs:", e)
+  }
+
+  return urlMap
+}
+
+function findBestUrl(providedUrl: string, groundingUrls: Map<string, string>, sourceName: string): string {
+  try {
+    const url = new URL(providedUrl)
+    const domain = url.hostname.replace("www.", "")
+
+    for (const [_, realUrl] of groundingUrls) {
+      try {
+        const realUrlObj = new URL(realUrl)
+        const realDomain = realUrlObj.hostname.replace("www.", "")
+        if (realDomain === domain) {
+          return realUrl
+        }
+      } catch {}
+    }
+  } catch {}
+
+  return providedUrl
+}
+
 async function searchWithGemini(
   systemPrompt: string,
   userPrompt: string,
-): Promise<{ success: boolean; data?: any; error?: string; needsFallback?: boolean }> {
+): Promise<{ success: boolean; data?: any; error?: string; needsFallback?: boolean; groundingMetadata?: any }> {
   try {
     const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY
     if (!apiKey) {
@@ -151,7 +246,13 @@ async function searchWithGemini(
     const data = await response.json()
 
     const finishReason = data.candidates?.[0]?.finishReason
-    console.log("[v0] Implementations: Gemini response status:", { finishReason })
+    const groundingMetadata = data.candidates?.[0]?.groundingMetadata
+
+    console.log("[v0] Implementations: Gemini response status:", {
+      finishReason,
+      hasGroundingMetadata: !!groundingMetadata,
+      groundingChunksCount: groundingMetadata?.groundingChunks?.length || 0,
+    })
 
     if (finishReason === "MAX_TOKENS") {
       console.error("[v0] Implementations: Gemini ran out of tokens")
@@ -159,12 +260,12 @@ async function searchWithGemini(
     }
 
     if (finishReason === "RECITATION") {
-      console.error("[v0] Implementations: Gemini RECITATION - trying fallback")
+      console.log("[v0] Implementations: Gemini RECITATION - will try fallback")
       return { success: false, error: "RECITATION", needsFallback: true }
     }
 
     if (finishReason === "SAFETY") {
-      console.error("[v0] Implementations: Gemini SAFETY - trying fallback")
+      console.log("[v0] Implementations: Gemini SAFETY - will try fallback")
       return { success: false, error: "SAFETY", needsFallback: true }
     }
 
@@ -188,10 +289,10 @@ async function searchWithGemini(
 
     if (Array.isArray(parsed)) {
       console.log("[v0] Implementations: Gemini returned direct array with", parsed.length, "items")
-      return { success: true, data: { implementations: parsed } }
+      return { success: true, data: { implementations: parsed }, groundingMetadata }
     }
 
-    return { success: true, data: parsed }
+    return { success: true, data: parsed, groundingMetadata }
   } catch (error) {
     console.error("[v0] Implementations: Gemini error:", error)
     return { success: false, error: String(error) }
@@ -216,15 +317,17 @@ async function searchWithPerplexity(
     twentyFourMonthsAgo.setMonth(twentyFourMonthsAgo.getMonth() - 24)
     const dateFilter = `${String(twentyFourMonthsAgo.getMonth() + 1).padStart(2, "0")}/${String(twentyFourMonthsAgo.getDate()).padStart(2, "0")}/${twentyFourMonthsAgo.getFullYear()}`
 
-    const systemPrompt = `Eres un buscador de implementaciones tecnológicas. Responde SOLO con un objeto JSON válido, sin explicaciones ni texto adicional.
+    const systemPrompt = `Eres un buscador de implementaciones tecnológicas. Responde SOLO con un objeto JSON válido.
+
+IMPORTANTE: Resume cada implementación con TUS PROPIAS PALABRAS. NO copies texto literal de las fuentes. Describe y analiza el caso.
 
 FORMATO OBLIGATORIO:
-{"implementations":[{"title":"string","provider_name":"string","technology":"string","area":"finanzas|ventas|logistica|rrhh|it|ciberseguridad|ecommerce|operaciones","summary":"string","results":"string o null","evidence_level":"strong|medium|weak","source_url":"string","source_name":"string","published_at":"YYYY-MM-DD","relevance_snippet":"fragmento textual"}]}
+{"implementations":[{"title":"string","provider_name":"string","technology":"string","area":"finanzas|ventas|logistica|rrhh|it|ciberseguridad|ecommerce|operaciones","summary":"Tu descripción del caso","results":"string o null","evidence_level":"strong|medium|weak","source_url":"string","source_name":"string","published_at":"YYYY-MM-DD"}]}
 
 Si no encuentras implementaciones, responde: {"implementations":[]}`
 
     const keywordsText = keywords?.length ? ` Tecnologías de interés: ${keywords.join(", ")}.` : ""
-    const userPrompt = `Busca implementaciones tecnológicas y casos de éxito realizados EN "${companyName}"${industry ? ` (industria: ${industry})` : ""}${country ? ` en ${country}` : ""}.${keywordsText} Máximo 10 resultados. Responde SOLO JSON.`
+    const userPrompt = `Busca implementaciones tecnológicas y casos de éxito realizados EN "${companyName}"${industry ? ` (industria: ${industry})` : ""}${country ? ` en ${country}` : ""}.${keywordsText} Máximo 10 resultados. Resume con tus propias palabras. Responde SOLO JSON.`
 
     const response = await fetch(PERPLEXITY_API_URL, {
       method: "POST",
@@ -302,12 +405,21 @@ export async function POST(request: Request) {
   }
 
   const body = await request.json()
-  const { bookmarkId, companyId, companyName } = body
+  const { bookmarkId, companyId, companyName, forceRefresh } = body
 
-  console.log("[v0] Implementations: === Starting search ===", { bookmarkId, companyId, companyName })
+  console.log("[v0] Implementations: === Starting search ===", { bookmarkId, companyId, companyName, forceRefresh })
 
   if (!bookmarkId || !companyName) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 })
+  }
+
+  if (forceRefresh) {
+    const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single()
+
+    if (profile?.role !== "superadmin") {
+      return NextResponse.json({ error: "Only superadmins can force refresh" }, { status: 403 })
+    }
+    console.log("[v0] Implementations: Force refresh requested by superadmin")
   }
 
   const { data: bookmark } = await supabase
@@ -321,25 +433,28 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Bookmark not found" }, { status: 404 })
   }
 
-  console.log("[v0] Implementations: Step 1 - Checking cache for company:", bookmark.company_id)
-  const cached = await getImplementationsFromCache(supabase, bookmark.company_id)
+  if (!forceRefresh) {
+    console.log("[v0] Implementations: Step 1 - Checking cache for company:", bookmark.company_id)
+    const cached = await getImplementationsFromCache(supabase, bookmark.company_id)
 
-  if (cached && cached.length > 0) {
-    console.log("[v0] Implementations: Cache HIT - Returning", cached.length, "cached items")
+    if (cached && cached.length > 0) {
+      console.log("[v0] Implementations: Cache HIT - Returning", cached.length, "cached items")
 
-    const implIds = cached.map((impl: any) => impl.id)
-    await registerUserInteractions(supabase, user.id, bookmark.company_id, implIds, "search")
+      const implIds = cached.map((impl: any) => impl.id)
+      await registerUserInteractions(supabase, user.id, bookmark.company_id, implIds, "search")
 
-    return NextResponse.json({
-      success: true,
-      count: cached.length,
-      message: `Se encontraron ${cached.length} implementaciones (cache)`,
-      implementations: cached,
-      fromCache: true,
-    })
+      return NextResponse.json({
+        success: true,
+        count: cached.length,
+        message: `Se encontraron ${cached.length} implementaciones (cache)`,
+        implementations: cached,
+        fromCache: true,
+      })
+    }
+    console.log("[v0] Implementations: Cache MISS - No valid cache found, proceeding to AI search")
+  } else {
+    console.log("[v0] Implementations: Skipping cache due to forceRefresh")
   }
-
-  console.log("[v0] Implementations: Cache MISS - No valid cache found, proceeding to AI search")
 
   const { data: company } = await supabase
     .from("companies")
@@ -366,6 +481,7 @@ export async function POST(request: Request) {
   console.log("[v0] Implementations: Step 2 - Calling Gemini with context:", promptContext)
   let searchResult = await searchWithGemini(IMPLEMENTATIONS_SYSTEM_PROMPT, userPrompt)
   let aiProvider = "gemini"
+  let groundingMetadata = searchResult.groundingMetadata
 
   const geminiImplCount = searchResult.data?.implementations?.length || 0
   const needsPerplexityFallback = searchResult.needsFallback || (searchResult.success && geminiImplCount === 0)
@@ -376,6 +492,7 @@ export async function POST(request: Request) {
     })
     searchResult = await searchWithPerplexity(companyName, company?.industry, company?.country, keywords)
     aiProvider = "perplexity"
+    groundingMetadata = null // Perplexity no tiene groundingMetadata
   }
 
   if (!searchResult.success) {
@@ -411,21 +528,30 @@ export async function POST(request: Request) {
   const items = searchResult.data?.implementations || []
   console.log("[v0] Implementations: SUCCESS - Got", items.length, "results from", aiProvider)
 
-  const itemsToInsert = items.map((item: any) => ({
-    company_id: bookmark.company_id,
-    title: item.title,
-    provider_name: item.provider_name,
-    technology: item.technology,
-    area: item.area || null,
-    summary: item.summary,
-    results: item.results || null,
-    evidence_level: item.evidence_level || null,
-    source_url: item.source_url,
-    source_name: item.source_name,
-    published_at: item.published_at || null,
-    relevance_snippet: item.relevance_snippet || null,
-    ai_provider: aiProvider,
-  }))
+  const groundingUrls = groundingMetadata ? extractGroundingUrls(groundingMetadata) : new Map()
+  if (groundingUrls.size > 0) {
+    console.log("[v0] Implementations: Extracted", groundingUrls.size, "grounding URLs for validation")
+  }
+
+  const itemsToInsert = items.map((item: any) => {
+    const bestUrl =
+      groundingUrls.size > 0 ? findBestUrl(item.source_url, groundingUrls, item.source_name) : item.source_url
+
+    return {
+      company_id: bookmark.company_id,
+      title: item.title,
+      provider_name: item.provider_name,
+      technology: item.technology,
+      area: item.area || null,
+      summary: item.summary,
+      results: item.results || null,
+      evidence_level: item.evidence_level || null,
+      source_url: bestUrl,
+      source_name: item.source_name,
+      published_at: sanitizeDate(item.published_at),
+      ai_provider: aiProvider,
+    }
+  })
 
   const insertedIds: string[] = []
 
