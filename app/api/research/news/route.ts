@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server"
 import { NextResponse } from "next/server"
 
 const PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions"
+const CACHE_DAYS = 7
 
 function replaceVariables(
   prompt: string,
@@ -107,6 +108,21 @@ function mapKeywordsToDictionary(
   }
 }
 
+async function getNewsFromCache(supabase: any, companyId: string) {
+  const cacheDate = new Date()
+  cacheDate.setDate(cacheDate.getDate() - CACHE_DAYS)
+
+  const { data: cachedNews } = await supabase
+    .from("company_news")
+    .select("*")
+    .eq("company_id", companyId)
+    .gte("created_at", cacheDate.toISOString())
+    .order("published_at", { ascending: false, nullsFirst: false })
+    .limit(10)
+
+  return cachedNews
+}
+
 export async function POST(request: Request) {
   const supabase = await createClient()
 
@@ -135,6 +151,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Bookmark not found" }, { status: 404 })
   }
 
+  const cachedNews = await getNewsFromCache(supabase, bookmark.company_id)
+
+  if (cachedNews && cachedNews.length > 0) {
+    // Devolver noticias del cache
+    return NextResponse.json({
+      success: true,
+      count: cachedNews.length,
+      message: `Se encontraron ${cachedNews.length} noticias`,
+      news: cachedNews,
+    })
+  }
+
+  // Si no hay cache, buscar en Perplexity
   const searchContext = bookmark.search_context as {
     filterType?: string
     filtersUsed?: {
@@ -143,13 +172,8 @@ export async function POST(request: Request) {
     }
   } | null
 
-  // Usar directamente los filtros del bookmark (por qué fue guardado)
   const bookmarkTechnologies = searchContext?.filtersUsed?.technology || []
   const bookmarkProcesses = searchContext?.filtersUsed?.process || []
-
-  console.log("[v0] Bookmark search_context:", searchContext)
-  console.log("[v0] Technologies from bookmark:", bookmarkTechnologies)
-  console.log("[v0] Processes from bookmark:", bookmarkProcesses)
 
   const { data: company } = await supabase
     .from("companies")
@@ -163,14 +187,11 @@ export async function POST(request: Request) {
     industry: company?.industry || "tecnología",
     linkedin_url: company?.linkedin_url || "",
     keywords: [...bookmarkTechnologies, ...bookmarkProcesses],
-    vendors: bookmarkTechnologies, // Las tecnologías son los vendors/productos
+    vendors: bookmarkTechnologies,
     products: bookmarkTechnologies,
     processes: bookmarkProcesses,
   }
 
-  console.log("[v0] Variable context for prompt:", variableContext)
-
-  // Obtener el prompt configurado
   const { data: promptConfig } = await supabase
     .from("admin_prompts")
     .select("prompt_text")
@@ -184,9 +205,14 @@ export async function POST(request: Request) {
 
   const prompt = replaceVariables(basePrompt, variableContext)
 
-  console.log("[v0] Final prompt to Perplexity:", prompt)
-
   try {
+    const sixMonthsAgo = new Date()
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6)
+    const month = String(sixMonthsAgo.getMonth() + 1).padStart(2, "0")
+    const day = String(sixMonthsAgo.getDate()).padStart(2, "0")
+    const year = sixMonthsAgo.getFullYear()
+    const searchAfterDate = `${month}/${day}/${year}`
+
     const perplexityResponse = await fetch(PERPLEXITY_API_URL, {
       method: "POST",
       headers: {
@@ -198,7 +224,15 @@ export async function POST(request: Request) {
         messages: [
           {
             role: "system",
-            content: `Eres un investigador de negocios. Responde SIEMPRE en formato JSON válido con la siguiente estructura:
+            content: `Eres un investigador de negocios.
+
+REGLAS IMPORTANTES:
+1. SIEMPRE responde en formato JSON válido, sin excepciones.
+2. Si no encuentras información, devuelve: {"news": [], "message": "No se encontraron noticias verificables"}
+3. NUNCA respondas con texto explicativo fuera del JSON.
+4. Solo incluye noticias con fuentes verificables.
+
+Formato de respuesta:
 {
   "news": [
     {
@@ -209,23 +243,46 @@ export async function POST(request: Request) {
       "published_at": "YYYY-MM-DD",
       "relevance_tags": ["expansion", "new_product", "partnership", "hiring", "funding", "award", "technology", "leadership"]
     }
-  ]
+  ],
+  "message": "Mensaje opcional sobre la búsqueda"
 }
-Solo incluye noticias verificables con fuente. Máximo 10 noticias más relevantes.`,
+
+Máximo 10 noticias más relevantes.`,
           },
           {
             role: "user",
             content: prompt,
           },
         ],
-        temperature: 0.2,
+        temperature: 0.1,
         max_tokens: 4000,
+        search_after_date_filter: searchAfterDate,
+        web_search_options: {
+          search_context_size: "high",
+        },
       }),
     })
 
     if (!perplexityResponse.ok) {
       const error = await perplexityResponse.text()
       console.error("Perplexity error:", error)
+
+      const { data: oldCache } = await supabase
+        .from("company_news")
+        .select("*")
+        .eq("company_id", bookmark.company_id)
+        .order("published_at", { ascending: false, nullsFirst: false })
+        .limit(10)
+
+      if (oldCache && oldCache.length > 0) {
+        return NextResponse.json({
+          success: true,
+          count: oldCache.length,
+          message: `Se encontraron ${oldCache.length} noticias`,
+          news: oldCache,
+        })
+      }
+
       return NextResponse.json({ error: "Error en búsqueda AI" }, { status: 500 })
     }
 
@@ -233,27 +290,129 @@ Solo incluye noticias verificables con fuente. Máximo 10 noticias más relevant
     const content = perplexityData.choices?.[0]?.message?.content
 
     if (!content) {
+      const { data: oldCache } = await supabase
+        .from("company_news")
+        .select("*")
+        .eq("company_id", bookmark.company_id)
+        .order("published_at", { ascending: false, nullsFirst: false })
+        .limit(10)
+
+      if (oldCache && oldCache.length > 0) {
+        return NextResponse.json({
+          success: true,
+          count: oldCache.length,
+          message: `Se encontraron ${oldCache.length} noticias`,
+          news: oldCache,
+        })
+      }
+
       return NextResponse.json({ error: "No se encontraron resultados" }, { status: 404 })
     }
 
-    // Parsear el JSON de la respuesta
+    // Verificar si la respuesta empieza con JSON válido
+    const trimmedContent = content.trim()
+    const startsWithJson =
+      trimmedContent.startsWith("{") || trimmedContent.startsWith("[") || trimmedContent.startsWith("```")
+
+    // Frases que indican que Perplexity no pudo acceder a fuentes
+    const noAccessPhrases = [
+      "no es posible acceder",
+      "no puedo acceder",
+      "no tengo acceso",
+      "currently unable",
+      "cannot access",
+      "limitaciones actuales",
+      "sin acceso operativo",
+      "actualmente no es posible",
+      "actualmente no",
+      "en este momento no",
+      "en este momento, no",
+      "no se puede garantizar",
+      "no es posible verificar",
+      "no dispongo de acceso",
+      "no cuento con acceso",
+      "lo siento",
+      "i'm sorry",
+      "i cannot",
+      "no puedo",
+    ]
+
+    const contentLower = content.toLowerCase()
+    const isAccessError = !startsWithJson || noAccessPhrases.some((phrase) => contentLower.includes(phrase))
+
+    if (isAccessError && !startsWithJson) {
+      // Respuesta no es JSON - intentar devolver cache viejo
+      const { data: oldCache } = await supabase
+        .from("company_news")
+        .select("*")
+        .eq("company_id", bookmark.company_id)
+        .order("published_at", { ascending: false, nullsFirst: false })
+        .limit(10)
+
+      if (oldCache && oldCache.length > 0) {
+        return NextResponse.json({
+          success: true,
+          count: oldCache.length,
+          message: `Se encontraron ${oldCache.length} noticias`,
+          news: oldCache,
+        })
+      }
+
+      return NextResponse.json({
+        success: true,
+        count: 0,
+        message: "No se pudieron encontrar noticias verificables en este momento. Intenta nuevamente más tarde.",
+        news: [],
+      })
+    }
+
     let newsData
     try {
-      const jsonMatch = content.match(/```json\n?([\s\S]*?)\n?```/) || content.match(/\{[\s\S]*\}/)
-      const jsonStr = jsonMatch ? jsonMatch[1] || jsonMatch[0] : content
-      newsData = JSON.parse(jsonStr)
+      const jsonMarkdownMatch = content.match(/```json\n?([\s\S]*?)\n?```/)
+      if (jsonMarkdownMatch) {
+        newsData = JSON.parse(jsonMarkdownMatch[1])
+      } else {
+        const jsonObjectMatch = content.match(/\{[\s\S]*"news"[\s\S]*\}/)
+        if (jsonObjectMatch) {
+          newsData = JSON.parse(jsonObjectMatch[0])
+        } else {
+          newsData = JSON.parse(content)
+        }
+      }
     } catch (parseError) {
-      console.error("Error parsing Perplexity response:", parseError, content)
-      return NextResponse.json({ error: "Error al procesar resultados" }, { status: 500 })
+      console.error("Error parsing Perplexity response:", parseError)
+
+      const { data: oldCache } = await supabase
+        .from("company_news")
+        .select("*")
+        .eq("company_id", bookmark.company_id)
+        .order("published_at", { ascending: false, nullsFirst: false })
+        .limit(10)
+
+      if (oldCache && oldCache.length > 0) {
+        return NextResponse.json({
+          success: true,
+          count: oldCache.length,
+          message: `Se encontraron ${oldCache.length} noticias`,
+          news: oldCache,
+        })
+      }
+
+      return NextResponse.json({
+        success: true,
+        count: 0,
+        message: "No se pudieron procesar los resultados. Intenta nuevamente más tarde.",
+        news: [],
+      })
     }
 
     const newsItems = newsData.news || []
 
-    // Insertar las noticias en la base de datos
     const newsToInsert = newsItems.map((item: any) => ({
       bookmark_id: bookmarkId,
       company_id: bookmark.company_id,
       user_id: user.id,
+      requested_by: user.id,
       title: item.title,
       summary: item.summary,
       source_url: item.source_url,
@@ -267,7 +426,7 @@ Solo incluye noticias verificables con fuente. Máximo 10 noticias más relevant
         const { data: existing } = await supabase
           .from("company_news")
           .select("id")
-          .eq("bookmark_id", bookmarkId)
+          .eq("company_id", bookmark.company_id)
           .eq("title", news.title)
           .maybeSingle()
 
@@ -288,13 +447,41 @@ Solo incluye noticias verificables con fuente. Máximo 10 noticias más relevant
       })
       .eq("id", bookmarkId)
 
+    const { data: insertedNews } = await supabase
+      .from("company_news")
+      .select("*")
+      .eq("company_id", bookmark.company_id)
+      .order("published_at", { ascending: false, nullsFirst: false })
+      .limit(10)
+
     return NextResponse.json({
       success: true,
-      count: newsToInsert.length,
-      message: `Se encontraron ${newsToInsert.length} noticias`,
+      count: insertedNews?.length || newsToInsert.length,
+      message:
+        newsToInsert.length > 0
+          ? `Se encontraron ${newsToInsert.length} noticias`
+          : newsData.message || "No se encontraron noticias verificables",
+      news: insertedNews || [],
     })
   } catch (error) {
     console.error("Research news error:", error)
+
+    const { data: oldCache } = await supabase
+      .from("company_news")
+      .select("*")
+      .eq("company_id", bookmark.company_id)
+      .order("published_at", { ascending: false, nullsFirst: false })
+      .limit(10)
+
+    if (oldCache && oldCache.length > 0) {
+      return NextResponse.json({
+        success: true,
+        count: oldCache.length,
+        message: `Se encontraron ${oldCache.length} noticias`,
+        news: oldCache,
+      })
+    }
+
     return NextResponse.json({ error: "Error interno" }, { status: 500 })
   }
 }

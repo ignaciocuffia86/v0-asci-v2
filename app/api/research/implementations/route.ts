@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server"
 import { NextResponse } from "next/server"
 
 const PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions"
+const CACHE_DAYS = 7
 
 function replaceVariables(
   prompt: string,
@@ -25,6 +26,21 @@ function replaceVariables(
     .replace(/{vendors}/g, context.vendors?.join(", ") || "")
     .replace(/{products}/g, context.products?.join(", ") || "")
     .replace(/{processes}/g, context.processes?.join(", ") || "")
+}
+
+async function getImplementationsFromCache(supabase: any, companyId: string) {
+  const cacheDate = new Date()
+  cacheDate.setDate(cacheDate.getDate() - CACHE_DAYS)
+
+  const { data: cachedImplementations } = await supabase
+    .from("company_implementations")
+    .select("*")
+    .eq("company_id", companyId)
+    .gte("created_at", cacheDate.toISOString())
+    .order("published_at", { ascending: false, nullsFirst: false })
+    .limit(10)
+
+  return cachedImplementations
 }
 
 export async function POST(request: Request) {
@@ -55,6 +71,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Bookmark not found" }, { status: 404 })
   }
 
+  const cachedImplementations = await getImplementationsFromCache(supabase, bookmark.company_id)
+
+  if (cachedImplementations && cachedImplementations.length > 0) {
+    return NextResponse.json({
+      success: true,
+      count: cachedImplementations.length,
+      message: `Se encontraron ${cachedImplementations.length} implementaciones`,
+      implementations: cachedImplementations,
+    })
+  }
+
+  // Si no hay cache, buscar en Perplexity
   const searchContext = bookmark.search_context as {
     filterType?: string
     filtersUsed?: {
@@ -63,13 +91,8 @@ export async function POST(request: Request) {
     }
   } | null
 
-  // Usar directamente los filtros del bookmark (por qué fue guardado)
   const bookmarkTechnologies = searchContext?.filtersUsed?.technology || []
   const bookmarkProcesses = searchContext?.filtersUsed?.process || []
-
-  console.log("[v0] Bookmark search_context:", searchContext)
-  console.log("[v0] Technologies from bookmark:", bookmarkTechnologies)
-  console.log("[v0] Processes from bookmark:", bookmarkProcesses)
 
   const { data: company } = await supabase
     .from("companies")
@@ -88,8 +111,6 @@ export async function POST(request: Request) {
     processes: bookmarkProcesses,
   }
 
-  console.log("[v0] Variable context for prompt:", variableContext)
-
   const { data: promptConfig } = await supabase
     .from("admin_prompts")
     .select("prompt_text")
@@ -103,9 +124,14 @@ export async function POST(request: Request) {
 
   const prompt = replaceVariables(basePrompt, variableContext)
 
-  console.log("[v0] Final implementations prompt:", prompt)
-
   try {
+    const twentyFourMonthsAgo = new Date()
+    twentyFourMonthsAgo.setMonth(twentyFourMonthsAgo.getMonth() - 24)
+    const month = String(twentyFourMonthsAgo.getMonth() + 1).padStart(2, "0")
+    const day = String(twentyFourMonthsAgo.getDate()).padStart(2, "0")
+    const year = twentyFourMonthsAgo.getFullYear()
+    const searchAfterDate = `${month}/${day}/${year}`
+
     const perplexityResponse = await fetch(PERPLEXITY_API_URL, {
       method: "POST",
       headers: {
@@ -117,7 +143,15 @@ export async function POST(request: Request) {
         messages: [
           {
             role: "system",
-            content: `Eres un investigador de negocios especializado en casos de éxito tecnológicos. Responde SIEMPRE en formato JSON válido con la siguiente estructura:
+            content: `Eres un investigador de negocios especializado en casos de éxito tecnológicos. 
+
+REGLAS IMPORTANTES:
+1. SIEMPRE responde en formato JSON válido, sin excepciones.
+2. Si no encuentras información, devuelve: {"implementations": [], "message": "No se encontraron implementaciones verificables"}
+3. NUNCA respondas con texto explicativo fuera del JSON.
+4. Solo incluye implementaciones con fuentes verificables.
+
+Formato de respuesta:
 {
   "implementations": [
     {
@@ -130,23 +164,46 @@ export async function POST(request: Request) {
       "source_name": "Nombre del medio/fuente",
       "published_at": "YYYY-MM-DD o null si no se conoce"
     }
-  ]
+  ],
+  "message": "Mensaje opcional sobre la búsqueda"
 }
-Solo incluye implementaciones verificables con fuente. Máximo 10 casos más relevantes.`,
+
+Máximo 10 casos más relevantes.`,
           },
           {
             role: "user",
             content: prompt,
           },
         ],
-        temperature: 0.2,
+        temperature: 0.1,
         max_tokens: 4000,
+        search_after_date_filter: searchAfterDate,
+        web_search_options: {
+          search_context_size: "high",
+        },
       }),
     })
 
     if (!perplexityResponse.ok) {
       const error = await perplexityResponse.text()
       console.error("Perplexity error:", error)
+
+      const { data: oldCache } = await supabase
+        .from("company_implementations")
+        .select("*")
+        .eq("company_id", bookmark.company_id)
+        .order("published_at", { ascending: false, nullsFirst: false })
+        .limit(10)
+
+      if (oldCache && oldCache.length > 0) {
+        return NextResponse.json({
+          success: true,
+          count: oldCache.length,
+          message: `Se encontraron ${oldCache.length} implementaciones`,
+          implementations: oldCache,
+        })
+      }
+
       return NextResponse.json({ error: "Error en búsqueda AI" }, { status: 500 })
     }
 
@@ -154,17 +211,119 @@ Solo incluye implementaciones verificables con fuente. Máximo 10 casos más rel
     const content = perplexityData.choices?.[0]?.message?.content
 
     if (!content) {
+      const { data: oldCache } = await supabase
+        .from("company_implementations")
+        .select("*")
+        .eq("company_id", bookmark.company_id)
+        .order("published_at", { ascending: false, nullsFirst: false })
+        .limit(10)
+
+      if (oldCache && oldCache.length > 0) {
+        return NextResponse.json({
+          success: true,
+          count: oldCache.length,
+          message: `Se encontraron ${oldCache.length} implementaciones`,
+          implementations: oldCache,
+        })
+      }
+
       return NextResponse.json({ error: "No se encontraron resultados" }, { status: 404 })
+    }
+
+    // Verificar si la respuesta empieza con JSON válido
+    const trimmedContent = content.trim()
+    const startsWithJson =
+      trimmedContent.startsWith("{") || trimmedContent.startsWith("[") || trimmedContent.startsWith("```")
+
+    const noAccessPhrases = [
+      "no es posible acceder",
+      "no puedo acceder",
+      "no tengo acceso",
+      "currently unable",
+      "cannot access",
+      "limitaciones actuales",
+      "sin acceso operativo",
+      "actualmente no es posible",
+      "actualmente no",
+      "en este momento no",
+      "en este momento, no",
+      "no se puede garantizar",
+      "no es posible verificar",
+      "no dispongo de acceso",
+      "no cuento con acceso",
+      "lo siento",
+      "i'm sorry",
+      "i cannot",
+      "no puedo",
+    ]
+
+    const contentLower = content.toLowerCase()
+    const isAccessError = !startsWithJson || noAccessPhrases.some((phrase) => contentLower.includes(phrase))
+
+    if (isAccessError && !startsWithJson) {
+      const { data: oldCache } = await supabase
+        .from("company_implementations")
+        .select("*")
+        .eq("company_id", bookmark.company_id)
+        .order("published_at", { ascending: false, nullsFirst: false })
+        .limit(10)
+
+      if (oldCache && oldCache.length > 0) {
+        return NextResponse.json({
+          success: true,
+          count: oldCache.length,
+          message: `Se encontraron ${oldCache.length} implementaciones`,
+          implementations: oldCache,
+        })
+      }
+
+      return NextResponse.json({
+        success: true,
+        count: 0,
+        message:
+          "No se pudieron encontrar implementaciones verificables en este momento. Intenta nuevamente más tarde.",
+        implementations: [],
+      })
     }
 
     let implementationsData
     try {
-      const jsonMatch = content.match(/```json\n?([\s\S]*?)\n?```/) || content.match(/\{[\s\S]*\}/)
-      const jsonStr = jsonMatch ? jsonMatch[1] || jsonMatch[0] : content
-      implementationsData = JSON.parse(jsonStr)
+      const jsonMarkdownMatch = content.match(/```json\n?([\s\S]*?)\n?```/)
+      if (jsonMarkdownMatch) {
+        implementationsData = JSON.parse(jsonMarkdownMatch[1])
+      } else {
+        const jsonObjectMatch = content.match(/\{[\s\S]*"implementations"[\s\S]*\}/)
+        if (jsonObjectMatch) {
+          implementationsData = JSON.parse(jsonObjectMatch[0])
+        } else {
+          implementationsData = JSON.parse(content)
+        }
+      }
     } catch (parseError) {
-      console.error("Error parsing Perplexity response:", parseError, content)
-      return NextResponse.json({ error: "Error al procesar resultados" }, { status: 500 })
+      console.error("Error parsing Perplexity response:", parseError)
+
+      const { data: oldCache } = await supabase
+        .from("company_implementations")
+        .select("*")
+        .eq("company_id", bookmark.company_id)
+        .order("published_at", { ascending: false, nullsFirst: false })
+        .limit(10)
+
+      if (oldCache && oldCache.length > 0) {
+        return NextResponse.json({
+          success: true,
+          count: oldCache.length,
+          message: `Se encontraron ${oldCache.length} implementaciones`,
+          implementations: oldCache,
+        })
+      }
+
+      return NextResponse.json({
+        success: true,
+        count: 0,
+        message: "No se pudieron procesar los resultados. Intenta nuevamente más tarde.",
+        implementations: [],
+      })
     }
 
     const implementations = implementationsData.implementations || []
@@ -173,6 +332,7 @@ Solo incluye implementaciones verificables con fuente. Máximo 10 casos más rel
       bookmark_id: bookmarkId,
       company_id: bookmark.company_id,
       user_id: user.id,
+      requested_by: user.id,
       title: item.title,
       provider_name: item.provider_name,
       technology: item.technology,
@@ -188,7 +348,7 @@ Solo incluye implementaciones verificables con fuente. Máximo 10 casos más rel
         const { data: existing } = await supabase
           .from("company_implementations")
           .select("id")
-          .eq("bookmark_id", bookmarkId)
+          .eq("company_id", bookmark.company_id)
           .eq("title", impl.title)
           .maybeSingle()
 
@@ -209,13 +369,41 @@ Solo incluye implementaciones verificables con fuente. Máximo 10 casos más rel
       })
       .eq("id", bookmarkId)
 
+    const { data: insertedImplementations } = await supabase
+      .from("company_implementations")
+      .select("*")
+      .eq("company_id", bookmark.company_id)
+      .order("published_at", { ascending: false, nullsFirst: false })
+      .limit(10)
+
     return NextResponse.json({
       success: true,
-      count: itemsToInsert.length,
-      message: `Se encontraron ${itemsToInsert.length} implementaciones`,
+      count: insertedImplementations?.length || itemsToInsert.length,
+      message:
+        itemsToInsert.length > 0
+          ? `Se encontraron ${itemsToInsert.length} implementaciones`
+          : implementationsData.message || "No se encontraron implementaciones verificables",
+      implementations: insertedImplementations || [],
     })
   } catch (error) {
     console.error("Research implementations error:", error)
+
+    const { data: oldCache } = await supabase
+      .from("company_implementations")
+      .select("*")
+      .eq("company_id", bookmark.company_id)
+      .order("published_at", { ascending: false, nullsFirst: false })
+      .limit(10)
+
+    if (oldCache && oldCache.length > 0) {
+      return NextResponse.json({
+        success: true,
+        count: oldCache.length,
+        message: `Se encontraron ${oldCache.length} implementaciones`,
+        implementations: oldCache,
+      })
+    }
+
     return NextResponse.json({ error: "Error interno" }, { status: 500 })
   }
 }

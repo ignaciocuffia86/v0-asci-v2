@@ -4,14 +4,13 @@ import { useState, useEffect, useMemo } from "react"
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
-import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Search, X, Building2, MapPin, Loader2, Users, GraduationCap, Flame, ArrowUpDown } from "lucide-react"
+import { Search, Building2, MapPin, Loader2, Users, GraduationCap, Flame, ArrowUpDown } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { searchByTechnology, type TechnologySearchResult, type SortOption } from "@/app/actions/search-v2"
-import { COUNTRIES } from "@/lib/constants"
 import { CompanyDrawer } from "@/components/company-drawer"
 import { ScoreTooltip, ScoringExplanation, ProvidersFilterTooltip } from "@/components/search/score-tooltip"
+import { CountryMultiSelect } from "@/components/search/country-multi-select"
 
 type TechnologyWithVendor = {
   id: string
@@ -65,14 +64,6 @@ export function TechnologySearch() {
     }
   }
 
-  const toggleCountry = (country: string) => {
-    if (selectedCountries.includes(country)) {
-      setSelectedCountries(selectedCountries.filter((c) => c !== country))
-    } else {
-      setSelectedCountries([...selectedCountries, country])
-    }
-  }
-
   const sortedResults = useMemo(() => {
     const sorted = [...results]
     switch (sortBy) {
@@ -122,31 +113,11 @@ export function TechnologySearch() {
           {/* Country Selection */}
           <div className="space-y-2">
             <Label>Países (Obligatorio)</Label>
-            <Select onValueChange={toggleCountry}>
-              <SelectTrigger>
-                <SelectValue placeholder="Agregar país..." />
-              </SelectTrigger>
-              <SelectContent className="bg-white dark:bg-gray-950 border-border">
-                {COUNTRIES.map((country) => (
-                  <SelectItem key={country} value={country}>
-                    {country}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <div className="flex flex-wrap gap-2 mt-2 min-h-[2.5rem]">
-              {selectedCountries.map((country) => (
-                <Badge key={country} variant="outline" className="pl-2 pr-1 py-1">
-                  {country}
-                  <button onClick={() => toggleCountry(country)} className="ml-2 hover:text-destructive">
-                    <X className="h-3 w-3" />
-                  </button>
-                </Badge>
-              ))}
-              {selectedCountries.length === 0 && (
-                <span className="text-sm text-muted-foreground italic py-1">Selecciona al menos un país</span>
-              )}
-            </div>
+            <CountryMultiSelect
+              selectedCountries={selectedCountries}
+              onCountriesChange={setSelectedCountries}
+              placeholder="Agregar país..."
+            />
           </div>
         </div>
 

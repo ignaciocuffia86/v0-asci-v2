@@ -52,13 +52,15 @@ export async function searchWebSignals(bookmarkId: string, query: string) {
     if (query === "news") {
       searchPrompt = `
         Investiga noticias recientes de negocios, finanzas y cambios corporativos sobre la empresa "${companyName}".
-        Prioriza: Fusiones, adquisiciones, nuevas inversiones, cambios directivos, reportes financieros recientes.
+        Prioriza: Fusiones, adquisiciones, nuevas inversiones, cambios directivos o gerenciales, reportes financieros recientes, eventos en los que participa, expone o es sponsor.
+        Fecha de consulta: ${new Date().toISOString().split("T")[0]}
       `
       signalType = "news"
     } else if (query === "success_story") {
       searchPrompt = `
-        Busca casos de éxito, testimonios o notas de prensa donde "${companyName}" hable sobre implementación de tecnología, transformación digital o mejoras de procesos.
-        Intenta identificar qué software o proveedores han contratado recientemente.
+        Busca casos de éxito, testimonios o notas de prensa donde tanto "${companyName}" o como su proveedor hable sobre implementación de tecnología, transformación digital o mejoras de procesos.
+        Intenta identificar qué software o proveedores han contratado recientemente y qué procesos se vieron afectados.
+        Fecha de consulta: ${new Date().toISOString().split("T")[0]}
       `
       signalType = "success_story"
     } else if (query === "job_posting") {
@@ -78,7 +80,7 @@ export async function searchWebSignals(bookmarkId: string, query: string) {
     const prompt = `
       ${searchPrompt}
       
-      Retorna ÚNICAMENTE un JSON válido (sin markdown) con una lista de 3 a 5 resultados más relevantes.
+      Retorna ÚNICAMENTE un JSON válido (sin markdown) con una lista de 5 a 7 resultados más relevantes.
       El formato debe ser exactamente este array de objetos:
       [
         {
@@ -86,7 +88,8 @@ export async function searchWebSignals(bookmarkId: string, query: string) {
           "content": "Resumen de 2 lineas sobre qué pasó y por qué es relevante",
           "source_url": "URL de la fuente (si la tienes, sino deja vacío)",
           "source_name": "Nombre del medio o fuente",
-          "signal_type": "${signalType}" 
+          "signal_type": "${signalType}",
+          "published_at": "YYYY-MM-DD (fecha de publicación de la noticia, si no la sabes pon null)"
         }
       ]
     `
@@ -111,10 +114,29 @@ export async function searchWebSignals(bookmarkId: string, query: string) {
     }
 
     for (const result of results) {
+      const baseData = {
+        company_id: bookmark.company_id,
+        title: result.title || "Señal detectada",
+        content: result.content || "",
+        source_url: result.source_url || "",
+        source_name: result.source_name || "Web Search",
+        published_at: result.published_at || null,
+        requested_at: new Date().toISOString(),
+        requested_by: user.id,
+      }
+
+      // Guardar en tabla específica según tipo
+      if (signalType === "news") {
+        await supabase.from("company_news").insert(baseData)
+      } else if (signalType === "success_story") {
+        await supabase.from("company_implementations").insert(baseData)
+      }
+
+      // También guardar en user_company_signals para mantener compatibilidad
       await supabase.from("user_company_signals").insert({
         user_id: user.id,
-        company_id: bookmark.company_id, // Still need company_id for reference
-        bookmark_id: bookmarkId, // IMPORTANT: Link to bookmark
+        company_id: bookmark.company_id,
+        bookmark_id: bookmarkId,
         title: result.title || "Señal detectada",
         content: result.content || "",
         source_url: result.source_url || "",
@@ -1137,13 +1159,17 @@ RECUERDA: Cada mensaje debe ser ÚNICO y personalizado. Si el headline dice "Dev
         .replace(/^\[LINKEDIN\]\s*/i, "")
         .replace(/^---LINKEDIN---\s*/i, "")
         .trim()
-      emailMessage = `Hola ${firstName}, te escribí por LinkedIn hace unos días sobre ${filterContextName || signalTypeLabel}. ¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?`
+      emailMessage = `Hola ${firstName}, te escribí por LinkedIn hace unos días. ¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?`
     }
   }
 
   // Asegurar que el email siempre tenga contenido
   if (!emailMessage || emailMessage.length < 20) {
-    emailMessage = `Hola ${firstName}, te escribí por LinkedIn hace unos días.\n\nNoté en tu perfil el trabajo con ${filterContextName || signalTypeLabel}. En ${userCompanyName}, ${valueProposition || "colaboramos con empresas para mejorar sus operaciones"}.\n\n¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?`
+    emailMessage = `Hola ${firstName}, te escribí por LinkedIn hace unos días.
+        
+        Noté en tu perfil el trabajo con ${filterContextName || signalTypeLabel}. En ${userCompanyName}, ${valueProposition || "colaboramos con empresas para mejorar sus operaciones"}.
+        
+        ¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?`
   }
 
   console.log("[v0] Final LinkedIn message:", linkedinMessage)
@@ -1255,6 +1281,139 @@ RECUERDA: Cada mensaje debe ser ÚNICO y personalizado. Si el headline dice "Dev
   return {
     linkedin: linkedinMessage,
     email: emailMessage,
+  }
+}
+
+export async function searchWeb(bookmarkId: string, query: string) {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: "No autorizado" }
+
+  const { data: bookmark } = await supabase.from("user_bookmarks").select("company_id").eq("id", bookmarkId).single()
+  if (!bookmark) return { success: false, error: "Bookmark no encontrado" }
+
+  const { data: company } = await supabase.from("companies").select("name").eq("id", bookmark.company_id).single()
+  const companyName = company?.name || "la empresa"
+
+  const currentDate = new Date().toISOString().split("T")[0]
+
+  try {
+    let searchPrompt = ""
+    let signalType = "generic"
+
+    if (query === "news") {
+      searchPrompt = `
+        Investiga noticias recientes de negocios, finanzas y cambios corporativos sobre la empresa "${companyName}".
+        Prioriza: Fusiones, adquisiciones, nuevas inversiones, cambios directivos o gerenciales, reportes financieros recientes, eventos en los que participa, expone o es sponsor.
+        Fecha de hoy: ${currentDate}
+      `
+      signalType = "news"
+    } else if (query === "success_story") {
+      searchPrompt = `
+        Busca casos de éxito, testimonios o notas de prensa donde tanto "${companyName}" como su proveedor hable sobre implementación de tecnología, transformación digital o mejoras de procesos.
+        Intenta identificar qué software o proveedores han contratado recientemente y qué procesos se vieron afectados.
+        Fecha de hoy: ${currentDate}
+      `
+      signalType = "success_story"
+    } else if (query === "job_posting") {
+      searchPrompt = `
+        Busca ofertas de empleo actuales (Job Postings) de "${companyName}" en portales como LinkedIn, Indeed o su sitio de carreras.
+        Enfócate en roles de tecnología, operaciones o liderazgo.
+        Extrae qué tecnologías mencionan como requisitos (ej: SAP, AWS, Salesforce, Python).
+      `
+      signalType = "job_posting"
+    } else {
+      searchPrompt = `
+        Investiga en la web sobre: "${query}" relacionado con la empresa "${companyName}".
+      `
+      signalType = "generic"
+    }
+
+    const prompt = `
+      ${searchPrompt}
+      
+      Retorna ÚNICAMENTE un JSON válido (sin markdown) con una lista de 5 a 7 resultados más relevantes.
+      El formato debe ser exactamente este array de objetos:
+      [
+        {
+          "title": "Título breve de la señal",
+          "content": "Resumen de 2 lineas sobre qué pasó y por qué es relevante",
+          "source_url": "URL de la fuente (si la tienes, sino deja vacío)",
+          "source_name": "Nombre del medio o fuente",
+          "signal_type": "${signalType}",
+          "published_at": "YYYY-MM-DD (fecha aproximada de publicación de la noticia, si no la sabes usa la fecha de hoy)"
+        }
+      ]
+    `
+
+    debugAIConfiguration()
+
+    const { text } = await generateText({
+      model: perplexity,
+      prompt: prompt,
+    })
+
+    let results = []
+    try {
+      const cleanJson = text
+        .replace(/```json/g, "")
+        .replace(/```/g, "")
+        .trim()
+      results = JSON.parse(cleanJson)
+    } catch (e) {
+      console.error("Error parsing Perplexity JSON", e)
+      throw new Error("Error al procesar los resultados de búsqueda")
+    }
+
+    const requestedAt = new Date().toISOString()
+
+    for (const result of results) {
+      // Always save to user_company_signals for the user's view
+      await supabase.from("user_company_signals").insert({
+        user_id: user.id,
+        company_id: bookmark.company_id,
+        bookmark_id: bookmarkId,
+        title: result.title || "Señal detectada",
+        content: result.content || "",
+        source_url: result.source_url || "",
+        source_name: result.source_name || "Web Search",
+        signal_type: result.signal_type || "generic",
+        created_at: requestedAt,
+      })
+
+      // Also save to company_news or company_implementations for digest system
+      if (signalType === "news") {
+        await supabase.from("company_news").insert({
+          company_id: bookmark.company_id,
+          title: result.title || "Noticia detectada",
+          content: result.content || "",
+          source_url: result.source_url || "",
+          source_name: result.source_name || "Web Search",
+          published_at: result.published_at || currentDate,
+          requested_at: requestedAt,
+          requested_by: user.id,
+        })
+      } else if (signalType === "success_story") {
+        await supabase.from("company_implementations").insert({
+          company_id: bookmark.company_id,
+          title: result.title || "Implementación detectada",
+          content: result.content || "",
+          source_url: result.source_url || "",
+          source_name: result.source_name || "Web Search",
+          published_at: result.published_at || currentDate,
+          requested_at: requestedAt,
+          requested_by: user.id,
+        })
+      }
+    }
+
+    revalidatePath(`/bookmarks/${bookmarkId}`)
+    return { success: true, count: results.length }
+  } catch (error: any) {
+    console.error("Web Search failed", error)
+    return { success: false, error: "Error al realizar la búsqueda web. Verifique su API Key de Perplexity." }
   }
 }
 

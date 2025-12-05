@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js"
 import { NextResponse } from "next/server"
+import { SYSTEM_USER_ID } from "@/app/actions/digest"
 
 const PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions"
 
@@ -146,7 +147,10 @@ Máximo 5 noticias más relevantes.`,
             if (!existing) {
               await supabase.from("company_news").insert({
                 bookmark_id: bookmark.id,
+                company_id: company.id,
                 user_id: bookmark.user_id,
+                requested_by: SYSTEM_USER_ID,
+                requested_at: new Date().toISOString(),
                 title: item.title,
                 summary: item.summary,
                 source_url: item.source_url,
