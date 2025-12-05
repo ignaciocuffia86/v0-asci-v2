@@ -44,30 +44,17 @@ IGNORAR: Aniversarios, eventos sociales, RSE genérico, premios sin contexto.
 Devuelve máximo 10 noticias RELEVANTES PARA VENTAS B2B en JSON. SOLO JSON, sin texto adicional.`
 }
 
-async function getNewsFromCache(supabase: any, bookmarkId: string, companyId: string) {
+async function getNewsFromCache(supabase: any, companyId: string) {
   const cacheDate = new Date()
   cacheDate.setDate(cacheDate.getDate() - CACHE_DAYS)
 
-  let { data: cachedNews } = await supabase
+  const { data: cachedNews } = await supabase
     .from("company_news")
     .select("*")
-    .eq("bookmark_id", bookmarkId)
+    .eq("company_id", companyId)
     .gte("created_at", cacheDate.toISOString())
     .order("published_at", { ascending: false, nullsFirst: false })
     .limit(10)
-
-  // Si no hay cache por bookmark, buscar por company_id (otros bookmarks de la misma empresa)
-  if (!cachedNews || cachedNews.length === 0) {
-    const { data: companyCache } = await supabase
-      .from("company_news")
-      .select("*")
-      .eq("company_id", companyId)
-      .gte("created_at", cacheDate.toISOString())
-      .order("published_at", { ascending: false, nullsFirst: false })
-      .limit(10)
-
-    cachedNews = companyCache
-  }
 
   return cachedNews
 }
@@ -81,6 +68,41 @@ async function getOldCache(supabase: any, companyId: string) {
     .limit(10)
 
   return oldCache
+}
+
+async function registerUserInteractions(
+  supabase: any,
+  userId: string,
+  companyId: string,
+  newsIds: string[],
+  source: "search" | "digest" | "browse" = "search",
+) {
+  if (newsIds.length === 0) return
+
+  const interactions = newsIds.map((newsId) => ({
+    user_id: userId,
+    news_id: newsId,
+    company_id: companyId,
+    source,
+    viewed_at: new Date().toISOString(),
+  }))
+
+  // Insertar ignorando duplicados (ON CONFLICT DO NOTHING)
+  for (const interaction of interactions) {
+    await supabase
+      .from("user_news_interactions")
+      .upsert(interaction, { onConflict: "user_id,news_id", ignoreDuplicates: true })
+  }
+}
+
+async function getUserViewedNewsIds(supabase: any, userId: string, companyId: string): Promise<Set<string>> {
+  const { data } = await supabase
+    .from("user_news_interactions")
+    .select("news_id")
+    .eq("user_id", userId)
+    .eq("company_id", companyId)
+
+  return new Set(data?.map((r: any) => r.news_id) || [])
 }
 
 async function searchWithGemini(
@@ -156,7 +178,6 @@ async function searchWithGemini(
       preview: content.substring(0, 200),
     })
 
-    // Intentar parsear JSON
     const jsonMatch = content.match(/```json\n?([\s\S]*?)\n?```/) || content.match(/\{[\s\S]*"news"[\s\S]*\}/)
     const jsonContent = jsonMatch ? jsonMatch[1] || jsonMatch[0] : content
 
@@ -187,7 +208,6 @@ async function searchWithPerplexity(
 
     console.log("[v0] News: Calling Perplexity API as fallback...")
 
-    // Calcular fecha de hace 6 meses en formato MM/DD/YYYY
     const sixMonthsAgo = new Date()
     sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6)
     const dateFilter = `${String(sixMonthsAgo.getMonth() + 1).padStart(2, "0")}/${String(sixMonthsAgo.getDate()).padStart(2, "0")}/${sixMonthsAgo.getFullYear()}`
@@ -243,10 +263,8 @@ Si no encuentras noticias relevantes, responde: {"news":[]}`
       preview: content.substring(0, 200),
     })
 
-    // Intentar extraer JSON del contenido
     let jsonContent = content.trim()
 
-    // Si empieza con texto, buscar el JSON
     if (!jsonContent.startsWith("{") && !jsonContent.startsWith("[")) {
       const jsonMatch = jsonContent.match(/\{[\s\S]*"news"[\s\S]*\}/) || jsonContent.match(/\[[\s\S]*\]/)
       if (jsonMatch) {
@@ -259,7 +277,6 @@ Si no encuentras noticias relevantes, responde: {"news":[]}`
 
     const parsed = JSON.parse(jsonContent)
 
-    // Normalizar respuesta
     if (Array.isArray(parsed)) {
       return { success: true, data: { news: parsed } }
     }
@@ -301,11 +318,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Bookmark not found" }, { status: 404 })
   }
 
-  console.log("[v0] News: Step 1 - Checking cache for bookmark:", bookmarkId, "company:", bookmark.company_id)
-  const cachedNews = await getNewsFromCache(supabase, bookmarkId, bookmark.company_id)
+  console.log("[v0] News: Step 1 - Checking cache for company:", bookmark.company_id)
+  const cachedNews = await getNewsFromCache(supabase, bookmark.company_id)
 
   if (cachedNews && cachedNews.length > 0) {
     console.log("[v0] News: Cache HIT - Returning", cachedNews.length, "cached news items")
+
+    const newsIds = cachedNews.map((n: any) => n.id)
+    await registerUserInteractions(supabase, user.id, bookmark.company_id, newsIds, "search")
+
     return NextResponse.json({
       success: true,
       count: cachedNews.length,
@@ -317,7 +338,6 @@ export async function POST(request: Request) {
 
   console.log("[v0] News: Cache MISS - No valid cache found, proceeding to AI search")
 
-  // Obtener datos de la compañía para el contexto
   const { data: company } = await supabase
     .from("companies")
     .select("industry, website, linkedin_url, country")
@@ -355,6 +375,10 @@ export async function POST(request: Request) {
 
     if (oldCache && oldCache.length > 0) {
       console.log("[v0] News: Found old cache with", oldCache.length, "items")
+
+      const newsIds = oldCache.map((n: any) => n.id)
+      await registerUserInteractions(supabase, user.id, bookmark.company_id, newsIds, "search")
+
       return NextResponse.json({
         success: true,
         count: oldCache.length,
@@ -374,15 +398,11 @@ export async function POST(request: Request) {
     })
   }
 
-  // Procesar resultados exitosos
   const newsItems = searchResult.data?.news || []
   console.log("[v0] News: SUCCESS - Got", newsItems.length, "results from", aiProvider)
 
   const newsToInsert = newsItems.map((item: any) => ({
-    bookmark_id: bookmarkId,
     company_id: bookmark.company_id,
-    user_id: user.id,
-    requested_by: user.id,
     title: item.title,
     summary: item.summary,
     source_url: item.source_url,
@@ -393,21 +413,31 @@ export async function POST(request: Request) {
     ai_provider: aiProvider,
   }))
 
-  // Insertar evitando duplicados
+  const insertedIds: string[] = []
+
   if (newsToInsert.length > 0) {
     for (const news of newsToInsert) {
+      // Verificar duplicados por source_url
       const { data: existing } = await supabase
         .from("company_news")
         .select("id")
         .eq("company_id", bookmark.company_id)
-        .eq("title", news.title)
+        .eq("source_url", news.source_url)
         .maybeSingle()
 
       if (!existing) {
-        await supabase.from("company_news").insert(news)
+        const { data: inserted } = await supabase.from("company_news").insert(news).select("id").single()
+
+        if (inserted) {
+          insertedIds.push(inserted.id)
+        }
+      } else {
+        insertedIds.push(existing.id)
       }
     }
   }
+
+  await registerUserInteractions(supabase, user.id, bookmark.company_id, insertedIds, "search")
 
   // Actualizar contexto del bookmark
   const existingContext = bookmark.search_context || {}
@@ -421,21 +451,20 @@ export async function POST(request: Request) {
     })
     .eq("id", bookmarkId)
 
-  // Obtener noticias insertadas
-  const { data: insertedNews } = await supabase
+  const { data: allNews } = await supabase
     .from("company_news")
     .select("*")
-    .eq("bookmark_id", bookmarkId)
+    .eq("company_id", bookmark.company_id)
     .order("published_at", { ascending: false, nullsFirst: false })
     .limit(10)
 
   return NextResponse.json({
     success: true,
-    count: insertedNews?.length || newsToInsert.length,
+    count: allNews?.length || newsToInsert.length,
     message:
       newsToInsert.length > 0
         ? `Se encontraron ${newsToInsert.length} noticias`
         : searchResult.data?.search_summary || "No se encontraron noticias verificables",
-    news: insertedNews || [],
+    news: allNews || [],
   })
 }

@@ -18,6 +18,7 @@ interface CompanyNews {
   source_name: string | null
   published_at: string | null
   relevance_tags: string[] | null
+  category: string | null
   created_at: string
 }
 
@@ -27,16 +28,14 @@ interface BookmarkNewsProps {
   companyName: string
 }
 
-const RELEVANCE_TAGS = [
-  { value: "expansion", label: "Expansión" },
-  { value: "new_product", label: "Nuevo Producto" },
-  { value: "partnership", label: "Partnership" },
-  { value: "hiring", label: "Contratando" },
-  { value: "funding", label: "Financiamiento" },
-  { value: "award", label: "Premio/Reconocimiento" },
-  { value: "technology", label: "Tecnología" },
-  { value: "leadership", label: "Cambio de Liderazgo" },
-]
+const CATEGORY_LABELS: Record<string, string> = {
+  inversion: "Inversión",
+  transformacion: "Transformación",
+  crecimiento: "Crecimiento",
+  ejecutivos: "Ejecutivos",
+  desafios: "Desafíos",
+  alianzas: "Alianzas",
+}
 
 export function BookmarkNews({ bookmarkId, companyId, companyName }: BookmarkNewsProps) {
   const [news, setNews] = useState<CompanyNews[]>([])
@@ -49,44 +48,24 @@ export function BookmarkNews({ bookmarkId, companyId, companyName }: BookmarkNew
 
   useEffect(() => {
     loadNews()
-  }, [bookmarkId, companyId]) // Added companyId to dependencies
+  }, [companyId])
 
   const loadNews = async () => {
     setIsLoading(true)
     setError(null)
     try {
-      console.log("[v0] Loading news for bookmark:", bookmarkId, "company:", companyId)
-
-      let { data, error } = await supabase
+      const { data, error } = await supabase
         .from("company_news")
         .select("*")
-        .eq("bookmark_id", bookmarkId)
+        .eq("company_id", companyId)
         .order("published_at", { ascending: false, nullsFirst: false })
+        .limit(10)
 
-      if (error) {
-        console.log("[v0] Supabase error loading news:", error)
-        throw error
-      }
+      if (error) throw error
 
-      if (!data || data.length === 0) {
-        console.log("[v0] No news by bookmark_id, trying company_id:", companyId)
-        const companyResult = await supabase
-          .from("company_news")
-          .select("*")
-          .eq("company_id", companyId)
-          .order("published_at", { ascending: false, nullsFirst: false })
-
-        if (companyResult.error) {
-          console.log("[v0] Supabase error loading news by company:", companyResult.error)
-        } else {
-          data = companyResult.data
-        }
-      }
-
-      console.log("[v0] Loaded news:", data?.length || 0)
       setNews(data || [])
     } catch (error: any) {
-      console.error("[v0] Error loading news:", error)
+      console.error("Error loading news:", error)
       setError(error.message || "Error al cargar noticias")
     } finally {
       setIsLoading(false)
@@ -132,7 +111,7 @@ export function BookmarkNews({ bookmarkId, companyId, companyName }: BookmarkNew
       const { error } = await supabase.from("company_news").delete().eq("id", id)
       if (error) throw error
       toast.success("Noticia eliminada")
-      loadNews()
+      setNews(news.filter((n) => n.id !== id))
     } catch (error) {
       toast.error("Error al eliminar")
     }
@@ -191,7 +170,7 @@ export function BookmarkNews({ bookmarkId, companyId, companyName }: BookmarkNew
         </Button>
       </div>
 
-      {/* News List - RSS Style */}
+      {/* News List */}
       {news.length === 0 ? (
         <Card className="border-dashed">
           <CardContent className="py-12 text-center">
@@ -259,14 +238,12 @@ export function BookmarkNews({ bookmarkId, companyId, companyName }: BookmarkNew
                             </span>
                           )}
                         </div>
-                        {item.relevance_tags && item.relevance_tags.length > 0 && (
+                        {item.category && (
                           <div className="flex items-center gap-1 mt-2">
                             <Tag className="h-3 w-3 text-muted-foreground" />
-                            {item.relevance_tags.map((tag) => (
-                              <Badge key={tag} variant="secondary" className="text-[10px] px-1.5 py-0">
-                                {RELEVANCE_TAGS.find((t) => t.value === tag)?.label || tag}
-                              </Badge>
-                            ))}
+                            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                              {CATEGORY_LABELS[item.category] || item.category}
+                            </Badge>
                           </div>
                         )}
                       </div>

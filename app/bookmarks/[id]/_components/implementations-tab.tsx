@@ -13,8 +13,10 @@ interface Implementation {
   title: string
   provider_name: string | null
   technology: string | null
+  area: string | null
   summary: string | null
   results: string | null
+  evidence_level: string | null
   source_url: string | null
   source_name: string | null
   published_at: string | null
@@ -27,6 +29,17 @@ interface ImplementationsTabProps {
   companyName: string
 }
 
+const AREA_LABELS: Record<string, string> = {
+  finanzas: "Finanzas",
+  ventas: "Ventas",
+  logistica: "Logística",
+  rrhh: "RRHH",
+  it: "IT",
+  ciberseguridad: "Ciberseguridad",
+  ecommerce: "eCommerce",
+  operaciones: "Operaciones",
+}
+
 export function ImplementationsTab({ bookmarkId, companyId, companyName }: ImplementationsTabProps) {
   const [implementations, setImplementations] = useState<Implementation[]>([])
   const [loading, setLoading] = useState(true)
@@ -36,29 +49,17 @@ export function ImplementationsTab({ bookmarkId, companyId, companyName }: Imple
 
   useEffect(() => {
     loadImplementations()
-  }, [bookmarkId, companyId]) // Added companyId to dependencies
+  }, [companyId])
 
   async function loadImplementations() {
     setLoading(true)
     try {
-      let { data } = await supabase
+      const { data } = await supabase
         .from("company_implementations")
         .select("*")
-        .eq("bookmark_id", bookmarkId)
+        .eq("company_id", companyId)
         .order("published_at", { ascending: false, nullsFirst: false })
-
-      if (!data || data.length === 0) {
-        console.log("[v0] No implementations by bookmark_id, trying company_id:", companyId)
-        const companyResult = await supabase
-          .from("company_implementations")
-          .select("*")
-          .eq("company_id", companyId)
-          .order("published_at", { ascending: false, nullsFirst: false })
-
-        if (!companyResult.error) {
-          data = companyResult.data
-        }
-      }
+        .limit(10)
 
       setImplementations(data || [])
     } catch (error) {
@@ -203,6 +204,18 @@ export function ImplementationsTab({ bookmarkId, companyId, companyName }: Imple
                       ) : (
                         <h4 className="font-medium">{item.title}</h4>
                       )}
+                      {item.evidence_level && (
+                        <Badge
+                          variant={item.evidence_level === "strong" ? "default" : "secondary"}
+                          className="text-[10px]"
+                        >
+                          {item.evidence_level === "strong"
+                            ? "Verificado"
+                            : item.evidence_level === "medium"
+                              ? "Probable"
+                              : "Inferido"}
+                        </Badge>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-3 mt-1.5 text-sm text-muted-foreground flex-wrap">
@@ -216,6 +229,11 @@ export function ImplementationsTab({ bookmarkId, companyId, companyName }: Imple
                         <Badge variant="secondary" className="text-xs">
                           <Cpu className="h-3 w-3 mr-1" />
                           {item.technology}
+                        </Badge>
+                      )}
+                      {item.area && (
+                        <Badge variant="outline" className="text-xs">
+                          {AREA_LABELS[item.area] || item.area}
                         </Badge>
                       )}
                       {item.source_name && <span className="text-xs opacity-70">vía {item.source_name}</span>}

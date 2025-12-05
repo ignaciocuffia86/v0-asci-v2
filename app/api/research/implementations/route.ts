@@ -57,29 +57,17 @@ Busca en:
 Devuelve máximo 10 implementaciones ordenadas por nivel de evidencia (strong primero).`
 }
 
-async function getImplementationsFromCache(supabase: any, bookmarkId: string, companyId: string) {
+async function getImplementationsFromCache(supabase: any, companyId: string) {
   const cacheDate = new Date()
   cacheDate.setDate(cacheDate.getDate() - CACHE_DAYS)
 
-  let { data: cached } = await supabase
+  const { data: cached } = await supabase
     .from("company_implementations")
     .select("*")
-    .eq("bookmark_id", bookmarkId)
+    .eq("company_id", companyId)
     .gte("created_at", cacheDate.toISOString())
     .order("published_at", { ascending: false, nullsFirst: false })
     .limit(10)
-
-  if (!cached || cached.length === 0) {
-    const { data: companyCache } = await supabase
-      .from("company_implementations")
-      .select("*")
-      .eq("company_id", companyId)
-      .gte("created_at", cacheDate.toISOString())
-      .order("published_at", { ascending: false, nullsFirst: false })
-      .limit(10)
-
-    cached = companyCache
-  }
 
   return cached
 }
@@ -93,6 +81,30 @@ async function getOldCache(supabase: any, companyId: string) {
     .limit(10)
 
   return oldCache
+}
+
+async function registerUserInteractions(
+  supabase: any,
+  userId: string,
+  companyId: string,
+  implementationIds: string[],
+  source: "search" | "digest" | "browse" = "search",
+) {
+  if (implementationIds.length === 0) return
+
+  const interactions = implementationIds.map((implId) => ({
+    user_id: userId,
+    implementation_id: implId,
+    company_id: companyId,
+    source,
+    viewed_at: new Date().toISOString(),
+  }))
+
+  for (const interaction of interactions) {
+    await supabase
+      .from("user_implementation_interactions")
+      .upsert(interaction, { onConflict: "user_id,implementation_id", ignoreDuplicates: true })
+  }
 }
 
 async function searchWithGemini(
@@ -309,16 +321,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Bookmark not found" }, { status: 404 })
   }
 
-  console.log(
-    "[v0] Implementations: Step 1 - Checking cache for bookmark:",
-    bookmarkId,
-    "company:",
-    bookmark.company_id,
-  )
-  const cached = await getImplementationsFromCache(supabase, bookmarkId, bookmark.company_id)
+  console.log("[v0] Implementations: Step 1 - Checking cache for company:", bookmark.company_id)
+  const cached = await getImplementationsFromCache(supabase, bookmark.company_id)
 
   if (cached && cached.length > 0) {
     console.log("[v0] Implementations: Cache HIT - Returning", cached.length, "cached items")
+
+    const implIds = cached.map((impl: any) => impl.id)
+    await registerUserInteractions(supabase, user.id, bookmark.company_id, implIds, "search")
+
     return NextResponse.json({
       success: true,
       count: cached.length,
@@ -374,6 +385,10 @@ export async function POST(request: Request) {
 
     if (oldCache && oldCache.length > 0) {
       console.log("[v0] Implementations: Found old cache with", oldCache.length, "items")
+
+      const implIds = oldCache.map((impl: any) => impl.id)
+      await registerUserInteractions(supabase, user.id, bookmark.company_id, implIds, "search")
+
       return NextResponse.json({
         success: true,
         count: oldCache.length,
@@ -397,10 +412,7 @@ export async function POST(request: Request) {
   console.log("[v0] Implementations: SUCCESS - Got", items.length, "results from", aiProvider)
 
   const itemsToInsert = items.map((item: any) => ({
-    bookmark_id: bookmarkId,
     company_id: bookmark.company_id,
-    user_id: user.id,
-    requested_by: user.id,
     title: item.title,
     provider_name: item.provider_name,
     technology: item.technology,
@@ -415,20 +427,30 @@ export async function POST(request: Request) {
     ai_provider: aiProvider,
   }))
 
+  const insertedIds: string[] = []
+
   if (itemsToInsert.length > 0) {
     for (const impl of itemsToInsert) {
       const { data: existing } = await supabase
         .from("company_implementations")
         .select("id")
         .eq("company_id", bookmark.company_id)
-        .eq("title", impl.title)
+        .eq("source_url", impl.source_url)
         .maybeSingle()
 
       if (!existing) {
-        await supabase.from("company_implementations").insert(impl)
+        const { data: inserted } = await supabase.from("company_implementations").insert(impl).select("id").single()
+
+        if (inserted) {
+          insertedIds.push(inserted.id)
+        }
+      } else {
+        insertedIds.push(existing.id)
       }
     }
   }
+
+  await registerUserInteractions(supabase, user.id, bookmark.company_id, insertedIds, "search")
 
   const existingContext = bookmark.search_context || {}
   await supabase
@@ -441,20 +463,20 @@ export async function POST(request: Request) {
     })
     .eq("id", bookmarkId)
 
-  const { data: inserted } = await supabase
+  const { data: allImpl } = await supabase
     .from("company_implementations")
     .select("*")
-    .eq("bookmark_id", bookmarkId)
+    .eq("company_id", bookmark.company_id)
     .order("published_at", { ascending: false, nullsFirst: false })
     .limit(10)
 
   return NextResponse.json({
     success: true,
-    count: inserted?.length || itemsToInsert.length,
+    count: allImpl?.length || itemsToInsert.length,
     message:
       itemsToInsert.length > 0
         ? `Se encontraron ${itemsToInsert.length} implementaciones`
         : searchResult.data?.search_summary || "No se encontraron implementaciones verificables",
-    implementations: inserted || [],
+    implementations: allImpl || [],
   })
 }
