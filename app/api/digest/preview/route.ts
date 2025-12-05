@@ -30,8 +30,14 @@ export async function GET(request: Request) {
   try {
     const result = await previewDigest(targetUserId)
 
-    if (result.error) {
-      return NextResponse.json({ error: result.error }, { status: 404 })
+    // Si no hay items, informar
+    if (result.itemCount === 0) {
+      return NextResponse.json({
+        success: true,
+        message: "No hay novedades para mostrar en el digest",
+        itemCount: 0,
+        html: "",
+      })
     }
 
     // Si se pide HTML puro (para preview en iframe)
@@ -43,7 +49,8 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       success: true,
-      digest: result.digest,
+      items: result.items,
+      itemCount: result.itemCount,
       html: result.html,
     })
   } catch (error: any) {
