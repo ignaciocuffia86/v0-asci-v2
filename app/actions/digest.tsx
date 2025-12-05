@@ -26,12 +26,6 @@ interface DigestItem {
   type: "news" | "implementation"
 }
 
-interface UserDigest {
-  user_id: string
-  email: string
-  items: DigestItem[]
-}
-
 // Obtener usuarios elegibles para el digest
 async function getEligibleUsers(): Promise<{ user_id: string; email: string }[]> {
   const supabase = getServiceClient()
