@@ -2,10 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
-import { generateText } from "ai"
-import { getPerplexityModel, debugAIConfiguration, generateGeminiContent } from "@/lib/ai-service"
-
-const perplexity = getPerplexityModel()
+import { debugAIConfiguration, generateGeminiContent, generatePerplexityContent } from "@/lib/ai-service"
 
 // --- SIGNALS ---
 
@@ -96,10 +93,7 @@ export async function searchWebSignals(bookmarkId: string, query: string) {
 
     debugAIConfiguration()
 
-    const { text } = await generateText({
-      model: perplexity,
-      prompt: prompt,
-    })
+    const text = await generatePerplexityContent(prompt)
 
     let results = []
     try {
@@ -658,7 +652,8 @@ export async function getContactsForIcebreaker(bookmarkId: string) {
         first_name,
         headline,
         current_position_title,
-        current_position_description
+        current_position_description,
+        profile_picture_url
       )
     `)
     .eq("company_id", bookmark.company_id)
@@ -1107,7 +1102,7 @@ RECUERDA: Cada mensaje debe ser ÚNICO y personalizado. Si el headline dice "Dev
       generatedText = await generateGeminiContent(prompt, "gemini-1.5-pro", 0.7)
     } catch (fallbackError: any) {
       console.error("Fallback AI Generation failed", fallbackError)
-      generatedText = `[LINKEDIN]\nHola ${firstName}, vi en tu perfil que trabajan con ${filterContextName || signalTypeLabel}. ¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?\n\n[EMAIL]\nHola ${firstName}, te escribí por LinkedIn hace unos días. Me interesó tu perfil por el uso de ${filterContextName || signalTypeLabel}. ¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?`
+      generatedText = `[LINKEDIN]\nHola ${firstName}, vi en tu perfil que trabajan con ${filterContextName || signalTypeLabel}. ¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?\n\n[EMAIL]\nHola ${firstName}, te escribí por LinkedIn hace unos días. ¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?`
     }
   }
 
@@ -1350,10 +1345,7 @@ export async function searchWeb(bookmarkId: string, query: string) {
 
     debugAIConfiguration()
 
-    const { text } = await generateText({
-      model: perplexity,
-      prompt: prompt,
-    })
+    const text = await generatePerplexityContent(prompt)
 
     let results = []
     try {
@@ -1464,7 +1456,18 @@ export async function getBookmarkSmartContext(bookmarkId: string) {
         id,
         full_name,
         current_position_title,
-        profile_picture_url
+        profile_picture_url,
+        linkedin_url,
+        email1,
+        email1_status,
+        email1_type,
+        email2,
+        email2_status,
+        email2_type,
+        phone1,
+        phone1_type,
+        phone2,
+        phone2_type
       )
     `)
     .eq("company_id", bookmark.company_id)
@@ -1533,6 +1536,12 @@ export async function getBookmarkSmartContext(bookmarkId: string) {
       contactPhoto: string | null
       isCurrent: boolean
       keywords: string[]
+      linkedinUrl: string | null
+      email: string | null
+      emailStatus: string | null
+      emailType: string | null
+      phone: string | null
+      phoneType: string | null
     }
   >()
 
@@ -1541,6 +1550,12 @@ export async function getBookmarkSmartContext(bookmarkId: string) {
     if (!contact?.id) continue
 
     if (!contactMap.has(contact.id)) {
+      const bestEmail = contact.email1 || contact.email2 || null
+      const bestEmailStatus = contact.email1 ? contact.email1_status : contact.email2_status
+      const bestEmailType = contact.email1 ? contact.email1_type : contact.email2_type
+      const bestPhone = contact.phone1 || contact.phone2 || null
+      const bestPhoneType = contact.phone1 ? contact.phone1_type : contact.phone2_type
+
       contactMap.set(contact.id, {
         contactId: contact.id,
         contactName: contact.full_name || "Sin nombre",
@@ -1548,6 +1563,12 @@ export async function getBookmarkSmartContext(bookmarkId: string) {
         contactPhoto: contact.profile_picture_url,
         isCurrent: signal.is_current_employee,
         keywords: [],
+        linkedinUrl: contact.linkedin_url || null,
+        email: bestEmail,
+        emailStatus: bestEmailStatus || null,
+        emailType: bestEmailType || null,
+        phone: bestPhone,
+        phoneType: bestPhoneType || null,
       })
     }
 

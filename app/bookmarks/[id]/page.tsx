@@ -11,12 +11,13 @@ import {
   Building2,
   Globe,
   Linkedin,
-  Sparkles,
+  FileText,
   BrainCircuit,
   Flame,
   Newspaper,
   Briefcase,
   Target,
+  Sparkles,
 } from "lucide-react"
 import Link from "next/link"
 
@@ -27,6 +28,7 @@ import { ImplementationsTab } from "./_components/implementations-tab"
 import { BookmarkIcebreakers } from "./_components/icebreakers-tab"
 import { BookmarkStrategy } from "./_components/strategy-tab"
 import { ProspectsTab } from "./_components/prospects-tab"
+import { SummaryTab } from "./_components/summary-tab"
 
 export default function BookmarkWorkspacePage() {
   const params = useParams()
@@ -176,6 +178,10 @@ export default function BookmarkWorkspacePage() {
               <Building2 className="h-4 w-4" />
               Resumen
             </TabsTrigger>
+            <TabsTrigger value="summary" className="gap-2">
+              <FileText className="h-4 w-4 text-primary" />
+              Brief Ejecutivo
+            </TabsTrigger>
             <TabsTrigger value="jobpostings" className="gap-2">
               <Flame className="h-4 w-4 text-orange-500" />
               Posiciones
@@ -210,6 +216,10 @@ export default function BookmarkWorkspacePage() {
 
           <TabsContent value="overview" className="m-0 focus-visible:ring-0">
             <BookmarkOverview bookmarkId={bookmarkId} company={company} />
+          </TabsContent>
+
+          <TabsContent value="summary" className="m-0 focus-visible:ring-0">
+            <SummaryTab bookmarkId={bookmarkId} companyName={company.name} />
           </TabsContent>
 
           <TabsContent value="jobpostings" className="m-0 focus-visible:ring-0">

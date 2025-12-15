@@ -1,11 +1,3 @@
-import { createOpenAI } from "@ai-sdk/openai"
-
-// Initialize Perplexity Provider (via OpenAI compatible client)
-const perplexity = createOpenAI({
-  apiKey: process.env.PERPLEXITY_API_KEY || "",
-  baseURL: "https://api.perplexity.ai",
-})
-
 export async function generateGeminiContent(
   prompt: string,
   model = "gemini-2.0-flash",
@@ -47,7 +39,6 @@ export async function generateGeminiContent(
     // Safety check for empty response
     if (!data.candidates || data.candidates.length === 0) {
       console.error("[v0] Gemini returned no candidates:", JSON.stringify(data))
-      // Try to gracefully fail or return empty string
       return ""
     }
 
@@ -59,8 +50,54 @@ export async function generateGeminiContent(
   }
 }
 
-export function getPerplexityModel() {
-  return perplexity("sonar-pro")
+export async function generatePerplexityContent(
+  prompt: string,
+  model = "sonar-pro",
+  systemPrompt?: string,
+): Promise<string> {
+  const apiKey = process.env.PERPLEXITY_API_KEY
+  if (!apiKey) throw new Error("Perplexity API Key is missing")
+
+  console.log(`[v0] Sending request to Perplexity (${model})...`)
+
+  try {
+    const messages: Array<{ role: string; content: string }> = []
+
+    if (systemPrompt) {
+      messages.push({ role: "system", content: systemPrompt })
+    }
+    messages.push({ role: "user", content: prompt })
+
+    const response = await fetch("https://api.perplexity.ai/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: model,
+        messages: messages,
+      }),
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      console.error(`[v0] Perplexity API Error (${response.status}):`, errorText)
+      throw new Error(`Perplexity API Failed: ${response.status} - ${errorText}`)
+    }
+
+    const data = await response.json()
+
+    if (!data.choices || data.choices.length === 0) {
+      console.error("[v0] Perplexity returned no choices:", JSON.stringify(data))
+      return ""
+    }
+
+    return data.choices[0].message.content || ""
+  } catch (error: any) {
+    console.error("[v0] Network/Parsing Error in generatePerplexityContent:", error)
+    throw error
+  }
 }
 
 export function debugAIConfiguration() {

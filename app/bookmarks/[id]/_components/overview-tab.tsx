@@ -3,10 +3,23 @@
 import { useEffect, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Bookmark, Info, User, Users, GraduationCap } from "lucide-react"
+import {
+  Bookmark,
+  Info,
+  User,
+  Users,
+  GraduationCap,
+  Linkedin,
+  Mail,
+  Phone,
+  CheckCircle2,
+  AlertCircle,
+} from "lucide-react"
 import { getBookmarkSmartContext } from "@/app/actions/workspace"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { toast } from "sonner"
 
 type GroupedContact = {
   contactId: string
@@ -15,6 +28,12 @@ type GroupedContact = {
   contactPhoto: string | null
   isCurrent: boolean
   keywords: string[]
+  linkedinUrl: string | null
+  email: string | null
+  emailStatus: string | null
+  emailType: string | null
+  phone: string | null
+  phoneType: string | null
 }
 
 type SmartContext = {
@@ -63,29 +82,129 @@ export function BookmarkOverview({ bookmarkId, company }: { bookmarkId: string; 
     }
   }
 
-  const ContactCard = ({ contact }: { contact: GroupedContact }) => (
-    <div className="flex items-center gap-3 p-2 bg-white dark:bg-slate-900 rounded-lg border border-slate-100 dark:border-slate-800">
-      <Avatar className="h-8 w-8 border border-slate-200 shrink-0">
+  const copyToClipboard = (text: string, label: string) => {
+    navigator.clipboard.writeText(text)
+    toast.success(`${label} copiado al portapapeles`)
+  }
+
+  const getEmailStatusIcon = (status: string | null) => {
+    if (!status) return null
+    const isValid = status.toLowerCase() === "valid" || status.toLowerCase() === "verified"
+    return isValid ? (
+      <CheckCircle2 className="h-3 w-3 text-green-500" />
+    ) : (
+      <AlertCircle className="h-3 w-3 text-amber-500" />
+    )
+  }
+
+  const getEmailStatusLabel = (status: string | null, type: string | null) => {
+    const parts: string[] = []
+    if (status) parts.push(status === "valid" || status === "verified" ? "Verificado" : status)
+    if (type) parts.push(type === "professional" ? "Corporativo" : type)
+    return parts.join(" · ") || "Email"
+  }
+
+  const ContactCard = ({ contact, isAlumni = false }: { contact: GroupedContact; isAlumni?: boolean }) => (
+    <div className="flex items-start gap-3 p-3 bg-white dark:bg-slate-900 rounded-lg border border-slate-100 dark:border-slate-800">
+      <Avatar className="h-10 w-10 border border-slate-200 shrink-0">
         <AvatarImage src={contact.contactPhoto || ""} />
         <AvatarFallback className="bg-slate-100 text-slate-500">
           <User className="h-4 w-4" />
         </AvatarFallback>
       </Avatar>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium truncate">{contact.contactName}</p>
-        <p className="text-xs text-muted-foreground truncate">{contact.contactRole}</p>
-      </div>
-      <div className="flex flex-wrap gap-1 justify-end shrink-0 max-w-[120px]">
-        {contact.keywords.slice(0, 3).map((keyword, i) => (
-          <Badge key={i} variant="secondary" className="text-[10px] bg-slate-100 text-slate-700 whitespace-nowrap">
-            {keyword}
-          </Badge>
-        ))}
-        {contact.keywords.length > 3 && (
-          <Badge variant="outline" className="text-[10px] whitespace-nowrap">
-            +{contact.keywords.length - 3}
-          </Badge>
-        )}
+      <div className="flex-1 min-w-0 space-y-2">
+        <div>
+          <p className="text-sm font-medium truncate">{contact.contactName}</p>
+          <p className="text-xs text-muted-foreground truncate">{contact.contactRole}</p>
+        </div>
+
+        {/* Botones de acción */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <TooltipProvider delayDuration={100}>
+            {/* LinkedIn */}
+            {contact.linkedinUrl && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 gap-1 text-[#0077B5] border-[#0077B5]/30 hover:bg-[#0077B5]/10 bg-transparent"
+                    onClick={() => window.open(contact.linkedinUrl!, "_blank")}
+                  >
+                    <Linkedin className="h-3.5 w-3.5" />
+                    <span className="text-xs">LinkedIn</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Abrir perfil de LinkedIn</TooltipContent>
+              </Tooltip>
+            )}
+
+            {/* Email */}
+            {!isAlumni && contact.email && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 gap-1 bg-transparent"
+                    onClick={() => copyToClipboard(contact.email!, "Email")}
+                  >
+                    <Mail className="h-3.5 w-3.5" />
+                    {getEmailStatusIcon(contact.emailStatus)}
+                    <span className="text-xs max-w-[100px] truncate">{contact.email}</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <div className="text-xs">
+                    <div>{contact.email}</div>
+                    <div className="text-muted-foreground">
+                      {getEmailStatusLabel(contact.emailStatus, contact.emailType)}
+                    </div>
+                    <div className="text-muted-foreground mt-1">Click para copiar</div>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
+            )}
+
+            {/* Teléfono */}
+            {!isAlumni && contact.phone && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 gap-1 bg-transparent"
+                    onClick={() => copyToClipboard(contact.phone!, "Teléfono")}
+                  >
+                    <Phone className="h-3.5 w-3.5" />
+                    <span className="text-xs">{contact.phone}</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <div className="text-xs">
+                    <div>{contact.phone}</div>
+                    {contact.phoneType && <div className="text-muted-foreground">{contact.phoneType}</div>}
+                    <div className="text-muted-foreground mt-1">Click para copiar</div>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
+            )}
+          </TooltipProvider>
+        </div>
+
+        {/* Keywords/Señales */}
+        <div className="flex flex-wrap gap-1">
+          {contact.keywords.slice(0, 3).map((keyword, i) => (
+            <Badge key={i} variant="secondary" className="text-[10px] bg-slate-100 text-slate-700 whitespace-nowrap">
+              {keyword}
+            </Badge>
+          ))}
+          {contact.keywords.length > 3 && (
+            <Badge variant="outline" className="text-[10px] whitespace-nowrap">
+              +{contact.keywords.length - 3}
+            </Badge>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -128,7 +247,7 @@ export function BookmarkOverview({ bookmarkId, company }: { bookmarkId: string; 
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {smartContext.currentEmployees.map((contact) => (
-                      <ContactCard key={contact.contactId} contact={contact} />
+                      <ContactCard key={contact.contactId} contact={contact} isAlumni={false} />
                     ))}
                   </div>
                 </div>
@@ -142,7 +261,7 @@ export function BookmarkOverview({ bookmarkId, company }: { bookmarkId: string; 
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {smartContext.alumni.map((contact) => (
-                      <ContactCard key={contact.contactId} contact={contact} />
+                      <ContactCard key={contact.contactId} contact={contact} isAlumni={true} />
                     ))}
                   </div>
                 </div>

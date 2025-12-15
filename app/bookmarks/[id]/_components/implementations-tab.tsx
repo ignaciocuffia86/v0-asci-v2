@@ -224,7 +224,7 @@ export function ImplementationsTab({ bookmarkId, companyId, companyName }: Imple
             <p className="text-sm text-muted-foreground mt-1 mb-4">
               Usa la búsqueda con AI para encontrar casos de éxito y proyectos en {companyName}
             </p>
-            <Button onClick={handleSearchImplementations} disabled={isSearching}>
+            <Button onClick={() => handleSearchImplementations(false)} disabled={isSearching}>
               {isSearching ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
