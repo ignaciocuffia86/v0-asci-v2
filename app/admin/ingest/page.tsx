@@ -20,7 +20,7 @@ const BATCH_TYPES = {
   },
   job_postings: {
     label: "Ofertas de Empleo (Job Postings)",
-    requiredHeaders: ["company_linkedin_url", "title", "description"],
+    requiredHeaders: ["title", "companyUrl"],
     description: "CSV de ofertas laborales con datos de empresas",
   },
 } as const
