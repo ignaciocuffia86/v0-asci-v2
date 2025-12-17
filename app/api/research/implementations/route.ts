@@ -1,9 +1,11 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextResponse } from "next/server"
 
-const TAVILY_API_URL = "https://api.tavily.com/search"
+const SERPAPI_URL = "https://serpapi.com/search"
 const PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions"
 const CACHE_DAYS = 14
+
+const SERPAPI_COUNTRY_CODES = ["ar", "es", "mx", "cl", "co", "pe", "us"]
 
 const PARTNER_NETWORK_DOMAINS = [
   // AWS
@@ -199,14 +201,15 @@ function buildPerplexityPrompt(context: {
   const industryText = industryTerms.join(", ")
   const countryText = context.country || "Latinoamérica"
 
-  const system = `Eres un buscador de implementaciones tecnológicas y casos de éxito B2B especializado en LATAM.
+  const system = `Eres un investigador de implementaciones tecnológicas e innovación empresarial especializado en LATAM.
 
 IMPORTANTE:
 1. Responde ÚNICAMENTE con un objeto JSON válido
 2. Resume con TUS PROPIAS PALABRAS - NO copies texto literal
 3. NO incluyas "source_url" en el JSON (se extraerá de tus citations automáticamente)
+4. Acepta evidence levels "weak" - Cualquier mención de adopción o uso de tecnología es válida
 
-FUENTES PRIORITARIAS (busca en orden):
+FUENTES PRIORITARIAS:
 - AWS Partner Network y casos de éxito de AWS
 - Microsoft Partner Portal y Customer Stories
 - Google Cloud casos de clientes
@@ -215,6 +218,9 @@ FUENTES PRIORITARIAS (busca en orden):
 - Salesforce Success Stories
 - Cisco Customer References
 - Blogs de consultoras (Accenture, Deloitte, Globant, etc.)
+- LinkedIn posts de vendors/partners mencionando implementaciones
+- Industry reports y analyst publications
+- Noticias sobre transformación digital y modernización
 
 FORMATO JSON OBLIGATORIO:
 {
@@ -233,29 +239,63 @@ FORMATO JSON OBLIGATORIO:
   ]
 }
 
-Si no encuentras implementaciones, responde: {"implementations":[]}`
+EVIDENCE LEVELS:
+- strong: Press release oficial, case study publicado, announcement del vendor
+- medium: LinkedIn post de executives, industry report, vendor announcement
+- weak: Mention en artículo, partnership announcement, customer reference, noticia de transformación digital
+
+Si encuentras entre 1-5 implementaciones válidas, inclúyelas. Es preferible tener resultados aunque sean "weak" que devolver vacío.
+Si no encuentras nada, responde: {"implementations":[]}`
 
   const keywordsText = context.keywords?.length ? ` Tecnologías de interés: ${context.keywords.join(", ")}.` : ""
 
-  const user = `Busca implementaciones tecnológicas, casos de éxito y proyectos de "${context.company_name}" (industria: ${industryText}) en ${countryText}.${keywordsText}
+  const user = `Busca noticias, implementaciones tecnológicas e innovación de "${context.company_name}" (industria: ${industryText}) en ${countryText}.${keywordsText}
 
-TÉRMINOS CLAVE EN ESPAÑOL:
+ESTRATEGIA DE BÚSQUEDA:
+Busca CUALQUIER MENCIÓN de que la empresa está usando, implementando, modernizando o transformando su infraestructura/procesos con tecnología.
+
+TÉRMINOS CLAVE EN ESPAÑOL (busca variaciones y combina):
 "${context.company_name}" AND (
-  "caso de éxito" OR "implementación" OR "migración" OR
-  "cliente de" OR "selecciona" OR "elige" OR "adopta" OR
-  "proyecto" OR "despliegue" OR "transformación"
+
+  # INNOVACIÓN y TRANSFORMACIÓN (AMPLIOS - PRIORIDAD)
+  "innovación" OR "transformación digital" OR "modernización" OR
+  "digitalización" OR "tecnología" OR "cloud" OR "infraestructura" OR
+  "automatización" OR "sistemas" OR "plataforma" OR
+
+  # IMPLEMENTACIÓN (ESPECÍFICO)
+  "implementación" OR "migración" OR "adopción" OR "implementó" OR
+  "selecciona" OR "elige" OR "cliente de" OR
+
+  # PARTNERSHIP y COLABORACIÓN
+  "partnership" OR "acuerdo con" OR "colaboración con" OR
+  "powered by" OR "usa" OR "utiliza" OR "proveedor de" OR
+
+  # MODERNIZACIÓN OPERACIONAL
+  "transformación empresarial" OR "mejora de procesos" OR
+  "eficiencia operacional" OR "modelo de negocio" OR
+  "experiencia del cliente" OR "digital-first"
 )
 
-VENDORS PRINCIPALES A CRUZAR:
+VENDORS Y TECNOLOGÍAS A BUSCAR:
 SAP, Oracle, Microsoft, AWS, IBM, Google Cloud, Cisco, Salesforce,
-Workday, ServiceNow, Adobe, Tableau, Snowflake, HubSpot
+Workday, ServiceNow, Adobe, Tableau, Snowflake, HubSpot, Slack,
+Zoom, Atlassian, Jira, Asana, Monday.com, Stripe, Shopify,
+Kubernetes, Docker, Python, Java, Node.js, React, Angular
 
 EXCLUIR:
-- Páginas institucionales o corporativas de ${context.company_name}
-- Solo incluye casos publicados por VENDORS o CONSULTORAS
-- Prioriza fuentes en español de LATAM
+- Solo páginas web institucionales de ${context.company_name} sin noticias
+- Resultados no relacionados con ${context.company_name}
+- Prioriza fuentes en español de LATAM o fuentes internacionales con menciones
 
-Últimos 24 meses. Máximo 10 implementaciones. Responde SOLO JSON.`
+⏰ RANGO TEMPORAL:
+- Busca noticias y anuncios de los últimos 12 meses (PRIORIDAD)
+- Incluye eventos importantes de hace 24 meses si son relevantes
+- Acepta 1-10 resultados (número flexible según relevancia)
+
+Recuerda: Una mención de que "implementó cloud" cuenta. Una noticia sobre "modernizó su infraestructura" cuenta.
+No necesitas un case study formal - CUALQUIER evidencia de adopción tecnológica es válida.
+
+Responde SOLO JSON válido.`
 
   return { system, user }
 }
@@ -455,179 +495,105 @@ const INSTITUTIONAL_KEYWORDS = [
 
 const OTHER_COMPANY_INDICATORS = ["caso de éxito:", "case study:", "customer story:", "cliente:", "historia de"]
 
-async function searchWithTavilyMultiQuery(context: {
+async function searchWithSerpAPIGoogle(context: {
   company_name: string
   industry?: string
   country?: string
   keywords?: string[]
-  website?: string // Agregado website
+  website?: string
 }): Promise<{ success: boolean; data?: any; error?: string }> {
   try {
-    const apiKey = process.env.TAVILY_API_KEY
+    const apiKey = process.env.SERPAPI_API_KEY
     if (!apiKey) {
-      return { success: false, error: "TAVILY_API_KEY not configured" }
+      return { success: false, error: "SERPAPI_API_KEY not configured" }
     }
 
-    console.log("[v0] Implementations: Calling Tavily with improved filters as FALLBACK...")
-
-    const twentyFourMonthsAgo = new Date()
-    twentyFourMonthsAgo.setMonth(twentyFourMonthsAgo.getMonth() - 24)
-    const startDate = twentyFourMonthsAgo.toISOString().split("T")[0]
+    console.log("[v0] Implementations: Calling SerpAPI Google Search as FALLBACK...")
 
     const industryTerms = getIndustryTranslations(context.industry)
-    const industryText = industryTerms[0] || "" // Solo el primero para ser más específico
-    const countryText = context.country || ""
+    const industryText = industryTerms[0] || ""
 
-    const companyDomain = getCompanyDomain(context.company_name, context.website)
-    const companyNameLower = context.company_name.toLowerCase()
+    // Build query with broad keywords (innovación, transformación, tecnología, etc.)
+    const broadKeywords = [
+      "innovación",
+      "transformación digital",
+      "modernización",
+      "tecnología",
+      "implementación",
+      "adopción",
+    ].join(" OR ")
 
-    const specificQuery = `
-      "${context.company_name}" ${countryText}
-      (implementa OR elige OR selecciona OR migra OR despliega OR adopta OR adquiere)
-      (SAP OR Oracle OR Microsoft OR AWS OR Salesforce OR IBM OR Cisco OR "Google Cloud")
-      -"memoria anual" -"annual report" -"reporte anual"
-    `
-      .trim()
-      .replace(/\s+/g, " ")
+    const excludeTerms = ["-memoria", "-anual", '-"annual report"', '-"reporte anual"'].join(" ")
+    const query = `"${context.company_name}" ${industryText} (${broadKeywords}) ${excludeTerms}`.trim()
 
-    console.log("[v0] Implementations: Tavily Query:", specificQuery)
+    console.log("[v0] Implementations: SerpAPI Query:", query)
 
-    const response = await fetch(TAVILY_API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    const allResults: any[] = []
+
+    // Search across multiple countries
+    for (const countryCode of SERPAPI_COUNTRY_CODES) {
+      const params = new URLSearchParams({
+        engine: "google",
+        q: query,
+        gl: countryCode,
+        hl: "es",
+        num: "10",
         api_key: apiKey,
-        query: specificQuery,
-        topic: "general",
-        start_date: startDate,
-        max_results: 20, // Aumentado para compensar filtrado agresivo
-        search_depth: "advanced",
-        include_raw_content: false,
-        include_images: false,
-      }),
-    })
+      })
 
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error("[v0] Implementations: Tavily API error:", response.status, errorText)
-      return { success: false, error: `Tavily API error: ${response.status}` }
+      const response = await fetch(`${SERPAPI_URL}?${params}`)
+
+      if (!response.ok) {
+        console.error("[v0] Implementations: SerpAPI error for", countryCode, response.status)
+        continue
+      }
+
+      const data = await response.json()
+      const results = data.organic_results || []
+
+      // Map SerpAPI results to our format
+      const implementations = results.map((result: any) => ({
+        title: result.title,
+        provider_name: extractProviderFromDomain(result.link) || extractProviderFromContent(result.snippet) || "N/A",
+        technology: inferTechnologyFromContent(result.title + " " + (result.snippet || "")),
+        area: categorizeImplementation(result.title + " " + (result.snippet || "")),
+        summary: result.snippet || result.title,
+        results: null,
+        evidence_level: inferEvidenceLevel(result.snippet || result.title),
+        source_url: result.link,
+        source_name: extractDomain(result.link),
+        published_at: result.date || new Date().toISOString().split("T")[0],
+      }))
+
+      allResults.push(...implementations)
     }
 
-    const data = await response.json()
-    const results = data.results || []
-
-    console.log("[v0] Implementations: Tavily raw results:", results.length)
-
-    if (results.length === 0) {
-      return { success: false, error: "No results from Tavily" }
+    if (allResults.length === 0) {
+      return { success: false, error: "No results from SerpAPI" }
     }
 
-    const filteredResults = results.filter((result: any) => {
-      const titleLower = result.title.toLowerCase()
-      const contentLower = (result.content || "").toLowerCase()
-      const urlLower = result.url.toLowerCase()
-      const combined = titleLower + " " + contentLower
-
-      // FILTRO 1: NO debe ser dominio de la empresa
-      if (urlLower.includes(companyDomain)) {
-        console.log("[v0] Implementations: Filtered out (company domain):", result.title)
-        return false
-      }
-
-      // FILTRO 2: DEBE mencionar la empresa en título O primeros 200 chars del contenido
-      const mentionsCompanyInTitle = titleLower.includes(companyNameLower)
-      const mentionsCompanyEarly = contentLower.substring(0, 200).includes(companyNameLower)
-
-      if (!mentionsCompanyInTitle && !mentionsCompanyEarly) {
-        console.log("[v0] Implementations: Filtered out (company not prominent):", result.title)
-        return false
-      }
-
-      // FILTRO 3: NO debe ser documento institucional
-      const isInstitutional = INSTITUTIONAL_KEYWORDS.some((keyword) => combined.includes(keyword))
-
-      if (isInstitutional) {
-        console.log("[v0] Implementations: Filtered out (institutional doc):", result.title)
-        return false
-      }
-
-      // FILTRO 4: Si el título tiene ":" después de keywords de caso de éxito,
-      // verificar que el nombre después del ":" sea nuestra empresa
-      for (const indicator of OTHER_COMPANY_INDICATORS) {
-        if (titleLower.includes(indicator)) {
-          const afterColon = titleLower.split(indicator)[1]
-          if (afterColon && !afterColon.includes(companyNameLower.split(" ")[0])) {
-            console.log("[v0] Implementations: Filtered out (case study of other company):", result.title)
-            return false
-          }
-        }
-      }
-
-      // FILTRO 5: DEBE mencionar un vendor/tecnología
-      const mentionsVendor = combined.match(
-        /\b(sap|oracle|microsoft|aws|salesforce|google cloud|ibm|cisco|servicenow|workday|adobe)\b/i,
-      )
-
-      if (!mentionsVendor) {
-        console.log("[v0] Implementations: Filtered out (no vendor mentioned):", result.title)
-        return false
-      }
-
-      // FILTRO 6: Score mínimo de 0.7 (más restrictivo)
-      if ((result.score || 0) < 0.7) {
-        console.log("[v0] Implementations: Filtered out (low score):", result.score, result.title)
-        return false
-      }
-
-      // FILTRO 7: Contenido debe tener longitud mínima (evitar snippets vacíos)
-      if ((result.content || "").length < 100) {
-        console.log("[v0] Implementations: Filtered out (too short):", result.title)
-        return false
-      }
-
+    // Remove duplicates by URL
+    const seenUrls = new Set<string>()
+    const uniqueImplementations = allResults.filter((item) => {
+      if (seenUrls.has(item.source_url)) return false
+      seenUrls.add(item.source_url)
       return true
     })
 
-    console.log("[v0] Implementations: After aggressive filtering:", filteredResults.length, "results remaining")
-
-    if (filteredResults.length === 0) {
-      return { success: false, error: "All results filtered out (low quality)" }
-    }
-
-    // Mapear resultados filtrados
-    const implementations = filteredResults.map((result: any) => ({
-      title: result.title,
-      provider_name: extractProviderFromDomain(result.url) || extractProviderFromContent(result.content),
-      technology: inferTechnologyFromContent(result.title + " " + (result.content || "")),
-      area: categorizeImplementation(result.title + " " + (result.content || "")),
-      summary: result.content?.substring(0, 250) || result.title,
-      results: null,
-      evidence_level: inferEvidenceLevel(result.content || result.title),
-      source_url: result.url,
-      source_name: extractDomain(result.url),
-      published_at: result.published_date || new Date().toISOString().split("T")[0],
-      relevance_score: result.score || 0,
-    }))
-
-    // Ordenar por score y tomar top 10
-    const topImplementations = implementations
-      .sort((a: any, b: any) => b.relevance_score - a.relevance_score)
-      .slice(0, 10)
-
-    console.log("[v0] Implementations: Tavily SUCCESS - Returning", topImplementations.length, "high-quality items")
+    console.log("[v0] Implementations: SerpAPI SUCCESS - Got", uniqueImplementations.length, "unique items")
 
     return {
       success: true,
-      data: { implementations: topImplementations },
+      data: { implementations: uniqueImplementations.slice(0, 10) }, // Limit to 10
     }
   } catch (error) {
-    console.error("[v0] Implementations: Tavily error:", error)
+    console.error("[v0] Implementations: SerpAPI error:", error)
     return { success: false, error: String(error) }
   }
 }
 
 function extractProviderFromContent(content: string): string {
-  if (!content) return "N/A"
+  if (!content) return ""
 
   const lowerContent = content.toLowerCase()
 
@@ -646,6 +612,12 @@ function extractProviderFromContent(content: string): string {
     accenture: "Accenture",
     deloitte: "Deloitte",
     globant: "Globant",
+    genpact: "Genpact",
+    capgemini: "Capgemini",
+    wipro: "Wipro",
+    infosys: "Infosys",
+    cognizant: "Cognizant",
+    tcs: "TCS",
   }
 
   for (const [keyword, name] of Object.entries(providers)) {
@@ -654,19 +626,28 @@ function extractProviderFromContent(content: string): string {
     }
   }
 
-  return "N/A"
+  return ""
 }
 
 function categorizeImplementation(text: string): string {
   const lowerText = text.toLowerCase()
 
-  if (lowerText.match(/finanzas|contabilidad|erp|sap|oracle|facturación/)) return "finanzas"
-  if (lowerText.match(/ventas|crm|salesforce|hubspot|comercial/)) return "ventas"
-  if (lowerText.match(/logística|transporte|supply chain|cadena de suministro/)) return "logistica"
-  if (lowerText.match(/recursos humanos|rrhh|workday|talento|nómina/)) return "rrhh"
-  if (lowerText.match(/ciberseguridad|seguridad|firewall|soc|identity/)) return "ciberseguridad"
-  if (lowerText.match(/ecommerce|comercio electrónico|tienda online/)) return "ecommerce"
-  if (lowerText.match(/infraestructura|cloud|aws|azure|google cloud|servidores/)) return "it"
+  if (lowerText.match(/finanzas|contabilidad|erp|sap|oracle|facturación|fiscal|tesorería|contable/)) return "finanzas"
+  if (lowerText.match(/ventas|crm|salesforce|hubspot|comercial|marketing|atencion al cliente|gestion de clientes/))
+    return "ventas"
+  if (lowerText.match(/logística|transporte|supply chain|cadena de suministro|inventario|almacen|distribución/))
+    return "logistica"
+  if (lowerText.match(/recursos humanos|rrhh|workday|talento|nómina|hr|capital humano|empleados/)) return "rrhh"
+  if (
+    lowerText.match(
+      /ciberseguridad|seguridad|firewall|soc|identity|endpoint|proteccion de datos|ransomware|vulnerabilidad/,
+    )
+  )
+    return "ciberseguridad"
+  if (lowerText.match(/ecommerce|comercio electrónico|tienda online|venta online|plataforma ecommerce/))
+    return "ecommerce"
+  if (lowerText.match(/infraestructura|cloud|aws|azure|google cloud|servidores|data center|redes|it|tecnologia/))
+    return "it"
 
   return "operaciones" // Default
 }
@@ -674,162 +655,16 @@ function categorizeImplementation(text: string): string {
 function inferEvidenceLevel(text: string): "strong" | "medium" | "weak" {
   const lowerText = text.toLowerCase()
 
-  if (lowerText.match(/caso de éxito|comunicado de prensa|implementó exitosamente/)) return "strong"
-  if (lowerText.match(/según fuentes|reporta|informó/)) return "medium"
+  if (
+    lowerText.match(
+      /caso de éxito oficial|official case study|comunicado de prensa|press release|announcement|anuncio oficial/,
+    )
+  )
+    return "strong"
+  if (lowerText.match(/según fuentes|reporta|informó|article|artículo|blog post|post de linkedin|linkedin post/))
+    return "medium"
 
   return "weak"
-}
-
-async function searchWithTavily(context: {
-  company_name: string
-  industry?: string
-  country?: string
-  keywords?: string[]
-}): Promise<{ success: boolean; data?: any; error?: string }> {
-  try {
-    const apiKey = process.env.TAVILY_API_KEY
-    if (!apiKey) {
-      return { success: false, error: "TAVILY_API_KEY not configured" }
-    }
-
-    console.log("[v0] Implementations: Calling Tavily API as FALLBACK...")
-
-    // Calcular fecha de hace 24 meses
-    const twentyFourMonthsAgo = new Date()
-    twentyFourMonthsAgo.setMonth(twentyFourMonthsAgo.getMonth() - 24)
-    const startDate = twentyFourMonthsAgo.toISOString().split("T")[0]
-
-    const tavilyQuery = buildTavilyQuery(context)
-
-    const response = await fetch(TAVILY_API_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        api_key: apiKey,
-        query: tavilyQuery,
-        topic: "general", // Cambiado de "news" a "general" para captar blogs de vendors
-        start_date: startDate,
-        max_results: 15, // Aumentado de 10 a 15
-        search_depth: "advanced",
-        include_domains: VENDOR_DOMAINS, // Solo buscar en sitios de vendors/consultoras
-        include_raw_content: false,
-        include_images: false,
-      }),
-    })
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error("[v0] Implementations: Tavily API error:", response.status, errorText)
-      return { success: false, error: `Tavily API error: ${response.status}` }
-    }
-
-    const data = await response.json()
-    const results = data.results || []
-
-    console.log("[v0] Implementations: Tavily response received", {
-      resultsCount: results.length,
-    })
-
-    if (results.length === 0) {
-      console.log("[v0] Implementations: Tavily returned 0 results")
-      return { success: false, error: "No results from Tavily" }
-    }
-
-    // Mapear resultados de Tavily a nuestro formato
-    const implementations = results.map((result: any) => ({
-      title: result.title,
-      provider_name: extractProviderFromDomain(result.url) || "N/A",
-      technology: inferTechnologyFromContent(result.title + " " + (result.content || "")),
-      area: categorizeImplementation(result.title + " " + (result.content || "")),
-      summary: result.content?.substring(0, 250) || result.title,
-      results: null,
-      evidence_level: inferEvidenceLevel(result.content || result.title),
-      source_url: result.url, // URL real garantizada
-      source_name: extractDomain(result.url),
-      published_at: result.published_date || new Date().toISOString().split("T")[0],
-      relevance_score: result.score || 0,
-    }))
-
-    // Filtrar por score mínimo de relevancia
-    const filteredImplementations = implementations.filter((item: any) => item.relevance_score > 0.5)
-
-    console.log(
-      "[v0] Implementations: Tavily SUCCESS - Got",
-      filteredImplementations.length,
-      "items (filtered by relevance > 0.5)",
-    )
-
-    return {
-      success: true,
-      data: { implementations: filteredImplementations },
-    }
-  } catch (error) {
-    console.error("[v0] Implementations: Tavily error:", error)
-    return { success: false, error: String(error) }
-  }
-}
-
-function buildTavilyQuery(context: {
-  company_name: string
-  industry?: string
-  country?: string
-  keywords?: string[]
-}): string {
-  const industryTerms = getIndustryTranslations(context.industry)
-  const industryText = industryTerms.join(" ")
-  const countryText = context.country || ""
-
-  // Query optimizada enfocada en casos de éxito con verbos de acción
-  return `"${context.company_name}" ${countryText} (implementa OR adopta OR migra OR despliega OR selecciona OR elige OR adquiere) (caso de éxito OR case study OR customer story OR historia de éxito OR testimonial OR referencia) ${industryText}`.trim()
-}
-
-function extractProviderFromDomain(url: string): string | null {
-  try {
-    const domain = extractDomain(url).toLowerCase()
-
-    // Mapeo de dominios conocidos a nombres de proveedores
-    const providerMap: Record<string, string> = {
-      "microsoft.com": "Microsoft",
-      "salesforce.com": "Salesforce",
-      "oracle.com": "Oracle",
-      "sap.com": "SAP",
-      "ibm.com": "IBM",
-      "aws.amazon.com": "AWS",
-      "cloud.google.com": "Google Cloud",
-      "servicenow.com": "ServiceNow",
-      "workday.com": "Workday",
-      "adobe.com": "Adobe",
-      "accenture.com": "Accenture",
-      "deloitte.com": "Deloitte",
-      "pwc.com": "PwC",
-      "ey.com": "EY",
-      "kpmg.com": "KPMG",
-      "globant.com": "Globant",
-    }
-
-    return providerMap[domain] || null
-  } catch {
-    return null
-  }
-}
-
-function inferTechnologyFromContent(text: string): string {
-  const lowerText = text.toLowerCase()
-
-  if (lowerText.match(/\bsap\b|s\/4hana|erp/)) return "SAP ERP"
-  if (lowerText.match(/salesforce|crm|service cloud|marketing cloud/)) return "Salesforce CRM"
-  if (lowerText.match(/microsoft dynamics|dynamics 365/)) return "Microsoft Dynamics"
-  if (lowerText.match(/oracle\s+(cloud|erp|netsuite)/)) return "Oracle Cloud"
-  if (lowerText.match(/\baws\b|amazon web services/)) return "AWS Cloud"
-  if (lowerText.match(/azure|microsoft cloud/)) return "Microsoft Azure"
-  if (lowerText.match(/google cloud|gcp/)) return "Google Cloud"
-  if (lowerText.match(/servicenow/)) return "ServiceNow"
-  if (lowerText.match(/workday/)) return "Workday HCM"
-  if (lowerText.match(/tableau|power\s*bi|looker/)) return "Business Intelligence"
-
-  return "Tecnología"
 }
 
 async function searchWithPerplexity(context: {
@@ -846,10 +681,6 @@ async function searchWithPerplexity(context: {
 
     console.log("[v0] Implementations: Calling Perplexity API as PRIMARY...")
 
-    const twentyFourMonthsAgo = new Date()
-    twentyFourMonthsAgo.setMonth(twentyFourMonthsAgo.getMonth() - 24)
-    const dateFilter = `${String(twentyFourMonthsAgo.getMonth() + 1).padStart(2, "0")}/${String(twentyFourMonthsAgo.getDate()).padStart(2, "0")}/${twentyFourMonthsAgo.getFullYear()}`
-
     const prompts = buildPerplexityPrompt(context)
 
     const response = await fetch(PERPLEXITY_API_URL, {
@@ -864,7 +695,7 @@ async function searchWithPerplexity(context: {
           { role: "system", content: prompts.system },
           { role: "user", content: prompts.user },
         ],
-        temperature: 0.1,
+        temperature: 0.2,
         max_tokens: 4000,
         return_citations: true,
         search_recency_filter: "year",
@@ -953,7 +784,7 @@ function parsePerplexityJson(content: string): any {
       try {
         const implementationsArray: any[] = []
         const implRegex =
-          /"title"\s*:\s*"([^"]+)"[\s\S]*?"provider_name"\s*:\s*"([^"]+)"[\s\S]*?"technology"\s*:\s*"([^"]+)"[\s\S]*?"area"\s*:\s*"([^"]+)"[\s\S]*?"summary"\s*:\s*"([^"]+)"[\s\S]*?"evidence_level"\s*:\s*"([^"]+)"/g
+          /"title"\s*:\s*"([^"]+)"[\s\S]*?"provider_name"\s*:\s*"([^"]+)"[\s\S]*?"technology"\s*:\s*"([^"]+)"[\s\S]*?"area"\s*:\s*"([^"]+)"[\s\S]*?"summary"\s*:\s*"([^"]+)"[\s\S]*?"results"\s*:\s*("([^"]*)"|null)[\s\S]*?"evidence_level"\s*:\s*"([^"]+)"/g
 
         let match
         while ((match = implRegex.exec(content)) !== null) {
@@ -963,8 +794,8 @@ function parsePerplexityJson(content: string): any {
             technology: match[3],
             area: match[4],
             summary: match[5],
-            evidence_level: match[6],
-            results: null,
+            results: match[7] || null, // Handle null for results
+            evidence_level: match[8],
             source_name: "",
             published_at: null,
           })
@@ -988,22 +819,28 @@ function mapImplementationsToCitations(items: any[], citations: string[], compan
   return items.map((item, index) => {
     let bestCitation = citations[index] || null
 
+    // Intentar encontrar una cita que coincida con el source_name del item
     if (!bestCitation && item.source_name && citations.length > 0) {
-      const sourceDomain = item.source_name.toLowerCase()
+      const sourceDomain = item.source_name.toLowerCase().replace("www.", "")
       bestCitation =
         citations.find((url) => {
-          const citationDomain = extractDomain(url).toLowerCase()
+          const citationDomain = extractDomain(url).toLowerCase().replace("www.", "")
           return sourceDomain.includes(citationDomain) || citationDomain.includes(sourceDomain)
         }) || null
     }
 
+    // Si no hay coincidencia directa de dominio, usar la primera cita como fallback
     if (!bestCitation && citations.length > 0) {
       bestCitation = citations[0]
     }
 
+    // Si aún no hay cita, intentar construir una URL basada en source_name
     if (!bestCitation && item.source_name) {
       const cleanName = item.source_name.toLowerCase().replace(/\s+/g, "")
-      bestCitation = `https://www.${cleanName}.com`
+      // Añadir un check para evitar dominios genéricos o irrelevantes
+      if (cleanName.length > 3 && !cleanName.includes("example")) {
+        bestCitation = `https://www.${cleanName}.com`
+      }
     }
 
     // Si no hay una cita clara, intentamos buscar una URL que contenga el nombre de la empresa
@@ -1012,19 +849,27 @@ function mapImplementationsToCitations(items: any[], citations: string[], compan
       bestCitation = citations.find((url) => url.toLowerCase().includes(companyNameLower)) || null
     }
 
+    // Si finalmente no tenemos URL, usar un placeholder
+    const finalUrl = bestCitation || "https://example.com"
+
     return {
       ...item,
-      source_url: bestCitation || "https://example.com",
+      source_url: finalUrl,
     }
   })
 }
 
 function extractDomain(url: string): string {
   try {
+    // Handle cases where URL might not have a protocol
+    if (!url.startsWith("http://") && !url.startsWith("https://")) {
+      url = `https://${url}`
+    }
     const urlObj = new URL(url)
     return urlObj.hostname.replace("www.", "")
   } catch {
-    return url
+    // If URL parsing fails, return the original string or a safe fallback
+    return url.replace("www.", "") // Attempt to remove www if it's just a string
   }
 }
 
@@ -1037,6 +882,7 @@ async function mapToGroundingUrls(items: any[], groundingUrls: Map<string, strin
       // Buscar por título
       const titleLower = item.title.toLowerCase()
       for (const [groundingTitle, realUrl] of groundingUrls) {
+        // Matching logic can be refined - simple substring check for now
         if (titleLower.includes(groundingTitle.substring(0, 30).toLowerCase())) {
           finalUrl = realUrl
           fromGrounding = true
@@ -1057,6 +903,7 @@ async function mapToGroundingUrls(items: any[], groundingUrls: Map<string, strin
         }
       }
 
+      // Validate URL if it's not from grounding and not a placeholder
       if (
         !fromGrounding &&
         finalUrl &&
@@ -1066,19 +913,21 @@ async function mapToGroundingUrls(items: any[], groundingUrls: Map<string, strin
         const isValid = await validateUrl(finalUrl)
         if (!isValid) {
           const domain = extractDomain(finalUrl)
+          // Fallback to just the domain if the full URL is invalid
           finalUrl = `https://${domain}`
           console.log("[v0] Implementations: URL validation failed, using domain:", finalUrl)
         }
       }
 
+      // Handle specific cases like Vertex AI Search URLs
       if (finalUrl?.includes("vertexaisearch.cloud.google.com")) {
         const sourceName = item.source_name || ""
-        // Intentar extraer dominio del nombre de la fuente
+        // Attempt to extract domain from source_name if available
         const domainMatch = sourceName.match(/([a-z0-9-]+\.(com|net|org|io|ar|cl|pe|mx|co))/i)
         if (domainMatch) {
           finalUrl = `https://${domainMatch[0]}`
         } else {
-          // Si no podemos inferir, dejar sin URL
+          // If domain cannot be inferred, set URL to '#' or remove it
           finalUrl = "#"
         }
       }
@@ -1086,7 +935,7 @@ async function mapToGroundingUrls(items: any[], groundingUrls: Map<string, strin
       return {
         ...item,
         source_url: finalUrl,
-        _fromGrounding: fromGrounding,
+        _fromGrounding: fromGrounding, // For debugging/tracking
       }
     }),
   )
@@ -1096,23 +945,24 @@ async function mapToGroundingUrls(items: any[], groundingUrls: Map<string, strin
 
 async function validateUrl(url: string): Promise<boolean> {
   try {
+    // Skip validation for known problematic or internal URLs
     if (url.includes("vertexaisearch.cloud.google.com") || url.includes("grounding-api-redirect")) {
       return false
     }
 
     const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 3000)
+    const timeoutId = setTimeout(() => controller.abort(), 3000) // 3-second timeout
 
     console.log("[v0] Implementations: Validating URL:", url)
 
     const response = await fetch(url, {
-      method: "HEAD",
+      method: "HEAD", // Use HEAD request to get headers without downloading the body
       signal: controller.signal,
-      redirect: "follow",
+      redirect: "follow", // Allow redirects
     })
 
-    clearTimeout(timeoutId)
-    const isValid = response.ok
+    clearTimeout(timeoutId) // Clear the timeout if fetch completes
+    const isValid = response.ok // Consider 2xx status codes as valid
 
     if (!isValid) {
       console.log(
@@ -1123,9 +973,93 @@ async function validateUrl(url: string): Promise<boolean> {
 
     return isValid
   } catch (error) {
-    console.log("[v0] Implementations: URL validation failed (expected, will fallback to domain)")
+    // Network errors, timeouts, etc. are considered invalid URLs
+    console.log("[v0] Implementations: URL validation failed (expected, will fallback to domain):", error)
     return false
   }
+}
+
+function extractProviderFromDomain(domain: string): string {
+  const providers: Record<string, string> = {
+    "aws.amazon.com": "AWS",
+    "microsoft.com": "Microsoft",
+    "salesforce.com": "Salesforce",
+    "oracle.com": "Oracle",
+    "sap.com": "SAP",
+    "ibm.com": "IBM",
+    "cloud.google.com": "Google Cloud",
+    "cisco.com": "Cisco",
+    "servicenow.com": "ServiceNow",
+    "workday.com": "Workday",
+    "accenture.com": "Accenture",
+    "deloitte.com": "Deloitte",
+    "globant.com": "Globant",
+    "genpact.com": "Genpact",
+    "capgemini.com": "Capgemini",
+    "wipro.com": "Wipro",
+    "infosys.com": "Infosys",
+    "cognizant.com": "Cognizant",
+    "tcs.com": "TCS",
+  }
+
+  for (const [keyword, name] of Object.entries(providers)) {
+    if (domain.includes(keyword)) {
+      return name
+    }
+  }
+
+  return ""
+}
+
+function inferTechnologyFromContent(content: string): string {
+  const technologies: Record<string, string> = {
+    aws: "AWS",
+    "amazon web services": "AWS",
+    "google cloud": "Google Cloud",
+    ibm: "IBM",
+    cisco: "Cisco",
+    servicenow: "ServiceNow",
+    workday: "Workday",
+    accenture: "Accenture",
+    deloitte: "Deloitte",
+    globant: "Globant",
+    genpact: "Genpact",
+    capgemini: "Capgemini",
+    wipro: "Wipro",
+    infosys: "Infosys",
+    cognizant: "Cognizant",
+    tcs: "TCS",
+    microsoft: "Microsoft",
+    salesforce: "Salesforce",
+    oracle: "Oracle",
+    sap: "SAP",
+    tableau: "Tableau",
+    snowflake: "Snowflake",
+    hubspot: "HubSpot",
+    slack: "Slack",
+    zoom: "Zoom",
+    atlassian: "Atlassian",
+    jira: "Jira",
+    asana: "Asana",
+    "monday.com": "Monday.com",
+    stripe: "Stripe",
+    shopify: "Shopify",
+    kubernetes: "Kubernetes",
+    docker: "Docker",
+    python: "Python",
+    java: "Java",
+    "node.js": "Node.js",
+    react: "React",
+    angular: "Angular",
+  }
+
+  for (const [keyword, name] of Object.entries(technologies)) {
+    if (content.toLowerCase().includes(keyword)) {
+      return name
+    }
+  }
+
+  return "Unknown Technology"
 }
 
 export async function POST(request: Request) {
@@ -1199,24 +1133,22 @@ export async function POST(request: Request) {
       provider = "perplexity"
       console.log(`[v0] Implementations: Using Perplexity results (${implementations.length} items)`)
     } else {
-      console.log(
-        "[v0] Implementations: Perplexity failed or returned 0 results, trying Tavily with improved filters...",
-      )
+      console.log("[v0] Implementations: Perplexity failed or returned 0 results, trying SerpAPI fallback...")
 
-      const tavilyResult = await searchWithTavilyMultiQuery({
+      const serpApiResult = await searchWithSerpAPIGoogle({
         company_name: companyName,
         industry: company.industry,
         country: company.country,
         keywords: [],
-        website: companyWebsite, // Agregado website
+        website: companyWebsite,
       })
 
-      if (tavilyResult.success && tavilyResult.data?.implementations?.length > 0) {
-        implementations = tavilyResult.data.implementations
-        provider = "tavily"
-        console.log(`[v0] Implementations: Using Tavily results (${implementations.length} items)`)
+      if (serpApiResult.success && serpApiResult.data?.implementations?.length > 0) {
+        implementations = serpApiResult.data.implementations
+        provider = "serpapi"
+        console.log(`[v0] Implementations: Using SerpAPI results (${implementations.length} items)`)
       } else {
-        console.log("[v0] Implementations: Both Perplexity and Tavily failed, checking old cache...")
+        console.log("[v0] Implementations: Both Perplexity and SerpAPI failed, checking old cache...")
 
         const oldCache = await getOldCache(supabase, companyId)
         if (oldCache && oldCache.length > 0) {
@@ -1271,6 +1203,10 @@ export async function POST(request: Request) {
         source_name: item.source_name,
         published_at: sanitizeDate(item.published_at),
         ai_provider: provider,
+        technology: item.technology,
+        area: item.area,
+        provider_name: item.provider_name,
+        evidence_level: item.evidence_level,
       }))
 
     console.log(

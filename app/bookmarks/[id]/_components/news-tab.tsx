@@ -72,9 +72,12 @@ export function BookmarkNews({ bookmarkId, companyId, companyName }: BookmarkNew
         .select("*")
         .eq("company_id", companyId)
         .order("published_at", { ascending: false, nullsFirst: false })
-        .limit(10)
+        .order("created_at", { ascending: false })
+        .limit(15)
 
       if (error) throw error
+
+      console.log("[v0] News Frontend: Loaded", data?.length || 0, "news items")
 
       setNews(data || [])
     } catch (error: any) {
@@ -109,13 +112,14 @@ export function BookmarkNews({ bookmarkId, companyId, companyName }: BookmarkNew
       }
 
       const result = await response.json()
-      toast.success(`Se encontraron ${result.count || 0} noticias${forceRefresh ? " (regenerado)" : ""}`)
 
-      if (result.news && result.news.length > 0) {
-        setNews(result.news)
-      } else {
-        loadNews()
-      }
+      console.log("[v0] News Frontend: API returned", result.news?.length || 0, "items, source:", result.source)
+
+      toast.success(
+        `Se encontraron ${result.count || result.news?.length || 0} noticias${forceRefresh ? " (regenerado)" : ""}`,
+      )
+
+      await loadNews()
     } catch (error: any) {
       console.error("Error searching news:", error)
       toast.error(error.message || "Error al buscar noticias")
