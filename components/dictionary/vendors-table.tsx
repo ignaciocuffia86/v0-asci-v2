@@ -78,11 +78,41 @@ export function VendorsTable() {
   }
 
   const addProduct = async (vendorId: string, name: string, keywords: string[]) => {
-    await supabase.from("dictionary_products").insert({
-      vendor_id: vendorId,
-      name,
-      keywords,
-    })
+    // 1. Insertar el producto y obtener el ID
+    const { data: newProduct, error: insertError } = await supabase
+      .from("dictionary_products")
+      .insert({
+        vendor_id: vendorId,
+        name,
+        keywords,
+      })
+      .select("id")
+      .single()
+
+    if (insertError || !newProduct) {
+      console.error("Error creating product:", insertError)
+      fetchData()
+      return
+    }
+
+    // 2. Crear jobs para cada keyword del nuevo producto
+    const jobs = keywords.map((keyword) => ({
+      job_type: "add_keyword",
+      signal_id: newProduct.id,
+      signal_type: "technology",
+      keyword: keyword,
+      status: "pending",
+    }))
+
+    if (jobs.length > 0) {
+      const { error: jobsError } = await supabase.from("dictionary_jobs").insert(jobs)
+      if (jobsError) {
+        console.error("Error creating keyword jobs:", jobsError)
+      } else {
+        console.log(`Created ${jobs.length} keyword jobs for new product: ${name}`)
+      }
+    }
+
     fetchData()
   }
 

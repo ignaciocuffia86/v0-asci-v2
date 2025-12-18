@@ -30,25 +30,31 @@ export async function processSignals(batchSize = 10) {
 export async function getProcessingStats() {
   const supabase = await createClient()
 
-  // Get pending rows from import_rows (the source of truth for the ETL)
-  const { count: pendingCount } = await supabase
-    .from("import_rows")
-    .select("*", { count: "exact", head: true })
-    .eq("status", "pending")
+  const { data: stats, error } = await supabase.rpc("get_processing_stats")
 
-  // Get total signals
-  const { count: totalSignals } = await supabase.from("signals").select("*", { count: "exact", head: true })
+  if (error) {
+    console.error("Error getting processing stats:", error)
+    // Fallback to individual queries if RPC fails
+    const { count: pendingCount } = await supabase
+      .from("import_rows")
+      .select("*", { count: "exact", head: true })
+      .eq("status", "pending")
 
-  // Check if there are any active batches (processing)
-  const { count: processingBatches } = await supabase
-    .from("import_batches")
-    .select("*", { count: "exact", head: true })
-    .eq("status", "processing")
+    const { count: processingBatches } = await supabase
+      .from("import_batches")
+      .select("*", { count: "exact", head: true })
+      .eq("status", "processing")
+
+    return {
+      pending: pendingCount || 0,
+      signals: 0, // Skip signals count on error
+      isSystemProcessing: (pendingCount || 0) > 0 || (processingBatches || 0) > 0,
+    }
+  }
 
   return {
-    pending: pendingCount || 0,
-    signals: totalSignals || 0,
-    // System is processing if there are pending rows or batches marked as processing
-    isSystemProcessing: (pendingCount || 0) > 0 || (processingBatches || 0) > 0,
+    pending: stats?.pending || 0,
+    signals: stats?.signals || 0,
+    isSystemProcessing: (stats?.pending || 0) > 0 || (stats?.processing_batches || 0) > 0,
   }
 }
