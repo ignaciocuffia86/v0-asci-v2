@@ -3,26 +3,18 @@
 import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import {
-  Play,
-  Loader2,
-  RefreshCw,
-  CheckCircle,
-  XCircle,
-  Clock,
-  AlertCircle,
-  Activity,
-  Users,
-  Briefcase,
-  AlertTriangle,
-  ShieldAlert,
-} from "lucide-react"
+import { Play, Loader2, RefreshCw, CheckCircle, XCircle, Clock, AlertTriangle, ShieldAlert } from "lucide-react"
 import { processSignals, getProcessingStats } from "@/app/actions/processing"
 import { Progress } from "@/components/ui/progress"
 import { createClient } from "@/lib/supabase/client"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { ImportBatchesStatus } from "./_components/import-batches-status"
+import { ProcessingLogs } from "./_components/processing-logs"
+import { CronHealth } from "./_components/cron-health"
+import { SignalsStatus } from "./_components/signals-status"
 
 type DictionaryJob = {
   id: string
@@ -63,6 +55,7 @@ export default function ProcessingPage() {
   const [dictFailed, setDictFailed] = useState(0)
   const [alerts, setAlerts] = useState<SystemAlert[]>([])
   const [totalPendingJobs, setTotalPendingJobs] = useState(0)
+  const [activeTab, setActiveTab] = useState("ingesta") // New state for tab management
 
   const supabase = createClient()
 
@@ -346,11 +339,11 @@ export default function ProcessingPage() {
   const hasWarningAlerts = alerts.some((a) => a.level === "warning")
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-10">
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Procesamiento de Señales</h1>
-          <p className="text-muted-foreground">Estado del motor de detección de señales y ejecución manual.</p>
+          <p className="text-muted-foreground">ETL en tiempo real: Ingesta → Señales → Diccionario</p>
         </div>
         <Button
           variant="outline"
@@ -365,379 +358,177 @@ export default function ProcessingPage() {
         </Button>
       </div>
 
-      {alerts.length > 0 && (
-        <div className="space-y-3">
-          {alerts.map((alert) => (
-            <Alert
-              key={alert.id}
-              variant={alert.level === "critical" ? "destructive" : "default"}
-              className={
-                alert.level === "critical"
-                  ? "border-red-500 bg-red-50 dark:bg-red-950/20"
-                  : alert.level === "warning"
-                    ? "border-amber-500 bg-amber-50 dark:bg-amber-950/20"
-                    : ""
-              }
-            >
-              {alert.level === "critical" ? <ShieldAlert className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
-              <AlertTitle className="flex items-center gap-2">
-                {alert.title}
-                <Badge variant={alert.level === "critical" ? "destructive" : "secondary"} className="text-xs">
-                  {alert.level === "critical" ? "Crítico" : "Advertencia"}
-                </Badge>
-              </AlertTitle>
-              <AlertDescription className="mt-1">
-                {alert.message}
-                {alert.context && (
-                  <span className="block text-xs mt-1 opacity-70">
-                    Keywords: {(alert.context.keywords as string[])?.join(", ")}
-                  </span>
-                )}
-              </AlertDescription>
-            </Alert>
-          ))}
+      {hasCriticalAlerts && (
+        <div className="space-y-2">
+          {alerts
+            .filter((a) => a.level === "critical")
+            .map((alert) => (
+              <Alert key={alert.id} variant="destructive" className="border-red-500 bg-red-50 dark:bg-red-950/20">
+                <ShieldAlert className="h-4 w-4" />
+                <AlertTitle>{alert.title}</AlertTitle>
+                <AlertDescription>{alert.message}</AlertDescription>
+              </Alert>
+            ))}
+        </div>
+      )}
 
-          {/* Quick action buttons for alerts */}
-          <div className="flex gap-2">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Batches Activos</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats.isSystemProcessing ? "✓ Activo" : "Idle"}</div>
+            <p className="text-xs text-muted-foreground mt-1">Ingesta de contactos/jobs</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Señales Pendientes</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats.signals.toLocaleString()}</div>
+            <p className="text-xs text-muted-foreground mt-1">En cola de procesamiento</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Jobs Diccionario</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex gap-2 text-sm font-medium">
+              <span className="text-blue-600">{dictProcessing} activos</span>
+              <span className="text-amber-600">{dictPending} pendientes</span>
+              {dictFailed > 0 && <span className="text-red-600">{dictFailed} fallidos</span>}
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">Estado diccionario</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
+        <TabsList className="grid w-full grid-cols-4">
+          <TabsTrigger value="ingesta">Ingesta</TabsTrigger>
+          <TabsTrigger value="señales">Señales</TabsTrigger>
+          <TabsTrigger value="diccionario">Diccionario</TabsTrigger>
+          <TabsTrigger value="logs">Logs</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="ingesta" className="space-y-4">
+          <ImportBatchesStatus />
+          <CronHealth />
+        </TabsContent>
+
+        <TabsContent value="señales" className="space-y-4">
+          <SignalsStatus />
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center justify-between">
+                <span>Ejecución Manual</span>
+                {isProcessing && <Loader2 className="h-5 w-5 animate-spin" />}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {progress > 0 && (
+                <div className="space-y-2">
+                  <div className="flex justify-between text-sm">
+                    <span>Progreso</span>
+                    <span className="font-medium">{progress}%</span>
+                  </div>
+                  <Progress value={progress} className="h-2" />
+                </div>
+              )}
+              <Button onClick={handleProcess} disabled={isProcessing} className="w-full">
+                {isProcessing ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Procesando...
+                  </>
+                ) : (
+                  <>
+                    <Play className="h-4 w-4 mr-2" />
+                    Procesar Señales Manualmente
+                  </>
+                )}
+              </Button>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="diccionario" className="space-y-4">
+          {hasWarningAlerts && (
+            <div className="space-y-2">
+              {alerts
+                .filter((a) => a.level === "warning")
+                .map((alert) => (
+                  <Alert key={alert.id} className="border-amber-500 bg-amber-50 dark:bg-amber-950/20">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertTitle>{alert.title}</AlertTitle>
+                    <AlertDescription>{alert.message}</AlertDescription>
+                  </Alert>
+                ))}
+            </div>
+          )}
+
+          <div className="flex gap-2 mb-4">
             {alerts.some((a) => a.id === "failed-jobs") && (
               <Button variant="outline" size="sm" onClick={handleRetryFailed}>
                 <RefreshCw className="h-3 w-3 mr-1" />
-                Reintentar Jobs Fallidos
+                Reintentar Fallidos
               </Button>
             )}
             {alerts.some((a) => a.id === "stuck-jobs") && (
               <Button variant="outline" size="sm" onClick={handleUnstickJobs}>
                 <Play className="h-3 w-3 mr-1" />
-                Desbloquear Jobs Estancados
+                Desbloquear Estancados
               </Button>
             )}
           </div>
-        </div>
-      )}
 
-      {activeStats && (
-        <Card className="border-blue-500 bg-blue-500/5">
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-4 mb-4">
-              <div className="p-2 rounded-full bg-blue-500/10">
-                <Activity className="h-5 w-5 text-blue-600 animate-pulse" />
-              </div>
-              <div>
-                <h3 className="font-semibold text-blue-600">
-                  {activeStats.activeCount} {activeStats.activeCount === 1 ? "Job" : "Jobs"} de Diccionario Activos
-                </h3>
-                <p className="text-sm text-muted-foreground">Procesando cambios de keywords en segundo plano</p>
-              </div>
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="flex items-center gap-2">
-                    <Users className="h-4 w-4" />
-                    Contactos
-                  </span>
-                  <span className="font-medium">
-                    {activeStats.contacts.processed.toLocaleString()} / {activeStats.contacts.total.toLocaleString()}
-                  </span>
-                </div>
-                <Progress
-                  value={
-                    activeStats.contacts.total > 0
-                      ? (activeStats.contacts.processed / activeStats.contacts.total) * 100
-                      : 0
-                  }
-                  className="h-2"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="flex items-center gap-2">
-                    <Briefcase className="h-4 w-4" />
-                    Job Postings
-                  </span>
-                  <span className="font-medium">
-                    {activeStats.jobPostings.processed.toLocaleString()} /{" "}
-                    {activeStats.jobPostings.total.toLocaleString()}
-                  </span>
-                </div>
-                <Progress
-                  value={
-                    activeStats.jobPostings.total > 0
-                      ? (activeStats.jobPostings.processed / activeStats.jobPostings.total) * 100
-                      : 0
-                  }
-                  className="h-2"
-                />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      <div className="grid gap-6 md:grid-cols-4">
-        <Card
-          className={totalPendingJobs >= 500 ? "border-red-500" : totalPendingJobs >= 100 ? "border-amber-500" : ""}
-        >
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Jobs Pendientes (Total)</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div
-              className={`text-2xl font-bold ${totalPendingJobs >= 500 ? "text-red-600" : totalPendingJobs >= 100 ? "text-amber-600" : ""}`}
-            >
-              {totalPendingJobs.toLocaleString()}
-            </div>
-            <p className="text-xs text-muted-foreground">En cola de dictionary_jobs</p>
-          </CardContent>
-        </Card>
-
-        <Card className={dictFailed > 0 ? "border-red-500" : ""}>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Jobs Fallidos</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className={`text-2xl font-bold ${dictFailed > 0 ? "text-red-600" : "text-green-600"}`}>
-              {dictFailed}
-            </div>
-            <p className="text-xs text-muted-foreground">{dictFailed > 0 ? "Requieren atención" : "Sin errores"}</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Señales Detectadas</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats.signals.toLocaleString()}</div>
-            <p className="text-xs text-muted-foreground">Total histórico</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Estado del Sistema</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div
-              className={`text-2xl font-bold ${
-                hasCriticalAlerts
-                  ? "text-red-600"
-                  : hasWarningAlerts
-                    ? "text-amber-600"
-                    : dictProcessing > 0
-                      ? "text-blue-600"
-                      : "text-green-600"
-              }`}
-            >
-              {hasCriticalAlerts
-                ? "Crítico"
-                : hasWarningAlerts
-                  ? "Advertencia"
-                  : dictProcessing > 0
-                    ? "Procesando"
-                    : "Saludable"}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {alerts.length > 0 ? `${alerts.length} alerta(s) activa(s)` : "Sin alertas"}
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="flex items-center gap-2">
-              Jobs de Diccionario
-              {(dictPending > 0 || dictProcessing > 0) && (
-                <Badge variant="secondary" className="ml-2">
-                  {dictPending + dictProcessing} activos
-                </Badge>
-              )}
-              {dictFailed > 0 && (
-                <Badge variant="destructive" className="ml-2">
-                  {dictFailed} fallidos
-                </Badge>
-              )}
-            </CardTitle>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {dictionaryJobs.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <AlertCircle className="h-8 w-8 mx-auto mb-2 opacity-50" />
-              <p>No hay jobs de diccionario recientes.</p>
-              <p className="text-xs mt-1">Los jobs se crean al modificar keywords en Admin → Diccionarios.</p>
-            </div>
-          ) : (
-            <div className="rounded-md border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Tipo</TableHead>
-                    <TableHead>Keyword</TableHead>
-                    <TableHead>Estado</TableHead>
-                    <TableHead>Fase</TableHead>
-                    <TableHead>Progreso</TableHead>
-                    <TableHead>Tiempo</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {dictionaryJobs.map((job) => (
-                    <TableRow
-                      key={job.id}
-                      className={
-                        job.status === "processing" ? "bg-blue-500/5" : job.status === "failed" ? "bg-red-500/5" : ""
-                      }
-                    >
-                      <TableCell>
-                        <div className="flex flex-col">
-                          <span className="font-medium text-sm">{formatJobType(job.job_type)}</span>
-                          <span className="text-xs text-muted-foreground">
-                            {job.signal_type === "technology" ? "Tecnología" : "Proceso"}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <code className="text-xs bg-muted px-1 py-0.5 rounded">{job.keyword || "-"}</code>
-                      </TableCell>
-                      <TableCell>{getStatusBadge(job.status)}</TableCell>
-                      <TableCell>
-                        {job.status === "processing" && job.phase ? (
-                          <Badge variant="outline" className="gap-1">
-                            {job.phase === "contacts" ? (
-                              <>
-                                <Users className="h-3 w-3" /> Contactos
-                              </>
-                            ) : (
-                              <>
-                                <Briefcase className="h-3 w-3" /> Job Postings
-                              </>
-                            )}
-                          </Badge>
-                        ) : job.status === "completed" ? (
-                          <span className="text-xs text-green-600">Finalizado</span>
-                        ) : job.status === "failed" ? (
-                          <span className="text-xs text-red-600">Error</span>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">-</span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {job.status === "processing" ? (
-                          <div className="space-y-1 min-w-[140px]">
-                            <Progress value={job.progress} className="h-2" />
-                            <div className="flex flex-col text-xs text-muted-foreground">
-                              {job.phase === "contacts" ? (
-                                <span>
-                                  {job.contacts_processed?.toLocaleString() || 0}/
-                                  {job.contacts_total?.toLocaleString() || 0} contactos
-                                </span>
-                              ) : (
-                                <span>
-                                  {job.job_postings_processed?.toLocaleString() || 0}/
-                                  {job.job_postings_total?.toLocaleString() || 0} postings
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        ) : job.status === "completed" ? (
-                          <div className="text-xs text-green-600">
-                            <div>{job.contacts_total?.toLocaleString() || 0} contactos</div>
-                            <div>{job.job_postings_total?.toLocaleString() || 0} postings</div>
-                          </div>
-                        ) : job.status === "failed" ? (
-                          <span
-                            className="text-xs text-red-600 max-w-[150px] truncate block"
-                            title={job.error_message || "Error"}
-                          >
-                            {job.error_message || "Error"}
-                          </span>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">En cola</span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {job.status === "processing" && job.started_at ? (
-                          <span className="text-xs font-medium text-blue-600">{getElapsedTime(job.started_at)}</span>
-                        ) : job.status === "completed" && job.completed_at ? (
-                          <span className="text-xs text-muted-foreground">
-                            {new Date(job.completed_at).toLocaleString("es-AR", {
-                              day: "2-digit",
-                              month: "2-digit",
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </span>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">
-                            {new Date(job.created_at).toLocaleString("es-AR", {
-                              day: "2-digit",
-                              month: "2-digit",
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </span>
-                        )}
-                      </TableCell>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">Jobs Recientes</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-auto max-h-[400px]">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-24">Estado</TableHead>
+                      <TableHead>Keyword</TableHead>
+                      <TableHead>Tipo</TableHead>
+                      <TableHead className="text-right">Progreso</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Ejecución Manual</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            El sistema procesa automáticamente en segundo plano. Usa este botón solo si necesitas forzar el
-            procesamiento inmediato de la cola pendiente.
-          </p>
-
-          {isProcessing && (
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span>Progreso de la sesión manual</span>
-                <span>{progress}%</span>
+                  </TableHeader>
+                  <TableBody>
+                    {dictionaryJobs.slice(0, 10).map((job) => (
+                      <TableRow key={job.id}>
+                        <TableCell>{getStatusBadge(job.status)}</TableCell>
+                        <TableCell className="font-mono text-sm truncate max-w-xs">{job.keyword || "N/A"}</TableCell>
+                        <TableCell>{formatJobType(job.job_type)}</TableCell>
+                        <TableCell className="text-right">
+                          <span className="text-sm">
+                            {job.total_records > 0
+                              ? `${Math.round((job.processed_records / job.total_records) * 100)}%`
+                              : "0%"}
+                          </span>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               </div>
-              <Progress value={progress} />
-            </div>
-          )}
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-          <Button onClick={handleProcess} disabled={stats.pending === 0 || isProcessing} className="w-full sm:w-auto">
-            {isProcessing ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Procesando...
-              </>
-            ) : (
-              <>
-                <Play className="mr-2 h-4 w-4" />
-                Forzar Procesamiento Ahora
-              </>
-            )}
-          </Button>
-
-          <div className="mt-4 bg-muted/50 rounded-md p-4 h-40 overflow-y-auto font-mono text-xs">
-            {logs.length === 0 ? (
-              <span className="text-muted-foreground">Esperando logs...</span>
-            ) : (
-              logs.map((log, i) => (
-                <div key={i} className="mb-1">
-                  {log}
-                </div>
-              ))
-            )}
-          </div>
-        </CardContent>
-      </Card>
+        <TabsContent value="logs">
+          <ProcessingLogs />
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }

@@ -257,11 +257,11 @@ export default function HomePage() {
           <div className="container mx-auto px-4">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
               <div className="text-center">
-                <div className="text-4xl font-bold text-slate-900 mb-1">50K+</div>
+                <div className="text-4xl font-bold text-slate-900 mb-1">70K+</div>
                 <div className="text-sm text-slate-500">Contactos Analizados</div>
               </div>
               <div className="text-center">
-                <div className="text-4xl font-bold text-slate-900 mb-1">31K+</div>
+                <div className="text-4xl font-bold text-slate-900 mb-1">42K+</div>
                 <div className="text-sm text-slate-500">Empresas Indexadas</div>
               </div>
               <div className="text-center">
@@ -269,7 +269,7 @@ export default function HomePage() {
                 <div className="text-sm text-slate-500">Tecnologías Detectadas</div>
               </div>
               <div className="text-center">
-                <div className="text-4xl font-bold text-slate-900 mb-1">160k+</div>
+                <div className="text-4xl font-bold text-slate-900 mb-1">230k+</div>
                 <div className="text-sm text-slate-500">Señales detectadas</div>
               </div>
             </div>

@@ -8,11 +8,7 @@ export async function GET(request: Request) {
   // Security check: Vercel sends this header
   const authHeader = request.headers.get("authorization")
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}` && process.env.NODE_ENV === "production") {
-    // In production, we strictly require the CRON_SECRET
-    // You can find this in your Vercel Project Settings -> Cron Jobs
-    // For now, we log a warning but allow it if you are testing manually without the header
     console.warn("[Cron] Warning: Unauthorized attempt or missing CRON_SECRET")
-    // return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
@@ -20,49 +16,82 @@ export async function GET(request: Request) {
   const startTime = Date.now()
   const MAX_EXECUTION_TIME = 55000 // Run for 55 seconds max to avoid timeout
   let totalProcessed = 0
+  let batchesProcessed = 0
   let loops = 0
 
   try {
-    console.log("[Cron] Starting continuous processing loop...")
+    console.log("[Cron] Starting import batch processing...")
 
-    // Loop until we run out of time
     while (Date.now() - startTime < MAX_EXECUTION_TIME) {
       loops++
 
-      // Call the stored procedure to process a chunk of rows
-      // We process 10 rows per iteration
-      const { data, error } = await supabase.rpc("process_pending_queue", {
-        p_limit: 10,
-      })
+      // Fetch pending/processing batches
+      const { data: batches, error: batchError } = await supabase
+        .from("import_batches")
+        .select("id, batch_type")
+        .in("status", ["pending", "processing"])
+        .order("created_at", { ascending: true })
+        .limit(3) // Process max 3 batches per loop
 
-      if (error) {
-        console.error("[Cron] Error processing queue:", error)
-        // If error is severe, wait and retry
+      if (batchError) {
+        console.error("[Cron] Error fetching batches:", batchError)
         await new Promise((resolve) => setTimeout(resolve, 5000))
         continue
       }
 
-      const processedCount = data as number
-      totalProcessed += processedCount
-
-      if (processedCount === 0) {
-        // If no rows were pending, wait a bit longer before checking again
-        // to save resources, but still be responsive (e.g., 5 seconds)
+      if (!batches || batches.length === 0) {
+        console.log("[Cron] No pending batches found, waiting...")
         await new Promise((resolve) => setTimeout(resolve, 5000))
-      } else {
-        // If we processed rows, there might be more.
-        // Wait a tiny bit to let the DB breathe, then continue immediately.
-        // This achieves the "every few seconds" effect when there is load.
-        await new Promise((resolve) => setTimeout(resolve, 1000))
+        continue
+      }
+
+      // Process each batch with the new process_import_batch function
+      for (const batch of batches) {
+        try {
+          console.log(`[Cron] Processing batch ${batch.id} (${batch.batch_type})...`)
+
+          const { data: result, error: processError } = await supabase.rpc("process_import_batch", {
+            p_batch_id: batch.id,
+            p_chunk_size: 100,
+          })
+
+          if (processError) {
+            console.error(`[Cron] Error processing batch ${batch.id}:`, processError)
+            continue
+          }
+
+          console.log(`[Cron] Batch result:`, result)
+
+          if (result?.status === "completed") {
+            totalProcessed += result.total_processed || 0
+            batchesProcessed += 1
+            console.log(
+              `[Cron] Batch ${batch.id} completed. Processed: ${result.total_processed} rows in ${result.iterations} iterations`,
+            )
+          } else if (result?.status === "partial") {
+            totalProcessed += result.processed_this_call || 0
+            console.log(
+              `[Cron] Batch ${batch.id} partial. Processed: ${result.processed_this_call} rows. ${result.pending_remaining} remaining. Will retry on next cron.`,
+            )
+          }
+
+          // Small delay between batches
+          await new Promise((resolve) => setTimeout(resolve, 1000))
+        } catch (batchErr: any) {
+          console.error(`[Cron] Unexpected error processing batch ${batch.id}:`, batchErr)
+        }
       }
     }
 
-    console.log(`[Cron] Loop finished. Loops: ${loops}, Total Processed: ${totalProcessed}`)
+    console.log(
+      `[Cron] Loop finished. Loops: ${loops}, Batches Processed: ${batchesProcessed}, Total Rows: ${totalProcessed}`,
+    )
 
     return NextResponse.json({
       success: true,
-      message: `Processed ${totalProcessed} rows in ${loops} loops`,
+      message: `Processed ${totalProcessed} rows in ${batchesProcessed} batches`,
       loops,
+      batchesProcessed,
       totalProcessed,
     })
   } catch (err: any) {

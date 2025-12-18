@@ -184,7 +184,7 @@ export async function triggerBatchProcessing(batchId: string) {
   try {
     const { data, error } = await supabase.rpc("process_import_batch", {
       p_batch_id: batchId,
-      p_limit: 10,
+      p_chunk_size: 100, // Changed from p_limit: 10 to p_chunk_size: 100 to match the RPC function signature
     })
 
     if (error) {
