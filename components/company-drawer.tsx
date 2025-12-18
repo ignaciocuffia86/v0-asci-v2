@@ -7,7 +7,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { SignalCardAvatar } from "@/components/signal-card-avatar"
 import {
   Building2,
   ExternalLink,
@@ -21,6 +21,7 @@ import {
   Briefcase,
   Loader2,
   FolderOpen,
+  BookmarkCheck,
 } from "lucide-react"
 import { bookmarkCompany, unbookmarkCompany, checkBookmarkWithContext } from "@/app/actions/bookmarks"
 import { useToast } from "@/hooks/use-toast"
@@ -122,29 +123,27 @@ type DrawerData = {
   alumni_signals: Signal[]
 }
 
-export function CompanyDrawer({
-  companyId,
-  isOpen,
-  onClose,
-  filterSignalIds,
-  filterType,
-}: {
+type CompanyDrawerProps = {
   companyId: string
   isOpen: boolean
   onClose: () => void
   filterSignalIds?: string[]
   filterType?: "process" | "technology"
-}) {
+}
+
+export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, filterType }: CompanyDrawerProps) {
   const [isBookmarked, setIsBookmarked] = useState(false)
   const [bookmarkState, setBookmarkState] = useState<{
     hasExactMatch: boolean
     exactMatchId?: string
     otherBookmarks: Array<{ id: string; context: string; created_at: string }>
     isLoading: boolean
+    isSaving: boolean
   }>({
     hasExactMatch: false,
     otherBookmarks: [],
     isLoading: true,
+    isSaving: false,
   })
 
   const supabase = createClient()
@@ -243,9 +242,10 @@ export function CompanyDrawer({
         exactMatchId: result.exactMatchId,
         otherBookmarks: result.otherBookmarks,
         isLoading: false,
+        isSaving: false,
       })
     } else {
-      setBookmarkState((prev) => ({ ...prev, isLoading: false }))
+      setBookmarkState((prev) => ({ ...prev, isLoading: false, isSaving: false }))
     }
   }
 
@@ -258,19 +258,27 @@ export function CompanyDrawer({
     const wasBookmarked = bookmarkState.hasExactMatch
     const previousState = { ...bookmarkState }
 
-    // Optimistic update
+    // Mostrar estado de loading
     setBookmarkState((prev) => ({
       ...prev,
-      hasExactMatch: !wasBookmarked,
-      exactMatchId: wasBookmarked ? undefined : prev.exactMatchId,
+      isSaving: true,
     }))
 
     try {
       if (wasBookmarked && bookmarkState.exactMatchId) {
         // Eliminar solo el bookmark específico de este contexto
-        unbookmarkCompany(user.id, companyId, bookmarkState.exactMatchId).catch(() => {
-          setBookmarkState(previousState)
-        })
+        const result = await unbookmarkCompany(user.id, companyId, bookmarkState.exactMatchId)
+
+        if (result.success) {
+          setBookmarkState((prev) => ({
+            ...prev,
+            hasExactMatch: false,
+            exactMatchId: undefined,
+            isSaving: false,
+          }))
+        } else {
+          setBookmarkState({ ...previousState, isSaving: false })
+        }
       } else {
         let contextNames: string[] = []
 
@@ -288,16 +296,26 @@ export function CompanyDrawer({
           process: filterType === "process" ? contextNames : [],
         }
 
-        bookmarkCompany(user.id, companyId, {
+        const result = await bookmarkCompany(user.id, companyId, {
           filterSignalIds: filterSignalIds || [],
           filterType: filterType || "generic",
           filtersUsed,
-        }).catch(() => {
-          setBookmarkState(previousState)
         })
+
+        if (result.success && result.bookmarkId) {
+          setBookmarkState((prev) => ({
+            ...prev,
+            hasExactMatch: true,
+            exactMatchId: result.bookmarkId,
+            isSaving: false,
+          }))
+        } else {
+          setBookmarkState({ ...previousState, isSaving: false })
+        }
       }
-    } catch {
-      setBookmarkState(previousState)
+    } catch (error) {
+      console.error("Error en handleBookmark:", error)
+      setBookmarkState({ ...previousState, isSaving: false })
     }
   }
 
@@ -475,29 +493,29 @@ export function CompanyDrawer({
                       </TooltipProvider>
                     )}
 
-                    {bookmarkState.hasExactMatch ? (
-                      <Button
-                        variant="default"
-                        size="sm"
-                        className="h-9 bg-primary text-primary-foreground"
-                        onClick={() => bookmarkState.exactMatchId && goToBookmark(bookmarkState.exactMatchId)}
-                      >
-                        <Bookmark className="h-4 w-4 mr-2 fill-current" />
-                        Ir al Workspace
+                    {bookmarkState.isSaving ? (
+                      <Button disabled variant="outline" size="sm">
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Guardando...
                       </Button>
+                    ) : bookmarkState.hasExactMatch && bookmarkState.exactMatchId ? (
+                      <>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => goToBookmark(bookmarkState.exactMatchId!)}
+                          className="gap-2"
+                        >
+                          <ExternalLink className="h-4 w-4" />
+                          Ir al Workspace
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={handleBookmark}>
+                          <BookmarkCheck className="h-4 w-4" />
+                        </Button>
+                      </>
                     ) : (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-9 bg-white dark:bg-slate-900"
-                        onClick={handleBookmark}
-                        disabled={bookmarkState.isLoading}
-                      >
-                        {bookmarkState.isLoading ? (
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        ) : (
-                          <Bookmark className="h-4 w-4 mr-2" />
-                        )}
+                      <Button variant="outline" size="sm" onClick={handleBookmark}>
+                        <Bookmark className="h-4 w-4 mr-2" />
                         Guardar
                       </Button>
                     )}
@@ -722,16 +740,7 @@ const SignalCard = ({ signal, company }: { signal: Signal; company: CompanyDetai
       <div className="p-6">
         <div className="flex items-start justify-between gap-4 mb-4">
           <div className="flex gap-4 w-full">
-            <Avatar className="h-14 w-14 border-2 border-white shadow-sm ring-1 ring-slate-100 shrink-0">
-              <AvatarImage
-                src={signal.contact?.profile_picture_url || ""}
-                alt={signal.contact?.full_name || "Contact"}
-                className="object-cover"
-              />
-              <AvatarFallback className="text-lg bg-primary/10 text-primary font-medium">
-                {contactInitials}
-              </AvatarFallback>
-            </Avatar>
+            <SignalCardAvatar imageUrl={signal.contact?.profile_picture_url} fullName={signal.contact?.full_name} />
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-0.5">
                 <h4 className="font-bold text-base truncate">{signal.contact?.full_name}</h4>
