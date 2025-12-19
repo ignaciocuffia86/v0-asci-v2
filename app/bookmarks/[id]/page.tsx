@@ -219,7 +219,12 @@ export default function BookmarkWorkspacePage() {
           </TabsContent>
 
           <TabsContent value="summary" className="m-0 focus-visible:ring-0">
-            <SummaryTab bookmarkId={bookmarkId} companyName={company.name} />
+            <SummaryTab
+              bookmarkId={bookmarkId}
+              companyName={company.name}
+              companyLogoUrl={company.logo_url}
+              companyWebsite={company.website}
+            />
           </TabsContent>
 
           <TabsContent value="jobpostings" className="m-0 focus-visible:ring-0">

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import {
@@ -9,46 +9,91 @@ import {
   RefreshCw,
   Loader2,
   AlertCircle,
+  AlertTriangle,
   Users,
   Newspaper,
   Briefcase,
   Target,
-  Linkedin,
-  Mail,
-  Phone,
+  TrendingUp,
+  Shield,
+  Copy,
+  Check,
+  Save,
+  Sparkles,
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 import { useToast } from "@/hooks/use-toast"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { jsPDF } from "jspdf"
+import { Badge } from "@/components/ui/badge"
+import { Progress } from "@/components/ui/progress"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { generateBriefPdf } from "@/lib/brief/generate-brief-pdf"
 
-const BIGUA_LOGO_URL = "/images/isologo-negro.png"
+interface FitReason {
+  reason: string
+  source: string
+  confidence: "high" | "medium" | "low"
+  evidenceCount: number
+  snippet?: string
+}
 
-interface KeyContact {
-  name: string
-  role: string
-  email: string | null
-  phone: string | null
-  linkedin: string | null
-  source: "prospect" | "signal"
+interface Risk {
+  type: string
+  description: string
+  confidence: string
+  source: string
+  mitigation?: string
+}
+
+interface Summary {
+  id: string
+  bookmark_id: string
+  summary: string
+  html_content: string | null
+  generated_at: string
+  version: number
+  fit_score: number | null
+  fit_reasons: FitReason[] | null
+  risks: Risk[] | null
+  context_hash: string | null
+  user_email: string | null
+  metadata: any
 }
 
 interface SummaryTabProps {
   bookmarkId: string
   companyName: string
+  companyLogoUrl?: string
+  companyWebsite?: string
 }
 
-export function SummaryTab({ bookmarkId, companyName }: SummaryTabProps) {
-  const [summary, setSummary] = useState<any>(null)
+export function SummaryTab({ bookmarkId, companyName, companyLogoUrl, companyWebsite }: SummaryTabProps) {
+  const [summary, setSummary] = useState<Summary | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isGenerating, setIsGenerating] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
   const [isDownloading, setIsDownloading] = useState(false)
+  const [hasChanges, setHasChanges] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false)
+  const editorRef = useRef<HTMLDivElement>(null)
   const { toast } = useToast()
   const supabase = createClient()
 
   useEffect(() => {
     fetchSummary()
+    checkSuperAdmin()
   }, [bookmarkId])
+
+  const checkSuperAdmin = async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    if (user) {
+      const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single()
+      setIsSuperAdmin(profile?.role === "superadmin")
+    }
+  }
 
   const fetchSummary = async () => {
     setIsLoading(true)
@@ -68,11 +113,15 @@ export function SummaryTab({ bookmarkId, companyName }: SummaryTabProps) {
     }
   }
 
-  const handleGenerateSummary = async () => {
+  const handleGenerateSummary = async (force = false) => {
     setIsGenerating(true)
     try {
-      const response = await fetch(`/api/bookmarks/${bookmarkId}/generate-summary`, {
+      const response = await fetch(`/api/bookmarks/${bookmarkId}/generate-brief`, {
         method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ force }),
       })
 
       if (!response.ok) {
@@ -81,12 +130,23 @@ export function SummaryTab({ bookmarkId, companyName }: SummaryTabProps) {
       }
 
       const data = await response.json()
-      setSummary(data.summary)
 
-      toast({
-        title: "Brief generado",
-        description: "El brief ejecutivo ha sido generado exitosamente",
-      })
+      if (data.cached) {
+        toast({
+          title: "Brief cargado",
+          description: "El contexto no ha cambiado. Mostrando brief existente.",
+        })
+      } else {
+        toast({
+          title: "Brief generado",
+          description: force
+            ? "El brief ha sido regenerado forzadamente (superadmin)"
+            : "El brief ejecutivo ha sido generado exitosamente",
+        })
+      }
+
+      setSummary(data.summary)
+      setHasChanges(false)
     } catch (error: any) {
       toast({
         title: "Error",
@@ -98,190 +158,73 @@ export function SummaryTab({ bookmarkId, companyName }: SummaryTabProps) {
     }
   }
 
-  const handleDownloadPDF = async () => {
+  const handleSaveChanges = async () => {
+    if (!summary || !editorRef.current) return
+
+    setIsSaving(true)
+    try {
+      const newHtmlContent = editorRef.current.innerHTML
+
+      const { error } = await supabase
+        .from("bookmark_summaries")
+        .update({
+          html_content: newHtmlContent,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", summary.id)
+
+      if (error) throw error
+
+      setSummary((prev) => (prev ? { ...prev, html_content: newHtmlContent } : null))
+      setHasChanges(false)
+
+      toast({
+        title: "Cambios guardados",
+        description: "El brief ha sido actualizado",
+      })
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: "No se pudieron guardar los cambios",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const handleDownloadPdf = async () => {
     if (!summary) return
 
     setIsDownloading(true)
-
     try {
-      const sections = parseSummary(summary.summary)
-      const keyContacts: KeyContact[] = summary.metadata?.key_contacts || []
-      const generatedDate = new Date(summary.generated_at).toLocaleDateString("es-ES", {
-        year: "numeric",
-        month: "long",
-        day: "numeric",
+      const fitScore = summary.fit_score || summary.metadata?.fitScore || 0
+      const fitReasons = summary.fit_reasons || summary.metadata?.fitReasons || []
+      const risks = summary.risks || summary.metadata?.risks || []
+      const sourcesSummary = summary.metadata?.sourcesSummary || {
+        currentEmployeesCount: 0,
+        alumniCount: 0,
+        jobPostingsCount: 0,
+        newsCount: 0,
+        implementationsCount: 0,
+        prospectsCount: 0,
+      }
+
+      await generateBriefPdf({
+        companyName,
+        companyIndustry: summary.metadata?.company_industry,
+        companyCountry: summary.metadata?.company_country,
+        companyLogoUrl,
+        companyWebsite,
+        fitScore,
+        fitReasons,
+        risks,
+        htmlContent: editorRef.current?.innerHTML || summary.html_content || summary.summary,
+        sourcesSummary,
+        generatedAt: summary.generated_at,
+        userEmail: summary.user_email || summary.metadata?.userEmail || "usuario@asci.app",
+        version: summary.version,
       })
-
-      // Create PDF with jsPDF
-      const doc = new jsPDF({
-        orientation: "portrait",
-        unit: "mm",
-        format: "a4",
-      })
-
-      const pageWidth = doc.internal.pageSize.getWidth()
-      const pageHeight = doc.internal.pageSize.getHeight()
-      const margin = 20
-      const contentWidth = pageWidth - margin * 2
-      let yPosition = margin
-
-      let logoLoaded = false
-      let logoImage: HTMLImageElement | null = null
-
-      try {
-        logoImage = await new Promise<HTMLImageElement>((resolve, reject) => {
-          const img = new Image()
-          img.crossOrigin = "anonymous"
-          img.onload = () => resolve(img)
-          img.onerror = reject
-          img.src = BIGUA_LOGO_URL
-        })
-        logoLoaded = true
-      } catch (e) {
-        console.warn("[v0] Could not load logo, continuing without it")
-      }
-
-      // Helper function to add text with word wrap
-      const addWrappedText = (text: string, fontSize: number, isBold = false, color: number[] = [51, 65, 85]) => {
-        doc.setFontSize(fontSize)
-        doc.setFont("helvetica", isBold ? "bold" : "normal")
-        doc.setTextColor(color[0], color[1], color[2])
-
-        const lines = doc.splitTextToSize(text, contentWidth)
-
-        for (const line of lines) {
-          if (yPosition > pageHeight - margin - 10) {
-            doc.addPage()
-            yPosition = margin
-          }
-          doc.text(line, margin, yPosition)
-          yPosition += fontSize * 0.4
-        }
-
-        return yPosition
-      }
-
-      const addSection = (title: string, content: string, iconColor: number[]) => {
-        // Add spacing before section
-        yPosition += 5
-
-        // Check if we need a new page
-        if (yPosition > pageHeight - 50) {
-          doc.addPage()
-          yPosition = margin
-        }
-
-        // Section title with colored bar
-        doc.setFillColor(iconColor[0], iconColor[1], iconColor[2])
-        doc.rect(margin, yPosition - 4, 3, 8, "F")
-
-        doc.setFontSize(12)
-        doc.setFont("helvetica", "bold")
-        doc.setTextColor(30, 64, 175)
-        doc.text(title, margin + 6, yPosition)
-        yPosition += 8
-
-        const processedContent = content || "No disponible."
-
-        // Section content
-        addWrappedText(processedContent, 10, false, [71, 85, 105])
-        yPosition += 3
-      }
-
-      const addContactsSection = (contacts: KeyContact[], iconColor: number[]) => {
-        yPosition += 5
-
-        if (yPosition > pageHeight - 50) {
-          doc.addPage()
-          yPosition = margin
-        }
-
-        // Section title with colored bar
-        doc.setFillColor(iconColor[0], iconColor[1], iconColor[2])
-        doc.rect(margin, yPosition - 4, 3, 8, "F")
-
-        doc.setFontSize(12)
-        doc.setFont("helvetica", "bold")
-        doc.setTextColor(30, 64, 175)
-        doc.text("3. Contactos Clave", margin + 6, yPosition)
-        yPosition += 8
-
-        if (contacts.length === 0) {
-          addWrappedText("No hay contactos identificados.", 10, false, [71, 85, 105])
-        } else {
-          for (const contact of contacts) {
-            if (yPosition > pageHeight - margin - 15) {
-              doc.addPage()
-              yPosition = margin
-            }
-
-            // Contact line
-            const contactLine = `- ${contact.name} | ${contact.role} | ${contact.email || "No disponible"} | ${contact.phone || "No disponible"}`
-            addWrappedText(contactLine, 9, false, [71, 85, 105])
-
-            // LinkedIn on separate line if available
-            if (contact.linkedin) {
-              doc.setFontSize(8)
-              doc.setTextColor(37, 99, 235)
-              doc.textWithLink(contact.linkedin, margin + 5, yPosition, { url: contact.linkedin })
-              yPosition += 4
-            }
-            yPosition += 2
-          }
-        }
-        yPosition += 3
-      }
-
-      doc.setFillColor(37, 99, 235)
-      doc.rect(0, 0, pageWidth, 40, "F")
-
-      // Agregar logo si se cargó
-      if (logoLoaded && logoImage) {
-        doc.setFillColor(255, 255, 255)
-        doc.circle(margin + 10, 20, 12, "F")
-        doc.addImage(logoImage, "PNG", margin + 2, 8, 16, 16)
-      }
-
-      const titleX = logoLoaded ? margin + 25 : margin
-
-      doc.setFontSize(18)
-      doc.setFont("helvetica", "bold")
-      doc.setTextColor(255, 255, 255)
-      doc.text(`Brief Ejecutivo: ${companyName}`, titleX, 18)
-
-      doc.setFontSize(10)
-      doc.setFont("helvetica", "normal")
-      doc.text(`Generado el ${generatedDate}`, titleX, 26)
-
-      if (summary.metadata) {
-        const statsText = `${summary.metadata.signals_count || 0} señales • ${summary.metadata.decision_makers_count || 0} contactos • ${summary.metadata.news_count || 0} noticias`
-        doc.text(statsText, titleX, 34)
-      }
-
-      yPosition = 50
-
-      // Sections
-      addSection("1. Señales Detectadas", sections.signals, [249, 115, 22])
-      addSection("2. Contexto de Mercado", sections.context, [59, 130, 246])
-      addContactsSection(keyContacts, [34, 197, 94])
-      addSection("4. Playbook de Abordaje", sections.playbook, [168, 85, 247])
-
-      // Footer on each page
-      const pageCount = doc.internal.pages.length - 1
-      for (let i = 1; i <= pageCount; i++) {
-        doc.setPage(i)
-        doc.setFontSize(8)
-        doc.setTextColor(148, 163, 184)
-        doc.text(
-          `Brief generado por Biguá • ${companyName} • Página ${i} de ${pageCount}`,
-          pageWidth / 2,
-          pageHeight - 10,
-          { align: "center" },
-        )
-      }
-
-      // Download
-      doc.save(`brief_${companyName.replace(/[^a-z0-9]/gi, "_")}.pdf`)
 
       toast({
         title: "PDF descargado",
@@ -299,6 +242,67 @@ export function SummaryTab({ bookmarkId, companyName }: SummaryTabProps) {
     }
   }
 
+  const handleCopyHtml = async () => {
+    if (!editorRef.current) return
+
+    try {
+      await navigator.clipboard.writeText(editorRef.current.innerHTML)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+      toast({
+        title: "Copiado",
+        description: "HTML copiado al portapapeles",
+      })
+    } catch {
+      toast({
+        title: "Error",
+        description: "No se pudo copiar",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const handleEditorChange = () => {
+    setHasChanges(true)
+  }
+
+  const getFitScoreColor = (score: number) => {
+    if (score >= 70) return "text-green-600"
+    if (score >= 40) return "text-yellow-600"
+    return "text-red-600"
+  }
+
+  const getFitScoreProgressColor = (score: number) => {
+    if (score >= 70) return "bg-green-500"
+    if (score >= 40) return "bg-yellow-500"
+    return "bg-red-500"
+  }
+
+  const getConfidenceBadge = (confidence: string) => {
+    switch (confidence) {
+      case "high":
+        return (
+          <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 text-[10px]">
+            ALTO
+          </Badge>
+        )
+      case "medium":
+        return (
+          <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200 text-[10px]">
+            MEDIO
+          </Badge>
+        )
+      case "low":
+        return (
+          <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200 text-[10px]">
+            BAJO
+          </Badge>
+        )
+      default:
+        return null
+    }
+  }
+
   const formatDate = (date: string) => {
     return new Date(date).toLocaleDateString("es-ES", {
       year: "numeric",
@@ -307,37 +311,6 @@ export function SummaryTab({ bookmarkId, companyName }: SummaryTabProps) {
       hour: "2-digit",
       minute: "2-digit",
     })
-  }
-
-  const parseSummary = (text: string) => {
-    const sections = {
-      title: "",
-      signals: "",
-      context: "",
-      contacts: "",
-      playbook: "",
-    }
-
-    // Extract title
-    const titleMatch = text.match(/\*\*BRIEF EJECUTIVO PARA (.+?)\*\*/i)
-    if (titleMatch) {
-      sections.title = titleMatch[1]
-    }
-
-    // Extract sections
-    const signalsMatch = text.match(/\*\*1\. SEÑALES DETECTADAS\*\*\n([\s\S]*?)(?=\*\*2\.|$)/i)
-    if (signalsMatch) sections.signals = signalsMatch[1].trim()
-
-    const contextMatch = text.match(/\*\*2\. CONTEXTO DE MERCADO\*\*\n([\s\S]*?)(?=\*\*3\.|$)/i)
-    if (contextMatch) sections.context = contextMatch[1].trim()
-
-    const contactsMatch = text.match(/\*\*3\. CONTACTOS CLAVE\*\*\n([\s\S]*?)(?=\*\*4\.|$)/i)
-    if (contactsMatch) sections.contacts = contactsMatch[1].trim()
-
-    const playbookMatch = text.match(/\*\*4\. PLAYBOOK DE ABORDAJE\*\*\n([\s\S]*?)$/i)
-    if (playbookMatch) sections.playbook = playbookMatch[1].trim()
-
-    return sections
   }
 
   if (isLoading) {
@@ -359,16 +332,15 @@ export function SummaryTab({ bookmarkId, companyName }: SummaryTabProps) {
             Brief Ejecutivo
           </CardTitle>
           <CardDescription>
-            Genera un brief ejecutivo completo con análisis de señales, contexto de mercado, contactos clave y playbook
-            de abordaje.
+            Genera un brief ejecutivo completo con análisis de FIT, señales detectadas, riesgos y playbook de abordaje.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <Alert>
             <AlertCircle className="h-4 w-4" />
             <AlertDescription>
-              El brief se genera bajo demanda. Asegúrate de tener información completa en las otras pestañas (noticias,
-              implementaciones, contactos, señales y estrategia) antes de generar el brief.
+              El brief se genera bajo demanda utilizando IA. Asegúrate de tener información completa en las otras
+              pestañas antes de generar.
             </AlertDescription>
           </Alert>
 
@@ -376,36 +348,40 @@ export function SummaryTab({ bookmarkId, companyName }: SummaryTabProps) {
             <h4 className="font-medium text-sm">El brief incluirá:</h4>
             <div className="grid grid-cols-2 gap-3 text-sm">
               <div className="flex items-start gap-2">
-                <Target className="h-4 w-4 text-primary mt-0.5" />
+                <TrendingUp className="h-4 w-4 text-green-600 mt-0.5" />
+                <div>
+                  <p className="font-medium">FIT Score (0-100)</p>
+                  <p className="text-muted-foreground text-xs">Qué tan bien hace fit con tu propuesta de valor</p>
+                </div>
+              </div>
+              <div className="flex items-start gap-2">
+                <Target className="h-4 w-4 text-orange-600 mt-0.5" />
                 <div>
                   <p className="font-medium">Señales Detectadas</p>
-                  <p className="text-muted-foreground text-xs">Personas con señales y posiciones abiertas</p>
+                  <p className="text-muted-foreground text-xs">Contactos y posiciones con evidencia</p>
                 </div>
               </div>
               <div className="flex items-start gap-2">
-                <Newspaper className="h-4 w-4 text-primary mt-0.5" />
+                <Shield className="h-4 w-4 text-red-600 mt-0.5" />
                 <div>
-                  <p className="font-medium">Contexto de Mercado</p>
-                  <p className="text-muted-foreground text-xs">Noticias e implementaciones relevantes</p>
+                  <p className="font-medium">Riesgos y Bloqueos</p>
+                  <p className="text-muted-foreground text-xs">Incumbentes, compliance, datos faltantes</p>
                 </div>
               </div>
               <div className="flex items-start gap-2">
-                <Users className="h-4 w-4 text-primary mt-0.5" />
-                <div>
-                  <p className="font-medium">Contactos Clave</p>
-                  <p className="text-muted-foreground text-xs">Decision makers con datos de contacto</p>
-                </div>
-              </div>
-              <div className="flex items-start gap-2">
-                <Briefcase className="h-4 w-4 text-primary mt-0.5" />
+                <Briefcase className="h-4 w-4 text-purple-600 mt-0.5" />
                 <div>
                   <p className="font-medium">Playbook de Abordaje</p>
-                  <p className="text-muted-foreground text-xs">Estrategia y tono recomendado</p>
+                  <p className="text-muted-foreground text-xs">Estrategia y acciones recomendadas</p>
                 </div>
               </div>
             </div>
 
-            <Button onClick={handleGenerateSummary} disabled={isGenerating} className="w-full gap-2 mt-4">
+            <Button
+              onClick={() => handleGenerateSummary(isSuperAdmin)}
+              disabled={isGenerating}
+              className="w-full gap-2 mt-4"
+            >
               {isGenerating ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -413,7 +389,7 @@ export function SummaryTab({ bookmarkId, companyName }: SummaryTabProps) {
                 </>
               ) : (
                 <>
-                  <FileText className="h-4 w-4" />
+                  <Sparkles className="h-4 w-4" />
                   Generar Brief Ejecutivo
                 </>
               )}
@@ -424,213 +400,241 @@ export function SummaryTab({ bookmarkId, companyName }: SummaryTabProps) {
     )
   }
 
-  const sections = parseSummary(summary.summary)
-  const keyContacts: KeyContact[] = summary.metadata?.key_contacts || []
+  const fitScore = summary.fit_score || summary.metadata?.fitScore || 0
+  const fitReasons = summary.fit_reasons || summary.metadata?.fitReasons || []
+  const risks = summary.risks || summary.metadata?.risks || []
+  const sourcesSummary = summary.metadata?.sourcesSummary || {}
 
   return (
     <div className="space-y-4">
-      {/* Header Card */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex-1">
               <CardTitle className="flex items-center gap-2">
                 <FileText className="h-5 w-5 text-primary" />
                 Brief Ejecutivo para {companyName}
               </CardTitle>
-              <CardDescription>Generado el {formatDate(summary.generated_at)}</CardDescription>
+              <CardDescription>
+                Generado el {formatDate(summary.generated_at)} | Versión {summary.version}
+                {summary.user_email && ` | Por: ${summary.user_email}`}
+              </CardDescription>
             </div>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleGenerateSummary}
-                disabled={isGenerating}
-                className="gap-2 bg-transparent"
-              >
-                {isGenerating ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Regenerando...
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className="h-4 w-4" />
-                    Regenerar
-                  </>
-                )}
-              </Button>
-              <Button onClick={handleDownloadPDF} disabled={isDownloading} className="gap-2">
-                {isDownloading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Descargando...
-                  </>
-                ) : (
-                  <>
-                    <FileDown className="h-4 w-4" />
-                    Descargar PDF
-                  </>
-                )}
-              </Button>
+
+            <div className="text-right">
+              <div className="flex items-center gap-2 justify-end">
+                <span className="text-sm text-muted-foreground">FIT Score</span>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger>
+                      <span className={`text-3xl font-bold ${getFitScoreColor(fitScore)}`}>{fitScore}</span>
+                      <span className="text-lg text-muted-foreground">/100</span>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p className="text-xs">
+                        Match de señales con búsqueda, contactos relevantes, calidad de datos y recencia
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
+              <Progress value={fitScore} className={`h-2 w-32 mt-1 ${getFitScoreProgressColor(fitScore)}`} />
             </div>
           </div>
         </CardHeader>
       </Card>
 
-      {/* Stats */}
-      {summary.metadata && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <Card className="p-3">
-            <div className="flex items-center gap-2">
-              <Target className="h-4 w-4 text-orange-500" />
-              <div>
-                <div className="text-xl font-bold">{summary.metadata.signals_count || 0}</div>
-                <div className="text-xs text-muted-foreground">Señales</div>
-              </div>
-            </div>
-          </Card>
-          <Card className="p-3">
-            <div className="flex items-center gap-2">
-              <Newspaper className="h-4 w-4 text-blue-500" />
-              <div>
-                <div className="text-xl font-bold">
-                  {(summary.metadata.news_count || 0) + (summary.metadata.implementations_count || 0)}
+      {fitReasons.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <TrendingUp className="h-4 w-4 text-green-600" />
+              Top Razones de FIT
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {fitReasons.map((reason, idx) => (
+              <div key={idx} className="flex items-start gap-2 p-2 bg-muted/30 rounded-lg">
+                <span className="text-sm font-bold text-muted-foreground">{idx + 1}.</span>
+                <div className="flex-1">
+                  <p className="text-sm">{reason.reason}</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    {getConfidenceBadge(reason.confidence)}
+                    <span className="text-[10px] text-muted-foreground">
+                      ({reason.source}) - {reason.evidenceCount} evidencias
+                    </span>
+                  </div>
                 </div>
-                <div className="text-xs text-muted-foreground">Noticias / Impl.</div>
               </div>
-            </div>
-          </Card>
-          <Card className="p-3">
-            <div className="flex items-center gap-2">
-              <Users className="h-4 w-4 text-green-500" />
-              <div>
-                <div className="text-xl font-bold">{summary.metadata.decision_makers_count || 0}</div>
-                <div className="text-xs text-muted-foreground">Decision Makers</div>
-              </div>
-            </div>
-          </Card>
-          <Card className="p-3">
-            <div className="flex items-center gap-2">
-              <Briefcase className="h-4 w-4 text-purple-500" />
-              <div>
-                <div className="text-xl font-bold">{summary.metadata.job_postings_count || 0}</div>
-                <div className="text-xs text-muted-foreground">Posiciones</div>
-              </div>
-            </div>
-          </Card>
-        </div>
+            ))}
+          </CardContent>
+        </Card>
       )}
 
-      {/* Brief Sections */}
-      <div className="grid gap-4">
-        {/* Señales Detectadas */}
-        <Card>
+      {risks.length > 0 && (
+        <Card className="border-amber-200 bg-amber-50/30">
           <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Target className="h-4 w-4 text-orange-500" />
-              1. Señales Detectadas
+            <CardTitle className="text-sm font-medium flex items-center gap-2 text-amber-800">
+              <AlertTriangle className="h-4 w-4" />
+              Riesgos y Bloqueos
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <div className="prose prose-sm max-w-none text-sm text-muted-foreground whitespace-pre-line">
-              {sections.signals || "No se detectaron señales en este análisis."}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Contexto de Mercado */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Newspaper className="h-4 w-4 text-blue-500" />
-              2. Contexto de Mercado
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="prose prose-sm max-w-none text-sm text-muted-foreground whitespace-pre-line">
-              {sections.context || "No hay suficiente contexto de mercado disponible."}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Users className="h-4 w-4 text-green-500" />
-              3. Contactos Clave
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {keyContacts.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No hay contactos identificados.</p>
-            ) : (
-              <div className="space-y-3">
-                {keyContacts.map((contact, index) => (
-                  <div
-                    key={index}
-                    className="flex flex-col sm:flex-row sm:items-center gap-2 p-3 bg-muted/30 rounded-lg"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-sm truncate">{contact.name}</p>
-                      <p className="text-xs text-muted-foreground truncate">{contact.role}</p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      {contact.linkedin && (
-                        <a
-                          href={contact.linkedin}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 bg-blue-50 px-2 py-1 rounded"
-                        >
-                          <Linkedin className="h-3 w-3" />
-                          LinkedIn
-                        </a>
-                      )}
-                      {contact.email && (
-                        <a
-                          href={`mailto:${contact.email}`}
-                          className="inline-flex items-center gap-1 text-xs text-green-600 hover:text-green-800 bg-green-50 px-2 py-1 rounded"
-                        >
-                          <Mail className="h-3 w-3" />
-                          {contact.email}
-                        </a>
-                      )}
-                      {contact.phone && (
-                        <a
-                          href={`tel:${contact.phone}`}
-                          className="inline-flex items-center gap-1 text-xs text-purple-600 hover:text-purple-800 bg-purple-50 px-2 py-1 rounded"
-                        >
-                          <Phone className="h-3 w-3" />
-                          {contact.phone}
-                        </a>
-                      )}
-                      {!contact.linkedin && !contact.email && !contact.phone && (
-                        <span className="text-xs text-muted-foreground">Sin datos de contacto</span>
-                      )}
-                    </div>
-                  </div>
-                ))}
+          <CardContent className="space-y-2">
+            {risks.map((risk, idx) => (
+              <div key={idx} className="p-2 bg-white/50 rounded-lg border border-amber-100">
+                <p className="text-sm font-medium text-amber-900">{risk.description}</p>
+                {risk.mitigation && (
+                  <p className="text-xs text-amber-700 mt-1">
+                    <span className="font-medium">Mitigación:</span> {risk.mitigation}
+                  </p>
+                )}
               </div>
-            )}
+            ))}
           </CardContent>
         </Card>
+      )}
 
-        {/* Playbook de Abordaje */}
-        <Card className="border-primary/20 bg-primary/5">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Briefcase className="h-4 w-4 text-purple-500" />
-              4. Playbook de Abordaje
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="prose prose-sm max-w-none text-sm whitespace-pre-line">
-              {sections.playbook || "No hay recomendaciones de abordaje disponibles."}
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
+        <Card className="p-3">
+          <div className="flex items-center gap-2">
+            <Users className="h-4 w-4 text-green-500" />
+            <div>
+              <div className="text-lg font-bold">{sourcesSummary.currentEmployeesCount || 0}</div>
+              <div className="text-[10px] text-muted-foreground">Contactos</div>
             </div>
-          </CardContent>
+          </div>
+        </Card>
+        <Card className="p-3">
+          <div className="flex items-center gap-2">
+            <Users className="h-4 w-4 text-slate-400" />
+            <div>
+              <div className="text-lg font-bold">{sourcesSummary.alumniCount || 0}</div>
+              <div className="text-[10px] text-muted-foreground">Alumni</div>
+            </div>
+          </div>
+        </Card>
+        <Card className="p-3">
+          <div className="flex items-center gap-2">
+            <Briefcase className="h-4 w-4 text-orange-500" />
+            <div>
+              <div className="text-lg font-bold">{sourcesSummary.jobPostingsCount || 0}</div>
+              <div className="text-[10px] text-muted-foreground">Posiciones</div>
+            </div>
+          </div>
+        </Card>
+        <Card className="p-3">
+          <div className="flex items-center gap-2">
+            <Newspaper className="h-4 w-4 text-blue-500" />
+            <div>
+              <div className="text-lg font-bold">{sourcesSummary.newsCount || 0}</div>
+              <div className="text-[10px] text-muted-foreground">Noticias</div>
+            </div>
+          </div>
+        </Card>
+        <Card className="p-3">
+          <div className="flex items-center gap-2">
+            <Target className="h-4 w-4 text-purple-500" />
+            <div>
+              <div className="text-lg font-bold">{sourcesSummary.implementationsCount || 0}</div>
+              <div className="text-[10px] text-muted-foreground">Implement.</div>
+            </div>
+          </div>
+        </Card>
+        <Card className="p-3">
+          <div className="flex items-center gap-2">
+            <Target className="h-4 w-4 text-green-600" />
+            <div>
+              <div className="text-lg font-bold">{sourcesSummary.prospectsCount || 0}</div>
+              <div className="text-[10px] text-muted-foreground">Prospectos</div>
+            </div>
+          </div>
         </Card>
       </div>
+
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => handleGenerateSummary(false)}
+            disabled={isGenerating}
+            className="gap-2 bg-transparent"
+          >
+            {isGenerating ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Regenerando...
+              </>
+            ) : (
+              <>
+                <RefreshCw className="h-4 w-4" />
+                Regenerar
+              </>
+            )}
+          </Button>
+
+          {/* Botón de forzar regeneración solo para superadmins */}
+          {isSuperAdmin && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleGenerateSummary(true)}
+                    disabled={isGenerating}
+                    className="gap-2 bg-transparent border-amber-300 text-amber-700 hover:bg-amber-50"
+                  >
+                    <Shield className="h-4 w-4" />
+                    Forzar
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p className="text-xs">Regenerar ignorando cache (solo superadmin)</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+
+          <Button variant="outline" size="sm" onClick={handleCopyHtml} className="gap-2 bg-transparent">
+            {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+            {copied ? "Copiado" : "Copiar HTML"}
+          </Button>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {hasChanges && (
+            <Button size="sm" onClick={handleSaveChanges} disabled={isSaving} className="gap-2">
+              {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              Guardar Cambios
+            </Button>
+          )}
+
+          <Button size="sm" onClick={handleDownloadPdf} disabled={isDownloading} className="gap-2">
+            {isDownloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileDown className="h-4 w-4" />}
+            {isDownloading ? "Generando..." : "Descargar PDF"}
+          </Button>
+        </div>
+      </div>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium">Brief Ejecutivo</CardTitle>
+          <CardDescription>Haz clic en el texto para editar. Los cambios se guardan manualmente.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div
+            ref={editorRef}
+            contentEditable
+            suppressContentEditableWarning
+            onInput={handleEditorChange}
+            className="min-h-[400px] p-4 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 prose prose-sm max-w-none"
+            dangerouslySetInnerHTML={{
+              __html: summary.html_content || summary.summary.replace(/\n/g, "<br>"),
+            }}
+          />
+        </CardContent>
+      </Card>
     </div>
   )
 }
