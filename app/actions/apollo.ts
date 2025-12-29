@@ -508,6 +508,75 @@ export async function getProspects(bookmarkId: string) {
     .eq("bookmark_id", bookmarkId)
     .eq("user_id", user.id)
     .eq("is_decision_maker", true)
+    .neq("status", "removed")
+    .order("created_at", { ascending: false })
+
+  return data || []
+}
+
+export async function removeProspect(prospectId: string): Promise<{ success: boolean; error?: string }> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  if (!user) {
+    return { success: false, error: "No autorizado" }
+  }
+
+  const { error } = await supabase
+    .from("user_company_contacts")
+    .update({ status: "removed" })
+    .eq("id", prospectId)
+    .eq("user_id", user.id)
+
+  if (error) {
+    console.error("Error removing prospect:", error)
+    return { success: false, error: error.message }
+  }
+
+  return { success: true }
+}
+
+export async function restoreProspect(prospectId: string): Promise<{ success: boolean; error?: string }> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  if (!user) {
+    return { success: false, error: "No autorizado" }
+  }
+
+  const { error } = await supabase
+    .from("user_company_contacts")
+    .update({ status: "active" })
+    .eq("id", prospectId)
+    .eq("user_id", user.id)
+
+  if (error) {
+    console.error("Error restoring prospect:", error)
+    return { success: false, error: error.message }
+  }
+
+  return { success: true }
+}
+
+export async function getRemovedProspects(bookmarkId: string) {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  if (!user) return []
+
+  const { data } = await supabase
+    .from("user_company_contacts")
+    .select("*")
+    .eq("bookmark_id", bookmarkId)
+    .eq("user_id", user.id)
+    .eq("is_decision_maker", true)
+    .eq("status", "removed")
     .order("created_at", { ascending: false })
 
   return data || []

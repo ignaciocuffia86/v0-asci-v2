@@ -224,6 +224,8 @@ export default function BookmarkWorkspacePage() {
               companyName={company.name}
               companyLogoUrl={company.logo_url}
               companyWebsite={company.website}
+              companyIndustry={company.industry}
+              companyCountry={company.country}
             />
           </TabsContent>
 

@@ -87,15 +87,15 @@ export async function prepareBriefContext(options: PrepareContextOptions): Promi
       p_limit: 3,
     }),
 
-    // Prospectos/Decision Makers (max 5)
     supabase
       .from("user_company_contacts")
       .select(
-        "id, full_name, role, email, email_status, phone, mobile_phone, linkedin_url, profile_picture_url, seniority, is_decision_maker",
+        "id, full_name, role, email, email_status, phone, mobile_phone, linkedin_url, profile_picture_url, seniority, is_decision_maker, status",
       )
       .eq("bookmark_id", bookmarkId)
       .eq("user_id", userId)
       .eq("is_decision_maker", true)
+      .neq("status", "removed")
       .limit(5),
 
     // Estrategia

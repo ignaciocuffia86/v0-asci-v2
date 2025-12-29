@@ -27,7 +27,6 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { generateBriefPdf } from "@/lib/brief/generate-brief-pdf"
 
 interface FitReason {
   reason: string
@@ -65,17 +64,25 @@ interface SummaryTabProps {
   companyName: string
   companyLogoUrl?: string
   companyWebsite?: string
+  companyIndustry?: string
+  companyCountry?: string
 }
 
-export function SummaryTab({ bookmarkId, companyName, companyLogoUrl, companyWebsite }: SummaryTabProps) {
+export function SummaryTab({
+  bookmarkId,
+  companyName,
+  companyLogoUrl,
+  companyWebsite,
+  companyIndustry,
+  companyCountry,
+}: SummaryTabProps) {
   const [summary, setSummary] = useState<Summary | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isGenerating, setIsGenerating] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
-  const [isDownloading, setIsDownloading] = useState(false)
-  const [hasChanges, setHasChanges] = useState(false)
   const [copied, setCopied] = useState(false)
   const [isSuperAdmin, setIsSuperAdmin] = useState(false)
+  const [hasChanges, setHasChanges] = useState(false)
   const editorRef = useRef<HTMLDivElement>(null)
   const { toast } = useToast()
   const supabase = createClient()
@@ -193,70 +200,30 @@ export function SummaryTab({ bookmarkId, companyName, companyLogoUrl, companyWeb
     }
   }
 
-  const handleDownloadPdf = async () => {
-    if (!summary) return
-
-    setIsDownloading(true)
-    try {
-      const fitScore = summary.fit_score || summary.metadata?.fitScore || 0
-      const fitReasons = summary.fit_reasons || summary.metadata?.fitReasons || []
-      const risks = summary.risks || summary.metadata?.risks || []
-      const sourcesSummary = summary.metadata?.sourcesSummary || {
-        currentEmployeesCount: 0,
-        alumniCount: 0,
-        jobPostingsCount: 0,
-        newsCount: 0,
-        implementationsCount: 0,
-        prospectsCount: 0,
-      }
-
-      await generateBriefPdf({
-        companyName,
-        companyIndustry: summary.metadata?.company_industry,
-        companyCountry: summary.metadata?.company_country,
-        companyLogoUrl,
-        companyWebsite,
-        fitScore,
-        fitReasons,
-        risks,
-        htmlContent: editorRef.current?.innerHTML || summary.html_content || summary.summary,
-        sourcesSummary,
-        generatedAt: summary.generated_at,
-        userEmail: summary.user_email || summary.metadata?.userEmail || "usuario@asci.app",
-        version: summary.version,
-      })
-
-      toast({
-        title: "PDF descargado",
-        description: "El brief ha sido descargado exitosamente",
-      })
-    } catch (error: any) {
-      console.error("[v0] PDF generation error:", error)
-      toast({
-        title: "Error",
-        description: error.message || "No se pudo generar el PDF",
-        variant: "destructive",
-      })
-    } finally {
-      setIsDownloading(false)
-    }
-  }
-
-  const handleCopyHtml = async () => {
+  const handleCopyText = async () => {
     if (!editorRef.current) return
 
     try {
-      await navigator.clipboard.writeText(editorRef.current.innerHTML)
+      const htmlContent = editorRef.current.innerHTML
+      const textContent = editorRef.current.innerText || editorRef.current.textContent || ""
+
+      // Use ClipboardItem to copy both HTML and plain text formats
+      const clipboardItem = new ClipboardItem({
+        "text/html": new Blob([htmlContent], { type: "text/html" }),
+        "text/plain": new Blob([textContent], { type: "text/plain" }),
+      })
+
+      await navigator.clipboard.write([clipboardItem])
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
       toast({
         title: "Copiado",
-        description: "HTML copiado al portapapeles",
+        description: "Brief copiado con formato al portapapeles",
       })
     } catch {
       toast({
         title: "Error",
-        description: "No se pudo copiar",
+        description: "No se pudo copiar el brief",
         variant: "destructive",
       })
     }
@@ -596,9 +563,9 @@ export function SummaryTab({ bookmarkId, companyName, companyLogoUrl, companyWeb
             </TooltipProvider>
           )}
 
-          <Button variant="outline" size="sm" onClick={handleCopyHtml} className="gap-2 bg-transparent">
+          <Button variant="outline" size="sm" onClick={handleCopyText} className="gap-2 bg-transparent">
             {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-            {copied ? "Copiado" : "Copiar HTML"}
+            {copied ? "Copiado" : "Copiar Texto"}
           </Button>
         </div>
 
@@ -610,9 +577,14 @@ export function SummaryTab({ bookmarkId, companyName, companyLogoUrl, companyWeb
             </Button>
           )}
 
-          <Button size="sm" onClick={handleDownloadPdf} disabled={isDownloading} className="gap-2">
-            {isDownloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileDown className="h-4 w-4" />}
-            {isDownloading ? "Generando..." : "Descargar PDF"}
+          <Button
+            size="sm"
+            onClick={() => console.log("Download PDF functionality removed")}
+            disabled
+            className="gap-2"
+          >
+            <FileDown className="h-4 w-4" />
+            Descargar PDF
           </Button>
         </div>
       </div>

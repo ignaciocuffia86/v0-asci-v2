@@ -19,8 +19,20 @@ import {
   CheckCircle2,
   AlertCircle,
   Target,
+  Trash2,
+  RotateCcw,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react"
-import { inferJobTitles, getBookmarkSearchContext, searchApolloProspects, getProspects } from "@/app/actions/apollo"
+import {
+  inferJobTitles,
+  getBookmarkSearchContext,
+  searchApolloProspects,
+  getProspects,
+  removeProspect,
+  restoreProspect,
+  getRemovedProspects,
+} from "@/app/actions/apollo"
 import Link from "next/link"
 import { Input } from "@/components/ui/input"
 
@@ -43,10 +55,16 @@ interface Prospect {
   source?: string
   is_decision_maker?: boolean
   created_at?: string
+  status?: string
 }
 
 export function ProspectsTab({ bookmarkId }: { bookmarkId: string }) {
   const [prospects, setProspects] = useState<Prospect[]>([])
+  const [removedProspects, setRemovedProspects] = useState<Prospect[]>([])
+  const [showRemoved, setShowRemoved] = useState(false)
+  const [removingId, setRemovingId] = useState<string | null>(null)
+  const [restoringId, setRestoringId] = useState<string | null>(null)
+
   const [isLoading, setIsLoading] = useState(true)
   const [isSearching, setIsSearching] = useState(false)
   const [isInferring, setIsInferring] = useState(false)
@@ -84,6 +102,9 @@ export function ProspectsTab({ bookmarkId }: { bookmarkId: string }) {
     // Cargar prospectos existentes
     const existingProspects = await getProspects(bookmarkId)
     setProspects(existingProspects)
+
+    const removed = await getRemovedProspects(bookmarkId)
+    setRemovedProspects(removed)
 
     setIsLoading(false)
   }, [bookmarkId])
@@ -134,6 +155,34 @@ export function ProspectsTab({ bookmarkId }: { bookmarkId: string }) {
       console.error("Error searching prospects:", error)
     }
     setIsSearching(false)
+  }
+
+  const handleRemoveProspect = async (prospectId: string) => {
+    setRemovingId(prospectId)
+    const result = await removeProspect(prospectId)
+    if (result.success) {
+      // Mover de prospects a removedProspects
+      const removed = prospects.find((p) => p.id === prospectId)
+      if (removed) {
+        setProspects((prev) => prev.filter((p) => p.id !== prospectId))
+        setRemovedProspects((prev) => [{ ...removed, status: "removed" }, ...prev])
+      }
+    }
+    setRemovingId(null)
+  }
+
+  const handleRestoreProspect = async (prospectId: string) => {
+    setRestoringId(prospectId)
+    const result = await restoreProspect(prospectId)
+    if (result.success) {
+      // Mover de removedProspects a prospects
+      const restored = removedProspects.find((p) => p.id === prospectId)
+      if (restored) {
+        setRemovedProspects((prev) => prev.filter((p) => p.id !== prospectId))
+        setProspects((prev) => [{ ...restored, status: "active" }, ...prev])
+      }
+    }
+    setRestoringId(null)
   }
 
   if (isLoading) {
@@ -343,6 +392,25 @@ export function ProspectsTab({ bookmarkId }: { bookmarkId: string }) {
                           </p>
                         )}
                       </div>
+
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
+                            onClick={() => handleRemoveProspect(prospect.id)}
+                            disabled={removingId === prospect.id}
+                          >
+                            {removingId === prospect.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Quitar del brief</TooltipContent>
+                      </Tooltip>
                     </div>
 
                     {/* Acciones */}
@@ -431,6 +499,67 @@ export function ProspectsTab({ bookmarkId }: { bookmarkId: string }) {
               ))}
             </TooltipProvider>
           </div>
+        </div>
+      )}
+
+      {removedProspects.length > 0 && (
+        <div className="border-t pt-4">
+          <button
+            onClick={() => setShowRemoved(!showRemoved)}
+            className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors w-full"
+          >
+            {showRemoved ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            <span>
+              {removedProspects.length} prospecto{removedProspects.length !== 1 ? "s" : ""} eliminado
+              {removedProspects.length !== 1 ? "s" : ""}
+            </span>
+          </button>
+
+          {showRemoved && (
+            <div className="mt-4 space-y-2">
+              <TooltipProvider>
+                {removedProspects.map((prospect) => (
+                  <div
+                    key={prospect.id}
+                    className="flex items-center justify-between p-3 bg-muted/50 rounded-lg opacity-60"
+                  >
+                    <div className="flex items-center gap-3">
+                      <Avatar className="h-8 w-8">
+                        <AvatarImage src={prospect.profile_picture_url || ""} />
+                        <AvatarFallback className="text-xs">
+                          {prospect.first_name?.[0]}
+                          {prospect.last_name?.[0]}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div>
+                        <p className="text-sm font-medium">{prospect.full_name}</p>
+                        <p className="text-xs text-muted-foreground">{prospect.role}</p>
+                      </div>
+                    </div>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 gap-1.5"
+                          onClick={() => handleRestoreProspect(prospect.id)}
+                          disabled={restoringId === prospect.id}
+                        >
+                          {restoringId === prospect.id ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <RotateCcw className="h-3.5 w-3.5" />
+                          )}
+                          Restaurar
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Volver a incluir en el brief</TooltipContent>
+                    </Tooltip>
+                  </div>
+                ))}
+              </TooltipProvider>
+            </div>
+          )}
         </div>
       )}
     </div>
