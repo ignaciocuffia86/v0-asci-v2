@@ -178,10 +178,6 @@ export default function BookmarkWorkspacePage() {
               <Building2 className="h-4 w-4" />
               Resumen
             </TabsTrigger>
-            <TabsTrigger value="summary" className="gap-2">
-              <FileText className="h-4 w-4 text-primary" />
-              Brief Ejecutivo
-            </TabsTrigger>
             <TabsTrigger value="jobpostings" className="gap-2">
               <Flame className="h-4 w-4 text-orange-500" />
               Posiciones
@@ -212,21 +208,14 @@ export default function BookmarkWorkspacePage() {
                 AI
               </Badge>
             </TabsTrigger>
+            <TabsTrigger value="summary" className="gap-2">
+              <FileText className="h-4 w-4 text-primary" />
+              Brief Ejecutivo
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="m-0 focus-visible:ring-0">
             <BookmarkOverview bookmarkId={bookmarkId} company={company} />
-          </TabsContent>
-
-          <TabsContent value="summary" className="m-0 focus-visible:ring-0">
-            <SummaryTab
-              bookmarkId={bookmarkId}
-              companyName={company.name}
-              companyLogoUrl={company.logo_url}
-              companyWebsite={company.website}
-              companyIndustry={company.industry}
-              companyCountry={company.country}
-            />
           </TabsContent>
 
           <TabsContent value="jobpostings" className="m-0 focus-visible:ring-0">
@@ -251,6 +240,17 @@ export default function BookmarkWorkspacePage() {
 
           <TabsContent value="icebreakers" className="m-0 focus-visible:ring-0">
             <BookmarkIcebreakers bookmarkId={bookmarkId} companyName={company.name} />
+          </TabsContent>
+
+          <TabsContent value="summary" className="m-0 focus-visible:ring-0">
+            <SummaryTab
+              bookmarkId={bookmarkId}
+              companyName={company.name}
+              companyLogoUrl={company.logo_url}
+              companyWebsite={company.website}
+              companyIndustry={company.industry}
+              companyCountry={company.country}
+            />
           </TabsContent>
         </Tabs>
       </main>

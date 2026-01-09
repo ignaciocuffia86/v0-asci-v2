@@ -144,7 +144,7 @@ export async function searchCompaniesByName(query: string) {
 
   const { data, error } = await supabase.rpc("search_companies_by_name_filtered", {
     p_query_text: query,
-    p_limit: 10,
+    p_limit: 50,
   })
 
   if (error) {
@@ -155,7 +155,7 @@ export async function searchCompaniesByName(query: string) {
       .select("id, name, logo_url, country, industry, linkedin_url")
       .ilike("name", `%${query}%`)
       .not("linkedin_url", "is", null)
-      .limit(10)
+      .limit(50)
 
     if (fallbackError) {
       console.error("Error searching companies (fallback):", fallbackError)

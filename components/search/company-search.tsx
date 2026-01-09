@@ -90,7 +90,7 @@ export function CompanySearch() {
           </div>
 
           {suggestions.length > 0 && !selectedCompany && (
-            <div className="absolute z-10 w-full mt-1 bg-popover border rounded-md shadow-md overflow-hidden">
+            <div className="absolute z-10 w-full mt-1 bg-popover border rounded-md shadow-md overflow-hidden max-h-[300px] overflow-y-auto">
               {suggestions.map((company) => (
                 <div
                   key={company.id}
