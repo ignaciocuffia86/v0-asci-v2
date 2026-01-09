@@ -1,16 +1,18 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useCallback } from "react"
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Search, Building2, MapPin, Loader2, Users, GraduationCap, Flame, ArrowUpDown } from "lucide-react"
+import { Search, Loader2, ArrowUpDown } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { searchByTechnology, type TechnologySearchResult, type SortOption } from "@/app/actions/search-v2"
 import { CompanyDrawer } from "@/components/company-drawer"
-import { ScoreTooltip, ScoringExplanation, ProvidersFilterTooltip } from "@/components/search/score-tooltip"
+import { ScoringExplanation, ProvidersFilterTooltip } from "@/components/search/score-tooltip"
 import { CountryMultiSelect } from "@/components/search/country-multi-select"
+import BulkBookmarkButton from "./bulk-bookmark-button"
+import ResultItem from "./result-item" // Import the ResultItem component
 
 type TechnologyWithVendor = {
   id: string
@@ -26,9 +28,12 @@ export function TechnologySearch() {
   const [results, setResults] = useState<TechnologySearchResult[]>([])
   const [isSearching, setIsSearching] = useState(false)
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null)
+  const [selectedCompanyIds, setSelectedCompanyIds] = useState<Set<string>>(new Set())
   const [excludeProviders, setExcludeProviders] = useState(false)
   const [sortBy, setSortBy] = useState<SortOption>("relevance")
   const supabase = createClient()
+
+  const getTechName = (id: string) => technologies.find((t) => t.id === id)?.display_name || id
 
   useEffect(() => {
     const fetchTechnologies = async () => {
@@ -54,6 +59,7 @@ export function TechnologySearch() {
     if (!selectedTech || selectedCountries.length === 0) return
 
     setIsSearching(true)
+    setSelectedCompanyIds(new Set())
     try {
       const data = await searchByTechnology(selectedTech, selectedCountries, excludeProviders)
       setResults(data)
@@ -62,6 +68,31 @@ export function TechnologySearch() {
     } finally {
       setIsSearching(false)
     }
+  }
+
+  const toggleCompanySelection = useCallback((companyId: string) => {
+    setSelectedCompanyIds((prevSet) => {
+      const newSet = new Set(prevSet)
+      if (newSet.has(companyId)) {
+        newSet.delete(companyId)
+      } else {
+        newSet.add(companyId)
+      }
+      return newSet
+    })
+  }, [])
+
+  const handleOpenDrawer = useCallback((companyId: string) => {
+    setSelectedCompanyId(companyId)
+  }, [])
+
+  const searchContext = {
+    filterSignalIds: selectedTech ? [selectedTech] : [],
+    filterType: "technology",
+    filtersUsed: {
+      technology: selectedTech ? [getTechName(selectedTech)] : [],
+      countries: selectedCountries,
+    },
   }
 
   const sortedResults = useMemo(() => {
@@ -183,85 +214,23 @@ export function TechnologySearch() {
 
           <div className="grid gap-4">
             {sortedResults.map((company) => (
-              <div
+              <ResultItem
                 key={company.company_id}
-                className="bg-card border rounded-lg p-6 hover:border-primary/50 transition-colors cursor-pointer"
-                onClick={() => setSelectedCompanyId(company.company_id)}
-              >
-                <div className="flex items-start gap-4">
-                  <div className="w-12 h-12 bg-muted rounded-md flex items-center justify-center flex-shrink-0 overflow-hidden">
-                    {company.company_logo_url ? (
-                      <img
-                        src={company.company_logo_url || "/placeholder.svg"}
-                        alt={company.company_name}
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <Building2 className="h-6 w-6 text-muted-foreground" />
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-lg">{company.company_name}</h3>
-                    <div className="flex items-center gap-3 text-sm text-muted-foreground mt-1">
-                      {company.company_country && (
-                        <span className="flex items-center gap-1">
-                          <MapPin className="h-3 w-3" />
-                          {company.company_country}
-                        </span>
-                      )}
-                      {company.company_industry && <span className="truncate">{company.company_industry}</span>}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-6">
-                    <div className="text-center border-r pr-6">
-                      <div className="text-xs text-muted-foreground font-medium uppercase tracking-wider mb-1">
-                        Score
-                      </div>
-                      <ScoreTooltip
-                        totalScore={company.relevance_score}
-                        currentScore={company.current_score}
-                        alumniScore={company.alumni_score}
-                        jobPostingsScore={company.job_postings_score}
-                        currentCount={company.current_count}
-                        alumniCount={company.alumni_count}
-                        jobPostingsCount={company.job_postings_count}
-                      />
-                    </div>
-
-                    {/* Counters */}
-                    <div className="text-center">
-                      <div className="flex items-center justify-center gap-1 text-primary font-bold text-2xl">
-                        <Users className="h-5 w-5" />
-                        {company.current_count}
-                      </div>
-                      <div className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Actuales</div>
-                    </div>
-                    <div className="text-center">
-                      <div className="flex items-center justify-center gap-1 text-muted-foreground font-bold text-2xl">
-                        <GraduationCap className="h-5 w-5" />
-                        {company.alumni_count}
-                      </div>
-                      <div className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Alumni</div>
-                    </div>
-                    {company.job_postings_count > 0 && (
-                      <div className="text-center">
-                        <div className="flex items-center justify-center gap-1 text-orange-600 font-bold text-2xl">
-                          <Flame className="h-5 w-5" />
-                          {company.job_postings_count}
-                        </div>
-                        <div className="text-xs text-muted-foreground font-medium uppercase tracking-wider">
-                          Búsquedas
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
+                company={company}
+                isSelected={selectedCompanyIds.has(company.company_id)}
+                onToggleSelect={toggleCompanySelection}
+                onOpenDrawer={handleOpenDrawer}
+              />
             ))}
           </div>
         </div>
       )}
+
+      <BulkBookmarkButton
+        selectedCompanyIds={Array.from(selectedCompanyIds)}
+        searchContext={searchContext}
+        onSuccess={() => setSelectedCompanyIds(new Set())}
+      />
 
       <CompanyDrawer
         companyId={selectedCompanyId || ""}

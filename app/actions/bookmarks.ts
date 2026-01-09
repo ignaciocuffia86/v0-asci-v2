@@ -139,3 +139,41 @@ export async function checkBookmarkWithContext(
     return { hasExactMatch: false, otherBookmarks: [] }
   }
 }
+
+export async function bookmarkCompanyBatch(userId: string, companyIds: string[], searchContext: any = {}) {
+  const supabase = await createClient()
+
+  if (!companyIds || companyIds.length === 0) {
+    return {
+      success: false,
+      error: "No companies selected",
+      results: [],
+    }
+  }
+
+  try {
+    const bookmarksData = companyIds.map((companyId) => ({
+      user_id: userId,
+      company_id: companyId,
+      search_context: searchContext,
+    }))
+
+    const { data, error } = await supabase.from("bookmarks").insert(bookmarksData).select("id, company_id")
+
+    if (error) throw error
+
+    return {
+      success: true,
+      bookmarkIds: data?.map((b) => b.id) || [],
+      companiesCount: companyIds.length,
+      results: data || [],
+    }
+  } catch (error: any) {
+    console.error("Error creating bookmarks batch:", error)
+    return {
+      success: false,
+      error: error.message || "Failed to create bookmarks",
+      results: [],
+    }
+  }
+}
