@@ -8,14 +8,14 @@ Este documento describe el sistema de Extracción, Transformación y Carga (ETL)
 
 ## Arquitectura General
 
-```
+\`\`\`
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │   CSV Upload    │────▶│   import_rows   │────▶│   companies     │
 │   (Admin UI)    │     │   (staging)     │     │   contacts      │
 └─────────────────┘     └─────────────────┘     │   signals       │
                                                  │   job_postings  │
                                                  └─────────────────┘
-```
+\`\`\`
 
 ---
 
@@ -66,14 +66,14 @@ El endpoint `/api/cron/process-queue` ejecuta cada minuto:
 ### Paso 3: Función `process_import_batch`
 Esta función RPC de PostgreSQL es el dispatcher principal:
 
-```sql
+\`\`\`sql
 -- Determina el tipo de batch y llama a la función interna correcta
 IF v_batch_type = 'job_postings' THEN
    v_processed := process_job_batch_internal(p_batch_id, p_limit);
 ELSE
    v_processed := process_contact_batch_internal(p_batch_id, p_limit);
 END IF;
-```
+\`\`\`
 
 ---
 
@@ -150,13 +150,13 @@ Para cada fila pendiente:
 
 Normaliza nombres para evitar duplicados:
 
-```sql
+\`\`\`sql
 -- 1. Lowercase y trim
 -- 2. Remueve valores basura ('', '-', 'n/a', 'null', etc.)
 -- 3. Normaliza espacios múltiples
 -- 4. Remueve puntuación final
 -- 5. Remueve sufijos corporativos (S.A., Ltd., Inc., LLC, etc.)
-```
+\`\`\`
 
 ### Función: `upsert_company`
 
@@ -180,11 +180,11 @@ Cada diccionario tiene `keywords` (array de strings) que se buscan en los textos
 
 ### Función: `process_contact_signals`
 
-```sql
+\`\`\`sql
 -- Busca keywords en: headline + about + current_position_description
 -- Usa regex con word boundaries: '\y' || keyword || '\y'
 -- Guarda matches en tabla signals con snippet de contexto
-```
+\`\`\`
 
 ---
 
@@ -259,7 +259,7 @@ Envía alertas por email vía Resend.
 | `043_add_job_postings_etl.sql` | Soporte para job postings |
 | `072_dictionary_jobs_and_rpcs.sql` | Jobs del diccionario |
 | `085_add_company_description.sql` | Soporte para descripción de empresa |
-```
+\`\`\`
 
-```md file="docs/ETL_PROCESS.md" isDeleted="true"
+\`\`\`md file="docs/ETL_PROCESS.md" isDeleted="true"
 ...deleted...

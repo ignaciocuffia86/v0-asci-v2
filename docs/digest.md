@@ -17,7 +17,7 @@ Enviar un email mensual a cada usuario con las novedades (noticias e implementac
 
 ## Flujo
 
-```
+\`\`\`
 1. Cron Job (1ro de cada mes, 9:00 AM)
    ↓
 2. Para cada usuario con digest_enabled = true:
@@ -35,11 +35,11 @@ Enviar un email mensual a cada usuario con las novedades (noticias e implementac
 6. Enviar email con Resend
    ↓
 7. Registrar items enviados en user_digest_sent_items
-```
+\`\`\`
 
 ## Formato del Email
 
-```
+\`\`\`
 Noticias ASCI
 Estas son las novedades de las cuentas que seguís:
 
@@ -51,12 +51,12 @@ Compañía A:
 
 Compañía B:
 ...
-```
+\`\`\`
 
 ## Tablas de Base de Datos
 
 ### user_notification_preferences
-```sql
+\`\`\`sql
 CREATE TABLE user_notification_preferences (
   user_id UUID PRIMARY KEY REFERENCES auth.users(id),
   digest_enabled BOOLEAN DEFAULT true,
@@ -65,10 +65,10 @@ CREATE TABLE user_notification_preferences (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
-```
+\`\`\`
 
 ### user_digest_sent_items
-```sql
+\`\`\`sql
 CREATE TABLE user_digest_sent_items (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES auth.users(id),
@@ -77,10 +77,10 @@ CREATE TABLE user_digest_sent_items (
   sent_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   UNIQUE(user_id, item_type, item_id)
 );
-```
+\`\`\`
 
 ### digest_send_log
-```sql
+\`\`\`sql
 CREATE TABLE digest_send_log (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES auth.users(id),
@@ -90,11 +90,11 @@ CREATE TABLE digest_send_log (
   status TEXT DEFAULT 'sent', -- 'sent', 'failed', 'skipped'
   error_message TEXT
 );
-```
+\`\`\`
 
 ## Campos requeridos en company_news y company_implementations
 
-```sql
+\`\`\`sql
 ALTER TABLE company_news 
 ADD COLUMN requested_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 ADD COLUMN requested_by UUID REFERENCES auth.users(id),
@@ -104,15 +104,15 @@ ALTER TABLE company_implementations
 ADD COLUMN requested_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 ADD COLUMN requested_by UUID REFERENCES auth.users(id),
 ADD COLUMN published_at DATE;
-```
+\`\`\`
 
 ## SYSTEM_USER_ID
 
 UUID especial para identificar noticias generadas automáticamente por el cron job (no por usuarios):
 
-```typescript
+\`\`\`typescript
 const SYSTEM_USER_ID = "00000000-0000-0000-0000-000000000000"
-```
+\`\`\`
 
 Las noticias con `requested_by = SYSTEM_USER_ID` se incluyen en el digest de TODOS los usuarios.
 
@@ -135,12 +135,12 @@ Debe guardar las noticias con `requested_by = SYSTEM_USER_ID` para que lleguen a
 
 ## vercel.json cron
 
-```json
+\`\`\`json
 {
   "path": "/api/cron/monthly-digest",
   "schedule": "0 9 1 * *"
 }
-```
+\`\`\`
 
 ## Script SQL completo
 
