@@ -266,28 +266,26 @@ async function callApolloAPI(
   }
 
   try {
-    const params = new URLSearchParams()
-
-    if (companyDomain) {
-      params.append("q_organization_domains", companyDomain)
-    } else {
-      params.append("q_organization_name", companyName)
+    const requestBody: Record<string, any> = {
+      per_page: limit,
+      page: 1,
+      person_titles: jobTitles,
     }
 
-    jobTitles.forEach((title) => {
-      params.append("person_titles[]", title)
-    })
+    if (companyDomain) {
+      requestBody.q_organization_domains = companyDomain
+    } else {
+      requestBody.q_organization_name = companyName
+    }
 
-    params.append("per_page", String(limit))
-    params.append("page", "1")
-
-    const response = await fetch(`https://api.apollo.io/api/v1/mixed_people/search?${params.toString()}`, {
+    const response = await fetch("https://api.apollo.io/api/v1/mixed_people/api_search", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Cache-Control": "no-cache",
         "x-api-key": apiKey,
       },
+      body: JSON.stringify(requestBody),
     })
 
     if (!response.ok) {
