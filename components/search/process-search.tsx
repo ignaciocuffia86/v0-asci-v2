@@ -70,6 +70,8 @@ export function ProcessSearch() {
     })
   }, [])
 
+  const getProcessName = (id: string) => processes.find((p) => p.id === id)?.name || id
+
   const handleOpenDrawer = useCallback((companyId: string) => {
     setSelectedCompanyId(companyId)
   }, [])
@@ -82,8 +84,6 @@ export function ProcessSearch() {
       countries: selectedCountries,
     },
   }
-
-  const getProcessName = (id: string) => processes.find((p) => p.id === id)?.name || id
 
   const sortedResults = useMemo(() => {
     const sorted = [...results]

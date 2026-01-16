@@ -11,6 +11,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useState } from "react"
 import Image from "next/image"
+import { syncUserToResend } from "@/app/actions/resend"
 
 export default function SignUpPage() {
   const [email, setEmail] = useState("")
@@ -38,6 +39,19 @@ export default function SignUpPage() {
         },
       })
       if (error) throw error
+
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getSession()
+        if (user?.id) {
+          await syncUserToResend(user.id)
+        }
+      } catch (syncError) {
+        console.error("Error syncing user to Resend:", syncError)
+        // No fallar el signup si Resend falla
+      }
+
       router.push("/auth/sign-up-success")
     } catch (error: unknown) {
       setError(error instanceof Error ? error.message : "Ocurrió un error")

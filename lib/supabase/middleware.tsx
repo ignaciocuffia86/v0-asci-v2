@@ -6,6 +6,7 @@ export async function updateSession(request: NextRequest) {
     request.nextUrl.pathname.startsWith("/_next") ||
     request.nextUrl.pathname.startsWith("/_vercel") ||
     request.nextUrl.pathname.startsWith("/api/cron") ||
+    request.nextUrl.pathname.startsWith("/api/sync-users") ||
     request.nextUrl.pathname.match(/\.(ico|png|jpg|jpeg|svg|css|js)$/)
   ) {
     return NextResponse.next()

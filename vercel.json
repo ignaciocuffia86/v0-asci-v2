@@ -15,6 +15,10 @@
     {
       "path": "/api/cron/monitor",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/sync-users",
+      "schedule": "0 2 * * *"
     }
   ]
 }

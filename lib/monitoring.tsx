@@ -10,12 +10,24 @@ export interface HealthCheckResult {
     failedJobs: number
     completedLast24h: number
     stuckJobs: number
+    pendingBatches: number
+    processingBatches: number
+    failedBatches: number
+    stuckBatches: number
   }
   timestamp: string
 }
 
 export interface Alert {
-  type: "stuck_jobs" | "failed_jobs" | "high_queue" | "system_stopped" | "critical_error"
+  type:
+    | "stuck_jobs"
+    | "failed_jobs"
+    | "high_queue"
+    | "system_stopped"
+    | "critical_error"
+    | "stuck_batches"
+    | "failed_batches"
+    | "high_batch_queue"
   severity: "warning" | "critical"
   message: string
   count?: number
@@ -25,8 +37,11 @@ export async function runHealthCheck(): Promise<HealthCheckResult> {
   const supabase = await createClient()
   const alerts: Alert[] = []
 
-  // Get job metrics
   const { data: jobStats } = await supabase.from("dictionary_jobs").select("status, started_at, error_message")
+
+  const { data: batchStats } = await supabase
+    .from("import_batches")
+    .select("status, created_at, updated_at, total_rows, processed_rows, error_rows")
 
   const metrics = {
     pendingJobs: 0,
@@ -34,6 +49,10 @@ export async function runHealthCheck(): Promise<HealthCheckResult> {
     failedJobs: 0,
     completedLast24h: 0,
     stuckJobs: 0,
+    pendingBatches: 0,
+    processingBatches: 0,
+    failedBatches: 0,
+    stuckBatches: 0,
   }
 
   const now = new Date()
@@ -48,7 +67,6 @@ export async function runHealthCheck(): Promise<HealthCheckResult> {
           break
         case "processing":
           metrics.processingJobs++
-          // Check if stuck (processing for more than 30 minutes)
           if (job.started_at && new Date(job.started_at) < thirtyMinutesAgo) {
             metrics.stuckJobs++
           }
@@ -63,23 +81,60 @@ export async function runHealthCheck(): Promise<HealthCheckResult> {
     }
   }
 
-  // Check for stuck jobs
+  if (batchStats) {
+    for (const batch of batchStats) {
+      switch (batch.status) {
+        case "pending":
+          metrics.pendingBatches++
+          break
+        case "processing":
+          metrics.processingBatches++
+          if (batch.created_at && new Date(batch.created_at) < thirtyMinutesAgo) {
+            metrics.stuckBatches++
+          }
+          break
+        case "failed":
+          metrics.failedBatches++
+          break
+      }
+    }
+  }
+
+  // Check for stuck dictionary jobs
   if (metrics.stuckJobs > 0) {
     alerts.push({
       type: "stuck_jobs",
       severity: "critical",
-      message: `${metrics.stuckJobs} job(s) estancados por más de 30 minutos`,
+      message: `${metrics.stuckJobs} job(s) de diccionario estancados por más de 30 minutos`,
       count: metrics.stuckJobs,
     })
   }
 
-  // Check for failed jobs
+  // Check for failed dictionary jobs
   if (metrics.failedJobs > 0) {
     alerts.push({
       type: "failed_jobs",
       severity: metrics.failedJobs > 10 ? "critical" : "warning",
-      message: `${metrics.failedJobs} job(s) fallidos requieren atención`,
+      message: `${metrics.failedJobs} job(s) de diccionario fallidos requieren atención`,
       count: metrics.failedJobs,
+    })
+  }
+
+  if (metrics.stuckBatches > 0) {
+    alerts.push({
+      type: "stuck_batches",
+      severity: "critical",
+      message: `${metrics.stuckBatches} batch(es) de ingesta estancados por más de 30 minutos`,
+      count: metrics.stuckBatches,
+    })
+  }
+
+  if (metrics.failedBatches > 0) {
+    alerts.push({
+      type: "failed_batches",
+      severity: metrics.failedBatches > 5 ? "critical" : "warning",
+      message: `${metrics.failedBatches} batch(es) de ingesta fallidos requieren atención`,
+      count: metrics.failedBatches,
     })
   }
 
@@ -88,21 +143,36 @@ export async function runHealthCheck(): Promise<HealthCheckResult> {
     alerts.push({
       type: "high_queue",
       severity: "critical",
-      message: `Cola muy alta: ${metrics.pendingJobs} jobs pendientes`,
+      message: `Cola de diccionario muy alta: ${metrics.pendingJobs} jobs pendientes`,
       count: metrics.pendingJobs,
     })
   } else if (metrics.pendingJobs > 100) {
     alerts.push({
       type: "high_queue",
       severity: "warning",
-      message: `Cola alta: ${metrics.pendingJobs} jobs pendientes`,
+      message: `Cola de diccionario alta: ${metrics.pendingJobs} jobs pendientes`,
       count: metrics.pendingJobs,
+    })
+  }
+
+  if (metrics.pendingBatches > 50) {
+    alerts.push({
+      type: "high_batch_queue",
+      severity: "critical",
+      message: `Cola de ingesta muy alta: ${metrics.pendingBatches} batches pendientes`,
+      count: metrics.pendingBatches,
+    })
+  } else if (metrics.pendingBatches > 20) {
+    alerts.push({
+      type: "high_batch_queue",
+      severity: "warning",
+      message: `Cola de ingesta alta: ${metrics.pendingBatches} batches pendientes`,
+      count: metrics.pendingBatches,
     })
   }
 
   // Check if system is stopped (no processing and has pending)
   if (metrics.processingJobs === 0 && metrics.pendingJobs > 0) {
-    // Check if last completed job was more than 1 hour ago
     const { data: lastCompleted } = await supabase
       .from("dictionary_jobs")
       .select("completed_at")
@@ -119,7 +189,7 @@ export async function runHealthCheck(): Promise<HealthCheckResult> {
         alerts.push({
           type: "system_stopped",
           severity: "critical",
-          message: `Sistema detenido: no hay procesamiento desde ${lastCompletedTime.toLocaleString()}`,
+          message: `Sistema de diccionario detenido: no hay procesamiento desde ${lastCompletedTime.toLocaleString()}`,
         })
       }
     }
@@ -143,10 +213,10 @@ export async function runHealthCheck(): Promise<HealthCheckResult> {
 
 export async function sendAlertEmail(healthCheck: HealthCheckResult): Promise<boolean> {
   const resendApiKey = process.env.RESEND_API_KEY
-  const alertEmail = process.env.ALERT_EMAIL
+  const alertEmail = process.env.ALERT_EMAIL || "ignacio@bigua.lat"
 
-  if (!resendApiKey || !alertEmail) {
-    console.error("[Monitor] Missing RESEND_API_KEY or ALERT_EMAIL")
+  if (!resendApiKey) {
+    console.error("[Monitor] Missing RESEND_API_KEY")
     return false
   }
 
@@ -166,6 +236,7 @@ export async function sendAlertEmail(healthCheck: HealthCheckResult): Promise<bo
 
   const metricsHtml = `
     <table style="width: 100%; border-collapse: collapse; margin-top: 16px;">
+      <tr style="background: #f3f4f6;"><td colspan="2" style="padding: 8px; border: 1px solid #e5e7eb; font-weight: bold;">DICCIONARIO</td></tr>
       <tr style="background: #f3f4f6;">
         <td style="padding: 8px; border: 1px solid #e5e7eb;">Pendientes</td>
         <td style="padding: 8px; border: 1px solid #e5e7eb; font-weight: bold;">${healthCheck.metrics.pendingJobs}</td>
@@ -182,12 +253,29 @@ export async function sendAlertEmail(healthCheck: HealthCheckResult): Promise<bo
         <td style="padding: 8px; border: 1px solid #e5e7eb;">Estancados</td>
         <td style="padding: 8px; border: 1px solid #e5e7eb; font-weight: bold; color: ${healthCheck.metrics.stuckJobs > 0 ? "#dc2626" : "inherit"};">${healthCheck.metrics.stuckJobs}</td>
       </tr>
+      <tr style="background: #f3f4f6;"><td colspan="2" style="padding: 8px; border: 1px solid #e5e7eb; font-weight: bold;">INGESTA DE BATCHES</td></tr>
+      <tr style="background: #f3f4f6;">
+        <td style="padding: 8px; border: 1px solid #e5e7eb;">Pendientes</td>
+        <td style="padding: 8px; border: 1px solid #e5e7eb; font-weight: bold;">${healthCheck.metrics.pendingBatches}</td>
+      </tr>
+      <tr>
+        <td style="padding: 8px; border: 1px solid #e5e7eb;">Procesando</td>
+        <td style="padding: 8px; border: 1px solid #e5e7eb; font-weight: bold;">${healthCheck.metrics.processingBatches}</td>
+      </tr>
+      <tr style="background: #f3f4f6;">
+        <td style="padding: 8px; border: 1px solid #e5e7eb;">Fallidos</td>
+        <td style="padding: 8px; border: 1px solid #e5e7eb; font-weight: bold; color: ${healthCheck.metrics.failedBatches > 0 ? "#dc2626" : "inherit"};">${healthCheck.metrics.failedBatches}</td>
+      </tr>
+      <tr>
+        <td style="padding: 8px; border: 1px solid #e5e7eb;">Estancados</td>
+        <td style="padding: 8px; border: 1px solid #e5e7eb; font-weight: bold; color: ${healthCheck.metrics.stuckBatches > 0 ? "#dc2626" : "inherit"};">${healthCheck.metrics.stuckBatches}</td>
+      </tr>
     </table>
   `
 
   try {
     await resend.emails.send({
-      from: "ASCI Monitor <onboarding@resend.dev>",
+      from: "Plataforma ASCI <asci@bigua.lat>",
       to: alertEmail,
       subject: `[ASCI ${healthCheck.status.toUpperCase()}] ${healthCheck.alerts.length} alerta(s) detectada(s)`,
       html: `

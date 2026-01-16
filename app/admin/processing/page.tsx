@@ -1,20 +1,77 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { useState, useEffect, useCallback } from "react"
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Play, Loader2, RefreshCw, CheckCircle, XCircle, Clock, AlertTriangle, ShieldAlert } from "lucide-react"
-import { processSignals, getProcessingStats } from "@/app/actions/processing"
+import {
+  Play,
+  Loader2,
+  RefreshCw,
+  CheckCircle,
+  XCircle,
+  Clock,
+  AlertTriangle,
+  ShieldAlert,
+  Database,
+  Users,
+  Building2,
+  Cpu,
+  Activity,
+  TrendingUp,
+  Layers,
+  BookOpen,
+  Package,
+  Store,
+} from "lucide-react"
+import { processSignals, getDashboardStats, getCronHealth } from "@/app/actions/processing"
 import { Progress } from "@/components/ui/progress"
 import { createClient } from "@/lib/supabase/client"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ImportBatchesStatus } from "./_components/import-batches-status"
 import { ProcessingLogs } from "./_components/processing-logs"
-import { CronHealth } from "./_components/cron-health"
-import { SignalsStatus } from "./_components/signals-status"
+
+type DashboardStats = {
+  signals: {
+    total: number
+    byType: { process: number; technology: number }
+  }
+  dictionaryJobs: {
+    pending: number
+    processing: number
+    completed: number
+    failed: number
+    total: number
+    lastCompleted: string | null
+    lastCreated: string | null
+  }
+  importBatches: {
+    pending: number
+    processing: number
+    completed: number
+    failed: number
+    total: number
+    lastActivity: string | null
+  }
+  entities: {
+    contacts: number
+    companies: number
+  }
+  dictionary: {
+    processes: number
+    products: number
+    vendors: number
+    processKeywords: number
+    productKeywords: number
+  }
+}
+
+type CronHealth = {
+  processDictionary: { status: string; lastRun: string | null; minutesAgo: number | null }
+  processQueue: { status: string; lastRun: string | null; minutesAgo: number | null }
+  monitor: { status: string; lastRun: string | null; minutesAgo: number | null }
+}
 
 type DictionaryJob = {
   id: string
@@ -25,10 +82,6 @@ type DictionaryJob = {
   progress: number
   total_records: number
   processed_records: number
-  contacts_processed: number
-  contacts_total: number
-  job_postings_processed: number
-  job_postings_total: number
   phase: string | null
   created_at: string
   started_at: string | null
@@ -36,136 +89,43 @@ type DictionaryJob = {
   error_message: string | null
 }
 
-type SystemAlert = {
-  id: string
-  level: "critical" | "warning" | "info"
-  title: string
-  message: string
-  context?: Record<string, unknown>
-}
-
 export default function ProcessingPage() {
-  const [stats, setStats] = useState({ pending: 0, signals: 0, isSystemProcessing: false })
+  const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null)
+  const [cronHealth, setCronHealth] = useState<CronHealth | null>(null)
+  const [dictionaryJobs, setDictionaryJobs] = useState<DictionaryJob[]>([])
+  const [isLoading, setIsLoading] = useState(true)
   const [isProcessing, setIsProcessing] = useState(false)
   const [progress, setProgress] = useState(0)
   const [logs, setLogs] = useState<string[]>([])
-  const [dictionaryJobs, setDictionaryJobs] = useState<DictionaryJob[]>([])
-  const [dictPending, setDictPending] = useState(0)
-  const [dictProcessing, setDictProcessing] = useState(0)
-  const [dictFailed, setDictFailed] = useState(0)
-  const [alerts, setAlerts] = useState<SystemAlert[]>([])
-  const [totalPendingJobs, setTotalPendingJobs] = useState(0)
-  const [activeTab, setActiveTab] = useState("ingesta") // New state for tab management
+  const [lastRefresh, setLastRefresh] = useState<Date>(new Date())
 
   const supabase = createClient()
 
-  const fetchStats = async () => {
-    const newStats = await getProcessingStats()
-    setStats(newStats)
-  }
+  const fetchAllData = useCallback(async () => {
+    setIsLoading(true)
+    try {
+      const [stats, crons, jobsResult] = await Promise.all([
+        getDashboardStats(),
+        getCronHealth(),
+        supabase.from("dictionary_jobs").select("*").order("created_at", { ascending: false }).limit(50),
+      ])
 
-  const fetchDictionaryJobs = async () => {
-    const { data, error } = await supabase
-      .from("dictionary_jobs")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(100)
-
-    if (!error && data) {
-      setDictionaryJobs(data.slice(0, 20)) // Show only 20 in table
-
-      const pending = data.filter((j) => j.status === "pending").length
-      const processing = data.filter((j) => j.status === "processing")
-      const failed = data.filter((j) => j.status === "failed")
-
-      setDictPending(pending)
-      setDictProcessing(processing.length)
-      setDictFailed(failed.length)
-
-      const { count } = await supabase
-        .from("dictionary_jobs")
-        .select("*", { count: "exact", head: true })
-        .eq("status", "pending")
-
-      setTotalPendingJobs(count || 0)
-
-      const newAlerts: SystemAlert[] = []
-
-      // Check for stuck jobs (processing > 30 min)
-      const now = new Date()
-      const stuckJobs = processing.filter((j) => {
-        if (!j.started_at) return false
-        const started = new Date(j.started_at)
-        const diffMinutes = (now.getTime() - started.getTime()) / 60000
-        return diffMinutes > 30
-      })
-
-      if (stuckJobs.length > 0) {
-        newAlerts.push({
-          id: "stuck-jobs",
-          level: "critical",
-          title: `${stuckJobs.length} job(s) estancados`,
-          message: `Jobs en "processing" por más de 30 minutos: ${stuckJobs.map((j) => j.keyword).join(", ")}`,
-        })
-      }
-
-      // Check for failed jobs
-      if (failed.length > 0) {
-        newAlerts.push({
-          id: "failed-jobs",
-          level: failed.length >= 10 ? "critical" : "warning",
-          title: `${failed.length} job(s) fallidos`,
-          message: `Errores: ${[...new Set(failed.map((j) => j.error_message))].slice(0, 3).join("; ")}`,
-          context: { keywords: failed.slice(0, 5).map((j) => j.keyword) },
-        })
-      }
-
-      // Check pending queue
-      if ((count || 0) >= 500) {
-        newAlerts.push({
-          id: "queue-critical",
-          level: "critical",
-          title: `Cola crítica: ${count} jobs pendientes`,
-          message: "El sistema puede estar detenido o procesando muy lento",
-        })
-      } else if ((count || 0) >= 100) {
-        newAlerts.push({
-          id: "queue-warning",
-          level: "warning",
-          title: `Cola alta: ${count} jobs pendientes`,
-          message: "Considerar revisar el estado del procesamiento",
-        })
-      }
-
-      // Check if no processing and pending exist
-      if (processing.length === 0 && (count || 0) > 0) {
-        // Check last completed job
-        const { data: lastCompleted } = await supabase
-          .from("dictionary_jobs")
-          .select("completed_at")
-          .eq("status", "completed")
-          .order("completed_at", { ascending: false })
-          .limit(1)
-          .single()
-
-        if (lastCompleted?.completed_at) {
-          const lastCompletedTime = new Date(lastCompleted.completed_at)
-          const hoursSince = (now.getTime() - lastCompletedTime.getTime()) / 3600000
-
-          if (hoursSince > 2) {
-            newAlerts.push({
-              id: "no-progress",
-              level: "critical",
-              title: "Sistema posiblemente detenido",
-              message: `No se ha completado ningún job en ${Math.round(hoursSince)} horas y hay ${count} pendientes`,
-            })
-          }
-        }
-      }
-
-      setAlerts(newAlerts)
+      if (stats) setDashboardStats(stats)
+      if (crons) setCronHealth(crons)
+      if (jobsResult.data) setDictionaryJobs(jobsResult.data)
+      setLastRefresh(new Date())
+    } catch (error) {
+      console.error("Error fetching dashboard data:", error)
+    } finally {
+      setIsLoading(false)
     }
-  }
+  }, [supabase])
+
+  useEffect(() => {
+    fetchAllData()
+    const interval = setInterval(fetchAllData, 30000) // Refresh every 30 seconds
+    return () => clearInterval(interval)
+  }, [fetchAllData])
 
   const handleRetryFailed = async () => {
     const { error } = await supabase
@@ -175,15 +135,12 @@ export default function ProcessingPage() {
 
     if (!error) {
       setLogs((prev) => ["Jobs fallidos reseteados a pendiente", ...prev])
-      fetchDictionaryJobs()
-    } else {
-      setLogs((prev) => [`Error al resetear jobs: ${error.message}`, ...prev])
+      fetchAllData()
     }
   }
 
   const handleUnstickJobs = async () => {
     const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString()
-
     const { error } = await supabase
       .from("dictionary_jobs")
       .update({ status: "pending", started_at: null })
@@ -192,81 +149,82 @@ export default function ProcessingPage() {
 
     if (!error) {
       setLogs((prev) => ["Jobs estancados reseteados a pendiente", ...prev])
-      fetchDictionaryJobs()
-    } else {
-      setLogs((prev) => [`Error al resetear jobs: ${error.message}`, ...prev])
+      fetchAllData()
     }
   }
-
-  useEffect(() => {
-    fetchStats()
-    fetchDictionaryJobs()
-    const interval = setInterval(
-      () => {
-        fetchStats()
-        fetchDictionaryJobs()
-      },
-      dictProcessing > 0 ? 3000 : 5000,
-    )
-    return () => clearInterval(interval)
-  }, [dictProcessing])
 
   const handleProcess = async () => {
     setIsProcessing(true)
-    setLogs((prev) => ["Iniciando procesamiento manual...", ...prev])
     setProgress(0)
-
-    const BATCH_SIZE = 10
-    let totalProcessed = 0
-    const initialPending = stats.pending
+    setLogs((prev) => ["Iniciando procesamiento manual...", ...prev])
 
     try {
+      const BATCH_SIZE = 10
+      let totalProcessed = 0
+
       while (true) {
         const result = await processSignals(BATCH_SIZE)
-
-        if (!result.success) {
-          setLogs((prev) => [`Error: ${result.error}`, ...prev])
-          break
-        }
-
-        if (result.processed === 0) {
-          setLogs((prev) => ["No hay más filas pendientes en la cola.", ...prev])
-          break
-        }
-
+        if (!result.success || result.processed === 0) break
         totalProcessed += result.processed
-
-        const currentProgress =
-          initialPending > 0 ? Math.min(Math.round((totalProcessed / initialPending) * 100), 100) : 0
-
-        setProgress(currentProgress)
+        setProgress(Math.min(totalProcessed, 100))
         setLogs((prev) => [`Procesadas ${result.processed} filas...`, ...prev])
-
-        await fetchStats()
-
-        await new Promise((resolve) => setTimeout(resolve, 1000))
+        await new Promise((resolve) => setTimeout(resolve, 500))
       }
+
+      setLogs((prev) => ["Procesamiento manual finalizado.", ...prev])
     } catch (error) {
-      setLogs((prev) => [`Error inesperado: ${error}`, ...prev])
+      setLogs((prev) => [`Error: ${error}`, ...prev])
     } finally {
       setIsProcessing(false)
-      setLogs((prev) => ["Ejecución manual finalizada.", ...prev])
-      fetchStats()
+      fetchAllData()
     }
   }
 
-  const formatJobType = (type: string) => {
-    switch (type) {
-      case "add_keyword":
-        return "Agregar Keyword"
-      case "remove_keyword":
-        return "Eliminar Keyword"
-      case "add_product":
-        return "Nuevo Producto"
-      case "add_process":
-        return "Nuevo Proceso"
+  const formatTimeAgo = (dateStr: string | null) => {
+    if (!dateStr) return "Nunca"
+    const date = new Date(dateStr)
+    const now = new Date()
+    const diffMs = now.getTime() - date.getTime()
+    const diffMins = Math.floor(diffMs / 60000)
+    const diffHours = Math.floor(diffMins / 60)
+    const diffDays = Math.floor(diffHours / 24)
+
+    if (diffMins < 1) return "Ahora"
+    if (diffMins < 60) return `Hace ${diffMins}m`
+    if (diffHours < 24) return `Hace ${diffHours}h ${diffMins % 60}m`
+    return `Hace ${diffDays}d ${diffHours % 24}h`
+  }
+
+  const getHealthBadge = (status: string) => {
+    switch (status) {
+      case "healthy":
+        return (
+          <Badge className="bg-green-600 gap-1">
+            <CheckCircle className="h-3 w-3" />
+            Saludable
+          </Badge>
+        )
+      case "warning":
+        return (
+          <Badge className="bg-amber-600 gap-1">
+            <AlertTriangle className="h-3 w-3" />
+            Atención
+          </Badge>
+        )
+      case "critical":
+        return (
+          <Badge variant="destructive" className="gap-1">
+            <XCircle className="h-3 w-3" />
+            Crítico
+          </Badge>
+        )
       default:
-        return type
+        return (
+          <Badge variant="secondary" className="gap-1">
+            <Clock className="h-3 w-3" />
+            Desconocido
+          </Badge>
+        )
     }
   }
 
@@ -288,7 +246,7 @@ export default function ProcessingPage() {
         )
       case "completed":
         return (
-          <Badge variant="default" className="gap-1 bg-green-600">
+          <Badge className="gap-1 bg-green-600">
             <CheckCircle className="h-3 w-3" />
             Completado
           </Badge>
@@ -305,131 +263,223 @@ export default function ProcessingPage() {
     }
   }
 
-  const getElapsedTime = (startedAt: string | null) => {
-    if (!startedAt) return null
-    const started = new Date(startedAt)
-    const now = new Date()
-    const diffMs = now.getTime() - started.getTime()
-    const diffMins = Math.floor(diffMs / 60000)
-    const diffHours = Math.floor(diffMins / 60)
-    if (diffHours > 0) {
-      return `${diffHours}h ${diffMins % 60}m`
-    }
-    return `${diffMins}m`
+  const getOverallHealth = () => {
+    if (!dashboardStats || !cronHealth) return "loading"
+
+    const hasCriticalCron = Object.values(cronHealth).some((c) => c.status === "critical")
+    const hasFailedJobs = dashboardStats.dictionaryJobs.failed > 0
+    const hasHighQueue = dashboardStats.dictionaryJobs.pending > 500
+
+    if (hasCriticalCron || hasHighQueue) return "critical"
+    if (hasFailedJobs || dashboardStats.dictionaryJobs.pending > 100) return "warning"
+    return "healthy"
   }
 
-  const getActiveJobsStats = () => {
-    const activeJobs = dictionaryJobs.filter((j) => j.status === "processing")
-    if (activeJobs.length === 0) return null
-
-    const totalContacts = activeJobs.reduce((sum, j) => sum + (j.contacts_total || 0), 0)
-    const processedContacts = activeJobs.reduce((sum, j) => sum + (j.contacts_processed || 0), 0)
-    const totalJobPostings = activeJobs.reduce((sum, j) => sum + (j.job_postings_total || 0), 0)
-    const processedJobPostings = activeJobs.reduce((sum, j) => sum + (j.job_postings_processed || 0), 0)
-
-    return {
-      activeCount: activeJobs.length,
-      contacts: { processed: processedContacts, total: totalContacts },
-      jobPostings: { processed: processedJobPostings, total: totalJobPostings },
-    }
-  }
-
-  const activeStats = getActiveJobsStats()
-  const hasCriticalAlerts = alerts.some((a) => a.level === "critical")
-  const hasWarningAlerts = alerts.some((a) => a.level === "warning")
+  const overallHealth = getOverallHealth()
 
   return (
     <div className="space-y-6 pb-10">
+      {/* Header */}
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Procesamiento de Señales</h1>
-          <p className="text-muted-foreground">ETL en tiempo real: Ingesta → Señales → Diccionario</p>
+          <h1 className="text-3xl font-bold tracking-tight">Dashboard de Plataforma</h1>
+          <p className="text-muted-foreground">
+            Estado de salud y métricas del sistema • Actualizado {formatTimeAgo(lastRefresh.toISOString())}
+          </p>
         </div>
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={() => {
-            fetchStats()
-            fetchDictionaryJobs()
-          }}
-          disabled={isProcessing}
-        >
-          <RefreshCw className={`h-4 w-4 ${isProcessing ? "animate-spin" : ""}`} />
-        </Button>
+        <div className="flex items-center gap-3">
+          {overallHealth === "healthy" && (
+            <Badge className="bg-green-600 gap-1 text-sm py-1 px-3">
+              <Activity className="h-4 w-4" />
+              Sistema Saludable
+            </Badge>
+          )}
+          {overallHealth === "warning" && (
+            <Badge className="bg-amber-600 gap-1 text-sm py-1 px-3">
+              <AlertTriangle className="h-4 w-4" />
+              Requiere Atención
+            </Badge>
+          )}
+          {overallHealth === "critical" && (
+            <Badge variant="destructive" className="gap-1 text-sm py-1 px-3">
+              <ShieldAlert className="h-4 w-4" />
+              Estado Crítico
+            </Badge>
+          )}
+          <Button variant="outline" size="icon" onClick={fetchAllData} disabled={isLoading}>
+            <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
+          </Button>
+        </div>
       </div>
 
-      {hasCriticalAlerts && (
-        <div className="space-y-2">
-          {alerts
-            .filter((a) => a.level === "critical")
-            .map((alert) => (
-              <Alert key={alert.id} variant="destructive" className="border-red-500 bg-red-50 dark:bg-red-950/20">
-                <ShieldAlert className="h-4 w-4" />
-                <AlertTitle>{alert.title}</AlertTitle>
-                <AlertDescription>{alert.message}</AlertDescription>
-              </Alert>
-            ))}
-        </div>
+      {/* Alerts */}
+      {dashboardStats && dashboardStats.dictionaryJobs.failed > 0 && (
+        <Alert variant="destructive" className="border-red-500">
+          <ShieldAlert className="h-4 w-4" />
+          <AlertTitle>{dashboardStats.dictionaryJobs.failed} jobs fallidos</AlertTitle>
+          <AlertDescription className="flex items-center justify-between">
+            <span>Hay jobs de diccionario que requieren atención.</span>
+            <Button variant="outline" size="sm" onClick={handleRetryFailed}>
+              <RefreshCw className="h-3 w-3 mr-1" />
+              Reintentar
+            </Button>
+          </AlertDescription>
+        </Alert>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {/* Main Stats Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Batches Activos</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+              <TrendingUp className="h-4 w-4" />
+              Total Señales
+            </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{stats.isSystemProcessing ? "✓ Activo" : "Idle"}</div>
-            <p className="text-xs text-muted-foreground mt-1">Ingesta de contactos/jobs</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Señales Pendientes</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats.signals.toLocaleString()}</div>
-            <p className="text-xs text-muted-foreground mt-1">En cola de procesamiento</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Jobs Diccionario</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex gap-2 text-sm font-medium">
-              <span className="text-blue-600">{dictProcessing} activos</span>
-              <span className="text-amber-600">{dictPending} pendientes</span>
-              {dictFailed > 0 && <span className="text-red-600">{dictFailed} fallidos</span>}
+            <div className="text-3xl font-bold">{dashboardStats?.signals.total.toLocaleString() || "-"}</div>
+            <div className="flex gap-2 mt-1 text-xs text-muted-foreground">
+              <span>Procesos: {dashboardStats?.signals.byType.process.toLocaleString() || 0}</span>
+              <span>•</span>
+              <span>Tech: {dashboardStats?.signals.byType.technology.toLocaleString() || 0}</span>
             </div>
-            <p className="text-xs text-muted-foreground mt-1">Estado diccionario</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+              <Users className="h-4 w-4" />
+              Contactos
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold">{dashboardStats?.entities.contacts.toLocaleString() || "-"}</div>
+            <p className="text-xs text-muted-foreground mt-1">En la base de datos</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+              <Building2 className="h-4 w-4" />
+              Compañías
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold">{dashboardStats?.entities.companies.toLocaleString() || "-"}</div>
+            <p className="text-xs text-muted-foreground mt-1">Registradas</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+              <Cpu className="h-4 w-4" />
+              Jobs Diccionario
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold">{dashboardStats?.dictionaryJobs.pending || 0}</div>
+            <div className="flex gap-2 mt-1 text-xs">
+              <span className="text-blue-600">{dashboardStats?.dictionaryJobs.processing || 0} activos</span>
+              {(dashboardStats?.dictionaryJobs.failed || 0) > 0 && (
+                <span className="text-red-600">{dashboardStats?.dictionaryJobs.failed} fallidos</span>
+              )}
+            </div>
           </CardContent>
         </Card>
       </div>
 
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-        <TabsList className="grid w-full grid-cols-4">
-          <TabsTrigger value="ingesta">Ingesta</TabsTrigger>
-          <TabsTrigger value="señales">Señales</TabsTrigger>
-          <TabsTrigger value="diccionario">Diccionario</TabsTrigger>
+      <Tabs defaultValue="overview" className="space-y-4">
+        <TabsList className="grid w-full grid-cols-5">
+          <TabsTrigger value="overview">Resumen</TabsTrigger>
+          <TabsTrigger value="crons">CRONs</TabsTrigger>
+          <TabsTrigger value="dictionary">Diccionario</TabsTrigger>
+          <TabsTrigger value="jobs">Jobs</TabsTrigger>
           <TabsTrigger value="logs">Logs</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="ingesta" className="space-y-4">
-          <ImportBatchesStatus />
-          <CronHealth />
-        </TabsContent>
+        {/* Overview Tab */}
+        <TabsContent value="overview" className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Diccionario Summary */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <BookOpen className="h-5 w-5" />
+                  Diccionario
+                </CardTitle>
+                <CardDescription>Estado de los diccionarios de señales</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="text-center p-3 bg-muted rounded-lg">
+                    <div className="text-2xl font-bold">{dashboardStats?.dictionary.processes || 0}</div>
+                    <div className="text-xs text-muted-foreground">Procesos</div>
+                    <div className="text-xs text-blue-600">
+                      {dashboardStats?.dictionary.processKeywords || 0} keywords
+                    </div>
+                  </div>
+                  <div className="text-center p-3 bg-muted rounded-lg">
+                    <div className="text-2xl font-bold">{dashboardStats?.dictionary.products || 0}</div>
+                    <div className="text-xs text-muted-foreground">Productos</div>
+                    <div className="text-xs text-blue-600">
+                      {dashboardStats?.dictionary.productKeywords || 0} keywords
+                    </div>
+                  </div>
+                  <div className="text-center p-3 bg-muted rounded-lg">
+                    <div className="text-2xl font-bold">{dashboardStats?.dictionary.vendors || 0}</div>
+                    <div className="text-xs text-muted-foreground">Vendors</div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
 
-        <TabsContent value="señales" className="space-y-4">
-          <SignalsStatus />
+            {/* Import Batches Summary */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Database className="h-5 w-5" />
+                  Import Batches
+                </CardTitle>
+                <CardDescription>Estado de la ingesta de datos</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-4 gap-2">
+                  <div className="text-center p-2 bg-muted rounded-lg">
+                    <div className="text-xl font-bold">{dashboardStats?.importBatches.pending || 0}</div>
+                    <div className="text-xs text-muted-foreground">Pendientes</div>
+                  </div>
+                  <div className="text-center p-2 bg-muted rounded-lg">
+                    <div className="text-xl font-bold text-blue-600">
+                      {dashboardStats?.importBatches.processing || 0}
+                    </div>
+                    <div className="text-xs text-muted-foreground">Procesando</div>
+                  </div>
+                  <div className="text-center p-2 bg-muted rounded-lg">
+                    <div className="text-xl font-bold text-green-600">
+                      {dashboardStats?.importBatches.completed || 0}
+                    </div>
+                    <div className="text-xs text-muted-foreground">Completados</div>
+                  </div>
+                  <div className="text-center p-2 bg-muted rounded-lg">
+                    <div className="text-xl font-bold text-red-600">{dashboardStats?.importBatches.failed || 0}</div>
+                    <div className="text-xs text-muted-foreground">Fallidos</div>
+                  </div>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Última actividad: {formatTimeAgo(dashboardStats?.importBatches.lastActivity || null)}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
 
+          {/* Manual Processing */}
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center justify-between">
-                <span>Ejecución Manual</span>
-                {isProcessing && <Loader2 className="h-5 w-5 animate-spin" />}
-              </CardTitle>
+              <CardTitle>Procesamiento Manual</CardTitle>
+              <CardDescription>Ejecutar procesamiento de señales manualmente</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               {progress > 0 && (
@@ -458,63 +508,189 @@ export default function ProcessingPage() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="diccionario" className="space-y-4">
-          {hasWarningAlerts && (
-            <div className="space-y-2">
-              {alerts
-                .filter((a) => a.level === "warning")
-                .map((alert) => (
-                  <Alert key={alert.id} className="border-amber-500 bg-amber-50 dark:bg-amber-950/20">
-                    <AlertTriangle className="h-4 w-4" />
-                    <AlertTitle>{alert.title}</AlertTitle>
-                    <AlertDescription>{alert.message}</AlertDescription>
-                  </Alert>
-                ))}
-            </div>
-          )}
-
-          <div className="flex gap-2 mb-4">
-            {alerts.some((a) => a.id === "failed-jobs") && (
-              <Button variant="outline" size="sm" onClick={handleRetryFailed}>
-                <RefreshCw className="h-3 w-3 mr-1" />
-                Reintentar Fallidos
-              </Button>
-            )}
-            {alerts.some((a) => a.id === "stuck-jobs") && (
-              <Button variant="outline" size="sm" onClick={handleUnstickJobs}>
-                <Play className="h-3 w-3 mr-1" />
-                Desbloquear Estancados
-              </Button>
-            )}
-          </div>
-
+        {/* CRONs Tab */}
+        <TabsContent value="crons" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="text-sm">Jobs Recientes</CardTitle>
+              <CardTitle>Estado de CRONs</CardTitle>
+              <CardDescription>Monitoreo de tareas programadas</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="overflow-auto max-h-[400px]">
+              <div className="space-y-4">
+                {/* Process Dictionary CRON */}
+                <div className="flex items-center justify-between p-4 border rounded-lg">
+                  <div className="flex items-center gap-4">
+                    <div className="p-2 bg-muted rounded-lg">
+                      <BookOpen className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <div className="font-medium">process-dictionary</div>
+                      <div className="text-sm text-muted-foreground">Procesa jobs del diccionario (cada 5 min)</div>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    {cronHealth && getHealthBadge(cronHealth.processDictionary.status)}
+                    <div className="text-xs text-muted-foreground mt-1">
+                      {formatTimeAgo(cronHealth?.processDictionary.lastRun || null)}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Process Queue CRON */}
+                <div className="flex items-center justify-between p-4 border rounded-lg">
+                  <div className="flex items-center gap-4">
+                    <div className="p-2 bg-muted rounded-lg">
+                      <Database className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <div className="font-medium">process-queue</div>
+                      <div className="text-sm text-muted-foreground">Procesa cola de ingesta (cada 5 min)</div>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    {cronHealth && getHealthBadge(cronHealth.processQueue.status)}
+                    <div className="text-xs text-muted-foreground mt-1">
+                      {formatTimeAgo(cronHealth?.processQueue.lastRun || null)}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Monitor CRON */}
+                <div className="flex items-center justify-between p-4 border rounded-lg">
+                  <div className="flex items-center gap-4">
+                    <div className="p-2 bg-muted rounded-lg">
+                      <Activity className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <div className="font-medium">monitor</div>
+                      <div className="text-sm text-muted-foreground">Monitoreo de salud del sistema (cada 15 min)</div>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    {cronHealth && getHealthBadge(cronHealth.monitor.status)}
+                    <div className="text-xs text-muted-foreground mt-1">
+                      {formatTimeAgo(cronHealth?.monitor.lastRun || null)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Dictionary Tab */}
+        <TabsContent value="dictionary" className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <Layers className="h-4 w-4" />
+                  Procesos
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-3xl font-bold">{dashboardStats?.dictionary.processes || 0}</div>
+                <div className="text-sm text-muted-foreground">
+                  {dashboardStats?.dictionary.processKeywords || 0} keywords totales
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <Package className="h-4 w-4" />
+                  Productos
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-3xl font-bold">{dashboardStats?.dictionary.products || 0}</div>
+                <div className="text-sm text-muted-foreground">
+                  {dashboardStats?.dictionary.productKeywords || 0} keywords totales
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <Store className="h-4 w-4" />
+                  Vendors
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-3xl font-bold">{dashboardStats?.dictionary.vendors || 0}</div>
+                <div className="text-sm text-muted-foreground">Proveedores registrados</div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Dictionary Jobs Queue */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Cola de Jobs del Diccionario</CardTitle>
+              <CardDescription>
+                {dashboardStats?.dictionaryJobs.pending || 0} pendientes •
+                {dashboardStats?.dictionaryJobs.processing || 0} procesando •
+                {dashboardStats?.dictionaryJobs.completed || 0} completados
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex gap-2 mb-4">
+                {(dashboardStats?.dictionaryJobs.failed || 0) > 0 && (
+                  <Button variant="outline" size="sm" onClick={handleRetryFailed}>
+                    <RefreshCw className="h-3 w-3 mr-1" />
+                    Reintentar {dashboardStats?.dictionaryJobs.failed} Fallidos
+                  </Button>
+                )}
+                <Button variant="outline" size="sm" onClick={handleUnstickJobs}>
+                  <Play className="h-3 w-3 mr-1" />
+                  Desbloquear Estancados
+                </Button>
+              </div>
+              <div className="text-xs text-muted-foreground mb-2">
+                Última actividad: {formatTimeAgo(dashboardStats?.dictionaryJobs.lastCompleted || null)}
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Jobs Tab */}
+        <TabsContent value="jobs" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Jobs Recientes</CardTitle>
+              <CardDescription>Últimos 50 jobs del diccionario</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-auto max-h-[500px]">
                 <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead className="w-24">Estado</TableHead>
                       <TableHead>Keyword</TableHead>
                       <TableHead>Tipo</TableHead>
+                      <TableHead>Señal</TableHead>
                       <TableHead className="text-right">Progreso</TableHead>
+                      <TableHead className="text-right">Creado</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {dictionaryJobs.slice(0, 10).map((job) => (
+                    {dictionaryJobs.map((job) => (
                       <TableRow key={job.id}>
                         <TableCell>{getStatusBadge(job.status)}</TableCell>
                         <TableCell className="font-mono text-sm truncate max-w-xs">{job.keyword || "N/A"}</TableCell>
-                        <TableCell>{formatJobType(job.job_type)}</TableCell>
-                        <TableCell className="text-right">
-                          <span className="text-sm">
-                            {job.total_records > 0
-                              ? `${Math.round((job.processed_records / job.total_records) * 100)}%`
-                              : "0%"}
-                          </span>
+                        <TableCell className="text-sm">
+                          {job.job_type === "add_keyword" ? "Agregar" : "Eliminar"}
+                        </TableCell>
+                        <TableCell className="text-sm capitalize">{job.signal_type}</TableCell>
+                        <TableCell className="text-right text-sm">
+                          {job.total_records > 0
+                            ? `${Math.round((job.processed_records / job.total_records) * 100)}%`
+                            : "-"}
+                        </TableCell>
+                        <TableCell className="text-right text-xs text-muted-foreground">
+                          {formatTimeAgo(job.created_at)}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -525,8 +701,25 @@ export default function ProcessingPage() {
           </Card>
         </TabsContent>
 
+        {/* Logs Tab */}
         <TabsContent value="logs">
           <ProcessingLogs />
+          {logs.length > 0 && (
+            <Card className="mt-4">
+              <CardHeader>
+                <CardTitle>Logs de Sesión</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="bg-muted p-4 rounded-lg max-h-[300px] overflow-y-auto font-mono text-sm">
+                  {logs.map((log, i) => (
+                    <div key={i} className="text-muted-foreground">
+                      {log}
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
       </Tabs>
     </div>
