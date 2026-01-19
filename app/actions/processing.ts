@@ -5,8 +5,6 @@ import { createClient } from "@/lib/supabase/server"
 export async function processSignals(batchSize = 10) {
   const supabase = await createClient()
 
-  // Call the background processing function manually
-  // This function (process_pending_queue) picks the oldest pending batch and processes a chunk
   const { data, error } = await supabase.rpc("process_pending_queue", {
     p_limit: batchSize,
   })
@@ -16,14 +14,13 @@ export async function processSignals(batchSize = 10) {
     return { success: false, error: error.message }
   }
 
-  // data is the number of processed rows returned by the function
   const processedCount = (data as number) || 0
 
   return {
     success: true,
     processed: processedCount,
-    errors: 0, // Errors are handled internally by the SQL function (marked as failed rows)
-    remaining: 0, // The UI will fetch stats to see remaining
+    errors: 0,
+    remaining: 0,
   }
 }
 
@@ -34,7 +31,6 @@ export async function getProcessingStats() {
 
   if (error) {
     console.error("Error getting processing stats:", error)
-    // Fallback to individual queries if RPC fails
     const { count: pendingCount } = await supabase
       .from("import_rows")
       .select("*", { count: "exact", head: true })
@@ -47,7 +43,7 @@ export async function getProcessingStats() {
 
     return {
       pending: pendingCount || 0,
-      signals: 0, // Skip signals count on error
+      signals: 0,
       isSystemProcessing: (pendingCount || 0) > 0 || (processingBatches || 0) > 0,
     }
   }
@@ -59,133 +55,89 @@ export async function getProcessingStats() {
   }
 }
 
+interface DashboardCounts {
+  signals_total: number
+  signals_process: number
+  signals_technology: number
+  contacts_total: number
+  companies_total: number
+  dictionary_processes: number
+  dictionary_products: number
+  dictionary_vendors: number
+  jobs_pending: number
+  jobs_processing: number
+  jobs_completed: number
+  jobs_failed: number
+  keywords_process: number
+  keywords_technology: number
+  batches_pending: number
+  batches_processing: number
+  batches_completed: number
+  batches_failed: number
+}
+
+interface CronExecution {
+  status: string | null
+  started_at: string | null
+  completed_at: string | null
+  records_processed: number | null
+  signals_created?: number | null
+  error_message: string | null
+}
+
+interface CronStatus {
+  process_dictionary: CronExecution | null
+  process_queue: CronExecution | null
+  monitor: CronExecution | null
+  sync_users: CronExecution | null
+}
+
 export async function getDashboardStats() {
   const supabase = await createClient()
 
   try {
-    // Parallel queries for all stats
-    const [
-      signalsResult,
-      dictionaryJobsResult,
-      importBatchesResult,
-      contactsResult,
-      companiesResult,
-      dictionaryProcessesResult,
-      dictionaryProductsResult,
-      dictionaryVendorsResult,
-    ] = await Promise.all([
-      // Total signals by type
-      supabase
-        .from("signals")
-        .select("signal_type"),
-      // Dictionary jobs by status
-      supabase
-        .from("dictionary_jobs")
-        .select("status, created_at, completed_at, started_at"),
-      // Import batches by status
-      supabase
-        .from("import_batches")
-        .select("status, updated_at"),
-      // Total contacts
-      supabase
-        .from("contacts")
-        .select("id", { count: "exact", head: true }),
-      // Total companies
-      supabase
-        .from("companies")
-        .select("id", { count: "exact", head: true }),
-      // Dictionary processes with keywords
-      supabase
-        .from("dictionary_processes")
-        .select("id, keywords"),
-      // Dictionary products with keywords
-      supabase
-        .from("dictionary_products")
-        .select("id, keywords"),
-      // Dictionary vendors
-      supabase
-        .from("dictionary_vendors")
-        .select("id", { count: "exact", head: true }),
-    ])
+    // Use the new RPC for accurate counts (no 1000 cap)
+    const { data: counts, error: countsError } = await supabase.rpc("get_dashboard_counts")
 
-    // Process signals by type
-    const signalsByType = { process: 0, technology: 0 }
-    if (signalsResult.data) {
-      for (const signal of signalsResult.data) {
-        if (signal.signal_type === "process") signalsByType.process++
-        else if (signal.signal_type === "technology") signalsByType.technology++
-      }
+    if (countsError) {
+      console.error("Error getting dashboard counts:", countsError)
+      return null
     }
 
-    // Process dictionary jobs by status
-    const dictionaryJobs = { pending: 0, processing: 0, completed: 0, failed: 0 }
-    let lastJobCompleted: string | null = null
-    let lastJobCreated: string | null = null
-    if (dictionaryJobsResult.data) {
-      for (const job of dictionaryJobsResult.data) {
-        dictionaryJobs[job.status as keyof typeof dictionaryJobs]++
-        if (job.completed_at && (!lastJobCompleted || job.completed_at > lastJobCompleted)) {
-          lastJobCompleted = job.completed_at
-        }
-        if (job.created_at && (!lastJobCreated || job.created_at > lastJobCreated)) {
-          lastJobCreated = job.created_at
-        }
-      }
-    }
-
-    // Process import batches by status
-    const importBatches = { pending: 0, processing: 0, completed: 0, failed: 0 }
-    let lastBatchActivity: string | null = null
-    if (importBatchesResult.data) {
-      for (const batch of importBatchesResult.data) {
-        importBatches[batch.status as keyof typeof importBatches]++
-        if (batch.updated_at && (!lastBatchActivity || batch.updated_at > lastBatchActivity)) {
-          lastBatchActivity = batch.updated_at
-        }
-      }
-    }
-
-    let processKeywordsCount = 0
-    let productKeywordsCount = 0
-
-    if (dictionaryProcessesResult.data) {
-      for (const process of dictionaryProcessesResult.data) {
-        processKeywordsCount += process.keywords?.length || 0
-      }
-    }
-
-    if (dictionaryProductsResult.data) {
-      for (const product of dictionaryProductsResult.data) {
-        productKeywordsCount += product.keywords?.length || 0
-      }
-    }
+    const c = counts as DashboardCounts
 
     return {
       signals: {
-        total: signalsByType.process + signalsByType.technology,
-        byType: signalsByType,
+        total: c.signals_total,
+        byType: {
+          process: c.signals_process,
+          technology: c.signals_technology,
+        },
       },
       dictionaryJobs: {
-        ...dictionaryJobs,
-        total: dictionaryJobs.pending + dictionaryJobs.processing + dictionaryJobs.completed + dictionaryJobs.failed,
-        lastCompleted: lastJobCompleted,
-        lastCreated: lastJobCreated,
+        pending: c.jobs_pending,
+        processing: c.jobs_processing,
+        completed: c.jobs_completed,
+        failed: c.jobs_failed,
+        total: c.jobs_pending + c.jobs_processing + c.jobs_completed + c.jobs_failed,
       },
       importBatches: {
-        ...importBatches,
-        total: importBatches.pending + importBatches.processing + importBatches.completed + importBatches.failed,
-        lastActivity: lastBatchActivity,
+        pending: c.batches_pending,
+        processing: c.batches_processing,
+        completed: c.batches_completed,
+        failed: c.batches_failed,
+        total: c.batches_pending + c.batches_processing + c.batches_completed + c.batches_failed,
       },
       entities: {
-        contacts: contactsResult.count || 0,
-        companies: companiesResult.count || 0,
+        contacts: c.contacts_total,
+        companies: c.companies_total,
       },
       dictionary: {
-        processes: dictionaryProcessesResult.data?.length || 0,
-        products: dictionaryProductsResult.data?.length || 0,
-        vendors: dictionaryVendorsResult.count || 0,
-        processKeywords: processKeywordsCount,
-        productKeywords: productKeywordsCount,
+        processes: c.dictionary_processes,
+        products: c.dictionary_products,
+        vendors: c.dictionary_vendors,
+        processKeywords: c.keywords_process,
+        productKeywords: c.keywords_technology,
       },
     }
   } catch (error) {
@@ -197,16 +149,69 @@ export async function getDashboardStats() {
 export async function getCronHealth() {
   const supabase = await createClient()
 
-  // Get last activity for each cron by checking related tables
+  try {
+    // Use the new RPC for cron status
+    const { data: cronStatus, error: cronError } = await supabase.rpc("get_cron_status")
+
+    if (cronError) {
+      console.error("Error getting cron status:", cronError)
+      // Fallback to legacy method
+      return getLegacyCronHealth(supabase)
+    }
+
+    const status = cronStatus as CronStatus
+    const now = new Date()
+
+    const formatCronStatus = (execution: CronExecution | null, intervalMinutes: number) => {
+      if (!execution || !execution.started_at) {
+        return { status: "unknown", lastRun: null, minutesAgo: null, recordsProcessed: 0, signalsCreated: 0 }
+      }
+
+      const lastRun = new Date(execution.started_at)
+      const minutesAgo = Math.floor((now.getTime() - lastRun.getTime()) / 60000)
+      const healthStatus =
+        execution.status === "failed"
+          ? "critical"
+          : minutesAgo <= intervalMinutes * 2
+            ? "healthy"
+            : minutesAgo <= intervalMinutes * 4
+              ? "warning"
+              : "critical"
+
+      return {
+        status: healthStatus,
+        lastRun: execution.started_at,
+        completedAt: execution.completed_at,
+        minutesAgo,
+        recordsProcessed: execution.records_processed || 0,
+        signalsCreated: execution.signals_created || 0,
+        errorMessage: execution.error_message,
+        executionStatus: execution.status,
+      }
+    }
+
+    return {
+      processDictionary: formatCronStatus(status.process_dictionary, 5),
+      processQueue: formatCronStatus(status.process_queue, 5),
+      monitor: formatCronStatus(status.monitor, 15),
+      syncUsers: formatCronStatus(status.sync_users, 1440), // 24 hours
+    }
+  } catch (error) {
+    console.error("Error getting cron health:", error)
+    return null
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getLegacyCronHealth(supabase: any) {
+  // Fallback: Get last activity for each cron by checking related tables
   const [lastDictionaryJob, lastImportBatch] = await Promise.all([
-    // process-dictionary cron - check last dictionary job activity
     supabase
       .from("dictionary_jobs")
       .select("started_at, completed_at, status")
       .order("started_at", { ascending: false, nullsFirst: false })
       .limit(1)
       .single(),
-    // process-queue cron - check last import batch activity
     supabase
       .from("import_batches")
       .select("updated_at, status")
@@ -229,6 +234,61 @@ export async function getCronHealth() {
   return {
     processDictionary: getCronStatus(lastDictionaryJob.data?.started_at || lastDictionaryJob.data?.completed_at, 5),
     processQueue: getCronStatus(lastImportBatch.data?.updated_at, 5),
-    monitor: { status: "unknown", lastRun: null, minutesAgo: null }, // No table to track monitor cron
+    monitor: { status: "unknown", lastRun: null, minutesAgo: null },
+    syncUsers: { status: "unknown", lastRun: null, minutesAgo: null },
+  }
+}
+
+// Helper to register a cron execution start
+export async function registerCronStart(cronName: string) {
+  const supabase = await createClient()
+
+  const { data, error } = await supabase
+    .from("cron_executions")
+    .insert({
+      cron_name: cronName,
+      status: "running",
+      started_at: new Date().toISOString(),
+    })
+    .select("id")
+    .single()
+
+  if (error) {
+    console.error(`Error registering cron start for ${cronName}:`, error)
+    return null
+  }
+
+  return data.id
+}
+
+// Helper to register a cron execution completion
+export async function registerCronComplete(
+  executionId: string,
+  status: "completed" | "failed",
+  metrics?: {
+    recordsProcessed?: number
+    recordsFailed?: number
+    signalsCreated?: number
+    errorMessage?: string
+    details?: Record<string, unknown>
+  }
+) {
+  const supabase = await createClient()
+
+  const { error } = await supabase
+    .from("cron_executions")
+    .update({
+      status,
+      completed_at: new Date().toISOString(),
+      records_processed: metrics?.recordsProcessed || 0,
+      records_failed: metrics?.recordsFailed || 0,
+      signals_created: metrics?.signalsCreated || 0,
+      error_message: metrics?.errorMessage || null,
+      details: metrics?.details || {},
+    })
+    .eq("id", executionId)
+
+  if (error) {
+    console.error(`Error completing cron execution ${executionId}:`, error)
   }
 }

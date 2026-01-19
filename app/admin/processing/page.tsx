@@ -67,10 +67,22 @@ type DashboardStats = {
   }
 }
 
+type CronExecution = {
+  status: string
+  lastRun: string | null
+  completedAt?: string | null
+  minutesAgo: number | null
+  recordsProcessed?: number
+  signalsCreated?: number
+  errorMessage?: string | null
+  executionStatus?: string | null
+}
+
 type CronHealth = {
-  processDictionary: { status: string; lastRun: string | null; minutesAgo: number | null }
-  processQueue: { status: string; lastRun: string | null; minutesAgo: number | null }
-  monitor: { status: string; lastRun: string | null; minutesAgo: number | null }
+  processDictionary: CronExecution
+  processQueue: CronExecution
+  monitor: CronExecution
+  syncUsers: CronExecution
 }
 
 type DictionaryJob = {
@@ -526,6 +538,16 @@ export default function ProcessingPage() {
                     <div>
                       <div className="font-medium">process-dictionary</div>
                       <div className="text-sm text-muted-foreground">Procesa jobs del diccionario (cada 5 min)</div>
+                      {cronHealth?.processDictionary.recordsProcessed !== undefined && cronHealth.processDictionary.recordsProcessed > 0 && (
+                        <div className="text-xs text-green-600 mt-1">
+                          Última ejecución: {cronHealth.processDictionary.recordsProcessed} jobs, {cronHealth.processDictionary.signalsCreated || 0} señales
+                        </div>
+                      )}
+                      {cronHealth?.processDictionary.errorMessage && (
+                        <div className="text-xs text-red-600 mt-1">
+                          Error: {cronHealth.processDictionary.errorMessage}
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="text-right">
@@ -545,6 +567,16 @@ export default function ProcessingPage() {
                     <div>
                       <div className="font-medium">process-queue</div>
                       <div className="text-sm text-muted-foreground">Procesa cola de ingesta (cada 5 min)</div>
+                      {cronHealth?.processQueue.recordsProcessed !== undefined && cronHealth.processQueue.recordsProcessed > 0 && (
+                        <div className="text-xs text-green-600 mt-1">
+                          Última ejecución: {cronHealth.processQueue.recordsProcessed} rows procesadas
+                        </div>
+                      )}
+                      {cronHealth?.processQueue.errorMessage && (
+                        <div className="text-xs text-red-600 mt-1">
+                          Error: {cronHealth.processQueue.errorMessage}
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="text-right">
@@ -564,12 +596,41 @@ export default function ProcessingPage() {
                     <div>
                       <div className="font-medium">monitor</div>
                       <div className="text-sm text-muted-foreground">Monitoreo de salud del sistema (cada 15 min)</div>
+                      {cronHealth?.monitor.errorMessage && (
+                        <div className="text-xs text-red-600 mt-1">
+                          Error: {cronHealth.monitor.errorMessage}
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="text-right">
                     {cronHealth && getHealthBadge(cronHealth.monitor.status)}
                     <div className="text-xs text-muted-foreground mt-1">
                       {formatTimeAgo(cronHealth?.monitor.lastRun || null)}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Sync Users CRON */}
+                <div className="flex items-center justify-between p-4 border rounded-lg">
+                  <div className="flex items-center gap-4">
+                    <div className="p-2 bg-muted rounded-lg">
+                      <Users className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <div className="font-medium">sync-users</div>
+                      <div className="text-sm text-muted-foreground">Sincroniza usuarios (diario 2am)</div>
+                      {cronHealth?.syncUsers.recordsProcessed !== undefined && cronHealth.syncUsers.recordsProcessed > 0 && (
+                        <div className="text-xs text-green-600 mt-1">
+                          Última ejecución: {cronHealth.syncUsers.recordsProcessed} usuarios
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    {cronHealth && getHealthBadge(cronHealth.syncUsers?.status || 'unknown')}
+                    <div className="text-xs text-muted-foreground mt-1">
+                      {formatTimeAgo(cronHealth?.syncUsers?.lastRun || null)}
                     </div>
                   </div>
                 </div>

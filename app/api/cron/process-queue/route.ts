@@ -13,6 +13,19 @@ export async function GET(request: Request) {
 
   const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 
+  // Register cron execution start
+  const { data: execution } = await supabase
+    .from("cron_executions")
+    .insert({
+      cron_name: "process-queue",
+      status: "running",
+      started_at: new Date().toISOString(),
+    })
+    .select("id")
+    .single()
+
+  const executionId = execution?.id
+
   const startTime = Date.now()
   const MAX_EXECUTION_TIME = 55000 // Run for 55 seconds max to avoid timeout
   let totalProcessed = 0
@@ -87,6 +100,19 @@ export async function GET(request: Request) {
       `[Cron] Loop finished. Loops: ${loops}, Batches Processed: ${batchesProcessed}, Total Rows: ${totalProcessed}`,
     )
 
+    // Register cron execution completion
+    if (executionId) {
+      await supabase
+        .from("cron_executions")
+        .update({
+          status: "completed",
+          completed_at: new Date().toISOString(),
+          records_processed: totalProcessed,
+          details: { loops, batchesProcessed },
+        })
+        .eq("id", executionId)
+    }
+
     return NextResponse.json({
       success: true,
       message: `Processed ${totalProcessed} rows in ${batchesProcessed} batches`,
@@ -96,6 +122,19 @@ export async function GET(request: Request) {
     })
   } catch (err: any) {
     console.error("[Cron] Unexpected error:", err)
+
+    // Register cron execution failure
+    if (executionId) {
+      await supabase
+        .from("cron_executions")
+        .update({
+          status: "failed",
+          completed_at: new Date().toISOString(),
+          error_message: err.message,
+        })
+        .eq("id", executionId)
+    }
+
     return NextResponse.json({ error: err.message }, { status: 500 })
   }
 }

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { runHealthCheck, sendAlertEmail } from "@/lib/monitoring"
 import { createClient } from "@/lib/supabase/server"
+import { createClient as createServiceClient } from "@supabase/supabase-js"
 
 export const maxDuration = 30
 
@@ -10,6 +11,25 @@ export async function GET(request: Request) {
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
+
+  // Use service role for cron_executions
+  const serviceSupabase = createServiceClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  )
+
+  // Register cron execution start
+  const { data: execution } = await serviceSupabase
+    .from("cron_executions")
+    .insert({
+      cron_name: "monitor",
+      status: "running",
+      started_at: new Date().toISOString(),
+    })
+    .select("id")
+    .single()
+
+  const executionId = execution?.id
 
   try {
     const healthCheck = await runHealthCheck()
@@ -48,12 +68,37 @@ export async function GET(request: Request) {
       }
     }
 
+    // Register cron execution completion
+    if (executionId) {
+      await serviceSupabase
+        .from("cron_executions")
+        .update({
+          status: "completed",
+          completed_at: new Date().toISOString(),
+          details: { healthStatus: healthCheck.status, alertCount: healthCheck.alerts.length },
+        })
+        .eq("id", executionId)
+    }
+
     return NextResponse.json({
       success: true,
       ...healthCheck,
     })
   } catch (error) {
     console.error("[Monitor] Health check failed:", error)
+
+    // Register cron execution failure
+    if (executionId) {
+      await serviceSupabase
+        .from("cron_executions")
+        .update({
+          status: "failed",
+          completed_at: new Date().toISOString(),
+          error_message: String(error),
+        })
+        .eq("id", executionId)
+    }
+
     return NextResponse.json({ success: false, error: String(error) }, { status: 500 })
   }
 }
