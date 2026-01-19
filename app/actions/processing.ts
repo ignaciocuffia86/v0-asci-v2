@@ -239,6 +239,66 @@ async function getLegacyCronHealth(supabase: any) {
   }
 }
 
+// Get signal processing activity from debug_events
+export async function getSignalProcessingActivity() {
+  const supabase = await createClient()
+
+  try {
+    // Get summary of recent processing activity
+    const [recentBatches, eventSummary, pendingSignals] = await Promise.all([
+      // Last 10 batch processed events
+      supabase
+        .from("debug_events")
+        .select("event_type, message, details, created_at")
+        .eq("event_type", "signals_batch_processed")
+        .order("created_at", { ascending: false })
+        .limit(10),
+      // Event type summary
+      supabase
+        .from("debug_events")
+        .select("event_type")
+        .gte("created_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()),
+      // Pending signals count
+      supabase
+        .from("pending_signals")
+        .select("id", { count: "exact", head: true })
+        .is("processed_at", null),
+    ])
+
+    // Count events by type in last 24h
+    const eventCounts: Record<string, number> = {}
+    if (eventSummary.data) {
+      for (const event of eventSummary.data) {
+        eventCounts[event.event_type] = (eventCounts[event.event_type] || 0) + 1
+      }
+    }
+
+    // Calculate total signals processed in recent batches
+    let totalProcessedRecently = 0
+    const batches = recentBatches.data || []
+    for (const batch of batches) {
+      const details = batch.details as { total_processed?: number; count?: number } | null
+      totalProcessedRecently += details?.total_processed || details?.count || 0
+    }
+
+    return {
+      pendingSignals: pendingSignals.count || 0,
+      recentBatches: batches.map((b) => ({
+        type: b.event_type,
+        message: b.message,
+        details: b.details,
+        createdAt: b.created_at,
+      })),
+      last24hEvents: eventCounts,
+      totalProcessedRecently,
+      lastProcessedAt: batches[0]?.created_at || null,
+    }
+  } catch (error) {
+    console.error("Error getting signal processing activity:", error)
+    return null
+  }
+}
+
 // Helper to register a cron execution start
 export async function registerCronStart(cronName: string) {
   const supabase = await createClient()

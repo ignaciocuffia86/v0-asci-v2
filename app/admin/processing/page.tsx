@@ -23,7 +23,7 @@ import {
   Package,
   Store,
 } from "lucide-react"
-import { processSignals, getDashboardStats, getCronHealth } from "@/app/actions/processing"
+import { processSignals, getDashboardStats, getCronHealth, getSignalProcessingActivity } from "@/app/actions/processing"
 import { Progress } from "@/components/ui/progress"
 import { createClient } from "@/lib/supabase/client"
 import { Badge } from "@/components/ui/badge"
@@ -85,6 +85,19 @@ type CronHealth = {
   syncUsers: CronExecution
 }
 
+type SignalProcessingActivity = {
+  pendingSignals: number
+  recentBatches: Array<{
+    type: string
+    message: string
+    details: Record<string, unknown> | null
+    createdAt: string
+  }>
+  last24hEvents: Record<string, number>
+  totalProcessedRecently: number
+  lastProcessedAt: string | null
+}
+
 type DictionaryJob = {
   id: string
   job_type: string
@@ -105,6 +118,7 @@ export default function ProcessingPage() {
   const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null)
   const [cronHealth, setCronHealth] = useState<CronHealth | null>(null)
   const [dictionaryJobs, setDictionaryJobs] = useState<DictionaryJob[]>([])
+  const [signalActivity, setSignalActivity] = useState<SignalProcessingActivity | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isProcessing, setIsProcessing] = useState(false)
   const [progress, setProgress] = useState(0)
@@ -116,15 +130,17 @@ export default function ProcessingPage() {
   const fetchAllData = useCallback(async () => {
     setIsLoading(true)
     try {
-      const [stats, crons, jobsResult] = await Promise.all([
+      const [stats, crons, jobsResult, activity] = await Promise.all([
         getDashboardStats(),
         getCronHealth(),
         supabase.from("dictionary_jobs").select("*").order("created_at", { ascending: false }).limit(50),
+        getSignalProcessingActivity(),
       ])
 
       if (stats) setDashboardStats(stats)
       if (crons) setCronHealth(crons)
       if (jobsResult.data) setDictionaryJobs(jobsResult.data)
+      if (activity) setSignalActivity(activity)
       setLastRefresh(new Date())
     } catch (error) {
       console.error("Error fetching dashboard data:", error)
@@ -486,6 +502,56 @@ export default function ProcessingPage() {
               </CardContent>
             </Card>
           </div>
+
+          {/* Signal Processing Activity */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Activity className="h-5 w-5" />
+                Procesamiento de Señales (pg_cron)
+              </CardTitle>
+              <CardDescription>Estado del procesamiento automático de señales cada minuto</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-4 gap-4">
+                <div className="text-center p-3 bg-muted rounded-lg">
+                  <div className="text-2xl font-bold">{signalActivity?.pendingSignals || 0}</div>
+                  <div className="text-xs text-muted-foreground">Pendientes</div>
+                </div>
+                <div className="text-center p-3 bg-muted rounded-lg">
+                  <div className="text-2xl font-bold text-green-600">{signalActivity?.totalProcessedRecently || 0}</div>
+                  <div className="text-xs text-muted-foreground">Procesadas (últ. batches)</div>
+                </div>
+                <div className="text-center p-3 bg-muted rounded-lg">
+                  <div className="text-2xl font-bold">{signalActivity?.last24hEvents?.signals_batch_processed || 0}</div>
+                  <div className="text-xs text-muted-foreground">Batches (24h)</div>
+                </div>
+                <div className="text-center p-3 bg-muted rounded-lg">
+                  <div className="text-2xl font-bold text-orange-600">{signalActivity?.last24hEvents?.signal_error || 0}</div>
+                  <div className="text-xs text-muted-foreground">Errores (24h)</div>
+                </div>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Último procesamiento: {formatTimeAgo(signalActivity?.lastProcessedAt || null)}
+              </div>
+              {signalActivity?.recentBatches && signalActivity.recentBatches.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-sm font-medium">Últimos batches procesados:</div>
+                  <div className="max-h-32 overflow-y-auto space-y-1">
+                    {signalActivity.recentBatches.slice(0, 5).map((batch, idx) => (
+                      <div key={idx} className="text-xs flex justify-between items-center p-2 bg-muted/50 rounded">
+                        <span className="text-muted-foreground">{formatTimeAgo(batch.createdAt)}</span>
+                        <span className="font-medium">
+                          {(batch.details as { total_processed?: number; count?: number })?.total_processed || 
+                           (batch.details as { total_processed?: number; count?: number })?.count || 0} señales
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
 
           {/* Manual Processing */}
           <Card>
