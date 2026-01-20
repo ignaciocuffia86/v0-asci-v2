@@ -1,0 +1,81 @@
+"use server"
+
+import { createClient } from "@/lib/supabase/server"
+
+export type ExportSortBy = "signals" | "signals_asc" | "contacts" | "job_postings" | "no_linkedin"
+
+export interface CompanyExportFilters {
+  country?: string | null
+  sortBy: ExportSortBy
+  limit: number
+  onlyWithoutLinkedIn?: boolean
+  onlyWithoutIndustry?: boolean
+  minSignals?: number
+}
+
+export interface CompanyExportRow {
+  name: string
+  country: string | null
+  linkedin_url: string | null
+  website: string | null
+  signal_count_process: number
+  signal_count_technology: number
+  job_posting_count: number
+}
+
+export async function getAvailableCountries() {
+  const supabase = await createClient()
+
+  // Use RPC to avoid 1000 row limit from direct queries
+  const { data, error } = await supabase.rpc("get_available_countries_for_export")
+
+  if (error) {
+    console.error("Error getting countries:", error)
+    return []
+  }
+
+  return (data || []).map((row: { country_normalized: string; company_count: number }) => ({
+    country: row.country_normalized,
+    count: row.company_count,
+  }))
+}
+
+export async function getCompaniesForExport(filters: CompanyExportFilters): Promise<{
+  data: CompanyExportRow[]
+  total: number
+}> {
+  const supabase = await createClient()
+
+  // Build the query using RPC for complex aggregations
+  const { data, error } = await supabase.rpc("get_companies_for_export", {
+    p_country: filters.country || null,
+    p_sort_by: filters.sortBy,
+    p_limit: filters.limit,
+    p_only_without_linkedin: filters.onlyWithoutLinkedIn || false,
+    p_only_without_industry: filters.onlyWithoutIndustry || false,
+    p_min_signals: filters.minSignals || 0,
+  })
+
+  if (error) {
+    console.error("Error getting companies for export:", error)
+    return { data: [], total: 0 }
+  }
+
+  return {
+    data: data || [],
+    total: data?.length || 0,
+  }
+}
+
+export async function getExportStats() {
+  const supabase = await createClient()
+
+  const { data, error } = await supabase.rpc("get_export_stats")
+
+  if (error) {
+    console.error("Error getting export stats:", error)
+    return null
+  }
+
+  return data
+}

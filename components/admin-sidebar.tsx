@@ -15,6 +15,7 @@ import {
   MessageSquare,
   Users,
   Sparkles,
+  Download,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { createClient } from "@/lib/supabase/client"
@@ -60,6 +61,11 @@ const sidebarItems = [
     title: "Uso por Usuario",
     href: "/admin/usage",
     icon: Users,
+  },
+  {
+    title: "Export Compañías",
+    href: "/admin/export",
+    icon: Download,
   },
 ]
 
