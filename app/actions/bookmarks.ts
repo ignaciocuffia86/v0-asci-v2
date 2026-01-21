@@ -1,6 +1,7 @@
 "use server"
 
 import { createClient } from "@/lib/supabase/server"
+import { type BookmarkStatus } from "@/lib/bookmark-types"
 
 export async function bookmarkCompany(userId: string, companyId: string, searchContext: any = {}) {
   const supabase = await createClient()
@@ -137,6 +138,129 @@ export async function checkBookmarkWithContext(
   } catch (error) {
     console.error("Error checking bookmark context:", error)
     return { hasExactMatch: false, otherBookmarks: [] }
+  }
+}
+
+export async function updateBookmarkStatus(bookmarkId: string, userId: string, status: BookmarkStatus) {
+  const supabase = await createClient()
+
+  try {
+    const { data, error } = await supabase
+      .from("bookmarks")
+      .update({ status, updated_at: new Date().toISOString() })
+      .eq("id", bookmarkId)
+      .eq("user_id", userId)
+      .select("id, status")
+      .single()
+
+    if (error) throw error
+
+    return { success: true, bookmark: data }
+  } catch (error) {
+    console.error("Error updating bookmark status:", error)
+    return { success: false, error }
+  }
+}
+
+export async function getBookmarksWithFilters(
+  userId: string,
+  filters?: {
+    status?: BookmarkStatus[]
+    priority?: string[]
+    search?: string
+  }
+) {
+  const supabase = await createClient()
+
+  try {
+    let query = supabase
+      .from("bookmarks")
+      .select(`
+        id,
+        notes,
+        priority,
+        status,
+        search_context,
+        created_at,
+        updated_at,
+        company:companies (
+          id,
+          name,
+          industry,
+          country_normalized,
+          website,
+          linkedin_url,
+          logo_url
+        )
+      `)
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+
+    // Apply status filter
+    if (filters?.status && filters.status.length > 0) {
+      query = query.in("status", filters.status)
+    }
+
+    // Apply priority filter
+    if (filters?.priority && filters.priority.length > 0) {
+      query = query.in("priority", filters.priority)
+    }
+
+    const { data, error } = await query
+
+    if (error) throw error
+
+    // Apply search filter client-side (for company name)
+    let filteredData = data || []
+    if (filters?.search && filters.search.trim()) {
+      const searchLower = filters.search.toLowerCase()
+      filteredData = filteredData.filter((b: any) =>
+        b.company?.name?.toLowerCase().includes(searchLower)
+      )
+    }
+
+    return { success: true, bookmarks: filteredData }
+  } catch (error) {
+    console.error("Error fetching bookmarks with filters:", error)
+    return { success: false, bookmarks: [], error }
+  }
+}
+
+export async function getBookmarkStats(userId: string) {
+  const supabase = await createClient()
+
+  try {
+    const { data, error } = await supabase
+      .from("bookmarks")
+      .select("status, priority")
+      .eq("user_id", userId)
+
+    if (error) throw error
+
+    const stats = {
+      byStatus: {} as Record<BookmarkStatus, number>,
+      byPriority: {} as Record<string, number>,
+      total: data?.length || 0,
+    }
+
+    // Initialize counts
+    for (const status of Object.keys(BOOKMARK_STATUS_CONFIG)) {
+      stats.byStatus[status as BookmarkStatus] = 0
+    }
+
+    for (const bookmark of data || []) {
+      if (bookmark.status) {
+        stats.byStatus[bookmark.status as BookmarkStatus] = (stats.byStatus[bookmark.status as BookmarkStatus] || 0) + 1
+      }
+      if (bookmark.priority) {
+        stats.byPriority[bookmark.priority] = (stats.byPriority[bookmark.priority] || 0) + 1
+      }
+    }
+
+    return { success: true, stats }
+  } catch (error) {
+    console.error("Error fetching bookmark stats:", error)
+    return { success: false, stats: null, error }
   }
 }
 

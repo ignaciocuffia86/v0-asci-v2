@@ -1,14 +1,13 @@
 "use client"
 
-import type React from "react"
+import { useMemo, useState, useEffect, useCallback } from "react"
 import { useRouter } from "next/navigation"
-import { useState, useEffect } from "react"
 import { createClient } from "@/lib/supabase/client"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Trash2, Edit2, Building2, Search } from "lucide-react"
+import { Trash2, Edit2, Building2, Search, LayoutGrid, List, Filter, X, Eye } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import {
   Dialog,
@@ -21,13 +20,24 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Card, CardContent } from "@/components/ui/card"
+import { cn } from "@/lib/utils"
+import { KanbanBoard } from "@/components/bookmarks/kanban-board"
+import { 
+  BOOKMARK_STATUS_CONFIG, 
+  PRIORITY_CONFIG,
+  type BookmarkStatus,
+} from "@/lib/bookmark-types"
 
 type Bookmark = {
   id: string
   company_id: string
   notes: string
   priority: "alta" | "transaccional" | "baja" | null
+  status: BookmarkStatus
   created_at: string
+  updated_at: string | null
   search_context: {
     filtersUsed?: {
       process?: string[]
@@ -39,26 +49,67 @@ type Bookmark = {
     id: string
     name: string
     industry: string | null
-    country: string | null
+    country_normalized: string | null
+    website: string | null
+    linkedin_url: string | null
     logo_url: string | null
   }
 }
+
+type ViewMode = "list" | "kanban"
 
 export default function BookmarksPage() {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
   const [filteredBookmarks, setFilteredBookmarks] = useState<Bookmark[]>([])
   const [searchQuery, setSearchQuery] = useState("")
   const [isLoading, setIsLoading] = useState(true)
-  const router = useRouter()
+  const [viewMode, setViewMode] = useState<ViewMode>("kanban")
+  const [userId, setUserId] = useState<string | null>(null)
+  
+  // Filters
+  const [selectedPriorities, setSelectedPriorities] = useState<string[]>([])
+  const [selectedStatuses, setSelectedStatuses] = useState<BookmarkStatus[]>([])
+  
+  // Stats - calculated from bookmarks with useMemo for auto-refresh
+  const stats = useMemo(() => {
+    if (bookmarks.length === 0) return null
+    
+    const calculatedStats = {
+      byStatus: {} as Record<BookmarkStatus, number>,
+      byPriority: {} as Record<string, number>,
+      total: bookmarks.length,
+    }
+    
+    // Initialize status counts
+    for (const status of Object.keys(BOOKMARK_STATUS_CONFIG)) {
+      calculatedStats.byStatus[status as BookmarkStatus] = 0
+    }
+    
+    // Count by status and priority
+    for (const bookmark of bookmarks) {
+      const status = (bookmark.status || 'nuevo') as BookmarkStatus
+      calculatedStats.byStatus[status] = (calculatedStats.byStatus[status] || 0) + 1
+      
+      if (bookmark.priority) {
+        calculatedStats.byPriority[bookmark.priority] = 
+          (calculatedStats.byPriority[bookmark.priority] || 0) + 1
+      }
+    }
+    
+    return calculatedStats
+  }, [bookmarks])
 
+  const router = useRouter()
   const supabase = createClient()
 
-  const fetchBookmarks = async () => {
+  const fetchBookmarks = useCallback(async () => {
     setIsLoading(true)
     const {
       data: { user },
     } = await supabase.auth.getUser()
     if (!user) return
+
+    setUserId(user.id)
 
     const { data } = await supabase
       .from("bookmarks")
@@ -67,47 +118,80 @@ export default function BookmarksPage() {
         company_id,
         notes,
         priority,
+        status,
         created_at,
+        updated_at,
         search_context,
         company:company_id (
           id,
           name,
           industry,
-          country,
+          country_normalized,
+          website,
+          linkedin_url,
           logo_url
         )
       `)
       .eq("user_id", user.id)
       .order("created_at", { ascending: false })
 
-    setBookmarks((data as any) || [])
-    setFilteredBookmarks((data as any) || [])
+    const bookmarksData = (data as any) || []
+    setBookmarks(bookmarksData)
+    setFilteredBookmarks(bookmarksData)
     setIsLoading(false)
-  }
+  }, [supabase])
 
   useEffect(() => {
     fetchBookmarks()
-  }, [])
+  }, [fetchBookmarks])
 
+  // Apply filters
   useEffect(() => {
-    if (!searchQuery.trim()) {
-      setFilteredBookmarks(bookmarks)
-      return
+    let filtered = [...bookmarks]
+
+    // Search filter
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase()
+      filtered = filtered.filter(
+        (b) =>
+          b.company?.name?.toLowerCase().includes(query) ||
+          (b.notes && b.notes.toLowerCase().includes(query)) ||
+          (b.company?.industry && b.company.industry.toLowerCase().includes(query)),
+      )
     }
 
-    const query = searchQuery.toLowerCase()
-    const filtered = bookmarks.filter(
-      (b) =>
-        b.company.name.toLowerCase().includes(query) ||
-        (b.notes && b.notes.toLowerCase().includes(query)) ||
-        (b.company.industry && b.company.industry.toLowerCase().includes(query)),
-    )
-    setFilteredBookmarks(filtered)
-  }, [searchQuery, bookmarks])
+    // Priority filter
+    if (selectedPriorities.length > 0) {
+      filtered = filtered.filter((b) => {
+        if (selectedPriorities.includes("sin_prioridad")) {
+          return !b.priority || selectedPriorities.includes(b.priority)
+        }
+        return b.priority && selectedPriorities.includes(b.priority)
+      })
+    }
 
-  const updateBookmark = async (id: string, notes: string, priority: string) => {
-    await supabase.from("bookmarks").update({ notes, priority }).eq("id", id)
-    fetchBookmarks()
+    // Status filter
+    if (selectedStatuses.length > 0) {
+      filtered = filtered.filter((b) => {
+        const bookmarkStatus = b.status || 'nuevo'
+        return selectedStatuses.includes(bookmarkStatus)
+      })
+    }
+
+    setFilteredBookmarks(filtered)
+  }, [searchQuery, bookmarks, selectedPriorities, selectedStatuses])
+
+  const handleStatusChange = (bookmarkId: string, newStatus: BookmarkStatus) => {
+    // Optimistic update
+    setBookmarks((prev) =>
+      prev.map((b) => (b.id === bookmarkId ? { ...b, status: newStatus, updated_at: new Date().toISOString() } : b))
+    )
+    // Stats will be recalculated on next fetch
+  }
+
+  const updateBookmark = async (id: string, notes: string, priority: string, status: BookmarkStatus) => {
+    await supabase.from("bookmarks").update({ notes, priority, status, updated_at: new Date().toISOString() }).eq("id", id)
+    // Don't refetch - we use optimistic updates
   }
 
   const deleteBookmark = async (id: string) => {
@@ -117,18 +201,25 @@ export default function BookmarksPage() {
     }
   }
 
-  const getPriorityColor = (priority: string | null) => {
-    switch (priority) {
-      case "alta":
-        return "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300"
-      case "transaccional":
-        return "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
-      case "baja":
-        return "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300"
-      default:
-        return "bg-gray-100 text-gray-800"
-    }
+  const togglePriorityFilter = (priority: string) => {
+    setSelectedPriorities((prev) =>
+      prev.includes(priority) ? prev.filter((p) => p !== priority) : [...prev, priority]
+    )
   }
+
+  const toggleStatusFilter = (status: BookmarkStatus) => {
+    setSelectedStatuses((prev) =>
+      prev.includes(status) ? prev.filter((s) => s !== status) : [...prev, status]
+    )
+  }
+
+  const clearFilters = () => {
+    setSelectedPriorities([])
+    setSelectedStatuses([])
+    setSearchQuery("")
+  }
+
+  const hasActiveFilters = selectedPriorities.length > 0 || selectedStatuses.length > 0 || searchQuery.trim()
 
   const renderContext = (context: any) => {
     if (!context || !context.filtersUsed) return <span className="text-muted-foreground text-xs">-</span>
@@ -158,12 +249,27 @@ export default function BookmarksPage() {
 
   return (
     <div className="p-8 space-y-6">
+      {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Mis Bookmarks</h1>
-          <p className="text-muted-foreground">Gestiona tus empresas guardadas y sus diferentes estrategias.</p>
+          <h1 className="text-3xl font-bold tracking-tight">Mis Cuentas</h1>
+          <p className="text-muted-foreground">
+            Gestiona tu pipeline de prospección. {stats?.total || 0} cuentas guardadas.
+          </p>
         </div>
         <div className="flex items-center gap-2">
+          <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as ViewMode)}>
+            <TabsList>
+              <TabsTrigger value="kanban" className="gap-2">
+                <LayoutGrid className="h-4 w-4" />
+                Kanban
+              </TabsTrigger>
+              <TabsTrigger value="list" className="gap-2">
+                <List className="h-4 w-4" />
+                Lista
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
           <Button onClick={() => router.push("/search")}>
             <Search className="mr-2 h-4 w-4" />
             Nueva Búsqueda
@@ -171,9 +277,37 @@ export default function BookmarksPage() {
         </div>
       </div>
 
-      {/* Search Bar */}
-      <div className="flex items-center space-x-2 max-w-md">
-        <div className="relative flex-1">
+      {/* Stats Cards */}
+      {stats && (
+        <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
+          {(Object.keys(BOOKMARK_STATUS_CONFIG) as BookmarkStatus[]).map((status) => {
+            const config = BOOKMARK_STATUS_CONFIG[status]
+            const count = stats.byStatus[status] || 0
+            const isSelected = selectedStatuses.includes(status)
+            
+            return (
+              <Card 
+                key={status}
+                className={cn(
+                  "cursor-pointer transition-all hover:shadow-md",
+                  isSelected && "ring-2 ring-primary"
+                )}
+                onClick={() => toggleStatusFilter(status)}
+              >
+                <CardContent className="p-3 text-center">
+                  <div className="text-2xl font-bold">{count}</div>
+                  <Badge className={cn("text-xs", config.color)}>{config.label}</Badge>
+                </CardContent>
+              </Card>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Filters Bar */}
+      <div className="flex flex-wrap items-center gap-3">
+        {/* Search */}
+        <div className="relative flex-1 min-w-[200px] max-w-md">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="Buscar por nombre, notas o industria..."
@@ -182,84 +316,203 @@ export default function BookmarksPage() {
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>
+
+        {/* Priority Filters */}
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-muted-foreground">Tier:</span>
+          {(Object.keys(PRIORITY_CONFIG) as Array<keyof typeof PRIORITY_CONFIG>).map((priority) => {
+            const config = PRIORITY_CONFIG[priority]
+            const isSelected = selectedPriorities.includes(priority)
+            const count = stats?.byPriority[priority] || 0
+            
+            return (
+              <Button
+                key={priority}
+                variant={isSelected ? "default" : "outline"}
+                size="sm"
+                onClick={() => togglePriorityFilter(priority)}
+                className={cn(
+                  "gap-1",
+                  !isSelected && config.color
+                )}
+              >
+                {config.label}
+                <span className="text-xs opacity-70">({count})</span>
+              </Button>
+            )
+          })}
+          {/* Sin Prioridad filter */}
+          <Button
+            variant={selectedPriorities.includes("sin_prioridad") ? "default" : "outline"}
+            size="sm"
+            onClick={() => togglePriorityFilter("sin_prioridad")}
+            className="gap-1"
+          >
+            Sin Prioridad
+            <span className="text-xs opacity-70">
+              ({(stats?.total || 0) - Object.values(stats?.byPriority || {}).reduce((a, b) => a + b, 0)})
+            </span>
+          </Button>
+        </div>
+
+        {/* Clear Filters */}
+        {hasActiveFilters && (
+          <Button variant="ghost" size="sm" onClick={clearFilters} className="gap-1">
+            <X className="h-4 w-4" />
+            Limpiar filtros
+          </Button>
+        )}
       </div>
 
-      <div className="rounded-md border bg-card">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Empresa</TableHead>
-              <TableHead>Contexto de Búsqueda</TableHead>
-              <TableHead>Prioridad</TableHead>
-              <TableHead>Notas</TableHead>
-              <TableHead>Fecha</TableHead>
-              <TableHead className="text-right">Acciones</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {filteredBookmarks.map((bookmark) => (
-              <TableRow key={bookmark.id}>
-                <TableCell>
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-muted rounded-md flex items-center justify-center flex-shrink-0">
-                      {bookmark.company.logo_url ? (
-                        <img
-                          src={bookmark.company.logo_url || "/placeholder.svg"}
-                          alt={bookmark.company.name}
-                          className="w-full h-full object-cover rounded-md"
-                        />
-                      ) : (
-                        <Building2 className="h-5 w-5 text-muted-foreground" />
-                      )}
-                    </div>
-                    <div>
-                      <div
-                        className="font-medium hover:underline cursor-pointer text-primary"
-                        onClick={() => router.push(`/bookmarks/${bookmark.id}`)}
-                      >
-                        {bookmark.company.name}
-                      </div>
-                      <div className="text-xs text-muted-foreground">{bookmark.company.industry}</div>
-                    </div>
-                  </div>
-                </TableCell>
-                <TableCell>{renderContext(bookmark.search_context)}</TableCell>
-                <TableCell>
-                  <Badge variant="outline" className={getPriorityColor(bookmark.priority)}>
-                    {bookmark.priority
-                      ? bookmark.priority.charAt(0).toUpperCase() + bookmark.priority.slice(1)
-                      : "Sin prioridad"}
-                  </Badge>
-                </TableCell>
-                <TableCell className="max-w-xs truncate text-muted-foreground">{bookmark.notes || "-"}</TableCell>
-                <TableCell>{new Date(bookmark.created_at).toLocaleDateString()}</TableCell>
-                <TableCell className="text-right">
-                  <div className="flex justify-end gap-2">
-                    <EditBookmarkDialog bookmark={bookmark} onUpdate={updateBookmark} />
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-destructive hover:text-destructive"
-                      onClick={() => deleteBookmark(bookmark.id)}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
-            {!isLoading && filteredBookmarks.length === 0 && (
+      {/* Active Filters Summary */}
+      {hasActiveFilters && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Filter className="h-4 w-4" />
+          Mostrando {filteredBookmarks.length} de {bookmarks.length} cuentas
+        </div>
+      )}
+
+      {/* Content */}
+      {isLoading ? (
+        <div className="flex items-center justify-center h-64">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+        </div>
+      ) : viewMode === "kanban" ? (
+        <KanbanBoard 
+          bookmarks={filteredBookmarks as any} 
+          userId={userId || ""} 
+          onStatusChange={handleStatusChange}
+        />
+      ) : (
+        <div className="rounded-md border bg-card">
+          <Table>
+            <TableHeader>
               <TableRow>
-                <TableCell colSpan={6} className="text-center h-32 text-muted-foreground">
-                  {bookmarks.length === 0
-                    ? "No tienes bookmarks guardados."
-                    : "No se encontraron resultados para tu búsqueda."}
-                </TableCell>
+                <TableHead>Empresa</TableHead>
+                <TableHead>Estado</TableHead>
+                <TableHead>Contexto</TableHead>
+                <TableHead>Prioridad</TableHead>
+                <TableHead>Notas</TableHead>
+                <TableHead>Fecha</TableHead>
+                <TableHead className="text-right">Acciones</TableHead>
               </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </div>
+            </TableHeader>
+            <TableBody>
+              {filteredBookmarks.map((bookmark) => (
+                <TableRow key={bookmark.id}>
+                  <TableCell 
+                    className="cursor-pointer hover:bg-muted/50 transition-colors"
+                    onClick={() => router.push(`/bookmarks/${bookmark.id}`)}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-muted rounded-md flex items-center justify-center flex-shrink-0">
+                        {bookmark.company?.logo_url ? (
+                          <img
+                            src={bookmark.company.logo_url || "/placeholder.svg"}
+                            alt={bookmark.company?.name}
+                            className="w-full h-full object-cover rounded-md"
+                          />
+                        ) : (
+                          <Building2 className="h-5 w-5 text-muted-foreground" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium text-primary flex items-center gap-2">
+                          {bookmark.company?.name || "Empresa"}
+                          <Eye className="h-3.5 w-3.5 text-muted-foreground" />
+                        </div>
+                        <div className="text-xs text-muted-foreground">{bookmark.company?.industry}</div>
+                      </div>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <Select
+                      value={bookmark.status}
+                      onValueChange={(val) => {
+                        const newStatus = val as BookmarkStatus
+                        handleStatusChange(bookmark.id, newStatus)
+                        updateBookmark(bookmark.id, bookmark.notes || "", bookmark.priority || "", newStatus)
+                      }}
+                    >
+                      <SelectTrigger className={cn("w-[130px] h-8 text-xs", BOOKMARK_STATUS_CONFIG[bookmark.status]?.color)}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(Object.keys(BOOKMARK_STATUS_CONFIG) as BookmarkStatus[]).map((s) => (
+                          <SelectItem key={s} value={s}>
+                            <span className={cn("px-2 py-0.5 rounded text-xs", BOOKMARK_STATUS_CONFIG[s].color)}>
+                              {BOOKMARK_STATUS_CONFIG[s].label}
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </TableCell>
+                  <TableCell>{renderContext(bookmark.search_context)}</TableCell>
+                  <TableCell>
+                    <Select
+                      value={bookmark.priority || "sin_prioridad"}
+                      onValueChange={(val) => {
+                        const newPriority = val === "sin_prioridad" ? "" : val
+                        // Optimistic update
+                        setBookmarks((prev) =>
+                          prev.map((b) => (b.id === bookmark.id ? { ...b, priority: newPriority as any } : b))
+                        )
+                        updateBookmark(bookmark.id, bookmark.notes || "", newPriority, bookmark.status)
+                      }}
+                    >
+                      <SelectTrigger className={cn(
+                        "w-[130px] h-8 text-xs border",
+                        bookmark.priority && PRIORITY_CONFIG[bookmark.priority as keyof typeof PRIORITY_CONFIG]?.color
+                      )}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="alta">
+                          <span className={cn("px-2 py-0.5 rounded text-xs", PRIORITY_CONFIG.alta.color)}>Alta</span>
+                        </SelectItem>
+                        <SelectItem value="transaccional">
+                          <span className={cn("px-2 py-0.5 rounded text-xs", PRIORITY_CONFIG.transaccional.color)}>Transaccional</span>
+                        </SelectItem>
+                        <SelectItem value="baja">
+                          <span className={cn("px-2 py-0.5 rounded text-xs", PRIORITY_CONFIG.baja.color)}>Baja</span>
+                        </SelectItem>
+                        <SelectItem value="sin_prioridad">
+                          <span className="px-2 py-0.5 rounded text-xs bg-gray-50 text-gray-500">Sin prioridad</span>
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </TableCell>
+                  <TableCell className="max-w-xs truncate text-muted-foreground">{bookmark.notes || "-"}</TableCell>
+                  <TableCell>{new Date(bookmark.created_at).toLocaleDateString()}</TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-2">
+                      <EditBookmarkDialog bookmark={bookmark} onUpdate={updateBookmark} />
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-destructive hover:text-destructive"
+                        onClick={() => deleteBookmark(bookmark.id)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+              {filteredBookmarks.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-center h-32 text-muted-foreground">
+                    {bookmarks.length === 0
+                      ? "No tienes cuentas guardadas."
+                      : "No se encontraron resultados para los filtros aplicados."}
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </div>
+      )}
     </div>
   )
 }
@@ -269,15 +522,16 @@ function EditBookmarkDialog({
   onUpdate,
 }: {
   bookmark: Bookmark
-  onUpdate: (id: string, notes: string, priority: string) => void
+  onUpdate: (id: string, notes: string, priority: string, status: BookmarkStatus) => void
 }) {
   const [notes, setNotes] = useState(bookmark.notes || "")
   const [priority, setPriority] = useState(bookmark.priority || "baja")
+  const [status, setStatus] = useState<BookmarkStatus>(bookmark.status || "nuevo")
   const [open, setOpen] = useState(false)
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    onUpdate(bookmark.id, notes, priority)
+    onUpdate(bookmark.id, notes, priority, status)
     setOpen(false)
   }
 
@@ -290,13 +544,28 @@ function EditBookmarkDialog({
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Editar Bookmark</DialogTitle>
-          <DialogDescription>Actualiza las notas y prioridad para {bookmark.company.name}.</DialogDescription>
+          <DialogTitle>Editar Cuenta</DialogTitle>
+          <DialogDescription>Actualiza el estado, prioridad y notas para {bookmark.company?.name}.</DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
-              <Label htmlFor="priority">Prioridad</Label>
+              <Label htmlFor="status">Estado de Prospección</Label>
+              <Select value={status} onValueChange={(val) => setStatus(val as BookmarkStatus)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {(Object.keys(BOOKMARK_STATUS_CONFIG) as BookmarkStatus[]).map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {BOOKMARK_STATUS_CONFIG[s].label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="priority">Tier / Prioridad</Label>
               <Select value={priority} onValueChange={(val: any) => setPriority(val)}>
                 <SelectTrigger>
                   <SelectValue />

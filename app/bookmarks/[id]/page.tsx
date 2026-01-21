@@ -20,6 +20,19 @@ import {
   Sparkles,
 } from "lucide-react"
 import Link from "next/link"
+import { 
+  BOOKMARK_STATUS_CONFIG, 
+  PRIORITY_CONFIG,
+  type BookmarkStatus,
+} from "@/lib/bookmark-types"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { cn } from "@/lib/utils"
 
 import { BookmarkOverview } from "./_components/overview-tab"
 import { BookmarkJobPostings } from "./_components/job-postings-tab"
@@ -78,6 +91,17 @@ export default function BookmarkWorkspacePage() {
     }
   }, [bookmarkId, router])
 
+  const updateBookmarkField = async (field: string, value: string) => {
+    const { error } = await supabase
+      .from("bookmarks")
+      .update({ [field]: value, updated_at: new Date().toISOString() })
+      .eq("id", bookmarkId)
+
+    if (!error) {
+      setBookmark((prev: any) => ({ ...prev, [field]: value }))
+    }
+  }
+
   if (isLoading) {
     return (
       <div className="flex h-screen items-center justify-center">
@@ -125,23 +149,18 @@ export default function BookmarkWorkspacePage() {
               )}
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-2xl font-bold tracking-tight">{company.name}</h1>
-                <Badge variant="outline" className="text-xs px-2 py-0.5 whitespace-nowrap">
-                  {bookmark.notes || "Sin notas"}
-                </Badge>
-              </div>
+              <h1 className="text-2xl font-bold tracking-tight">{company.name}</h1>
 
               <div className="flex items-center gap-2 text-muted-foreground mt-1">
                 <span>{company.industry || "Industria no especificada"}</span>
-                {company.country && (
+                {company.country_normalized && (
                   <>
                     <span>•</span>
-                    <span>{company.country}</span>
+                    <span>{company.country_normalized}</span>
                   </>
                 )}
               </div>
-              <div className="flex items-center gap-2 mt-2">
+              <div className="flex items-center gap-2 mt-3">
                 {company.website && (
                   <Button variant="outline" size="sm" asChild className="h-7 text-xs px-3 bg-transparent">
                     <Link href={company.website} target="_blank">
@@ -162,11 +181,61 @@ export default function BookmarkWorkspacePage() {
             </div>
           </div>
 
-          {company.description && (
-            <div className="lg:max-w-md xl:max-w-lg bg-muted/30 rounded-lg p-3 border">
-              <p className="text-sm text-muted-foreground leading-relaxed line-clamp-4">{company.description}</p>
+          {/* Status and Priority Controls */}
+          <div className="flex flex-col sm:flex-row gap-3 lg:items-start">
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-muted-foreground font-medium">Estado</span>
+              <Select
+                value={bookmark.status || "nuevo"}
+                onValueChange={(val) => updateBookmarkField("status", val)}
+              >
+                <SelectTrigger className={cn(
+                  "w-[150px] h-9",
+                  BOOKMARK_STATUS_CONFIG[(bookmark.status || "nuevo") as BookmarkStatus]?.color
+                )}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {(Object.keys(BOOKMARK_STATUS_CONFIG) as BookmarkStatus[]).map((s) => (
+                    <SelectItem key={s} value={s}>
+                      <span className={cn("px-2 py-0.5 rounded text-xs", BOOKMARK_STATUS_CONFIG[s].color)}>
+                        {BOOKMARK_STATUS_CONFIG[s].label}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
-          )}
+
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-muted-foreground font-medium">Prioridad (Tier)</span>
+              <Select
+                value={bookmark.priority || "sin_prioridad"}
+                onValueChange={(val) => updateBookmarkField("priority", val === "sin_prioridad" ? "" : val)}
+              >
+                <SelectTrigger className={cn(
+                  "w-[150px] h-9",
+                  bookmark.priority && PRIORITY_CONFIG[bookmark.priority as keyof typeof PRIORITY_CONFIG]?.color
+                )}>
+                  <SelectValue placeholder="Sin prioridad" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="alta">
+                    <span className={cn("px-2 py-0.5 rounded text-xs", PRIORITY_CONFIG.alta.color)}>Alta</span>
+                  </SelectItem>
+                  <SelectItem value="transaccional">
+                    <span className={cn("px-2 py-0.5 rounded text-xs", PRIORITY_CONFIG.transaccional.color)}>Transaccional</span>
+                  </SelectItem>
+                  <SelectItem value="baja">
+                    <span className={cn("px-2 py-0.5 rounded text-xs", PRIORITY_CONFIG.baja.color)}>Baja</span>
+                  </SelectItem>
+                  <SelectItem value="sin_prioridad">
+                    <span className="px-2 py-0.5 rounded text-xs bg-gray-50 text-gray-500">Sin prioridad</span>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
         </div>
       </header>
 
