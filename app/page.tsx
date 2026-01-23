@@ -1,3 +1,5 @@
+'use client';
+
 import Link from "next/link"
 import Image from "next/image"
 import {
@@ -15,6 +17,11 @@ import {
   CheckCircle2,
   ChevronRight,
   Play,
+  Kanban,
+  Layers,
+  BarChart3,
+  FileText,
+  Briefcase,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -38,20 +45,11 @@ export default function HomePage() {
             <Link href="#workspace" className="hover:text-slate-900 transition-colors">
               Workspace IA
             </Link>
-            <Link href="#pricing" className="hover:text-slate-900 transition-colors">
-              Precios
-            </Link>
           </nav>
           <div className="flex items-center gap-3">
             <Link href="/auth/login">
               <Button variant="ghost" size="sm" className="text-slate-600 hover:text-slate-900">
                 Iniciar Sesión
-              </Button>
-            </Link>
-            <Link href="#form-container">
-              <Button size="sm" className="bg-slate-900 hover:bg-slate-800 text-white rounded-full px-4">
-                Saber más
-                <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
               </Button>
             </Link>
           </div>
@@ -257,20 +255,20 @@ export default function HomePage() {
           <div className="container mx-auto px-4">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
               <div className="text-center">
-                <div className="text-4xl font-bold text-slate-900 mb-1">70K+</div>
+                <div className="text-4xl font-bold text-slate-900 mb-1">42K+</div>
                 <div className="text-sm text-slate-500">Contactos Analizados</div>
               </div>
               <div className="text-center">
-                <div className="text-4xl font-bold text-slate-900 mb-1">42K+</div>
+                <div className="text-4xl font-bold text-slate-900 mb-1">58K+</div>
                 <div className="text-sm text-slate-500">Empresas Indexadas</div>
               </div>
               <div className="text-center">
-                <div className="text-4xl font-bold text-slate-900 mb-1">200+</div>
-                <div className="text-sm text-slate-500">Tecnologías Detectadas</div>
+                <div className="text-4xl font-bold text-slate-900 mb-1">1.1K+</div>
+                <div className="text-sm text-slate-500">Tecnologías y Procesos</div>
               </div>
               <div className="text-center">
-                <div className="text-4xl font-bold text-slate-900 mb-1">230k+</div>
-                <div className="text-sm text-slate-500">Señales detectadas</div>
+                <div className="text-4xl font-bold text-slate-900 mb-1">235K+</div>
+                <div className="text-sm text-slate-500">Señales Detectadas</div>
               </div>
             </div>
           </div>
@@ -413,6 +411,144 @@ export default function HomePage() {
                 <p className="text-slate-600 text-sm">
                   Genera mensajes de apertura personalizados basados en las señales y contexto de cada prospecto.
                 </p>
+              </div>
+
+              {/* Feature 7 - Pipeline Kanban */}
+              <div className="bg-white rounded-2xl p-6 border border-slate-200 hover:shadow-lg hover:border-slate-300 transition-all">
+                <div className="h-12 w-12 rounded-xl bg-indigo-100 text-indigo-600 flex items-center justify-center mb-4">
+                  <Kanban className="h-6 w-6" />
+                </div>
+                <h3 className="text-lg font-semibold text-slate-900 mb-2">Pipeline Kanban</h3>
+                <p className="text-slate-600 text-sm">
+                  Gestiona tus cuentas con vista Kanban. Arrastra y suelta para mover entre estados: Nuevo, Investigando, Contactado, Reunión.
+                </p>
+              </div>
+
+              {/* Feature 8 - Account Tiers */}
+              <div className="bg-white rounded-2xl p-6 border border-slate-200 hover:shadow-lg hover:border-slate-300 transition-all">
+                <div className="h-12 w-12 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center mb-4">
+                  <Layers className="h-6 w-6" />
+                </div>
+                <h3 className="text-lg font-semibold text-slate-900 mb-2">Tiers de Cuentas (ABM)</h3>
+                <p className="text-slate-600 text-sm">
+                  Clasifica tus cuentas en Alta, Transaccional o Baja prioridad. Enfoca tu tiempo en lo que más importa con Account-Based Marketing.
+                </p>
+              </div>
+
+              {/* Feature 9 - Brief Ejecutivo */}
+              <div className="bg-white rounded-2xl p-6 border border-slate-200 hover:shadow-lg hover:border-slate-300 transition-all">
+                <div className="h-12 w-12 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center mb-4">
+                  <FileText className="h-6 w-6" />
+                </div>
+                <h3 className="text-lg font-semibold text-slate-900 mb-2">Brief Ejecutivo con IA</h3>
+                <p className="text-slate-600 text-sm">
+                  Genera resúmenes ejecutivos de cada cuenta combinando señales, noticias, implementaciones y estrategia comercial.
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* New Pipeline Section */}
+        <section className="py-24 bg-white border-t border-slate-200">
+          <div className="container mx-auto px-4">
+            <div className="text-center max-w-3xl mx-auto mb-16">
+              <Badge className="mb-4 bg-amber-100 text-amber-700 hover:bg-amber-100">
+                <Briefcase className="h-3 w-3 mr-1" />
+                Gestión de Pipeline
+              </Badge>
+              <h2 className="text-4xl font-bold text-slate-900 mb-4">Tu pipeline de prospección, organizado</h2>
+              <p className="text-lg text-slate-600">
+                Guarda cuentas, clasifícalas por prioridad y gestiona todo el funnel de prospección desde una sola vista.
+              </p>
+            </div>
+
+            {/* Pipeline Visual */}
+            <div className="max-w-5xl mx-auto">
+              <div className="bg-slate-50 rounded-2xl border border-slate-200 p-8">
+                {/* Kanban Preview */}
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  {/* Column 1 */}
+                  <div className="bg-white rounded-xl border border-slate-200 p-4">
+                    <div className="flex items-center justify-between mb-4">
+                      <span className="font-semibold text-slate-900">Nuevo</span>
+                      <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-full">12</span>
+                    </div>
+                    <div className="space-y-3">
+                      <div className="bg-slate-50 rounded-lg p-3 border border-slate-100">
+                        <div className="font-medium text-sm text-slate-900">ICBC Argentina</div>
+                        <div className="text-xs text-slate-500">Banking</div>
+                        <Badge className="mt-2 bg-red-50 text-red-700 text-xs">Alta</Badge>
+                      </div>
+                      <div className="bg-slate-50 rounded-lg p-3 border border-slate-100">
+                        <div className="font-medium text-sm text-slate-900">YPF</div>
+                        <div className="text-xs text-slate-500">Oil & Gas</div>
+                        <Badge className="mt-2 bg-yellow-50 text-yellow-700 text-xs">Transaccional</Badge>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Column 2 */}
+                  <div className="bg-white rounded-xl border border-slate-200 p-4">
+                    <div className="flex items-center justify-between mb-4">
+                      <span className="font-semibold text-blue-600">Investigando</span>
+                      <span className="text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded-full">8</span>
+                    </div>
+                    <div className="space-y-3">
+                      <div className="bg-blue-50/50 rounded-lg p-3 border border-blue-100">
+                        <div className="font-medium text-sm text-slate-900">Mercado Libre</div>
+                        <div className="text-xs text-slate-500">E-commerce</div>
+                        <Badge className="mt-2 bg-red-50 text-red-700 text-xs">Alta</Badge>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Column 3 */}
+                  <div className="bg-white rounded-xl border border-slate-200 p-4">
+                    <div className="flex items-center justify-between mb-4">
+                      <span className="font-semibold text-yellow-600">Contactado</span>
+                      <span className="text-xs bg-yellow-100 text-yellow-600 px-2 py-1 rounded-full">5</span>
+                    </div>
+                    <div className="space-y-3">
+                      <div className="bg-yellow-50/50 rounded-lg p-3 border border-yellow-100">
+                        <div className="font-medium text-sm text-slate-900">Santander</div>
+                        <div className="text-xs text-slate-500">Banking</div>
+                        <Badge className="mt-2 bg-red-50 text-red-700 text-xs">Alta</Badge>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Column 4 */}
+                  <div className="bg-white rounded-xl border border-slate-200 p-4">
+                    <div className="flex items-center justify-between mb-4">
+                      <span className="font-semibold text-purple-600">Reunión</span>
+                      <span className="text-xs bg-purple-100 text-purple-600 px-2 py-1 rounded-full">3</span>
+                    </div>
+                    <div className="space-y-3">
+                      <div className="bg-purple-50/50 rounded-lg p-3 border border-purple-100">
+                        <div className="font-medium text-sm text-slate-900">Galicia Bank</div>
+                        <div className="text-xs text-slate-500">Financial Services</div>
+                        <Badge className="mt-2 bg-red-50 text-red-700 text-xs">Alta</Badge>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Stats Bar */}
+                <div className="mt-8 pt-6 border-t border-slate-200 grid grid-cols-3 gap-4 text-center">
+                  <div>
+                    <div className="text-2xl font-bold text-red-600">15</div>
+                    <div className="text-xs text-slate-500">Cuentas Alta Prioridad</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold text-yellow-600">12</div>
+                    <div className="text-xs text-slate-500">Cuentas Transaccionales</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold text-slate-600">8</div>
+                    <div className="text-xs text-slate-500">Cuentas Baja Prioridad</div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -566,14 +702,12 @@ export default function HomePage() {
         {/* CTA Section */}
         <section className="py-24 bg-slate-900 text-white">
           <div className="container mx-auto px-4">
-            <div className="text-center mb-12">
+            <div className="text-center">
               <h2 className="text-4xl font-bold mb-4">Comienza a encontrar señales hoy</h2>
               <p className="text-xl text-slate-400 max-w-2xl mx-auto">
-                Únete a los equipos de ventas que ya están usando inteligencia de señales para mejorar su prospección
-                B2B.
+                Únete a los equipos de ventas que ya están usando inteligencia de señales para mejorar su prospección B2B.
               </p>
             </div>
-            <NetHuntForm />
           </div>
         </section>
 
@@ -585,8 +719,15 @@ export default function HomePage() {
                 <Image src="/logo.png" alt="ASCI Logo" width={28} height={28} className="rounded-lg" />
                 ASCI
               </div>
-              <div className="text-sm text-slate-500">© 2025 ASCI. Asistente de Señales de Compra e Inferencias.</div>
+              <div className="text-sm text-slate-500">© 2026 ASCI. Asistente de Señales de Compra e Inferencias.</div>
             </div>
+          </div>
+        </footer>
+
+        {/* NetHunt Form - Fixed in footer */}
+        <footer className="border-t border-slate-200 bg-white">
+          <div className="container mx-auto px-4 py-12">
+            <NetHuntForm />
           </div>
         </footer>
       </main>
