@@ -711,6 +711,19 @@ export default function HomePage() {
           </div>
         </section>
 
+        {/* NetHunt Form Section */}
+        <section className="border-t border-slate-200 bg-white py-16">
+          <div className="container mx-auto px-4">
+            <div className="text-center mb-12">
+              <h2 className="text-3xl font-bold text-slate-900 mb-4">Solicita acceso a ASCI</h2>
+              <p className="text-lg text-slate-600 max-w-2xl mx-auto">
+                Completa el formulario y te contactaremos para brindarte acceso a la plataforma.
+              </p>
+            </div>
+            <NetHuntForm />
+          </div>
+        </section>
+
         {/* Footer */}
         <footer className="border-t border-slate-200 bg-white py-8">
           <div className="container mx-auto px-4">
@@ -721,13 +734,6 @@ export default function HomePage() {
               </div>
               <div className="text-sm text-slate-500">© 2026 ASCI. Asistente de Señales de Compra e Inferencias.</div>
             </div>
-          </div>
-        </footer>
-
-        {/* NetHunt Form - Fixed in footer */}
-        <footer className="border-t border-slate-200 bg-white">
-          <div className="container mx-auto px-4 py-12">
-            <NetHuntForm />
           </div>
         </footer>
       </main>
