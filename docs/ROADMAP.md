@@ -13,6 +13,8 @@ Este documento consolida todas las features planificadas para ASCI, con sus resp
 | 1 | Documentos del Vendedor y Contexto Enriquecido | Planificación | Alta | 8-12 días | [Ver plan](./FEATURE_SELLER_DOCUMENTS_PLAN.md) |
 | 2 | Filtro por Industria en Búsquedas | Planificación | Media | 8-13 horas | [Ver plan](./FEATURE_INDUSTRY_FILTER_PLAN.md) |
 | 3 | Dashboard de Salud de la Plataforma v2 | Planificación | Media-Alta | 7-11 horas | [Ver plan](./FEATURE_DASHBOARD_IMPROVEMENTS_PLAN.md) |
+| 4 | FAQ Helper / Asistente de Ayuda | Planificación | Media | 2-3 días | [Ver plan](./FEATURE_FAQ_HELPER_PLAN.md) |
+| 5 | Onboarding Guiado Interactivo | Planificación | Alta | 4-6 días | [Ver plan](./FEATURE_ONBOARDING_PLAN.md) |
 
 ---
 
@@ -95,6 +97,81 @@ Este documento consolida todas las features planificadas para ASCI, con sus resp
 
 ---
 
+## 4. FAQ Helper / Asistente de Ayuda Flotante
+
+**Objetivo**: Botón flotante con centro de ayuda contextual para resolver dudas frecuentes de usuarios, con búsqueda y fallback a soporte humano.
+
+### Alcance
+- Botón flotante en esquina inferior derecha
+- Panel con 9 categorías de ayuda (35+ artículos)
+- Búsqueda con fuzzy matching
+- Fallback a email: ignacio@bigua.lat
+
+### Categorías de FAQ
+1. Primeros Pasos
+2. Búsqueda de Señales
+3. Gestión de Cuentas (Bookmarks)
+4. Detalle de Cuenta
+5. Generación con IA
+6. Decision Makers
+7. Señales Públicas y Noticias
+8. Filtros y Organización
+9. Mi Perfil y Configuración
+
+### Fases de Implementación
+1. **MVP** (1-2 días): datos FAQ, botón flotante, panel accordion
+2. **Búsqueda** (0.5 días): fuse.js, highlight de matches
+3. **Polish** (0.5 días): animaciones, responsive, accesibilidad
+
+📄 **[Plan completo](./FEATURE_FAQ_HELPER_PLAN.md)**
+
+---
+
+## 5. Onboarding Guiado Interactivo
+
+**Objetivo**: Sistema de onboarding con popups/tooltips que guía a nuevos usuarios paso a paso, requiriendo acciones reales para avanzar.
+
+### Comportamiento
+- **Trigger**: Primer login post-registro
+- **Persistencia**: Continúa entre sesiones hasta completar o saltar
+- **Interactivo**: Usuario realiza acciones reales, no solo lee
+
+### Flujo de 8 Pasos
+1. **Bienvenida + Perfil**: Completar propuesta de valor
+2. **Búsqueda**: Ejecutar primera búsqueda de señales
+3. **Bookmark**: Guardar primera cuenta
+4. **Tier**: Asignar prioridad (Alta/Transaccional/Baja)
+5. **Kanban**: Cambiar a vista Kanban
+6. **Detalle**: Ingresar al detalle de una cuenta
+7. **Tour de Tabs**: Recorrer todas las tabs (6 sub-pasos)
+8. **Brief**: Generar primer brief ejecutivo
+
+### Modelo de Datos
+- Nueva tabla `user_onboarding` con estado y progreso
+- Trigger automático al crear usuario
+- Migration para usuarios existentes (marcar como completado)
+
+### Diseño Visual
+- Tooltips con spotlight en elemento target
+- Overlay semi-transparente
+- Barra de progreso visible
+- Botón "Omitir onboarding" siempre disponible
+
+### Fases de Implementación
+1. **Infraestructura** (1-2 días): Tabla, provider, hooks
+2. **Componentes Base** (1-2 días): Tooltip, modal, overlay
+3. **Integración por Pasos** (1-2 días): 8 pasos + sub-pasos
+4. **Polish** (0.5-1 día): Animaciones, responsive, testing
+
+### Relación con FAQ Helper
+- Onboarding: Activación inicial, guiado, obligatorio
+- FAQ: Disponible siempre, autoservicio, opcional
+- Al finalizar onboarding se muestra el FAQ Helper
+
+📄 **[Plan completo](./FEATURE_ONBOARDING_PLAN.md)**
+
+---
+
 ## Otros Documentos Técnicos
 
 | Documento | Descripción |
@@ -108,15 +185,17 @@ Este documento consolida todas las features planificadas para ASCI, con sus resp
 ## Priorización Sugerida
 
 ### Corto Plazo (Q1 2026)
-1. **Dashboard Improvements** - Visibilidad crítica para operaciones
-2. **Filtro por Industria** - Quick win para mejorar UX de búsqueda
+1. **Onboarding Guiado** - Crítico para activación de nuevos usuarios
+2. **FAQ Helper** - Soporte al usuario, reduce carga de soporte manual
+3. **Dashboard Improvements** - Visibilidad crítica para operaciones
 
 ### Mediano Plazo (Q1-Q2 2026)
-3. **Documentos del Vendedor** - Feature diferenciadora de alto valor
+4. **Filtro por Industria** - Quick win para mejorar UX de búsqueda
+5. **Documentos del Vendedor** - Feature diferenciadora de alto valor
 
 ### Largo Plazo (Q2+ 2026)
-4. **Recomendación de Cuentas** - Extensión natural de documentos del vendedor
-5. **Enriquecimiento de Industrias** - API para completar el 82% sin industria
+6. **Recomendación de Cuentas** - Extensión natural de documentos del vendedor
+7. **Enriquecimiento de Industrias** - API para completar el 82% sin industria
 
 ---
 
@@ -133,6 +212,8 @@ Este documento consolida todas las features planificadas para ASCI, con sus resp
 
 | Fecha | Cambio |
 |-------|--------|
+| 23/01/2026 | Plan de Onboarding Guiado Interactivo |
+| 23/01/2026 | Plan de FAQ Helper / Asistente de Ayuda |
 | 21/01/2026 | Creación del roadmap y feature de documentos del vendedor |
 | 16/01/2026 | Plan de dashboard improvements |
 | Enero 2026 | Plan de filtro por industria |
