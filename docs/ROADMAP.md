@@ -10,11 +10,44 @@ Este documento consolida todas las features planificadas para ASCI, con sus resp
 
 | # | Feature | Estado | Prioridad | Esfuerzo | Documento |
 |---|---------|--------|-----------|----------|-----------|
+| 0 | Setup Dev/Prod Environments (Supabase Branches) | En Progreso | Crítica | 2-3 horas | [Ver plan](./SETUP_SUPABASE_BRANCHES.md) |
 | 1 | Documentos del Vendedor y Contexto Enriquecido | Planificación | Alta | 8-12 días | [Ver plan](./FEATURE_SELLER_DOCUMENTS_PLAN.md) |
 | 2 | Filtro por Industria en Búsquedas | Planificación | Media | 8-13 horas | [Ver plan](./FEATURE_INDUSTRY_FILTER_PLAN.md) |
 | 3 | Dashboard de Salud de la Plataforma v2 | Planificación | Media-Alta | 7-11 horas | [Ver plan](./FEATURE_DASHBOARD_IMPROVEMENTS_PLAN.md) |
 | 4 | FAQ Helper / Asistente de Ayuda | Planificación | Media | 2-3 días | [Ver plan](./FEATURE_FAQ_HELPER_PLAN.md) |
 | 5 | Onboarding Guiado Interactivo | Planificación | Alta | 4-6 días | [Ver plan](./FEATURE_ONBOARDING_PLAN.md) |
+
+---
+
+## 0. Setup Dev/Prod Environments (Supabase Branches)
+
+**Objetivo**: Separar desarrollo de producción usando Supabase Branches en el mismo repo GitHub, permitiendo desarrollo sin riesgo.
+
+### Arquitectura
+- **1 repositorio GitHub** (asci)
+- **2 ramas**: main (prod), develop (dev)
+- **1 proyecto Supabase** con 2 branches: production, preview
+- **2 proyectos Vercel**: asci-production, asci-dev
+- **3 workflows GitHub Actions**: ci.yml, deploy-dev.yml, deploy-prod.yml
+
+### Flujo
+```
+Develop local → push develop → CI tests → Deploy dev.asci.bigua.lat
+Merge a main → CI tests → Deploy asci.bigua.lat (PROD)
+```
+
+### Esfuerzo Estimado: 2-3 horas
+1. Configurar Supabase Branches (30 min)
+2. GitHub Environments + Secrets (30 min)
+3. Vercel Projects + Variables (30 min)
+4. Testing flujo completo (30-60 min)
+
+### Status
+- ✅ Workflows creados (.github/workflows/)
+- ✅ Documentación lista
+- ⏳ Pendiente: Configuración manual Supabase, GitHub, Vercel
+
+📄 **[Plan completo](./SETUP_SUPABASE_BRANCHES.md)**
 
 ---
 
