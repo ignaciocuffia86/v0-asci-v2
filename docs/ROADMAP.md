@@ -172,6 +172,62 @@ Este documento consolida todas las features planificadas para ASCI, con sus resp
 
 ---
 
+## Análisis de Best Practices (25/01/2026)
+
+**Documento**: [ANALYSIS_BEST_PRACTICES.md](./ANALYSIS_BEST_PRACTICES.md)
+
+Análisis completo de la plataforma cubriendo:
+
+### Supabase/Postgres
+- 2 tablas con RLS habilitado pero sin policies (`job_postings`, `pending_signals`)
+- 26 functions con `search_path` mutable (vulnerabilidad de seguridad)
+- 17 Foreign Keys sin índices (impacto en performance)
+- 8 RLS policies que re-evalúan `auth.uid()` por fila
+
+### React/Next.js
+- Oportunidades de `React.memo` en componentes de lista
+- `useCallback` faltante en handlers de bookmarks
+- Lazy loading de tabs en bookmark detail
+- SWR para data fetching con caching
+
+### Web Design (Solo propuestas)
+- Social proof en landing (logos, testimonios)
+- Empty states con ilustraciones
+- Micro-interacciones mejoradas
+- Rediseño de Kanban para mobile
+
+**Scripts de remediación incluidos en el documento.**
+
+---
+
+## Setup de Infraestructura: Development vs Production (Próximo)
+
+**Documento**: [INFRASTRUCTURE_DEV_PROD_SETUP.md](./INFRASTRUCTURE_DEV_PROD_SETUP.md)
+
+Guía completa para separar ambientes con bases de datos independientes:
+
+### Configuración
+- 3 Supabase projects independientes (dev, staging, prod)
+- 3 branches de Git (develop, release/*, main)
+- 3 projects de Vercel con dominios específicos
+- GitHub Actions workflows para CI/CD automático
+
+### Ambientes
+- **Development** (dev.asci.bigua.lat): Desarrollo activo
+- **Staging** (staging.asci.bigua.lat): Pre-producción
+- **Production** (asci.bigua.lat): Usuarios reales
+
+### Esfuerzo Estimado
+- Fase 1-5: 7-10 horas totales
+- Setup de Supabase: 1-2 horas
+- Configuración GitHub/Vercel: 2 horas
+- CI/CD workflows: 2-3 horas
+- Testing e iteración: 2-3 horas
+
+**Checklist y diagramas incluidos en el documento.**
+
+---
+
 ## Otros Documentos Técnicos
 
 | Documento | Descripción |
@@ -179,6 +235,8 @@ Este documento consolida todas las features planificadas para ASCI, con sus resp
 | [ETL_PROCESS.md](./ETL_PROCESS.md) | Documentación del proceso ETL |
 | [ETL_SYSTEM.md](./ETL_SYSTEM.md) | Arquitectura del sistema ETL |
 | [digest.md](./digest.md) | Notas y decisiones técnicas |
+| [ANALYSIS_BEST_PRACTICES.md](./ANALYSIS_BEST_PRACTICES.md) | Análisis de best practices |
+| [INFRASTRUCTURE_DEV_PROD_SETUP.md](./INFRASTRUCTURE_DEV_PROD_SETUP.md) | Setup dev/prod environments |
 
 ---
 
@@ -212,6 +270,8 @@ Este documento consolida todas las features planificadas para ASCI, con sus resp
 
 | Fecha | Cambio |
 |-------|--------|
+| 25/01/2026 | Setup de Infraestructura: Development vs Production |
+| 25/01/2026 | Análisis de Best Practices (Supabase, React, Design) |
 | 23/01/2026 | Plan de Onboarding Guiado Interactivo |
 | 23/01/2026 | Plan de FAQ Helper / Asistente de Ayuda |
 | 21/01/2026 | Creación del roadmap y feature de documentos del vendedor |
