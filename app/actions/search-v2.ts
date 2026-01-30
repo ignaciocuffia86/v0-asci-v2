@@ -1,6 +1,7 @@
 "use server"
 
 import { createClient } from "@/lib/supabase/server"
+import { normalizeCountriesForSearch } from "@/lib/normalize-utils"
 
 export type ProcessSearchResult = {
   company_id: string
@@ -55,9 +56,14 @@ export async function searchByProcess(
 ): Promise<ProcessSearchResult[]> {
   const supabase = await createClient()
 
+  // Normalizar países para incluir variantes sin acentos
+  const normalizedCountries = countries.length > 0 
+    ? normalizeCountriesForSearch(countries) 
+    : null
+
   const { data, error } = await supabase.rpc("search_companies_by_process_v2", {
     p_process_ids: processIds,
-    p_countries: countries.length > 0 ? countries : null,
+    p_countries: normalizedCountries,
     p_exclude_providers: excludeProviders,
   })
 
@@ -94,9 +100,14 @@ export async function searchByTechnology(
 ): Promise<TechnologySearchResult[]> {
   const supabase = await createClient()
 
+  // Normalizar países para incluir variantes sin acentos
+  const normalizedCountries = countries.length > 0 
+    ? normalizeCountriesForSearch(countries) 
+    : null
+
   const { data, error } = await supabase.rpc("search_companies_by_technology_v2", {
     p_product_id: productId,
-    p_countries: countries.length > 0 ? countries : null,
+    p_countries: normalizedCountries,
     p_exclude_providers: excludeProviders,
   })
 
