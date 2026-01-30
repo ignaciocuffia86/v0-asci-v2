@@ -43,6 +43,45 @@ interface CompanyInfo {
   website?: string
 }
 
+interface SearchContext {
+  filterType?: "technology" | "process"
+  filtersUsed?: {
+    process?: string[]
+    technology?: string[]
+  }
+  filterSignalIds?: string[]
+}
+
+/**
+ * Formatea el search_context JSON a texto legible
+ * Ejemplo: {"filterType":"technology","filtersUsed":{"technology":["SAP ERP"]}}
+ * Resultado: "Tecnología: SAP ERP"
+ */
+function formatSearchContext(rawContext?: string): string {
+  if (!rawContext) return ""
+  
+  try {
+    const context: SearchContext = JSON.parse(rawContext)
+    const filterType = context.filterType
+    const filters = context.filtersUsed
+    
+    if (!filterType || !filters) return ""
+    
+    if (filterType === "technology" && filters.technology?.length) {
+      return `Tecnología: ${filters.technology.join(", ")}`
+    }
+    
+    if (filterType === "process" && filters.process?.length) {
+      return `Proceso: ${filters.process.join(", ")}`
+    }
+    
+    return ""
+  } catch {
+    // Si no es JSON válido, retornar vacío
+    return ""
+  }
+}
+
 /**
  * Transforma los prospectos raw al formato de exportación
  */
@@ -72,7 +111,7 @@ export function prepareProspectsForExport(
     linkedin_url: p.linkedin_url || "",
     country: p.country || "",
     seniority: p.seniority || "",
-    search_context: p.search_context || "",
+    search_context: formatSearchContext(p.search_context),
     company_name: company.name,
     company_domain: extractDomain(company.website),
   }))
