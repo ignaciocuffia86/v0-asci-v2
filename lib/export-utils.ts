@@ -1,5 +1,3 @@
-import * as XLSX from "xlsx"
-
 export interface ExportProspect {
   first_name: string
   last_name: string
@@ -126,61 +124,86 @@ function downloadBlob(blob: Blob, filename: string): void {
 }
 
 /**
+ * Escapa valor para CSV
+ */
+function escapeCSV(value: string): string {
+  if (value.includes(",") || value.includes('"') || value.includes("\n")) {
+    return `"${value.replace(/"/g, '""')}"`
+  }
+  return value
+}
+
+/**
  * Exporta prospectos a CSV
  */
 export function exportToCSV(prospects: ExportProspect[], companyName: string): void {
   const headers = Object.values(EXPORT_HEADERS)
   const keys = Object.keys(EXPORT_HEADERS) as (keyof ExportProspect)[]
 
-  // Crear filas con valores escapados para CSV
-  const escapeCSV = (value: string): string => {
-    if (value.includes(",") || value.includes('"') || value.includes("\n")) {
-      return `"${value.replace(/"/g, '""')}"`
-    }
-    return value
-  }
-
   const rows = prospects.map((p) =>
     keys.map((key) => escapeCSV(p[key] || "")).join(",")
   )
 
   const csvContent = [headers.join(","), ...rows].join("\n")
+  // BOM para UTF-8 en Excel
   const blob = new Blob(["\ufeff" + csvContent], { type: "text/csv;charset=utf-8;" })
   downloadBlob(blob, generateFilename(companyName, "csv"))
 }
 
 /**
- * Exporta prospectos a Excel
+ * Escapa valor para XML
+ */
+function escapeXML(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;")
+}
+
+/**
+ * Exporta prospectos a Excel (formato XML SpreadsheetML compatible con Excel)
  */
 export function exportToExcel(prospects: ExportProspect[], companyName: string): void {
   const headers = Object.values(EXPORT_HEADERS)
   const keys = Object.keys(EXPORT_HEADERS) as (keyof ExportProspect)[]
 
-  // Crear datos con headers
-  const data = [
-    headers,
-    ...prospects.map((p) => keys.map((key) => p[key] || "")),
-  ]
+  // Crear filas de datos
+  const headerRow = headers
+    .map((h) => `<Cell><Data ss:Type="String">${escapeXML(h)}</Data></Cell>`)
+    .join("")
 
-  // Crear workbook y worksheet
-  const worksheet = XLSX.utils.aoa_to_sheet(data)
-  const workbook = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(workbook, worksheet, "Prospectos")
+  const dataRows = prospects
+    .map((p) => {
+      const cells = keys
+        .map((key) => `<Cell><Data ss:Type="String">${escapeXML(p[key] || "")}</Data></Cell>`)
+        .join("")
+      return `<Row>${cells}</Row>`
+    })
+    .join("")
 
-  // Ajustar ancho de columnas
-  const colWidths = keys.map((key) => {
-    const maxLength = Math.max(
-      EXPORT_HEADERS[key].length,
-      ...prospects.map((p) => (p[key] || "").length)
-    )
-    return { wch: Math.min(maxLength + 2, 50) }
+  // Crear XML de SpreadsheetML (formato nativo de Excel)
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+  xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+  <Styles>
+    <Style ss:ID="Header">
+      <Font ss:Bold="1"/>
+      <Interior ss:Color="#E0E0E0" ss:Pattern="Solid"/>
+    </Style>
+  </Styles>
+  <Worksheet ss:Name="Prospectos">
+    <Table>
+      <Row ss:StyleID="Header">${headerRow}</Row>
+      ${dataRows}
+    </Table>
+  </Worksheet>
+</Workbook>`
+
+  const blob = new Blob([xml], {
+    type: "application/vnd.ms-excel;charset=utf-8",
   })
-  worksheet["!cols"] = colWidths
-
-  // Generar y descargar
-  const excelBuffer = XLSX.write(workbook, { bookType: "xlsx", type: "array" })
-  const blob = new Blob([excelBuffer], {
-    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  })
-  downloadBlob(blob, generateFilename(companyName, "xlsx"))
+  downloadBlob(blob, generateFilename(companyName, "xls"))
 }
