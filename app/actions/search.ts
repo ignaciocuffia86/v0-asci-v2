@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { normalizeCountriesForSearch } from "@/lib/normalize-utils";
 
 type SearchFilters = {
   technologies: string[];
@@ -26,7 +27,9 @@ export async function searchCompanies(filters: SearchFilters) {
     `);
 
   if (filters.countries.length > 0) {
-    query = query.in('country', filters.countries);
+    // Normalizar países para incluir variantes sin acentos
+    const normalizedCountries = normalizeCountriesForSearch(filters.countries);
+    query = query.in('country', normalizedCountries);
   }
   
   // Apply optional industry filter
