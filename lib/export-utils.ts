@@ -124,13 +124,23 @@ function downloadBlob(blob: Blob, filename: string): void {
 }
 
 /**
- * Escapa valor para CSV
+ * Escapa valor para CSV - maneja null, undefined, y objetos
  */
-function escapeCSV(value: string): string {
-  if (value.includes(",") || value.includes('"') || value.includes("\n")) {
-    return `"${value.replace(/"/g, '""')}"`
+function escapeCSV(value: unknown): string {
+  // Convertir cualquier valor a string de forma segura
+  let str: string
+  if (value === null || value === undefined) {
+    str = ""
+  } else if (typeof value === "object") {
+    str = JSON.stringify(value)
+  } else {
+    str = String(value)
   }
-  return value
+  
+  if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+    return `"${str.replace(/"/g, '""')}"`
+  }
+  return str
 }
 
 /**
@@ -151,10 +161,20 @@ export function exportToCSV(prospects: ExportProspect[], companyName: string): v
 }
 
 /**
- * Escapa valor para XML
+ * Escapa valor para XML - maneja null, undefined, y objetos
  */
-function escapeXML(value: string): string {
-  return value
+function escapeXML(value: unknown): string {
+  // Convertir cualquier valor a string de forma segura
+  let str: string
+  if (value === null || value === undefined) {
+    str = ""
+  } else if (typeof value === "object") {
+    str = JSON.stringify(value)
+  } else {
+    str = String(value)
+  }
+  
+  return str
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
