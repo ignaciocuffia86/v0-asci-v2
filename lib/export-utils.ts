@@ -34,7 +34,7 @@ interface RawProspect {
   is_decision_maker?: boolean
   created_at?: string
   status?: string
-  search_context?: string
+  search_context?: string | SearchContext | null
   job_titles_searched?: string[]
 }
 
@@ -53,15 +53,20 @@ interface SearchContext {
 }
 
 /**
- * Formatea el search_context JSON a texto legible
+ * Formatea el search_context a texto legible
+ * Puede recibir un objeto JSONB o un string JSON
  * Ejemplo: {"filterType":"technology","filtersUsed":{"technology":["SAP ERP"]}}
  * Resultado: "Tecnología: SAP ERP"
  */
-function formatSearchContext(rawContext?: string): string {
+function formatSearchContext(rawContext?: string | SearchContext | null): string {
   if (!rawContext) return ""
   
   try {
-    const context: SearchContext = JSON.parse(rawContext)
+    // Si es string, parsear. Si ya es objeto, usar directamente
+    const context: SearchContext = typeof rawContext === "string" 
+      ? JSON.parse(rawContext) 
+      : rawContext
+    
     const filterType = context.filterType
     const filters = context.filtersUsed
     
@@ -77,7 +82,7 @@ function formatSearchContext(rawContext?: string): string {
     
     return ""
   } catch {
-    // Si no es JSON válido, retornar vacío
+    // Si falla el parseo, retornar vacío
     return ""
   }
 }
