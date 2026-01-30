@@ -23,6 +23,10 @@ import {
   RotateCcw,
   ChevronDown,
   ChevronUp,
+  Download,
+  FileSpreadsheet,
+  CheckSquare,
+  Square,
 } from "lucide-react"
 import {
   inferJobTitles,
@@ -35,6 +39,8 @@ import {
 } from "@/app/actions/apollo"
 import Link from "next/link"
 import { Input } from "@/components/ui/input"
+import { Checkbox } from "@/components/ui/checkbox"
+import { exportToCSV, exportToExcel, prepareProspectsForExport } from "@/lib/export-utils"
 
 interface Prospect {
   id: string
@@ -58,12 +64,22 @@ interface Prospect {
   status?: string
 }
 
-export function ProspectsTab({ bookmarkId }: { bookmarkId: string }) {
+interface ProspectsTabProps {
+  bookmarkId: string
+  companyName: string
+  companyWebsite?: string
+}
+
+export function ProspectsTab({ bookmarkId, companyName, companyWebsite }: ProspectsTabProps) {
   const [prospects, setProspects] = useState<Prospect[]>([])
   const [removedProspects, setRemovedProspects] = useState<Prospect[]>([])
   const [showRemoved, setShowRemoved] = useState(false)
   const [removingId, setRemovingId] = useState<string | null>(null)
   const [restoringId, setRestoringId] = useState<string | null>(null)
+
+  // Selección para exportación
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [isExporting, setIsExporting] = useState(false)
 
   const [isLoading, setIsLoading] = useState(true)
   const [isSearching, setIsSearching] = useState(false)
@@ -183,6 +199,58 @@ export function ProspectsTab({ bookmarkId }: { bookmarkId: string }) {
       }
     }
     setRestoringId(null)
+  }
+
+  // Funciones de selección
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+  }
+
+  const selectAll = () => {
+    setSelectedIds(new Set(prospects.map((p) => p.id)))
+  }
+
+  const deselectAll = () => {
+    setSelectedIds(new Set())
+  }
+
+  const isAllSelected = prospects.length > 0 && selectedIds.size === prospects.length
+
+  // Funciones de exportación
+  const handleExportCSV = () => {
+    setIsExporting(true)
+    try {
+      const selectedProspects = prospects.filter((p) => selectedIds.has(p.id))
+      const exportData = prepareProspectsForExport(selectedProspects, {
+        name: companyName,
+        website: companyWebsite,
+      })
+      exportToCSV(exportData, companyName)
+    } finally {
+      setIsExporting(false)
+    }
+  }
+
+  const handleExportExcel = () => {
+    setIsExporting(true)
+    try {
+      const selectedProspects = prospects.filter((p) => selectedIds.has(p.id))
+      const exportData = prepareProspectsForExport(selectedProspects, {
+        name: companyName,
+        website: companyWebsite,
+      })
+      exportToExcel(exportData, companyName)
+    } finally {
+      setIsExporting(false)
+    }
   }
 
   if (isLoading) {
@@ -350,19 +418,89 @@ export function ProspectsTab({ bookmarkId }: { bookmarkId: string }) {
         </Card>
       ) : (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <h3 className="text-sm font-medium text-muted-foreground">
               {prospects.length} prospecto{prospects.length !== 1 ? "s" : ""} encontrado
               {prospects.length !== 1 ? "s" : ""}
             </h3>
+
+            {/* Barra de selección y exportación */}
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={isAllSelected ? deselectAll : selectAll}
+                className="h-8 gap-1.5 text-xs"
+              >
+                {isAllSelected ? (
+                  <>
+                    <CheckSquare className="h-3.5 w-3.5" />
+                    Deseleccionar todos
+                  </>
+                ) : (
+                  <>
+                    <Square className="h-3.5 w-3.5" />
+                    Seleccionar todos
+                  </>
+                )}
+              </Button>
+
+              {selectedIds.size > 0 && (
+                <>
+                  <span className="text-xs text-muted-foreground px-2 border-l">
+                    {selectedIds.size} seleccionado{selectedIds.size !== 1 ? "s" : ""}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleExportCSV}
+                    disabled={isExporting}
+                    className="h-8 gap-1.5 text-xs"
+                  >
+                    {isExporting ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Download className="h-3.5 w-3.5" />
+                    )}
+                    CSV
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleExportExcel}
+                    disabled={isExporting}
+                    className="h-8 gap-1.5 text-xs"
+                  >
+                    {isExporting ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <FileSpreadsheet className="h-3.5 w-3.5" />
+                    )}
+                    Excel
+                  </Button>
+                </>
+              )}
+            </div>
           </div>
 
           <div className="grid gap-4 md:grid-cols-2">
             <TooltipProvider>
               {prospects.map((prospect) => (
-                <Card key={prospect.id} className="group hover:border-primary/50 transition-colors">
+                <Card 
+                  key={prospect.id} 
+                  className={`group hover:border-primary/50 transition-colors ${
+                    selectedIds.has(prospect.id) ? "border-primary bg-primary/5" : ""
+                  }`}
+                >
                   <CardContent className="p-4">
-                    <div className="flex items-start gap-4">
+                    <div className="flex items-start gap-3">
+                      {/* Checkbox de selección */}
+                      <Checkbox
+                        checked={selectedIds.has(prospect.id)}
+                        onCheckedChange={() => toggleSelect(prospect.id)}
+                        className="mt-1 flex-shrink-0"
+                      />
+
                       {/* Avatar */}
                       <Avatar className="h-12 w-12 flex-shrink-0">
                         <AvatarImage src={prospect.profile_picture_url || ""} />
