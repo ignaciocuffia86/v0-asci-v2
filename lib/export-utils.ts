@@ -52,14 +52,17 @@ interface SearchContext {
   filterSignalIds?: string[]
 }
 
+const DEFAULT_FILTER_TEXT = "Filtro: Compañía general"
+
 /**
  * Formatea el search_context a texto legible
  * Puede recibir un objeto JSONB o un string JSON
  * Ejemplo: {"filterType":"technology","filtersUsed":{"technology":["SAP ERP"]}}
  * Resultado: "Tecnología: SAP ERP"
+ * Si no hay filtros específicos, retorna "Filtro: Compañía general"
  */
 function formatSearchContext(rawContext?: string | SearchContext | null): string {
-  if (!rawContext) return ""
+  if (!rawContext) return DEFAULT_FILTER_TEXT
   
   try {
     // Si es string, parsear. Si ya es objeto, usar directamente
@@ -70,7 +73,7 @@ function formatSearchContext(rawContext?: string | SearchContext | null): string
     const filterType = context.filterType
     const filters = context.filtersUsed
     
-    if (!filterType || !filters) return ""
+    if (!filterType || !filters) return DEFAULT_FILTER_TEXT
     
     if (filterType === "technology" && filters.technology?.length) {
       return `Tecnología: ${filters.technology.join(", ")}`
@@ -80,10 +83,10 @@ function formatSearchContext(rawContext?: string | SearchContext | null): string
       return `Proceso: ${filters.process.join(", ")}`
     }
     
-    return ""
+    return DEFAULT_FILTER_TEXT
   } catch {
-    // Si falla el parseo, retornar vacío
-    return ""
+    // Si falla el parseo, usar valor por defecto
+    return DEFAULT_FILTER_TEXT
   }
 }
 
