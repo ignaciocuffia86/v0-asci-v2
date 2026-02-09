@@ -255,3 +255,17 @@
 .fade-out-80 {
   --tw-exit-opacity: 0.8;
 }
+
+/* ─── NetHunt form button fix ─── */
+.nethunt-form-wrapper button,
+.nethunt-form-wrapper input[type="submit"] {
+  background-color: hsl(216 100% 50%) !important;
+  color: white !important;
+  border-radius: 0.5rem !important;
+  cursor: pointer !important;
+}
+
+.nethunt-form-wrapper button:hover,
+.nethunt-form-wrapper input[type="submit"]:hover {
+  background-color: hsl(216 100% 43%) !important;
+}
