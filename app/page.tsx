@@ -1,7 +1,6 @@
 'use client';
 
 import Link from "next/link"
-import Image from "next/image"
 import { useEffect, useRef, useState, type ReactNode } from "react"
 import {
   ArrowRight,
@@ -20,9 +19,71 @@ import {
   Kanban,
   Layers,
   FileText,
-  Radar,
   Download,
 } from "lucide-react"
+
+/* ─── ASCI Sonar Logo ─── */
+function AsciLogo({ size = 40, className = "" }: { size?: number; className?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 120 120"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+    >
+      {/* Outer arc */}
+      <path
+        d="M60 10 C87.6 10 110 32.4 110 60"
+        stroke="currentColor"
+        strokeWidth="4"
+        strokeLinecap="round"
+        opacity="0.25"
+      />
+      {/* Middle arc */}
+      <path
+        d="M60 28 C77.7 28 92 42.3 92 60"
+        stroke="currentColor"
+        strokeWidth="4.5"
+        strokeLinecap="round"
+        opacity="0.5"
+      />
+      {/* Inner arc */}
+      <path
+        d="M60 46 C67.7 46 74 52.3 74 60"
+        stroke="currentColor"
+        strokeWidth="5"
+        strokeLinecap="round"
+        opacity="0.8"
+      />
+      {/* Center dot */}
+      <circle cx="60" cy="60" r="5" fill="currentColor" />
+      {/* Bottom-left reflected arcs for balance */}
+      <path
+        d="M60 110 C32.4 110 10 87.6 10 60"
+        stroke="currentColor"
+        strokeWidth="4"
+        strokeLinecap="round"
+        opacity="0.25"
+      />
+      <path
+        d="M60 92 C42.3 92 28 77.7 28 60"
+        stroke="currentColor"
+        strokeWidth="4.5"
+        strokeLinecap="round"
+        opacity="0.5"
+      />
+      <path
+        d="M60 74 C52.3 74 46 67.7 46 60"
+        stroke="currentColor"
+        strokeWidth="5"
+        strokeLinecap="round"
+        opacity="0.8"
+      />
+    </svg>
+  )
+}
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -146,8 +207,8 @@ export default function HomePage() {
       {/* ─── Navbar ─── */}
       <header className={`sticky top-0 z-50 w-full border-b bg-background/80 backdrop-blur-xl transition-all duration-300 ${scrolled ? "border-border shadow-sm" : "border-transparent"}`}>
         <div className="container mx-auto flex h-16 items-center justify-between px-4">
-          <div className="flex items-center gap-3">
-            <Image src="/logo.jpg" alt="ASCI Logo" width={44} height={44} className="rounded-xl" priority />
+          <div className="flex items-center gap-2">
+            <AsciLogo size={36} className="text-primary" />
             <span className="text-xl font-bold tracking-tight text-foreground">ASCI</span>
           </div>
           <nav className="hidden items-center gap-8 text-sm font-medium text-muted-foreground md:flex">
@@ -197,7 +258,7 @@ export default function HomePage() {
               {/* Logo hero */}
               <Reveal>
                 <div className="mb-8 flex justify-center">
-                  <Image src="/logo.jpg" alt="ASCI" width={80} height={80} className="rounded-2xl shadow-lg shadow-primary/10" priority />
+                  <AsciLogo size={72} className="text-primary" />
                 </div>
               </Reveal>
 
@@ -569,7 +630,7 @@ export default function HomePage() {
           <div className="container mx-auto px-4 text-center">
             <Reveal>
               <div className="mx-auto max-w-3xl">
-                <Radar className="mx-auto mb-6 h-12 w-12 text-primary" />
+                <div className="mx-auto mb-6"><AsciLogo size={56} className="text-primary" /></div>
                 <h2 className="mb-4 text-balance text-4xl font-bold">Comienza a encontrar senales hoy</h2>
                 <p className="mb-8 text-lg text-secondary-foreground/70">
                   Unite a los equipos de ventas que ya estan usando inteligencia de senales para mejorar su prospeccion B2B.
@@ -582,7 +643,7 @@ export default function HomePage() {
                     </Button>
                   </Link>
                   <Link href="/auth/login">
-                    <Button variant="outline" size="lg" className="h-12 px-8 text-base border-secondary-foreground/20 text-secondary-foreground hover:bg-secondary-foreground/10 transition-all duration-300">
+                    <Button size="lg" className="h-12 px-8 text-base bg-transparent border border-secondary-foreground/30 text-secondary-foreground hover:bg-secondary-foreground/10 transition-all duration-300">
                       Ya tengo cuenta
                     </Button>
                   </Link>
@@ -615,8 +676,8 @@ export default function HomePage() {
         <footer className="border-t border-border bg-card py-8">
           <div className="container mx-auto px-4">
             <div className="flex flex-col items-center justify-between gap-4 md:flex-row">
-              <div className="flex items-center gap-3 font-bold text-foreground">
-                <Image src="/logo.jpg" alt="ASCI Logo" width={36} height={36} className="rounded-xl" />
+              <div className="flex items-center gap-2 font-bold text-foreground">
+                <AsciLogo size={30} className="text-primary" />
                 ASCI
               </div>
               <div className="text-sm text-muted-foreground">
