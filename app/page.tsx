@@ -115,9 +115,9 @@ export default function HomePage() {
       {/* Navbar */}
       <header className="sticky top-0 z-50 w-full border-b border-border/50 bg-background/80 backdrop-blur-xl">
         <div className="container mx-auto flex h-16 items-center justify-between px-4">
-          <div className="flex items-center gap-2.5">
-            <Image src="/logo.jpg" alt="ASCI Logo" width={32} height={32} className="rounded-lg" />
-            <span className="text-lg font-bold tracking-tight text-foreground">ASCI</span>
+          <div className="flex items-center gap-3">
+            <Image src="/logo.jpg" alt="ASCI Logo" width={40} height={40} className="rounded-xl" />
+            <span className="text-xl font-bold tracking-tight text-foreground">ASCI</span>
           </div>
           <nav className="hidden items-center gap-8 text-sm font-medium text-muted-foreground md:flex">
             <Link href="#features" className="transition-colors hover:text-foreground">
@@ -139,9 +139,9 @@ export default function HomePage() {
                 Iniciar Sesion
               </Button>
             </Link>
-            <Link href="/auth/sign-up">
+            <Link href="#request-access">
               <Button size="sm" className="bg-primary text-primary-foreground hover:bg-primary/90">
-                Registrarse
+                Solicitar Demo
               </Button>
             </Link>
           </div>
@@ -186,15 +186,15 @@ export default function HomePage() {
 
               {/* CTA Buttons */}
               <div className="mb-20 flex flex-col items-center justify-center gap-4 sm:flex-row">
-                <Link href="/auth/sign-up">
+                <Link href="#request-access">
                   <Button size="lg" className="h-12 px-8 text-base bg-primary text-primary-foreground hover:bg-primary/90 shadow-lg shadow-primary/20">
-                    Comenzar Gratis
+                    Solicitar Demo
                     <ArrowRight className="ml-2 h-4 w-4" />
                   </Button>
                 </Link>
-                <Link href="#request-access">
+                <Link href="/auth/login">
                   <Button variant="outline" size="lg" className="h-12 px-8 text-base border-border text-foreground hover:bg-muted">
-                    Solicitar Demo
+                    Ya tengo cuenta
                   </Button>
                 </Link>
               </div>
@@ -572,15 +572,15 @@ export default function HomePage() {
                 Unite a los equipos de ventas que ya estan usando inteligencia de senales para mejorar su prospeccion B2B.
               </p>
               <div className="flex flex-col items-center justify-center gap-4 sm:flex-row">
-                <Link href="/auth/sign-up">
+                <Link href="#request-access">
                   <Button size="lg" className="h-12 px-8 text-base bg-primary text-primary-foreground hover:bg-primary/90 shadow-lg shadow-primary/20">
-                    Crear Cuenta Gratis
+                    Solicitar Demo
                     <ArrowRight className="ml-2 h-4 w-4" />
                   </Button>
                 </Link>
-                <Link href="#request-access">
+                <Link href="/auth/login">
                   <Button variant="outline" size="lg" className="h-12 px-8 text-base border-secondary-foreground/20 text-secondary-foreground hover:bg-secondary-foreground/10">
-                    Solicitar Demo
+                    Ya tengo cuenta
                   </Button>
                 </Link>
               </div>
@@ -605,8 +605,8 @@ export default function HomePage() {
         <footer className="border-t border-border bg-card py-8">
           <div className="container mx-auto px-4">
             <div className="flex flex-col items-center justify-between gap-4 md:flex-row">
-              <div className="flex items-center gap-2 font-bold text-foreground">
-                <Image src="/logo.jpg" alt="ASCI Logo" width={28} height={28} className="rounded-lg" />
+              <div className="flex items-center gap-2.5 font-bold text-foreground">
+                <Image src="/logo.jpg" alt="ASCI Logo" width={36} height={36} className="rounded-xl" />
                 ASCI
               </div>
               <div className="text-sm text-muted-foreground">
