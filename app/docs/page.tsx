@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
-import { Plus, FileText, Loader2 } from "lucide-react"
+import { Plus, FileText, Loader2, ArrowLeft } from "lucide-react"
+import Link from "next/link"
 import { getUserDocuments, getUserValueProfile } from "@/app/actions/documents"
 import type { UserDocument, UserValueProfile } from "@/app/actions/documents"
 import { UploadDialog } from "./_components/upload-dialog"
@@ -55,6 +56,13 @@ export default function DocsPage() {
 
   return (
     <div className="p-8 space-y-6">
+      <Button variant="ghost" size="sm" asChild className="-ml-2">
+        <Link href="/">
+          <ArrowLeft className="h-4 w-4 mr-2" />
+          Volver a Busqueda
+        </Link>
+      </Button>
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
