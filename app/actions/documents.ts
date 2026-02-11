@@ -102,6 +102,34 @@ export async function createDocument(params: {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { data: null, error: "No autenticado" }
 
+  // Check for duplicates before inserting
+  if (params.type === "url" && params.source_url) {
+    const { data: existing } = await supabase
+      .from("user_documents")
+      .select("id, title")
+      .eq("user_id", user.id)
+      .eq("source_url", params.source_url)
+      .limit(1)
+      .maybeSingle()
+
+    if (existing) {
+      return { data: null, error: `Esta URL ya fue cargada como "${existing.title}".` }
+    }
+  } else if (params.type !== "url") {
+    const { data: existing } = await supabase
+      .from("user_documents")
+      .select("id, title")
+      .eq("user_id", user.id)
+      .eq("title", params.title)
+      .eq("type", params.type)
+      .limit(1)
+      .maybeSingle()
+
+    if (existing) {
+      return { data: null, error: `Ya existe un documento "${existing.title}" con el mismo nombre. Renombralo antes de subirlo o elimina el existente.` }
+    }
+  }
+
   const { data, error } = await supabase
     .from("user_documents")
     .insert({
