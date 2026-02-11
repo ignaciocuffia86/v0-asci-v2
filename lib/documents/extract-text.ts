@@ -28,41 +28,38 @@ export async function extractTextFromUrl(url: string): Promise<string> {
   const ogTitle = $('meta[property="og:title"]').attr("content")?.trim() || ""
   const ogDescription = $('meta[property="og:description"]').attr("content")?.trim() || ""
 
-  // Remove noise elements
-  $("script, style, nav, footer, header, iframe, noscript, svg, form").remove()
-  $('[role="navigation"], [role="banner"], [role="contentinfo"]').remove()
+  // Remove only non-content noise (keep nav/header/footer - landing pages have key info there)
+  $("script, style, iframe, noscript, svg").remove()
   $(".cookie-banner, .popup, .modal, .ad, .advertisement").remove()
 
-  // Extract meaningful content
-  const contentSelectors = [
-    "article",
-    "main",
-    '[role="main"]',
-    ".content",
-    ".post-content",
-    ".entry-content",
-    "#content",
-  ]
+  // Prepend meta info as it often contains key terms not in the body
+  const metaParts: string[] = []
+  if (metaTitle) metaParts.push(`Titulo: ${metaTitle}`)
+  if (ogTitle && ogTitle !== metaTitle) metaParts.push(`OG Titulo: ${ogTitle}`)
+  if (metaDescription) metaParts.push(`Descripcion: ${metaDescription}`)
+  if (ogDescription && ogDescription !== metaDescription) metaParts.push(`OG Descripcion: ${ogDescription}`)
+  
+  // Also extract alt texts from images (often mention technologies/products)
+  const altTexts: string[] = []
+  $("img[alt]").each((_, el) => {
+    const alt = $(el).attr("alt")?.trim()
+    if (alt && alt.length > 3) altTexts.push(alt)
+  })
+  if (altTexts.length > 0) metaParts.push(`Imagenes: ${altTexts.join(", ")}`)
 
-  let text = ""
-  for (const selector of contentSelectors) {
-    const el = $(selector)
-    if (el.length > 0) {
-      text = el.text()
-      break
-    }
-  }
+  // Get ALL body text (not just specific selectors)
+  let text = $("body").text()
 
-  // Fallback to body
-  if (!text.trim()) {
-    text = $("body").text()
-  }
-
-  // Clean up whitespace
+  // Clean up whitespace and prepend meta info
   text = text
     .replace(/\s+/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim()
+  
+  // Combine meta info + body text for complete extraction
+  if (metaParts.length > 0) {
+    text = metaParts.join("\n") + "\n\n" + text
+  }
 
   // Check if we got meaningful content (SPAs often return very little text)
   const MIN_USEFUL_CHARS = 100
