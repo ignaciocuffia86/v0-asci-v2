@@ -9,7 +9,6 @@ import {
 } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import {
   FileText, Globe, FileSpreadsheet, Presentation,
@@ -115,7 +114,7 @@ export function DocumentDetailDialog({ documentId, open, onOpenChange, onUpdated
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
         ) : doc ? (
-          <ScrollArea className="flex-1 -mx-6 px-6">
+          <div className="flex-1 -mx-6 px-6 overflow-y-auto">
             <div className="space-y-5 pb-4">
               {/* Summary */}
               {doc.ai_summary && (
@@ -226,7 +225,7 @@ export function DocumentDetailDialog({ documentId, open, onOpenChange, onUpdated
                 </span>
               </div>
             </div>
-          </ScrollArea>
+          </div>
         ) : null}
       </DialogContent>
     </Dialog>
