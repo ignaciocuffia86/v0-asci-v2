@@ -155,15 +155,15 @@ export async function POST(req: NextRequest) {
       filterSignalIds,
     })
 
-    // Build the prompt
-    const docSections = rankedDocs.map((doc) => {
+    // Build the prompt - anonymize doc titles so Gemini doesn't cite internal docs
+    const docSections = rankedDocs.map((doc, i) => {
       const tagLabels = doc.matchedTags
         .map((t) => `${t.type === "industry" ? "Industria" : t.type === "technology" ? "Tecnologia" : "Proceso"}: ${t.value}`)
         .join(", ")
-      return `- "${doc.title}" (${doc.type.toUpperCase()}, Score: ${doc.score})
-  Resumen: ${doc.ai_summary || "Sin resumen"}
-  FIT con la cuenta: ${tagLabels || "Sin match directo"}
-  ${doc.extracted_text ? `Contenido clave: ${doc.extracted_text.slice(0, 2000)}` : ""}`
+      return `- Experiencia #${i + 1} (${doc.type === "url" ? "Referencia web" : "Documento interno"}):
+  Lo que hicimos/ofrecemos: ${doc.ai_summary || "Sin resumen"}
+  Relacion con la cuenta: ${tagLabels || "Sin match directo"}
+  ${doc.extracted_text ? `Detalle: ${doc.extracted_text.slice(0, 2000)}` : ""}`
     }).join("\n\n")
 
     const prompt = `Eres un consultor de estrategia de ventas B2B. Tu tarea es redactar una ESTRATEGIA DE CUENTA breve e interna (no un mensaje para enviar al cliente).
@@ -180,24 +180,26 @@ ${valueProfile?.profile_summary || "No definido"}
 Tecnologias que manejamos: ${(valueProfile?.target_technologies as string[])?.join(", ") || "No definidas"}
 Procesos que resolvemos: ${(valueProfile?.target_processes as string[])?.join(", ") || "No definidos"}
 
-=== DOCUMENTOS RELEVANTES (casos de exito, brochures, propuestas) ===
-${docSections || "No hay documentos cargados"}
+=== NUESTRA EXPERIENCIA RELEVANTE (aprendida de documentos internos - NO citar nombres de documentos) ===
+${docSections || "No hay experiencia documentada"}
 
 === INSTRUCCIONES ===
 Redacta una estrategia de cuenta que responda estas preguntas de manera concisa:
 
-1. Que tenemos para ofrecerle a ${company.name}? (basandote en nuestros docs, tecnologias y procesos)
+1. Que tenemos para ofrecerle a ${company.name}? (basandote en nuestras capacidades, tecnologias y procesos)
 2. Por que somos relevantes para ellos? (conectar nuestras capacidades con sus senales/industria)
-3. Que experiencia previa respalda nuestra propuesta? (mencionar casos de exito o documentos relevantes si aplica)
+3. Que experiencia previa respalda nuestra propuesta? (describir lo que hicimos, no citar documentos)
 
 REGLAS:
 - Esto es un documento interno de estrategia, NO un mensaje para el cliente. No escribas saludos, no te dirijas a la empresa.
 - Escribe en primera persona del plural (nosotros/nuestro), como notas internas de un vendedor.
 - Maximo 150 palabras. Se directo y concreto.
-- Menciona tecnologias, nombres de casos y datos especificos cuando los tengas.
-- Si no hay documentos relevantes, basa la estrategia en el value profile y las senales.
-- Ejemplo de tono correcto: "Tenemos experiencia en implementacion de SAP para empresas de energia. El caso de [X] es directamente aplicable porque... Nuestra propuesta se centra en..."
-- Ejemplo de tono INCORRECTO: "Hola [empresa], sabemos que ustedes..."
+- NUNCA menciones nombres de documentos, archivos, PDFs, brochures o URLs internas. La informacion de los documentos es para que APRENDAS que hacemos, no para citarla.
+- NUNCA uses frases como "segun nuestro documento", "como se detalla en", "en nuestro informe", "nuestro documento de migracion".
+- SI menciona tecnologias, industrias, capacidades y resultados concretos extraidos de los documentos (sin nombrarlos).
+- Ejemplo CORRECTO: "Tenemos experiencia migrando infraestructura a AWS para empresas de energia, logrando reduccion de costos del 30%. Podemos aplicar este enfoque en ${company.name} dado que usan tecnologias compatibles."
+- Ejemplo INCORRECTO: "Segun nuestro documento 'Migracion Cloud FEB2025', tenemos experiencia en..."
+- Si no hay documentos, basa la estrategia en el value profile y las senales.
 - Espanol, sin markdown, sin bullet points, prosa corrida.`
 
     const strategy = await generateGeminiContent(prompt, "gemini-2.5-flash", 0.5)
