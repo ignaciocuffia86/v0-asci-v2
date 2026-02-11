@@ -564,7 +564,7 @@ Ahora genera el mensaje de icebreaker (SOLO el mensaje, nada más):`
   // Generar con IA
   let generatedText = ""
   try {
-    generatedText = await generateGeminiContent(finalPrompt, "gemini-2.5-flash", 0.7)
+    generatedText = await generateGeminiContent(finalPrompt, "gemini-2.5-flash", 0.7, 0)
 
     // Limpiar respuesta de preámbulos comunes
     generatedText = generatedText
@@ -1092,7 +1092,7 @@ RECUERDA: Cada mensaje debe ser ÚNICO y personalizado. Si el headline dice "Dev
   let generatedText = ""
   try {
     console.log("[v0] Sending request to Gemini (gemini-2.5-flash)...")
-    generatedText = await generateGeminiContent(prompt, "gemini-2.5-flash", 0.7)
+    generatedText = await generateGeminiContent(prompt, "gemini-2.5-flash", 0.7, 0)
     console.log("[v0] Raw generated text:", generatedText)
   } catch (error: any) {
     console.error("AI Generation failed (Gemini 2.5 Flash)", error)

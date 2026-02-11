@@ -202,7 +202,7 @@ REGLAS:
 - Si no hay documentos, basa la estrategia en el value profile y las senales.
 - Espanol, sin markdown, sin bullet points, prosa corrida.`
 
-    const strategy = await generateGeminiContent(prompt, "gemini-2.5-flash", 0.5)
+    const strategy = await generateGeminiContent(prompt, "gemini-2.5-flash", 0.5, 0)
 
     return NextResponse.json({ strategy: strategy.trim() })
   } catch (error: any) {
