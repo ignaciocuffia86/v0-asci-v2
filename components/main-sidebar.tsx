@@ -4,7 +4,7 @@ import Link from "next/link"
 import Image from "next/image"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { Search, Bookmark, User, LogOut, Settings, Loader2 } from "lucide-react"
+import { Search, Bookmark, User, LogOut, Settings, Loader2, FileText } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { createClient } from "@/lib/supabase/client"
 import { useRouter } from "next/navigation"
@@ -20,6 +20,11 @@ const sidebarItems = [
     title: "Mis Bookmarks",
     href: "/bookmarks",
     icon: Bookmark,
+  },
+  {
+    title: "Docs",
+    href: "/docs",
+    icon: FileText,
   },
   {
     title: "Perfil",
