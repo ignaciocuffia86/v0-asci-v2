@@ -51,10 +51,10 @@ TEXTO DEL DOCUMENTO:
 ${extractedText.slice(0, 30000)}
 ---
 
-DICCIONARIO DE TECNOLOGIAS CONOCIDAS (usa estos nombres cuando matcheen):
+DICCIONARIO DE TECNOLOGIAS DISPONIBLES (usa EXACTAMENTE estos nombres):
 ${productList}
 
-DICCIONARIO DE PROCESOS DE NEGOCIO CONOCIDOS (usa estos nombres cuando matcheen):
+DICCIONARIO DE PROCESOS DE NEGOCIO DISPONIBLES (usa EXACTAMENTE estos nombres):
 ${processList}
 
 INDUSTRIAS CONOCIDAS EN NUESTRA BASE:
@@ -64,25 +64,28 @@ Responde en formato JSON estricto (sin markdown, sin backticks):
 {
   "summary": "Resumen conciso (2-4 oraciones) de que ofrece/vende la empresa segun este documento. Enfocate en la propuesta de valor, no en describir el documento.",
   "industries": [
-    {"name": "nombre de la industria", "confidence": 0.9}
+    {"name": "nombre EXACTO de la lista de industrias", "confidence": 0.9}
   ],
   "technologies": [
-    {"name": "nombre de la tecnologia", "dictionary_match": "nombre exacto del diccionario si existe", "confidence": 0.85}
+    {"name": "nombre EXACTO del diccionario de tecnologias", "confidence": 0.85}
   ],
   "processes": [
-    {"name": "nombre del proceso", "dictionary_match": "nombre exacto del diccionario si existe", "confidence": 0.8}
+    {"name": "nombre EXACTO del diccionario de procesos", "confidence": 0.8}
   ]
 }
 
 REGLAS CRITICAS:
-- Extrae TODAS las tecnologias, servicios, plataformas y vendors mencionados (AWS, Azure, SAP, Oracle, Salesforce, etc.)
-- Para cada tecnologia/proceso: si hay un match en el diccionario, ponelo en "dictionary_match". Si NO hay match exacto, dejalo en null pero IGUAL incluilo con su nombre real en "name".
-- Busca TODAS las menciones incluyendo: nombres de productos, servicios cloud, frameworks, lenguajes, plataformas, ERPs, CRMs, etc.
-- Para industrias: usa nombres de la lista cuando aplique, pero tambien podes agregar industrias que no esten en la lista.
+- Para technologies: SOLO incluye nombres que existan TEXTUALMENTE en el DICCIONARIO DE TECNOLOGIAS proporcionado arriba. Busca cuidadosamente cada tecnologia mencionada en el documento contra el diccionario.
+  - Si el documento menciona "Amazon Bedrock" y en el diccionario existe "AWS", incluye "AWS".
+  - Si el documento menciona "SAP S/4HANA" y en el diccionario existe "SAP ERP", incluye "SAP ERP".
+  - Si el documento menciona un servicio de una plataforma (ej: "EC2", "Lambda", "Bedrock") busca si la plataforma madre existe (ej: "AWS").
+  - Si una tecnologia mencionada NO tiene ningun equivalente en el diccionario, NO la incluyas.
+- Para processes: misma logica, SOLO nombres del diccionario de procesos.
+- Para industries: SOLO nombres de la lista de industrias proporcionada.
 - Confidence: 0.9-1.0 si se menciona explicitamente, 0.7-0.89 si se infiere del contexto, 0.5-0.69 si es una referencia indirecta.
 - El summary debe ser en español.
 - Si el documento es un caso de exito, extrae la industria del CLIENTE (no del vendor).
-- NO omitas tecnologias solo porque no estan en el diccionario. Preferimos capturar de mas que perder informacion.`
+- Se exhaustivo buscando en el diccionario. Lee cada tecnologia mencionada en el texto y buscala cuidadosamente en la lista.`
 
   const responseText = await generateGeminiContent(prompt, "gemini-2.0-flash", 0.2)
 
@@ -111,36 +114,53 @@ REGLAS CRITICAS:
     })
   }
 
-  // Match technologies against dictionary_products (fuzzy: try exact, then dictionary_match, then includes)
+  // Match technologies against dictionary_products
+  // Strict: only save if we find a match in the dictionary
+  const usedTechIds = new Set<string>()
   for (const tech of parsed.technologies || []) {
-    const techName = (tech.dictionary_match || tech.name || "").toLowerCase().trim()
-    const match = (products || []).find(
+    const techName = (tech.name || "").toLowerCase().trim()
+    // 1. Exact match
+    let match = (products || []).find(
       (p: any) => p.name.toLowerCase() === techName
-    ) || (products || []).find(
-      (p: any) => techName.includes(p.name.toLowerCase()) || p.name.toLowerCase().includes(techName)
     )
-    tags.push({
-      type: "technology",
-      value: match ? match.name : tech.name,
-      reference_id: match ? match.id : null,
-      confidence: tech.confidence || 0.7,
-    })
+    // 2. Normalized match (ignore case, extra spaces)
+    if (!match) {
+      match = (products || []).find(
+        (p: any) => p.name.toLowerCase().trim() === techName.replace(/\s+/g, " ")
+      )
+    }
+    if (match && !usedTechIds.has(match.id)) {
+      usedTechIds.add(match.id)
+      tags.push({
+        type: "technology",
+        value: match.name,
+        reference_id: match.id,
+        confidence: tech.confidence || 0.7,
+      })
+    }
   }
 
-  // Match processes against dictionary_processes (fuzzy)
+  // Match processes against dictionary_processes
+  const usedProcIds = new Set<string>()
   for (const proc of parsed.processes || []) {
-    const procName = (proc.dictionary_match || proc.name || "").toLowerCase().trim()
-    const match = (processes || []).find(
+    const procName = (proc.name || "").toLowerCase().trim()
+    let match = (processes || []).find(
       (p: any) => p.name.toLowerCase() === procName
-    ) || (processes || []).find(
-      (p: any) => procName.includes(p.name.toLowerCase()) || p.name.toLowerCase().includes(procName)
     )
-    tags.push({
-      type: "process",
-      value: match ? match.name : proc.name,
-      reference_id: match ? match.id : null,
-      confidence: proc.confidence || 0.7,
-    })
+    if (!match) {
+      match = (processes || []).find(
+        (p: any) => p.name.toLowerCase().trim() === procName.replace(/\s+/g, " ")
+      )
+    }
+    if (match && !usedProcIds.has(match.id)) {
+      usedProcIds.add(match.id)
+      tags.push({
+        type: "process",
+        value: match.name,
+        reference_id: match.id,
+        confidence: proc.confidence || 0.7,
+      })
+    }
   }
 
   return {
