@@ -96,6 +96,13 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite }: Prospe
   const [reasoning, setReasoning] = useState("")
   const [customJobTitle, setCustomJobTitle] = useState("")
 
+  // Value profile for enriched job title suggestions
+  const [valueProfile, setValueProfile] = useState<{
+    profileSummary: string
+    targetTechnologies: string[]
+    targetProcesses: string[]
+  } | null>(null)
+
   // Copiar al portapapeles
   const [copiedId, setCopiedId] = useState<string | null>(null)
 
@@ -109,11 +116,25 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite }: Prospe
   const loadData = useCallback(async () => {
     setIsLoading(true)
 
-    // Cargar contexto de búsqueda
-    const context = await getBookmarkSearchContext(bookmarkId)
+    // Cargar contexto de busqueda + value profile en paralelo
+    const [context, profileRes] = await Promise.all([
+      getBookmarkSearchContext(bookmarkId),
+      fetch(`/api/documents/context-for-bookmark?bookmarkId=${bookmarkId}`).then((r) =>
+        r.ok ? r.json() : null
+      ).catch(() => null),
+    ])
+
     setTechnologies(context.technologies)
     setProcesses(context.processes)
     setCompany(context.company)
+
+    if (profileRes?.valueProfile) {
+      setValueProfile({
+        profileSummary: profileRes.valueProfile.profile_summary || "",
+        targetTechnologies: profileRes.valueProfile.target_technologies || [],
+        targetProcesses: profileRes.valueProfile.target_processes || [],
+      })
+    }
 
     // Cargar prospectos existentes
     const existingProspects = await getProspects(bookmarkId)
@@ -133,7 +154,7 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite }: Prospe
   const handleInferJobTitles = async () => {
     setIsInferring(true)
     try {
-      const result = await inferJobTitles(technologies, processes)
+      const result = await inferJobTitles(technologies, processes, valueProfile)
       setSuggestedJobTitles(result.jobTitles)
       setSelectedJobTitles(result.jobTitles.slice(0, 4)) // Seleccionar los primeros 4 por defecto
       setReasoning(result.reasoning)

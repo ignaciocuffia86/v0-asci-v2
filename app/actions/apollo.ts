@@ -45,45 +45,56 @@ interface ApolloSearchResponse {
 export async function inferJobTitles(
   technologies: string[],
   processes: string[],
+  valueProfile?: {
+    profileSummary: string
+    targetTechnologies: string[]
+    targetProcesses: string[]
+  } | null,
 ): Promise<{ jobTitles: string[]; reasoning: string }> {
   const isGeneralBookmark = technologies.length === 0 && processes.length === 0
 
-  const prompt = `Eres un experto en estructuras organizacionales B2B.
-Dado el contexto de búsqueda (tecnologías y/o procesos), devuelve los job titles más relevantes de tomadores de decisión.
+  const valueProfileSection = valueProfile
+    ? `\n=== PROPUESTA DE VALOR DEL VENDEDOR ===
+Lo que vendo/ofrezco: ${valueProfile.profileSummary || "No definido"}
+Tecnologias que manejo: ${valueProfile.targetTechnologies.join(", ") || "No definidas"}
+Procesos que resuelvo: ${valueProfile.targetProcesses.join(", ") || "No definidos"}
 
-Contexto de búsqueda:
-- Tecnologías: ${technologies.length > 0 ? technologies.join(", ") : "No especificadas"}
-- Procesos: ${processes.length > 0 ? processes.join(", ") : "No especificados"}
-- Tipo de búsqueda: ${isGeneralBookmark ? "BÚSQUEDA GENERAL (sin filtros específicos)" : "Búsqueda filtrada"}
+IMPORTANTE: Usa esta informacion para recomendar job titles que sean COMPRADORES de lo que el vendedor ofrece.
+Por ejemplo: si el vendedor implementa SAP y la empresa tiene senales de SAP, recomienda roles que deciden sobre SAP (Director de Sistemas, Gerente de ERP, etc.).
+Si el vendedor ofrece automatizacion de procesos financieros, recomienda CFO, Controller, Director de Finanzas, etc.`
+    : ""
 
-Reglas:
-1. **SI ES BÚSQUEDA GENERAL (sin tecnologías ni procesos especificados)**: Recomendar C-Level y Directores de cada vertical de la empresa:
-   - CEO, COO, CFO, CMO, CTO, CHRO
-   - Y sus sinónimos: Chief Executive Officer, Chief Operating Officer, Chief Financial Officer, Chief Marketing Officer, Chief Technology Officer, Chief Human Resources Officer
-   - También incluir: Managing Director, General Manager, VP Operations, VP Finance, VP Marketing
-   
-2. Si son tecnologías de cloud/infraestructura (AWS, Azure, GCP, Kubernetes, Docker) → incluir CTO, VP Engineering, Cloud Architect, DevOps Manager, IT Director
+  const prompt = `Eres un experto en estructuras organizacionales B2B en empresas de Latinoamerica.
+Dado el contexto de busqueda (tecnologias y/o procesos de la empresa target) y la propuesta de valor del vendedor, devuelve los job titles mas relevantes de tomadores de decision.
 
-3. Si son tecnologías de datos (Snowflake, Databricks, BigQuery) → incluir CDO, Data Engineering Manager, Analytics Director, Head of Data
+=== SENALES DE LA EMPRESA TARGET ===
+- Tecnologias detectadas: ${technologies.length > 0 ? technologies.join(", ") : "No especificadas"}
+- Procesos detectados: ${processes.length > 0 ? processes.join(", ") : "No especificados"}
+- Tipo de busqueda: ${isGeneralBookmark ? "BUSQUEDA GENERAL (sin filtros especificos)" : "Busqueda filtrada"}
+${valueProfileSection}
 
-4. Si son tecnologías de software/desarrollo → incluir CTO, VP Engineering, Engineering Manager, Software Architect
+=== REGLAS CRITICAS ===
 
-5. Si son tecnologías de seguridad → incluir CISO, Security Director, VP Security
+1. Los job titles DEBEN estar en el formato que las personas usan en LinkedIn en Latinoamerica. Incluir SIEMPRE variantes en espanol Y en ingles porque en LATAM se usan ambos indistintamente:
+   - Para TI: "Director de TI", "Director de Sistemas", "Director de IT", "IT Manager", "Gerente de Sistemas", "Jefe de Sistemas", "CTO"
+   - Para Finanzas: "Director de Finanzas", "CFO", "Gerente de Finanzas", "Controller", "Contralor"
+   - Para Operaciones: "Director de Operaciones", "COO", "Gerente de Operaciones", "VP Operaciones"
+   - Para RRHH: "Director de RRHH", "Director de Recursos Humanos", "CHRO", "Gerente de Capital Humano", "VP People"
+   - Para Compras: "Director de Compras", "Procurement Manager", "Gerente de Abastecimiento"
+   - Para Comercial: "Director Comercial", "VP Sales", "Gerente Comercial", "Chief Revenue Officer"
 
-6. Si son procesos de transformación digital → incluir COO, Digital Transformation Lead, Chief Digital Officer
+2. SI HAY PROPUESTA DE VALOR DEL VENDEDOR: Prioriza roles que COMPRAN lo que el vendedor ofrece, no solo roles relacionados con la tecnologia detectada.
 
-7. Si son procesos de RRHH → incluir CHRO, VP People, HR Director
+3. SI ES BUSQUEDA GENERAL: Incluir C-Level y Directores principales en espanol e ingles.
 
-8. Si son procesos financieros → incluir CFO, VP Finance, Controller
+4. Incluir variantes como las personas realmente ponen en LinkedIn (abreviaciones, mezcla de idiomas, cargo con "de" o sin "de").
 
-9. Siempre incluir variantes y sinónimos comunes (IT Manager = Technology Manager = Systems Manager)
+5. Maximo 12 job titles, ordenados por relevancia para la venta.
 
-10. Máximo 10 job titles, ordenados por relevancia
-
-Devuelve SOLO un JSON válido con este formato exacto:
+Devuelve SOLO un JSON valido con este formato exacto:
 {
-  "jobTitles": ["CTO", "VP Engineering", "..."],
-  "reasoning": "Breve explicación de por qué estos roles (1-2 oraciones)"
+  "jobTitles": ["Director de TI", "IT Manager", "CTO", "Gerente de Sistemas", "..."],
+  "reasoning": "Breve explicacion de por que estos roles son los compradores mas relevantes (1-2 oraciones en espanol)"
 }`
 
   try {
@@ -117,14 +128,14 @@ Devuelve SOLO un JSON válido con este formato exacto:
 
   if (isGeneralBookmark) {
     return {
-      jobTitles: ["CEO", "COO", "CFO", "CTO", "CMO", "CHRO", "Managing Director", "General Manager"],
-      reasoning: "Job titles de C-Level y directivos por defecto para búsqueda general",
+      jobTitles: ["CEO", "Director General", "COO", "Director de Operaciones", "CFO", "Director de Finanzas", "CTO", "Director de TI"],
+      reasoning: "Job titles de C-Level y directivos por defecto para busqueda general (espanol e ingles)",
     }
   }
 
   return {
-    jobTitles: ["CTO", "VP Engineering", "IT Director", "Technology Manager"],
-    reasoning: "Job titles genéricos por defecto",
+    jobTitles: ["CTO", "Director de TI", "IT Manager", "Gerente de Sistemas"],
+    reasoning: "Job titles genericos por defecto en formato LATAM",
   }
 }
 

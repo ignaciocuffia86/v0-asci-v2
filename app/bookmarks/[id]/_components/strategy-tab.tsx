@@ -103,29 +103,24 @@ export function BookmarkStrategy({ bookmarkId, companyName }: BookmarkStrategyPr
   }
 
   const handleGenerateFromDocs = async () => {
-    if (!valueProfile) return
     setIsGenerating(true)
     try {
-      // Build a context string from the value profile + relevant docs
-      let generated = valueProfile.profile_summary || ""
+      const res = await fetch("/api/documents/context-for-bookmark", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bookmarkId }),
+      })
 
-      if (relevantDocs.length > 0) {
-        const topDoc = relevantDocs[0]
-        const matchLabels = topDoc.matchedTags.map((t) => t.value).join(", ")
-        generated += `\n\nExperiencia relevante para ${companyName}: "${topDoc.title}" (match: ${matchLabels}).`
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.error || "Error al generar estrategia")
       }
 
-      if (valueProfile.target_industries.length > 0) {
-        generated += `\nIndustrias donde tenemos experiencia: ${valueProfile.target_industries.join(", ")}.`
-      }
-      if (valueProfile.target_technologies.length > 0) {
-        generated += `\nTecnologias que manejamos: ${valueProfile.target_technologies.join(", ")}.`
-      }
-
-      setSenderContext(generated)
-      toast.success("Propuesta generada desde ASCI Docs. Podes editarla antes de guardar.")
-    } catch (error) {
-      toast.error("Error al generar desde Docs")
+      const data = await res.json()
+      setSenderContext(data.strategy)
+      toast.success("Estrategia generada con ASCI Docs. Podes editarla antes de guardar.")
+    } catch (error: any) {
+      toast.error(error.message || "Error al generar desde Docs")
     } finally {
       setIsGenerating(false)
     }
@@ -138,7 +133,7 @@ export function BookmarkStrategy({ bookmarkId, companyName }: BookmarkStrategyPr
   return (
     <div className="max-w-2xl mx-auto space-y-4">
       {/* ASCI Docs Context Card */}
-      {hasDocuments && valueProfile ? (
+      {hasDocuments && (valueProfile || relevantDocs.length > 0) ? (
         <Card className="border-primary/30 bg-primary/5">
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
