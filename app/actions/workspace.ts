@@ -896,7 +896,7 @@ export async function generateSimplifiedIcebreaker(bookmarkId: string, contactId
     // Es un contacto privado (decision maker) - buscar en user_company_contacts
     const { data: privateContact } = await supabase
       .from("user_company_contacts")
-      .select("id, full_name, first_name, role")
+      .select("id, full_name, first_name, role, headline")
       .eq("id", contactId)
       .eq("user_id", user.id)
       .maybeSingle()
@@ -1039,7 +1039,8 @@ INFORMACIÓN DEL CONTACTO (USA ESTO PARA PERSONALIZAR)
 ═══════════════════════════════════════════════════════════════
 Nombre: ${firstName}
 Empresa: ${companyName}
-Headline: ${contactData.headline || "No disponible"}
+Cargo/Headline: ${contactData.headline || contactData.role || "No disponible"}
+Rol: ${contactData.role || contactData.current_position_title || "No especificado"}
 Descripción del puesto actual:
 ${contactData.current_position_description || "No disponible"}
 
@@ -1077,7 +1078,7 @@ IMPORTANTE: El mensaje debe ser ÚNICO para esta persona. No uses frases genéri
 3. Explica cómo ${userCompanyName} puede ayudar concretamente con ${filterContextName || "sus necesidades"}
 4. Cierra: "¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?"
 
-═══════════════════════════════════════════════════════════════
+══════════════════════════════════════════════════════════════��
 FORMATO DE RESPUESTA (SIN INCLUIR LOS TAGS EN EL MENSAJE FINAL)
 ═══════════════════════════════════════════════════════════════
 ---LINKEDIN---
