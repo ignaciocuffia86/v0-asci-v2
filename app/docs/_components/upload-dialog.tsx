@@ -15,7 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Upload, Link2, FileText, Loader2, AlertCircle, CheckCircle2 } from "lucide-react"
+import { Upload, Link2, FileText, Loader2, AlertCircle } from "lucide-react"
 import { toast } from "sonner"
 
 const ACCEPTED_TYPES: Record<string, string[]> = {
@@ -38,47 +38,48 @@ interface UploadDialogProps {
 
 export function UploadDialog({ open, onOpenChange, onDocumentCreated }: UploadDialogProps) {
   const [isUploading, setIsUploading] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
   const [url, setUrl] = useState("")
   const [urlTitle, setUrlTitle] = useState("")
-  const supabase = createClient()
 
-  const onDrop = useCallback(async (acceptedFiles: File[]) => {
-    if (acceptedFiles.length === 0) return
-    const file = acceptedFiles[0]
-
+  const handleFileUpload = async (file: File) => {
     setIsUploading(true)
+    setUploadError(null)
+    
     try {
-      console.log("[v0] Starting file upload:", file.name, file.type, file.size)
-      
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) throw new Error("No autenticado")
-      console.log("[v0] User authenticated:", user.id)
+      // Detect file type - also try by extension as fallback
+      let docType = FILE_TYPE_MAP[file.type]
+      if (!docType) {
+        const ext = file.name.split(".").pop()?.toLowerCase()
+        if (ext === "pdf") docType = "pdf"
+        else if (ext === "pptx") docType = "pptx"
+        else if (ext === "docx") docType = "docx"
+        else throw new Error(`Tipo de archivo no soportado: ${file.type || file.name}`)
+      }
 
-      const docType = FILE_TYPE_MAP[file.type]
-      if (!docType) throw new Error(`Tipo de archivo no soportado: ${file.type}`)
-      console.log("[v0] File type mapped:", docType)
+      // Get user from client-side supabase
+      const supabase = createClient()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) throw new Error("No autenticado. Recarga la pagina e intenta nuevamente.")
 
       // Generate unique path
       const fileExt = file.name.split(".").pop()
       const docId = crypto.randomUUID()
       const storagePath = `${user.id}/${docId}/${file.name}`
-      console.log("[v0] Storage path:", storagePath)
 
       // Upload to Supabase Storage
-      const { data: uploadData, error: uploadError } = await supabase.storage
+      const { error: storageError } = await supabase.storage
         .from("user-documents")
         .upload(storagePath, file, {
           cacheControl: "3600",
           upsert: false,
         })
 
-      if (uploadError) {
-        console.error("[v0] Storage upload error:", uploadError)
-        throw uploadError
+      if (storageError) {
+        throw new Error(`Error al subir archivo: ${storageError.message}`)
       }
-      console.log("[v0] Storage upload success:", uploadData)
 
-      // Create DB record
+      // Create DB record via server action
       const title = file.name.replace(`.${fileExt}`, "")
       const result = await createDocument({
         title,
@@ -87,31 +88,45 @@ export function UploadDialog({ open, onOpenChange, onDocumentCreated }: UploadDi
         file_size: file.size,
       })
 
-      console.log("[v0] createDocument result:", JSON.stringify(result))
       if (result.error) throw new Error(result.error)
 
       toast.success(`"${title}" subido correctamente. Procesando...`)
       onDocumentCreated()
       onOpenChange(false)
 
-      // Trigger processing using documentId (most reliable)
+      // Trigger async processing
       if (result.data?.id) {
-        console.log("[v0] Triggering processing for doc:", result.data.id)
         fetch("/api/documents/process", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ documentId: result.data.id }),
-        }).catch((err) => console.error("[v0] Process trigger failed:", err))
-      } else {
-        console.error("[v0] No document ID returned from createDocument")
+        }).catch(() => {})
       }
     } catch (err: any) {
-      console.error("[v0] Upload failed:", err)
-      toast.error(err.message || "Error al subir el archivo")
+      const msg = err.message || "Error al subir el archivo"
+      setUploadError(msg)
+      toast.error(msg)
     } finally {
       setIsUploading(false)
     }
-  }, [supabase, onDocumentCreated, onOpenChange])
+  }
+
+  const onDrop = useCallback((acceptedFiles: File[], rejectedFiles: any[]) => {
+    if (rejectedFiles.length > 0) {
+      const rejection = rejectedFiles[0]
+      const errorCode = rejection.errors?.[0]?.code
+      if (errorCode === "file-too-large") {
+        setUploadError("El archivo supera los 50MB permitidos")
+        toast.error("El archivo supera los 50MB permitidos")
+      } else if (errorCode === "file-invalid-type") {
+        setUploadError("Formato no soportado. Usa PDF, PPTX o DOCX")
+        toast.error("Formato no soportado. Usa PDF, PPTX o DOCX")
+      }
+      return
+    }
+    if (acceptedFiles.length === 0) return
+    handleFileUpload(acceptedFiles[0])
+  }, [])
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -119,6 +134,7 @@ export function UploadDialog({ open, onOpenChange, onDocumentCreated }: UploadDi
     maxFiles: 1,
     maxSize: 52428800, // 50MB
     disabled: isUploading,
+    onDropAccepted: () => setUploadError(null),
   })
 
   const handleUrlSubmit = async () => {
@@ -193,6 +209,14 @@ export function UploadDialog({ open, onOpenChange, onDocumentCreated }: UploadDi
                 <div className="flex flex-col items-center gap-3">
                   <Loader2 className="h-10 w-10 text-primary animate-spin" />
                   <p className="text-sm text-muted-foreground">Subiendo archivo...</p>
+                </div>
+              ) : uploadError ? (
+                <div className="flex flex-col items-center gap-3">
+                  <AlertCircle className="h-10 w-10 text-destructive" />
+                  <div>
+                    <p className="text-sm font-medium text-destructive">{uploadError}</p>
+                    <p className="text-xs text-muted-foreground mt-1">Hace click o arrastra para reintentar</p>
+                  </div>
                 </div>
               ) : (
                 <div className="flex flex-col items-center gap-3">
