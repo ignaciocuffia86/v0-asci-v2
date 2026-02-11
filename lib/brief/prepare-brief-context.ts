@@ -8,6 +8,7 @@ import type {
   BriefProspect,
 } from "./brief-types"
 import crypto from "crypto"
+import { rankDocumentsForBookmark } from "@/lib/documents/rank-documents-for-bookmark"
 
 interface PrepareContextOptions {
   bookmarkId: string
@@ -164,38 +165,71 @@ export async function prepareBriefContext(options: PrepareContextOptions): Promi
   // 7. Determine filter type
   let filterType: "process" | "technology" | "general" = "general"
   if (filterSignalIds.length > 0) {
-    // Check if mostly processes or technologies
-    const techCount = signalsResult.filter((s: any) => s.signalType === "technology").length
-    const procCount = signalsResult.filter((s: any) => s.signalType === "process").length
-    filterType = techCount > procCount ? "technology" : "process"
+  // Check if mostly processes or technologies
+  const techCount = signalsResult.filter((s: any) => s.signalType === "technology").length
+  const procCount = signalsResult.filter((s: any) => s.signalType === "process").length
+  filterType = techCount > procCount ? "technology" : "process"
   }
+  
+  // 8. Fetch user value profile and rank documents for this bookmark
+  const [{ data: valueProfileData }, rankedDocs] = await Promise.all([
+    supabase
+      .from("user_value_profiles")
+      .select("profile_summary, target_industries, target_technologies, target_processes")
+      .eq("user_id", userId)
+      .maybeSingle(),
+    rankDocumentsForBookmark(userId, {
+      companyIndustry: company.industry,
+      filterSignalIds,
+    }),
+  ])
+
+  const valueProfile = valueProfileData
+    ? {
+        profileSummary: valueProfileData.profile_summary || "",
+        targetIndustries: (valueProfileData.target_industries as string[]) || [],
+        targetTechnologies: (valueProfileData.target_technologies as string[]) || [],
+        targetProcesses: (valueProfileData.target_processes as string[]) || [],
+      }
+    : null
+
+  const relevantDocs = rankedDocs.map((d) => ({
+    title: d.title,
+    type: d.type,
+    summary: d.ai_summary,
+    matchedTags: d.matchedTags,
+    score: d.score,
+    extractedText: d.extracted_text ? d.extracted_text.slice(0, 3000) : null,
+  }))
 
   return {
-    company: {
-      id: company.id,
-      name: company.name,
-      industry: company.industry,
-      country: company.country,
-      website: company.website,
-      description: company.description,
-    },
-    searchContext: {
-      filterSignalIds,
-      signalNames,
-      filterType,
-    },
-    strategy: strategy
-      ? {
-          valueProposition: strategy.sender_context_override,
-          targetSummary: strategy.target_summary,
-        }
-      : null,
-    currentEmployees: currentEmployees.slice(0, 5), // Max 5
-    alumni: alumni.slice(0, 3), // Max 3
-    jobPostings: briefJobPostings,
-    news: briefNews,
-    implementations: briefImplementations,
-    prospects: briefProspects,
+  company: {
+  id: company.id,
+  name: company.name,
+  industry: company.industry,
+  country: company.country,
+  website: company.website,
+  description: company.description,
+  },
+  searchContext: {
+  filterSignalIds,
+  signalNames,
+  filterType,
+  },
+  strategy: strategy
+  ? {
+  valueProposition: strategy.sender_context_override,
+  targetSummary: strategy.target_summary,
+  }
+  : null,
+  currentEmployees: currentEmployees.slice(0, 5), // Max 5
+  alumni: alumni.slice(0, 3), // Max 3
+  jobPostings: briefJobPostings,
+  news: briefNews,
+  implementations: briefImplementations,
+  prospects: briefProspects,
+  valueProfile,
+  relevantDocs: relevantDocs.length > 0 ? relevantDocs : undefined,
     userEmail,
   }
 }
@@ -444,6 +478,8 @@ export function calculateContextHash(context: BriefContext): string {
     implementationsIds: context.implementations.map((i) => i.id).sort(),
     prospectsIds: context.prospects.map((p) => p.id).sort(),
     strategyHash: context.strategy?.valueProposition?.substring(0, 100) || "",
+    valueProfileHash: context.valueProfile?.profileSummary?.substring(0, 100) || "",
+    relevantDocsHash: (context.relevantDocs || []).map((d) => d.title).sort().join(","),
   }
 
   return crypto.createHash("sha256").update(JSON.stringify(relevantData)).digest("hex")

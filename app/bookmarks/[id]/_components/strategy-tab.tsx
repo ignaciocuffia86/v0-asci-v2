@@ -5,26 +5,48 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
-import { BrainCircuit, Save } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import { BrainCircuit, Save, Sparkles, FileText, Loader2, AlertCircle } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { getStrategy, saveSenderContext } from "@/app/actions/workspace"
 import { toast } from "sonner"
+import Link from "next/link"
 
 interface BookmarkStrategyProps {
   bookmarkId: string
   companyName: string
 }
 
+interface ValueProfile {
+  profile_summary: string
+  target_industries: string[]
+  target_technologies: string[]
+  target_processes: string[]
+}
+
+interface RelevantDoc {
+  title: string
+  type: string
+  matchedTags: { type: string; value: string }[]
+}
+
 export function BookmarkStrategy({ bookmarkId, companyName }: BookmarkStrategyProps) {
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
+  const [isGenerating, setIsGenerating] = useState(false)
 
   // Sender context state
   const [senderContext, setSenderContext] = useState("")
   const [saveAsDefault, setSaveAsDefault] = useState(false)
 
+  // Docs state
+  const [valueProfile, setValueProfile] = useState<ValueProfile | null>(null)
+  const [relevantDocs, setRelevantDocs] = useState<RelevantDoc[]>([])
+  const [hasDocuments, setHasDocuments] = useState(false)
+
   useEffect(() => {
     loadStrategy()
+    loadDocsContext()
   }, [bookmarkId])
 
   const loadStrategy = async () => {
@@ -49,6 +71,20 @@ export function BookmarkStrategy({ bookmarkId, companyName }: BookmarkStrategyPr
     }
   }
 
+  const loadDocsContext = async () => {
+    try {
+      const res = await fetch(`/api/documents/context-for-bookmark?bookmarkId=${bookmarkId}`)
+      if (res.ok) {
+        const data = await res.json()
+        setValueProfile(data.valueProfile || null)
+        setRelevantDocs(data.relevantDocs || [])
+        setHasDocuments(data.hasDocuments || false)
+      }
+    } catch (error) {
+      console.error("Error loading docs context:", error)
+    }
+  }
+
   const handleSaveContext = async () => {
     setIsSaving(true)
     try {
@@ -66,12 +102,116 @@ export function BookmarkStrategy({ bookmarkId, companyName }: BookmarkStrategyPr
     }
   }
 
+  const handleGenerateFromDocs = async () => {
+    if (!valueProfile) return
+    setIsGenerating(true)
+    try {
+      // Build a context string from the value profile + relevant docs
+      let generated = valueProfile.profile_summary || ""
+
+      if (relevantDocs.length > 0) {
+        const topDoc = relevantDocs[0]
+        const matchLabels = topDoc.matchedTags.map((t) => t.value).join(", ")
+        generated += `\n\nExperiencia relevante para ${companyName}: "${topDoc.title}" (match: ${matchLabels}).`
+      }
+
+      if (valueProfile.target_industries.length > 0) {
+        generated += `\nIndustrias donde tenemos experiencia: ${valueProfile.target_industries.join(", ")}.`
+      }
+      if (valueProfile.target_technologies.length > 0) {
+        generated += `\nTecnologias que manejamos: ${valueProfile.target_technologies.join(", ")}.`
+      }
+
+      setSenderContext(generated)
+      toast.success("Propuesta generada desde ASCI Docs. Podes editarla antes de guardar.")
+    } catch (error) {
+      toast.error("Error al generar desde Docs")
+    } finally {
+      setIsGenerating(false)
+    }
+  }
+
   if (isLoading) {
     return <div className="p-8 text-center text-muted-foreground">Cargando...</div>
   }
 
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className="max-w-2xl mx-auto space-y-4">
+      {/* ASCI Docs Context Card */}
+      {hasDocuments && valueProfile ? (
+        <Card className="border-primary/30 bg-primary/5">
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-5 w-5 text-primary" />
+                <CardTitle className="text-base">ASCI Docs</CardTitle>
+              </div>
+              {relevantDocs.length > 0 && (
+                <Badge variant="secondary" className="text-xs">
+                  {relevantDocs.length} doc{relevantDocs.length !== 1 ? "s" : ""} relevante{relevantDocs.length !== 1 ? "s" : ""}
+                </Badge>
+              )}
+            </div>
+            <CardDescription>
+              ASCI aprendio de tus documentos. Usa esta informacion para generar una propuesta contextualizada para {companyName}.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {/* Relevant docs for this bookmark */}
+            {relevantDocs.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-muted-foreground">Documentos con FIT para esta cuenta:</p>
+                {relevantDocs.map((doc, i) => (
+                  <div key={i} className="flex items-center gap-2 text-sm">
+                    <FileText className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                    <span className="truncate">{doc.title}</span>
+                    <div className="flex gap-1 flex-shrink-0">
+                      {doc.matchedTags.map((tag, j) => (
+                        <Badge key={j} variant="outline" className="text-[10px] px-1.5 py-0">
+                          {tag.value}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <Button
+              onClick={handleGenerateFromDocs}
+              disabled={isGenerating}
+              className="w-full"
+              variant="default"
+            >
+              {isGenerating ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Sparkles className="h-4 w-4 mr-2" />
+              )}
+              Generar Propuesta con ASCI Docs
+            </Button>
+          </CardContent>
+        </Card>
+      ) : !hasDocuments ? (
+        <Card className="border-dashed">
+          <CardContent className="py-4">
+            <div className="flex items-center gap-3">
+              <AlertCircle className="h-5 w-5 text-muted-foreground flex-shrink-0" />
+              <div className="flex-1">
+                <p className="text-sm text-muted-foreground">
+                  Subi tus casos de exito, brochures y propuestas en{" "}
+                  <Link href="/docs" className="text-primary hover:underline font-medium">
+                    Docs
+                  </Link>{" "}
+                  para que ASCI genere estrategias contextualizadas automaticamente.
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {/* Manual strategy card */}
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
@@ -79,7 +219,7 @@ export function BookmarkStrategy({ bookmarkId, companyName }: BookmarkStrategyPr
             <CardTitle>Mi Propuesta de Valor</CardTitle>
           </div>
           <CardDescription>
-            Define tu propuesta de valor para {companyName}. Este contexto se usará para generar icebreakers
+            Define tu propuesta de valor para {companyName}. Este contexto se usara para generar icebreakers
             personalizados.
           </CardDescription>
         </CardHeader>
@@ -90,9 +230,9 @@ export function BookmarkStrategy({ bookmarkId, companyName }: BookmarkStrategyPr
               id="context"
               value={senderContext}
               onChange={(e) => setSenderContext(e.target.value)}
-              placeholder="Describe quién eres, qué ofreces y por qué eres relevante para este prospecto...
+              placeholder="Describe quien eres, que ofreces y por que eres relevante para este prospecto...
 
-Ejemplo: Soy especialista en automatización de procesos financieros con 10 años de experiencia ayudando a bancos regionales a reducir tiempos de cierre contable. Hemos trabajado con instituciones similares logrando reducciones del 40% en tiempos de proceso."
+Ejemplo: Soy especialista en automatizacion de procesos financieros con 10 anos de experiencia ayudando a bancos regionales a reducir tiempos de cierre contable. Hemos trabajado con instituciones similares logrando reducciones del 40% en tiempos de proceso."
               className="min-h-[250px] resize-none text-sm"
             />
           </div>

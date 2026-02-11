@@ -131,15 +131,47 @@ export function generateBriefPrompt(context: BriefContext): string {
     return lines.join("\n")
   }
 
-  // Format strategy section
+  // Format strategy section - now enhanced with Docs value profile
   const formatStrategy = () => {
-    if (!strategy?.valueProposition) {
-      return "ESTRATEGIA: [WARNING] Falta definir una propuesta de valor para la cuenta."
+    const parts: string[] = []
+
+    // Value profile from Docs feature
+    if (context.valueProfile?.profileSummary) {
+      parts.push(`PERFIL DE PROPUESTA DE VALOR (generado por ASCI Docs):
+${context.valueProfile.profileSummary}
+Industrias target: ${context.valueProfile.targetIndustries.join(", ") || "No definidas"}
+Tecnologias target: ${context.valueProfile.targetTechnologies.join(", ") || "No definidas"}
+Procesos target: ${context.valueProfile.targetProcesses.join(", ") || "No definidos"}`)
     }
 
-    return `ESTRATEGIA DEFINIDA POR EL VENDEDOR:
+    // Relevant documents for this bookmark
+    if (context.relevantDocs && context.relevantDocs.length > 0) {
+      parts.push(`\nDOCUMENTOS RELEVANTES PARA ESTA CUENTA (${context.relevantDocs.length}):`)
+      for (const doc of context.relevantDocs) {
+        const tagLabels = doc.matchedTags.map((t) => `${t.type === "industry" ? "Industria" : t.type === "technology" ? "Tecnologia" : "Proceso"}: ${t.value}`).join(", ")
+        parts.push(`- "${doc.title}" (${doc.type.toUpperCase()})`)
+        parts.push(`  Resumen: ${doc.summary || "Sin resumen"}`)
+        parts.push(`  FIT con esta cuenta: ${tagLabels}`)
+        if (doc.extractedText) {
+          parts.push(`  Contenido relevante: ${doc.extractedText.slice(0, 1500)}`)
+        }
+        parts.push("")
+      }
+      parts.push(`INSTRUCCION ESPECIAL: Usa estos documentos para explicar el FIT entre lo que el vendedor ofrece y las senales de esta empresa. En el icebreaker/playbook, referencia el documento mas relevante como caso de exito o experiencia previa.`)
+    }
+
+    // Manual strategy override
+    if (strategy?.valueProposition) {
+      parts.push(`\nESTRATEGIA MANUAL DEFINIDA POR EL VENDEDOR:
 Propuesta de valor: ${strategy.valueProposition}
-${strategy.targetSummary ? `Objetivo: ${strategy.targetSummary}` : ""}`
+${strategy.targetSummary ? `Objetivo: ${strategy.targetSummary}` : ""}`)
+    }
+
+    if (parts.length === 0) {
+      return "ESTRATEGIA: [WARNING] Falta definir una propuesta de valor. Se recomienda subir documentos en la seccion Docs o completar la estrategia manual."
+    }
+
+    return parts.join("\n")
   }
 
   // Build the complete prompt
