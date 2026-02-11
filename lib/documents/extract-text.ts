@@ -1,15 +1,18 @@
 import * as cheerio from "cheerio"
+import { generateGeminiContent } from "@/lib/ai-service"
 
 /**
- * Extract text from a URL by fetching HTML and parsing with Cheerio
+ * Extract text from a URL by fetching HTML and parsing with Cheerio.
+ * Falls back to Gemini extraction if the page is a SPA with minimal text content.
  */
 export async function extractTextFromUrl(url: string): Promise<string> {
   const response = await fetch(url, {
     headers: {
-      "User-Agent": "Mozilla/5.0 (compatible; ASCIBot/1.0)",
-      "Accept": "text/html,application/xhtml+xml",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
     },
-    signal: AbortSignal.timeout(15000),
+    signal: AbortSignal.timeout(20000),
   })
 
   if (!response.ok) {
@@ -18,6 +21,12 @@ export async function extractTextFromUrl(url: string): Promise<string> {
 
   const html = await response.text()
   const $ = cheerio.load(html)
+
+  // Extract meta info before removing elements (useful for SPAs)
+  const metaTitle = $("title").text().trim()
+  const metaDescription = $('meta[name="description"]').attr("content")?.trim() || ""
+  const ogTitle = $('meta[property="og:title"]').attr("content")?.trim() || ""
+  const ogDescription = $('meta[property="og:description"]').attr("content")?.trim() || ""
 
   // Remove noise elements
   $("script, style, nav, footer, header, iframe, noscript, svg, form").remove()
@@ -50,11 +59,51 @@ export async function extractTextFromUrl(url: string): Promise<string> {
   }
 
   // Clean up whitespace
-  return text
+  text = text
     .replace(/\s+/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim()
-    .slice(0, 50000) // Limit to ~50k chars
+
+  // Check if we got meaningful content (SPAs often return very little text)
+  const MIN_USEFUL_CHARS = 100
+  if (text.length < MIN_USEFUL_CHARS) {
+    console.log(`[v0] URL text too short (${text.length} chars), trying Gemini extraction for: ${url}`)
+
+    // Use meta info + raw HTML as context for Gemini
+    const metaContext = [metaTitle, ogTitle, metaDescription, ogDescription].filter(Boolean).join(" | ")
+    
+    // Send the raw HTML (limited) to Gemini to interpret
+    const rawHtml = html.slice(0, 30000)
+    
+    const geminiText = await generateGeminiContent(
+      `Analiza el siguiente HTML de la pagina web ${url}. 
+Esta pagina podria ser una Single Page Application (SPA) que renderiza con JavaScript.
+Extrae TODO el contenido textual util que puedas encontrar en el HTML, incluyendo:
+- Textos dentro de data attributes, JSON embedded, o script tags con contenido
+- Meta tags y Open Graph tags
+- Cualquier texto visible que encuentres
+
+Informacion meta disponible: ${metaContext || "Ninguna"}
+
+HTML:
+${rawHtml}
+
+Devuelve SOLO el texto extraido, organizado de manera coherente. Si realmente no hay contenido, indica "No se encontro contenido textual en esta pagina."`,
+      "gemini-2.0-flash",
+      0.1,
+    )
+
+    if (geminiText && geminiText.length > MIN_USEFUL_CHARS) {
+      return geminiText.trim().slice(0, 50000)
+    }
+
+    // Last resort: use whatever meta info we have
+    if (metaContext.length > 20) {
+      return `Pagina web: ${url}\nTitulo: ${metaTitle || ogTitle}\nDescripcion: ${metaDescription || ogDescription}\n${text}`.trim()
+    }
+  }
+
+  return text.slice(0, 50000)
 }
 
 /**

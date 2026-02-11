@@ -33,8 +33,8 @@ export async function POST(request: NextRequest) {
     // Find the document to process
     let document: any
 
-    if (body.documentId && body.reprocess) {
-      // Reprocessing existing document
+    if (body.documentId) {
+      // Find by document ID (primary method)
       const { data, error } = await supabase
         .from("user_documents")
         .select("*")
@@ -47,21 +47,16 @@ export async function POST(request: NextRequest) {
       }
       document = data
 
-      // Reset status
-      await supabase
-        .from("user_documents")
-        .update({ status: "processing", processing_error: null, updated_at: new Date().toISOString() })
-        .eq("id", document.id)
-
-      // Clear existing tags
-      await supabase
-        .from("document_tags")
-        .delete()
-        .eq("document_id", document.id)
-        .eq("user_id", user.id)
-
+      // If reprocessing, clear existing tags
+      if (body.reprocess) {
+        await supabase
+          .from("document_tags")
+          .delete()
+          .eq("document_id", document.id)
+          .eq("user_id", user.id)
+      }
     } else if (body.storagePath) {
-      // Find by storage path
+      // Fallback: find by storage path
       const { data, error } = await supabase
         .from("user_documents")
         .select("*")
@@ -75,7 +70,7 @@ export async function POST(request: NextRequest) {
       document = data
 
     } else if (body.sourceUrl) {
-      // Find by source URL
+      // Fallback: find by source URL
       const { data, error } = await supabase
         .from("user_documents")
         .select("*")

@@ -71,25 +71,27 @@ export function UploadDialog({ open, onOpenChange, onDocumentCreated }: UploadDi
 
       // Create DB record
       const title = file.name.replace(`.${fileExt}`, "")
-      const { error } = await createDocument({
+      const result = await createDocument({
         title,
         type: docType,
         storage_path: storagePath,
         file_size: file.size,
       })
 
-      if (error) throw new Error(error)
+      if (result.error) throw new Error(result.error)
 
       toast.success(`"${title}" subido correctamente. Procesando...`)
       onDocumentCreated()
       onOpenChange(false)
 
-      // Trigger processing
-      fetch("/api/documents/process", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ storagePath }),
-      }).catch(console.error) // fire and forget
+      // Trigger processing using documentId (most reliable)
+      if (result.data?.id) {
+        fetch("/api/documents/process", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ documentId: result.data.id }),
+        }).catch((err) => console.error("[v0] Process trigger failed:", err))
+      }
     } catch (err: any) {
       toast.error(err.message || "Error al subir el archivo")
     } finally {
@@ -111,13 +113,13 @@ export function UploadDialog({ open, onOpenChange, onDocumentCreated }: UploadDi
     setIsUploading(true)
     try {
       const title = urlTitle.trim() || new URL(url).hostname
-      const { error } = await createDocument({
+      const result = await createDocument({
         title,
         type: "url",
         source_url: url.trim(),
       })
 
-      if (error) throw new Error(error)
+      if (result.error) throw new Error(result.error)
 
       toast.success(`"${title}" creado. Procesando URL...`)
       onDocumentCreated()
@@ -125,12 +127,14 @@ export function UploadDialog({ open, onOpenChange, onDocumentCreated }: UploadDi
       setUrl("")
       setUrlTitle("")
 
-      // Trigger processing
-      fetch("/api/documents/process", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sourceUrl: url.trim() }),
-      }).catch(console.error)
+      // Trigger processing using documentId (most reliable)
+      if (result.data?.id) {
+        fetch("/api/documents/process", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ documentId: result.data.id }),
+        }).catch((err) => console.error("[v0] URL process trigger failed:", err))
+      }
     } catch (err: any) {
       toast.error(err.message || "Error al procesar la URL")
     } finally {
