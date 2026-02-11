@@ -48,26 +48,35 @@ export function UploadDialog({ open, onOpenChange, onDocumentCreated }: UploadDi
 
     setIsUploading(true)
     try {
+      console.log("[v0] Starting file upload:", file.name, file.type, file.size)
+      
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) throw new Error("No autenticado")
+      console.log("[v0] User authenticated:", user.id)
 
       const docType = FILE_TYPE_MAP[file.type]
-      if (!docType) throw new Error("Tipo de archivo no soportado")
+      if (!docType) throw new Error(`Tipo de archivo no soportado: ${file.type}`)
+      console.log("[v0] File type mapped:", docType)
 
       // Generate unique path
       const fileExt = file.name.split(".").pop()
       const docId = crypto.randomUUID()
       const storagePath = `${user.id}/${docId}/${file.name}`
+      console.log("[v0] Storage path:", storagePath)
 
       // Upload to Supabase Storage
-      const { error: uploadError } = await supabase.storage
+      const { data: uploadData, error: uploadError } = await supabase.storage
         .from("user-documents")
         .upload(storagePath, file, {
           cacheControl: "3600",
           upsert: false,
         })
 
-      if (uploadError) throw uploadError
+      if (uploadError) {
+        console.error("[v0] Storage upload error:", uploadError)
+        throw uploadError
+      }
+      console.log("[v0] Storage upload success:", uploadData)
 
       // Create DB record
       const title = file.name.replace(`.${fileExt}`, "")
@@ -78,6 +87,7 @@ export function UploadDialog({ open, onOpenChange, onDocumentCreated }: UploadDi
         file_size: file.size,
       })
 
+      console.log("[v0] createDocument result:", JSON.stringify(result))
       if (result.error) throw new Error(result.error)
 
       toast.success(`"${title}" subido correctamente. Procesando...`)
@@ -86,13 +96,17 @@ export function UploadDialog({ open, onOpenChange, onDocumentCreated }: UploadDi
 
       // Trigger processing using documentId (most reliable)
       if (result.data?.id) {
+        console.log("[v0] Triggering processing for doc:", result.data.id)
         fetch("/api/documents/process", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ documentId: result.data.id }),
         }).catch((err) => console.error("[v0] Process trigger failed:", err))
+      } else {
+        console.error("[v0] No document ID returned from createDocument")
       }
     } catch (err: any) {
+      console.error("[v0] Upload failed:", err)
       toast.error(err.message || "Error al subir el archivo")
     } finally {
       setIsUploading(false)
