@@ -90,7 +90,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     for (const model of GEMINI_MODELS) {
       try {
         console.log(`[v0] Trying Gemini model: ${model}`)
-        summary = await generateGeminiContent(prompt, model, 0.4)
+        summary = await generateGeminiContent(prompt, model, 0.3, 0)
         modelUsed = model
         console.log(`[v0] Successfully generated with ${model}`)
         break

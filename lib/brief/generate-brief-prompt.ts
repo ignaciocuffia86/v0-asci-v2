@@ -1,291 +1,182 @@
 import type { BriefContext } from "./brief-types"
 
 /**
- * Genera el prompt optimizado para Gemini para crear el Brief Ejecutivo
- * Incluye toda la estructura y reglas para generación con confidence levels
+ * Genera el prompt para crear un Brief Ejecutivo comercial conciso.
+ * Orientado a vendedores: panorama de cuenta + estrategia de abordaje.
  */
 export function generateBriefPrompt(context: BriefContext): string {
-  const { company, searchContext, strategy, currentEmployees, alumni, jobPostings, news, implementations, prospects } =
-    context
+  const {
+    company,
+    searchContext,
+    strategy,
+    currentEmployees,
+    alumni,
+    jobPostings,
+    news,
+    implementations,
+    prospects,
+  } = context
 
-  // Format contacts section
+  // --- Build contact list (unified, no duplicates) ---
   const formatContacts = () => {
-    const contactsSection: string[] = []
+    const seen = new Set<string>()
+    const lines: string[] = []
 
-    if (currentEmployees.length > 0) {
-      contactsSection.push(`EMPLEADOS ACTUALES CON SEÑALES (${currentEmployees.length}) [Confidence: ALTO]:`)
-      for (const c of currentEmployees) {
-        contactsSection.push(`- ${c.name} | ${c.role}`)
-        contactsSection.push(`  Señales: ${c.keywords.join(", ") || "N/A"}`)
-        contactsSection.push(`  LinkedIn: ${c.linkedinUrl || "No disponible"}`)
-        contactsSection.push(
-          `  Email: ${c.email || "No disponible"}${c.emailType === "corporate" ? " (Corporativo)" : ""}`,
-        )
-        contactsSection.push(`  Teléfono: ${c.phone || "No disponible"}`)
-        contactsSection.push("")
-      }
-    } else {
-      contactsSection.push("EMPLEADOS ACTUALES CON SEÑALES: No hay señales internas detectadas.")
+    // Signal contacts (current employees)
+    for (const c of currentEmployees.slice(0, 5)) {
+      if (seen.has(c.name)) continue
+      seen.add(c.name)
+      const emailTag = c.emailType === "corporate" ? " (Corp)" : ""
+      lines.push(
+        `- ${c.name} | ${c.role || "Sin cargo"} | Senales: ${c.keywords.join(", ") || "N/A"} | Email: ${c.email || "N/D"}${emailTag} | LinkedIn: ${c.linkedinUrl || "N/D"}`,
+      )
     }
 
+    // Prospects / decision makers
+    for (const p of prospects.slice(0, 5)) {
+      if (seen.has(p.fullName)) continue
+      seen.add(p.fullName)
+      const emailTag = p.emailStatus === "verified" ? " (Verificado)" : ""
+      lines.push(
+        `- ${p.fullName} | ${p.role || "Sin cargo"} | Seniority: ${p.seniority || "N/D"} | Email: ${p.email || "N/D"}${emailTag} | LinkedIn: ${p.linkedinUrl || "N/D"}`,
+      )
+    }
+
+    // Alumni (brief mention only if they exist)
     if (alumni.length > 0) {
-      contactsSection.push(`\nALUMNI / EX-EMPLEADOS CON SEÑALES (${alumni.length}) [Confidence: ALTO]:`)
-      for (const c of alumni) {
-        contactsSection.push(`- ${c.name} | ${c.role}`)
-        contactsSection.push(`  Señales: ${c.keywords.join(", ") || "N/A"}`)
-        contactsSection.push(`  LinkedIn: ${c.linkedinUrl || "No disponible"}`)
-        contactsSection.push("")
-      }
+      lines.push(
+        `\n(Tambien se detectaron ${alumni.length} ex-empleados con senales: ${alumni.map((a) => `${a.name} - ${a.role}`).join(", ")})`,
+      )
     }
 
-    return contactsSection.join("\n")
+    return lines.length > 0 ? lines.join("\n") : "No se identificaron contactos relevantes."
   }
 
-  // Format job postings section
-  const formatJobPostings = () => {
-    if (jobPostings.length === 0) {
-      return "POSICIONES ABIERTAS: No tenemos evidencia de posiciones abiertas actualmente."
-    }
-
-    const lines = [`POSICIONES ABIERTAS (${jobPostings.length}) [Confidence: MEDIO]:`]
-    for (const jp of jobPostings) {
-      lines.push(`- ${jp.title}`)
-      lines.push(`  Publicado: ${jp.postedAt ? new Date(jp.postedAt).toLocaleDateString("es-ES") : "No especificado"}`)
-      if (jp.detectedKeywords.length > 0) {
-        lines.push(`  Señales detectadas: ${jp.detectedKeywords.join(", ")}`)
-      }
-      if (jp.snippet) {
-        lines.push(`  Extracto: "${jp.snippet.substring(0, 150)}..."`)
-      }
-      lines.push("")
-    }
-    return lines.join("\n")
-  }
-
-  // Format news section
+  // --- News (max 3, brief) ---
   const formatNews = () => {
-    if (news.length === 0) {
-      return "NOTICIAS: No tenemos noticias recientes, se recomienda buscar manualmente."
-    }
-
-    const lines = [`NOTICIAS RECIENTES (${news.length}) [Confidence: BAJO]:`]
-    for (const n of news) {
-      lines.push(`- [${n.category || "General"}] ${n.title}`)
-      if (n.summary) {
-        lines.push(`  Resumen: ${n.summary.substring(0, 200)}`)
-      }
-      lines.push(
-        `  Fuente: ${n.sourceName || "No especificada"} | Fecha: ${n.publishedAt ? new Date(n.publishedAt).toLocaleDateString("es-ES") : "No especificada"}`,
-      )
-      if (n.sourceUrl) {
-        lines.push(`  URL: ${n.sourceUrl}`)
-      }
-      lines.push("")
-    }
-    return lines.join("\n")
+    if (news.length === 0) return "Sin noticias recientes."
+    return news
+      .slice(0, 3)
+      .map((n) => {
+        const date = n.publishedAt
+          ? new Date(n.publishedAt).toLocaleDateString("es-ES", { month: "short", year: "numeric" })
+          : "S/F"
+        return `- [${date}] ${n.title}${n.summary ? ` — ${n.summary.substring(0, 120)}` : ""} (${n.sourceName || "Web"})`
+      })
+      .join("\n")
   }
 
-  // Format implementations section
-  const formatImplementations = () => {
-    if (implementations.length === 0) {
-      return "" // Omitir sección si está vacía
-    }
-
-    const lines = [`IMPLEMENTACIONES / CASOS (${implementations.length}) [Confidence: BAJO]:`]
-    for (const impl of implementations) {
-      lines.push(`- ${impl.title}`)
-      if (impl.providerName) {
-        lines.push(`  Proveedor/Partner: ${impl.providerName}`)
-      }
-      if (impl.technology) {
-        lines.push(`  Tecnología: ${impl.technology}`)
-      }
-      if (impl.summary) {
-        lines.push(`  Detalle: ${impl.summary.substring(0, 200)}`)
-      }
-      lines.push(
-        `  Evidencia: ${impl.evidenceLevel === "strong" ? "Verificado" : impl.evidenceLevel === "medium" ? "Probable" : "Inferido"}`,
-      )
-      if (impl.sourceUrl) {
-        lines.push(`  URL: ${impl.sourceUrl}`)
-      }
-      lines.push("")
-    }
-    return lines.join("\n")
-  }
-
-  // Format prospects section
-  const formatProspects = () => {
-    if (prospects.length === 0) {
-      return "DECISION MAKERS: Se recomienda buscar tomadores de decisión tanto dentro de ASCI como por fuera."
-    }
-
-    const lines = [`DECISION MAKERS / PROSPECTOS (${prospects.length}) [Confidence: ALTO]:`]
-    for (const p of prospects) {
-      lines.push(`- ${p.fullName} | ${p.role || "No especificado"}`)
-      lines.push(`  Email: ${p.email || "No disponible"}${p.emailStatus === "verified" ? " (Verificado)" : ""}`)
-      lines.push(`  Teléfono: ${p.phone || "No disponible"}`)
-      lines.push(`  LinkedIn: ${p.linkedinUrl || "No disponible"}`)
-      lines.push("")
-    }
-    return lines.join("\n")
-  }
-
-  // Format strategy section - now enhanced with Docs value profile
-  const formatStrategy = () => {
+  // --- Value profile + docs context ---
+  const formatValueContext = () => {
     const parts: string[] = []
 
-    // Value profile from Docs feature
     if (context.valueProfile?.profileSummary) {
-      parts.push(`PERFIL DE PROPUESTA DE VALOR (generado por ASCI Docs):
+      parts.push(`PROPUESTA DE VALOR:
 ${context.valueProfile.profileSummary}
-Industrias target: ${context.valueProfile.targetIndustries.join(", ") || "No definidas"}
-Tecnologias target: ${context.valueProfile.targetTechnologies.join(", ") || "No definidas"}
-Procesos target: ${context.valueProfile.targetProcesses.join(", ") || "No definidos"}`)
+Tecnologias: ${context.valueProfile.targetTechnologies.join(", ") || "No definidas"}
+Procesos: ${context.valueProfile.targetProcesses.join(", ") || "No definidos"}`)
     }
 
-    // Relevant documents for this bookmark
-    if (context.relevantDocs && context.relevantDocs.length > 0) {
-      parts.push(`\nDOCUMENTOS RELEVANTES PARA ESTA CUENTA (${context.relevantDocs.length}):`)
-      for (const doc of context.relevantDocs) {
-        const tagLabels = doc.matchedTags.map((t) => `${t.type === "industry" ? "Industria" : t.type === "technology" ? "Tecnologia" : "Proceso"}: ${t.value}`).join(", ")
-        parts.push(`- "${doc.title}" (${doc.type.toUpperCase()})`)
-        parts.push(`  Resumen: ${doc.summary || "Sin resumen"}`)
-        parts.push(`  FIT con esta cuenta: ${tagLabels}`)
-        if (doc.extractedText) {
-          parts.push(`  Contenido relevante: ${doc.extractedText.slice(0, 1500)}`)
-        }
-        parts.push("")
-      }
-      parts.push(`INSTRUCCION ESPECIAL: Usa estos documentos para explicar el FIT entre lo que el vendedor ofrece y las senales de esta empresa. En el icebreaker/playbook, referencia el documento mas relevante como caso de exito o experiencia previa.`)
-    }
-
-    // Manual strategy override
     if (strategy?.valueProposition) {
-      parts.push(`\nESTRATEGIA MANUAL DEFINIDA POR EL VENDEDOR:
-Propuesta de valor: ${strategy.valueProposition}
-${strategy.targetSummary ? `Objetivo: ${strategy.targetSummary}` : ""}`)
+      parts.push(`\nESTRATEGIA DEFINIDA PARA ESTA CUENTA:
+${strategy.valueProposition}`)
     }
 
-    if (parts.length === 0) {
-      return "ESTRATEGIA: [WARNING] Falta definir una propuesta de valor. Se recomienda subir documentos en la seccion Docs o completar la estrategia manual."
+    if (context.relevantDocs && context.relevantDocs.length > 0) {
+      parts.push(`\nEXPERIENCIA RELEVANTE (de documentos internos, NO citar nombres de archivos):`)
+      for (const doc of context.relevantDocs.slice(0, 3)) {
+        const tags = doc.matchedTags.map((t) => t.value).join(", ")
+        parts.push(`- Lo que hicimos: ${doc.summary || "Sin resumen"} (FIT: ${tags})`)
+      }
     }
 
-    return parts.join("\n")
+    return parts.length > 0 ? parts.join("\n") : "No hay propuesta de valor definida. Se recomienda completar la seccion Docs y Estrategia."
   }
 
-  // Build the complete prompt
-  const prompt = `Eres un consultor senior de ventas B2B especializado en tecnología. Tu tarea es generar un BRIEF EJECUTIVO para el equipo comercial.
+  // --- Signals summary ---
+  const formatSignals = () => {
+    const lines: string[] = []
 
-=== CONTEXTO DE LA INVESTIGACIÓN ===
-Estamos desarrollando la investigación de mercado de la compañía ${company.name} de ${company.country || "país no especificado"} que tiene su web en ${company.website || "no disponible"}.
+    if (searchContext.signalNames.length > 0) {
+      lines.push(`Senales buscadas: ${searchContext.signalNames.join(", ")}`)
+    }
 
-Industria: ${company.industry || "No especificada"}
-${company.description ? `Descripción: ${company.description.substring(0, 300)}` : ""}
+    if (jobPostings.length > 0) {
+      lines.push(`\nPosiciones abiertas (${jobPostings.length}):`)
+      for (const jp of jobPostings.slice(0, 3)) {
+        const kws = jp.detectedKeywords.length > 0 ? ` [Senales: ${jp.detectedKeywords.join(", ")}]` : ""
+        lines.push(`- ${jp.title}${kws}`)
+      }
+    }
 
-=== OBJETIVO DEL VENDEDOR ===
-${searchContext.signalNames.length > 0 ? `Buscando oportunidades relacionadas con: ${searchContext.signalNames.join(", ")}` : "Búsqueda general de oportunidades"}
-${formatStrategy()}
+    if (implementations.length > 0) {
+      lines.push(`\nImplementaciones detectadas (${implementations.length}):`)
+      for (const impl of implementations.slice(0, 3)) {
+        lines.push(
+          `- ${impl.title}${impl.providerName ? ` (${impl.providerName})` : ""}${impl.technology ? ` — ${impl.technology}` : ""}`,
+        )
+      }
+    }
 
-=== DATOS RECOPILADOS DE ASCI ===
+    return lines.length > 0 ? lines.join("\n") : "Sin senales especificas."
+  }
 
-${formatContacts()}
+  // --- Total contacts for footer ---
+  const totalSignals = currentEmployees.length + alumni.length
+  const totalContacts = totalSignals + prospects.length
 
-${formatJobPostings()}
+  const prompt = `Eres un consultor senior de ventas B2B. Genera un BRIEF EJECUTIVO COMERCIAL conciso para el equipo de ventas.
+Este brief sera entregado a los comerciales para que entiendan la cuenta y sepan como abordarla.
 
+=== EMPRESA ===
+${company.name} | ${company.industry || "Industria no especificada"} | ${company.country || "Pais no especificado"}
+Web: ${company.website || "N/D"}
+${company.description ? company.description.substring(0, 300) : "Sin descripcion disponible."}
+
+=== SENALES E INTELIGENCIA COMERCIAL ===
+${formatSignals()}
+
+=== LO QUE OFRECEMOS Y NUESTRA EXPERIENCIA ===
+${formatValueContext()}
+
+=== NOTICIAS RECIENTES ===
 ${formatNews()}
 
-${formatImplementations()}
+=== CONTACTOS IDENTIFICADOS (${totalContacts}) ===
+${formatContacts()}
 
-${formatProspects()}
+=== GENERA EL BRIEF CON ESTA ESTRUCTURA EXACTA ===
 
-=== INSTRUCCIONES PARA EL BRIEF ===
+## Resumen de la Cuenta
+[2-3 oraciones: que hace la empresa, industria, pais, tamano si se infiere. Solo hechos.]
 
-Genera un Brief Ejecutivo en formato Markdown con el siguiente formato EXACTO:
+## Por que es una Oportunidad
+[Top 3 razones concretas que justifican el esfuerzo comercial. Cada razon con evidencia especifica (senal, noticia, posicion abierta, implementacion). Incluir nivel de confianza: ALTO (senales directas), MEDIO (posiciones abiertas), BAJO (noticias/inferido).]
 
-## RESUMEN EJECUTIVO
+## Estrategia de Abordaje
+[El corazon del brief. Basandote en nuestra propuesta de valor, documentos y experiencia: que le podemos ofrecer a esta cuenta, por que somos relevantes, y cual es el angulo de entrada. Si hay estrategia definida por el vendedor, usarla como base. NUNCA mencionar nombres de documentos internos, pero SI usar el conocimiento que aportan. Maximo 100 palabras.]
 
-[2-3 oraciones que resuman la oportunidad. Incluye el nivel de FIT inferido.]
+## Noticias Relevantes
+[Max 3 noticias con fecha y fuente. Solo incluir si existen. Cada una en 1 linea.]
 
-## TOP 3 RAZONES DE FIT
+## Contactos Clave
+[Lista unica de los contactos mas relevantes (max 8). Incluir: nombre, cargo, email, LinkedIn. No repetir contactos. Agrupar brevemente: primero los que tienen senales, luego decision makers.]
 
-1. **[Razón 1]** [Confidence: ALTO/MEDIO/BAJO]
-   [Explicación con evidencia específica y fuente]
+## Proximos Pasos
+[3 acciones concretas y priorizadas que el comercial debe ejecutar. Ser especifico: "Contactar a [nombre] por LinkedIn mencionando [tema]", no "Investigar la cuenta".]
 
-2. **[Razón 2]** [Confidence: ALTO/MEDIO/BAJO]
-   [Explicación con evidencia específica y fuente]
+=== REGLAS ===
+1. NUNCA inventes datos. Si no hay info, indicalo.
+2. Indica nivel de confianza cuando sea relevante: [ALTO], [MEDIO], [BAJO].
+3. NUNCA cites nombres de documentos, archivos internos o PDFs.
+4. Maximo 800 palabras total (~1 pagina A4).
+5. Espanol profesional de negocios. Sin emojis.
+6. Si falta propuesta de valor, indica que se recomienda completar Docs y Estrategia.
+7. Tono directo y accionable. Esto lo lee un comercial ocupado, no un analista.
+8. Formato Markdown. Usa ## para secciones, ** para bold, - para listas.
 
-3. **[Razón 3]** [Confidence: ALTO/MEDIO/BAJO]
-   [Explicación con evidencia específica y fuente]
-
-## RIESGOS Y BLOQUEOS
-
-[Lista de riesgos identificados con recomendaciones de mitigación. Si detectas proveedor incumbente, sector regulado, o falta de datos, inclúyelo aquí.]
-
-## SEÑALES DETECTADAS
-
-### Contactos con Señales
-[Lista resumida de los contactos más relevantes con sus señales. Máx 5.]
-
-### Posiciones Abiertas
-[Lista resumida de job postings relevantes. Máx 3.]
-
-### Alumni Relevantes
-[Si hay alumni, mencionar que se encontraron X ex-empleados con experiencia en las señales buscadas.]
-
-## CONTEXTO DE MERCADO
-
-### Noticias
-[Resumen de noticias relevantes con fecha y fuente]
-
-### Implementaciones
-[Solo si hay datos. Casos detectados con partners/tecnologías]
-
-## CONTACTOS CLAVE
-
-[Tabla o lista de los decision makers identificados con sus datos de contacto]
-
-## PLAYBOOK DE ABORDAJE
-
-### Canales Recomendados
-[LinkedIn, email, llamada, evento, etc. basado en los datos disponibles]
-
-### Tono y Enfoque
-[Consultivo, directo, técnico, etc. basado en la propuesta de valor]
-
-### Acciones Comerciales Recomendadas
-1. [Acción 1]
-2. [Acción 2]
-3. [Acción 3]
-
-### Pendientes de Verificación Humana
-- [Items que requieren verificación manual]
-
-## FUENTES CONSULTADAS
-
-- ASCI Resumen: ${currentEmployees.length} contactos con señales
-- Alumni: ${alumni.length} ex-empleados
-- Job Postings: ${jobPostings.length} posiciones
-- Noticias: ${news.length} artículos
-- Implementaciones: ${implementations.length} casos
-- Prospectos Apollo: ${prospects.length} decision makers
-
-Fecha de captura: ${new Date().toLocaleDateString("es-ES", { year: "numeric", month: "long", day: "numeric" })}
-
----
-
-=== REGLAS ESTRICTAS ===
-
-1. **NUNCA inventes datos**. Si no hay evidencia, indica: "No hay datos disponibles" o "Requiere verificación".
-2. **SIEMPRE indica el nivel de confidence**: [ALTO] para datos de Resumen/Prospectos, [MEDIO] para Job Postings, [BAJO] para Noticias/Implementaciones.
-3. **SIEMPRE incluye la fuente** entre paréntesis: (Resumen), (Posiciones), (Noticias), (Implementaciones), (Prospectos).
-4. **USA inferencias correctamente**: Si es inferencia, etiquétalo como "posible", "se observa en búsquedas laborales", etc.
-5. **Tono consultivo y ejecutivo**: Orientado a impacto y decisiones, sin adjetivos grandilocuentes.
-6. **SÉ TRANSPARENTE con la incertidumbre**: "no confirmado", "posible", "alta probabilidad por X evidencia".
-7. **Idioma**: Todo en español profesional de negocios.
-8. **Extensión máxima**: 2500 palabras (aprox. 2 páginas A4).
-9. **NO uses emojis**.
-10. Si falta la propuesta de valor del vendedor, indica en el brief que se recomienda completar el tab de Estrategia.`
+Fecha: ${new Date().toLocaleDateString("es-ES", { year: "numeric", month: "long", day: "numeric" })}
+Fuentes: ${totalSignals} contactos con senales, ${jobPostings.length} posiciones, ${news.length} noticias, ${implementations.length} implementaciones, ${prospects.length} decision makers`
 
   return prompt
 }
