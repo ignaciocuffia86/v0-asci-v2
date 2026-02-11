@@ -91,7 +91,7 @@ export default function ProfilePage() {
           <p className="text-muted-foreground">Gestiona tu información personal y propuesta de valor.</p>
         </div>
         <Button variant="outline" asChild>
-          <Link href="/">
+          <Link href="/search">
             <ArrowLeft className="mr-2 h-4 w-4" />
             Volver a Búsqueda
           </Link>

@@ -57,7 +57,7 @@ export default function DocsPage() {
   return (
     <div className="p-8 space-y-6">
       <Button variant="ghost" size="sm" asChild className="-ml-2">
-        <Link href="/">
+        <Link href="/search">
           <ArrowLeft className="h-4 w-4 mr-2" />
           Volver a Busqueda
         </Link>
