@@ -87,7 +87,7 @@ Devuelve SOLO un JSON válido con este formato exacto:
 }`
 
   try {
-    const text = await generateGeminiContent(prompt, "gemini-2.0-flash", 0.5)
+    const text = await generateGeminiContent(prompt, "gemini-2.5-flash", 0.5)
 
     const jsonMatch = text.match(/\{[\s\S]*\}/)
     if (jsonMatch) {
@@ -101,7 +101,7 @@ Devuelve SOLO un JSON válido con este formato exacto:
     console.error("Error inferring job titles with Gemini:", error)
 
     try {
-      const text = await generateGeminiContent(prompt, "gemini-1.5-pro", 0.5)
+      const text = await generateGeminiContent(prompt, "gemini-2.0-flash", 0.5)
       const jsonMatch = text.match(/\{[\s\S]*\}/)
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0])

@@ -564,7 +564,7 @@ Ahora genera el mensaje de icebreaker (SOLO el mensaje, nada más):`
   // Generar con IA
   let generatedText = ""
   try {
-    generatedText = await generateGeminiContent(finalPrompt, "gemini-2.0-flash", 0.7)
+    generatedText = await generateGeminiContent(finalPrompt, "gemini-2.5-flash", 0.7)
 
     // Limpiar respuesta de preámbulos comunes
     generatedText = generatedText
@@ -572,11 +572,11 @@ Ahora genera el mensaje de icebreaker (SOLO el mensaje, nada más):`
       .replace(/^["']|["']$/g, "")
       .trim()
   } catch (error: any) {
-    console.error("AI Generation failed (Gemini 2.0 Flash)", error)
+    console.error("AI Generation failed (Gemini 2.5 Flash)", error)
 
     try {
-      console.log("[v0] Attempting fallback to Gemini 1.5 Pro...")
-      generatedText = await generateGeminiContent(finalPrompt, "gemini-1.5-pro", 0.7)
+      console.log("[v0] Attempting fallback to Gemini 2.0 Flash...")
+      generatedText = await generateGeminiContent(finalPrompt, "gemini-2.0-flash", 0.7)
       generatedText = generatedText
         .replace(/^(Claro|Aquí está|Aquí tienes|Por supuesto|El mensaje es|Mensaje:|Icebreaker:)[\s,:]*/gi, "")
         .replace(/^["']|["']$/g, "")
@@ -1091,15 +1091,15 @@ RECUERDA: Cada mensaje debe ser ÚNICO y personalizado. Si el headline dice "Dev
   // Generar con IA
   let generatedText = ""
   try {
-    console.log("[v0] Sending request to Gemini (gemini-2.0-flash)...")
-    generatedText = await generateGeminiContent(prompt, "gemini-2.0-flash", 0.7)
+    console.log("[v0] Sending request to Gemini (gemini-2.5-flash)...")
+    generatedText = await generateGeminiContent(prompt, "gemini-2.5-flash", 0.7)
     console.log("[v0] Raw generated text:", generatedText)
   } catch (error: any) {
-    console.error("AI Generation failed (Gemini 2.0 Flash)", error)
+    console.error("AI Generation failed (Gemini 2.5 Flash)", error)
 
     try {
-      console.log("[v0] Attempting fallback to Gemini 1.5 Pro...")
-      generatedText = await generateGeminiContent(prompt, "gemini-1.5-pro", 0.7)
+      console.log("[v0] Attempting fallback to Gemini 2.0 Flash...")
+      generatedText = await generateGeminiContent(prompt, "gemini-2.0-flash", 0.7)
     } catch (fallbackError: any) {
       console.error("Fallback AI Generation failed", fallbackError)
       generatedText = `[LINKEDIN]\nHola ${firstName}, vi en tu perfil que trabajan con ${filterContextName || signalTypeLabel}. ¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?\n\n[EMAIL]\nHola ${firstName}, te escribí por LinkedIn hace unos días. ¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?`

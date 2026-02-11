@@ -7,7 +7,7 @@ import { generateBriefPrompt } from "@/lib/brief/generate-brief-prompt"
 import type { BriefMetadata } from "@/lib/brief/brief-types"
 
 // Models to try in order (primary -> fallback)
-const GEMINI_MODELS = ["gemini-3-flash-preview", "gemini-2.0-flash"]
+const GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"]
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const { id: bookmarkId } = await params

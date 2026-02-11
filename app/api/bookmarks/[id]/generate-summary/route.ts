@@ -384,10 +384,10 @@ REGLAS:
 
     let summary: string
     try {
-      summary = await generateGeminiContent(prompt, "gemini-2.0-flash", 0.4)
+      summary = await generateGeminiContent(prompt, "gemini-2.5-flash", 0.4)
     } catch (error) {
-      console.error("[v0] Gemini 2.0 Flash falló, intentando con 1.5 Pro...")
-      summary = await generateGeminiContent(prompt, "gemini-1.5-pro", 0.4)
+      console.error("[v0] Gemini 2.5 Flash fallo, intentando con 2.0 Flash...")
+      summary = await generateGeminiContent(prompt, "gemini-2.0-flash", 0.4)
     }
 
     const keyContacts = [

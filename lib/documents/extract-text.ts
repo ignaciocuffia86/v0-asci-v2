@@ -86,7 +86,7 @@ HTML:
 ${rawHtml}
 
 Devuelve SOLO el texto extraido, organizado de manera coherente. Si realmente no hay contenido, indica "No se encontro contenido textual en esta pagina."`,
-      "gemini-2.0-flash",
+      "gemini-2.5-flash",
       0.1,
     )
 
@@ -134,7 +134,7 @@ export async function extractTextFromPptx(buffer: Buffer): Promise<string> {
   const base64Data = buffer.toString("base64")
 
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

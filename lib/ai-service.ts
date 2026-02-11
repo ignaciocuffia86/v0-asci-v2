@@ -1,6 +1,6 @@
 export async function generateGeminiContent(
   prompt: string,
-  model = "gemini-2.0-flash",
+  model = "gemini-2.5-flash",
   temperature = 0.7,
 ): Promise<string> {
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY

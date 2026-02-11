@@ -87,7 +87,7 @@ REGLAS CRITICAS:
 - Si el documento es un caso de exito, extrae la industria del CLIENTE (no del vendor).
 - Se exhaustivo buscando en el diccionario. Lee cada tecnologia mencionada en el texto y buscala cuidadosamente en la lista.`
 
-  const responseText = await generateGeminiContent(prompt, "gemini-2.0-flash", 0.2)
+  const responseText = await generateGeminiContent(prompt, "gemini-2.5-flash", 0.2)
 
   // Parse JSON response
   let parsed: any

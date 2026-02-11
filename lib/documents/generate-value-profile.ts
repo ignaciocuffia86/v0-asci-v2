@@ -65,7 +65,7 @@ Genera un resumen consolidado (3-5 oraciones en español) que responda:
 
 Responde SOLO con el texto del resumen, sin formateo markdown ni titulos. Sé específico y concreto basándote en la evidencia de los documentos.`
 
-  const profileSummary = await generateGeminiContent(prompt, "gemini-2.0-flash", 0.3)
+  const profileSummary = await generateGeminiContent(prompt, "gemini-2.5-flash", 0.3)
 
   // Upsert value profile
   const { data: existing } = await supabase
