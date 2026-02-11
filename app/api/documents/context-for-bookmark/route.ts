@@ -166,40 +166,39 @@ export async function POST(req: NextRequest) {
   ${doc.extracted_text ? `Contenido clave: ${doc.extracted_text.slice(0, 2000)}` : ""}`
     }).join("\n\n")
 
-    const prompt = `Eres un consultor de ventas B2B experto en estrategia de cuentas. 
-Genera una PROPUESTA DE VALOR CONTEXTUALIZADA para abordar a esta empresa.
+    const prompt = `Eres un consultor de estrategia de ventas B2B. Tu tarea es redactar una ESTRATEGIA DE CUENTA breve e interna (no un mensaje para enviar al cliente).
 
 === EMPRESA TARGET ===
 Nombre: ${company.name}
 Industria: ${company.industry || "No especificada"}
 Pais: ${company.country || "No especificado"}
-Website: ${company.website || "No especificado"}
 Descripcion: ${company.description || "No disponible"}
 Senales detectadas (tecnologias/procesos): ${signalNames.length > 0 ? signalNames.join(", ") : "Ninguna especifica"}
 
-=== MI PROPUESTA DE VALOR (lo que vendo/ofrezco) ===
-${valueProfile?.profile_summary || "No definida"}
-Industrias target: ${(valueProfile?.target_industries as string[])?.join(", ") || "No definidas"}
-Tecnologias que manejo: ${(valueProfile?.target_technologies as string[])?.join(", ") || "No definidas"}
-Procesos que resuelvo: ${(valueProfile?.target_processes as string[])?.join(", ") || "No definidos"}
+=== LO QUE VENDEMOS/OFRECEMOS ===
+${valueProfile?.profile_summary || "No definido"}
+Tecnologias que manejamos: ${(valueProfile?.target_technologies as string[])?.join(", ") || "No definidas"}
+Procesos que resolvemos: ${(valueProfile?.target_processes as string[])?.join(", ") || "No definidos"}
 
 === DOCUMENTOS RELEVANTES (casos de exito, brochures, propuestas) ===
 ${docSections || "No hay documentos cargados"}
 
 === INSTRUCCIONES ===
-Genera una propuesta de valor en primera persona (como si fuera el vendedor escribiendo) que incluya:
+Redacta una estrategia de cuenta que responda estas preguntas de manera concisa:
 
-1. **Contexto de la empresa**: Que sabemos de ellos y por que son relevantes como prospecto.
-2. **FIT con mi oferta**: Explicar la conexion entre lo que yo ofrezco y lo que esta empresa necesita, basandote en las senales detectadas y los documentos relevantes.
-3. **Referencia a experiencia previa**: Si hay documentos (casos de exito, propuestas) que matchean con la industria o tecnologia de esta empresa, mencionarlos como experiencia relevante. Ejemplo: "Trabajamos con [empresa del caso] en un contexto similar...".
-4. **Angulo de entrada**: Una frase concreta de como abrir la conversacion.
+1. Que tenemos para ofrecerle a ${company.name}? (basandote en nuestros docs, tecnologias y procesos)
+2. Por que somos relevantes para ellos? (conectar nuestras capacidades con sus senales/industria)
+3. Que experiencia previa respalda nuestra propuesta? (mencionar casos de exito o documentos relevantes si aplica)
 
 REGLAS:
-- Escribe en espanol, tono profesional pero directo, sin formalismos excesivos.
-- Maximo 200 palabras.
-- No uses bullet points ni formato markdown. Escribe en prosa corrida, parrafos cortos.
-- Se especifico: menciona nombres de tecnologias, industrias y empresas de los documentos cuando aplique.
-- Si no hay documentos relevantes, basa la estrategia solo en el value profile y las senales.`
+- Esto es un documento interno de estrategia, NO un mensaje para el cliente. No escribas saludos, no te dirijas a la empresa.
+- Escribe en primera persona del plural (nosotros/nuestro), como notas internas de un vendedor.
+- Maximo 150 palabras. Se directo y concreto.
+- Menciona tecnologias, nombres de casos y datos especificos cuando los tengas.
+- Si no hay documentos relevantes, basa la estrategia en el value profile y las senales.
+- Ejemplo de tono correcto: "Tenemos experiencia en implementacion de SAP para empresas de energia. El caso de [X] es directamente aplicable porque... Nuestra propuesta se centra en..."
+- Ejemplo de tono INCORRECTO: "Hola [empresa], sabemos que ustedes..."
+- Espanol, sin markdown, sin bullet points, prosa corrida.`
 
     const strategy = await generateGeminiContent(prompt, "gemini-2.5-flash", 0.5)
 
