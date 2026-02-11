@@ -62,10 +62,14 @@ export function UploadDialog({ open, onOpenChange, onDocumentCreated }: UploadDi
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) throw new Error("No autenticado. Recarga la pagina e intenta nuevamente.")
 
-      // Generate unique path
+      // Generate unique path with sanitized filename
       const fileExt = file.name.split(".").pop()
       const docId = crypto.randomUUID()
-      const storagePath = `${user.id}/${docId}/${file.name}`
+      const sanitizedName = file.name
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // remove accents
+        .replace(/[^a-zA-Z0-9._-]/g, "_") // replace special chars with underscore
+        .replace(/_+/g, "_") // collapse multiple underscores
+      const storagePath = `${user.id}/${docId}/${sanitizedName}`
 
       // Upload to Supabase Storage
       const { error: storageError } = await supabase.storage
