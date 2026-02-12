@@ -230,6 +230,8 @@ async function searchApolloCache(
 
   return cached
     .filter((c) => {
+      // Quality check: skip un-enriched entries (no last_name = not enriched)
+      if (!c.last_name && !c.linkedin_url && !c.email) return false
       const cachedTitle = (c.title || "").toLowerCase()
       return normalizedJobTitles.some((jt) => cachedTitle.includes(jt) || jt.includes(cachedTitle.split(",")[0]))
     })
@@ -380,6 +382,9 @@ async function saveToApolloCache(
   const supabase = await createClient()
 
   for (const contact of contacts) {
+    // Only cache enriched contacts (must have at least last_name or linkedin_url)
+    if (!contact.last_name && !contact.linkedin_url && !contact.email) continue
+
     const mobileEntry = contact.phone_numbers?.find((p) => p.type === "mobile")
     const workEntry = contact.phone_numbers?.find((p) => p.type === "work")
     const anyEntry = contact.phone_numbers?.[0]
@@ -480,6 +485,9 @@ export async function searchApolloProspects(
 
   let savedCount = 0
   for (const contact of contacts) {
+    // Skip un-enriched contacts (only have first_name from search, nothing useful)
+    if (!contact.last_name && !contact.linkedin_url && !contact.email) continue
+
     const mobileEntry = contact.phone_numbers?.find((p) => p.type === "mobile")
     const workEntry = contact.phone_numbers?.find((p) => p.type === "work")
     const anyEntry = contact.phone_numbers?.[0]
