@@ -6,7 +6,7 @@ import { createDocument } from "@/app/actions/documents"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { ScrollArea } from "@/components/ui/scroll-area"
+
 import {
   FolderOpen,
   FileText,
@@ -324,7 +324,7 @@ export function FolderUploadTab({ onDocumentCreated, onOpenChange }: FolderUploa
       )}
 
       {/* File list */}
-      <ScrollArea className="h-[240px] rounded-md border">
+      <div className="h-[240px] rounded-md border overflow-y-auto">
         <div className="p-2 space-y-1">
           {files.map((entry, i) => (
             <div
@@ -345,7 +345,7 @@ export function FolderUploadTab({ onDocumentCreated, onOpenChange }: FolderUploa
             </div>
           ))}
         </div>
-      </ScrollArea>
+      </div>
 
       {/* Actions */}
       <div className="flex items-center gap-2">
