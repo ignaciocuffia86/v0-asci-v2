@@ -308,29 +308,8 @@ async function callApolloAPI(
     const data: ApolloSearchResponse = await response.json()
 
     if (data.people && data.people.length > 0) {
-      // Log first person from search to see what fields come back
-      const sample = data.people[0]
-      console.log("[v0] Apollo search sample person keys:", Object.keys(sample))
-      console.log("[v0] Apollo search sample:", JSON.stringify({ 
-        name: sample.name, first_name: sample.first_name, last_name: sample.last_name,
-        email: sample.email, linkedin_url: sample.linkedin_url, 
-        phone: sample.phone_numbers, photo: sample.photo_url,
-        title: sample.title, headline: sample.headline
-      }))
-      
       const personIds = data.people.map((p) => p.id)
       const enrichedPeople = await enrichApolloContacts(personIds, apiKey)
-      
-      if (enrichedPeople.length > 0) {
-        const enrichedSample = enrichedPeople[0]
-        console.log("[v0] Enriched sample keys:", Object.keys(enrichedSample))
-        console.log("[v0] Enriched sample:", JSON.stringify({
-          name: enrichedSample.name, first_name: enrichedSample.first_name, last_name: enrichedSample.last_name,
-          email: enrichedSample.email, linkedin_url: enrichedSample.linkedin_url,
-          phone: enrichedSample.phone_numbers, photo: enrichedSample.photo_url
-        }))
-      }
-      
       return enrichedPeople.length > 0 ? enrichedPeople : data.people
     }
 
@@ -364,11 +343,6 @@ async function enrichApolloContacts(personIds: string[], apiKey: string): Promis
     }
 
     const data = await response.json()
-    console.log("[v0] bulk_match response keys:", Object.keys(data))
-    console.log("[v0] bulk_match matches count:", data.matches?.length, "people count:", data.people?.length, "status:", data.status)
-    if (data.matches?.[0]) {
-      console.log("[v0] bulk_match first match keys:", Object.keys(data.matches[0]))
-    }
     return data.matches || data.people || []
   } catch (error) {
     console.error("Error enriching Apollo contacts:", error)
@@ -492,19 +466,26 @@ export async function searchApolloProspects(
     const phoneNumber = mobileEntry?.raw_number || mobileEntry?.sanitized_number || contact.sanitized_phone || null
     const workPhone = workEntry?.raw_number || workEntry?.sanitized_number || anyEntry?.raw_number || anyEntry?.sanitized_number || null
 
-    const { data: existing } = await supabase
+    // Check for duplicate: by linkedin_url if available, otherwise by name
+    const firstName = contact.first_name || ""
+    const lastName = contact.last_name || ""
+    const fullName = contact.name || [firstName, lastName].filter(Boolean).join(" ") || "Sin nombre"
+
+    let existingQuery = supabase
       .from("user_company_contacts")
       .select("id")
       .eq("user_id", user.id)
       .eq("company_id", company.id)
-      .eq("linkedin_url", contact.linkedin_url)
-      .maybeSingle()
+
+    if (contact.linkedin_url) {
+      existingQuery = existingQuery.eq("linkedin_url", contact.linkedin_url)
+    } else {
+      existingQuery = existingQuery.eq("full_name", fullName)
+    }
+
+    const { data: existing } = await existingQuery.maybeSingle()
 
     if (!existing) {
-      const firstName = contact.first_name || ""
-      const lastName = contact.last_name || ""
-      const fullName = contact.name || [firstName, lastName].filter(Boolean).join(" ") || "Sin nombre"
-
       const { error } = await supabase.from("user_company_contacts").insert({
         user_id: user.id,
         company_id: company.id,
