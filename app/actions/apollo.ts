@@ -344,6 +344,7 @@ async function enrichApolloContacts(
         body: JSON.stringify({
           id: person.id,
           reveal_personal_emails: true,
+          reveal_phone_number: true,
         }),
       })
 
