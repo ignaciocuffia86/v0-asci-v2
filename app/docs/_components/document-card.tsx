@@ -34,6 +34,12 @@ const TYPE_COLORS: Record<string, string> = {
   url: "bg-green-50 text-green-700 border-green-200",
 }
 
+const TAG_COLORS: Record<string, string> = {
+  industry: "bg-emerald-50 text-emerald-700",
+  technology: "bg-blue-50 text-blue-700",
+  process: "bg-purple-50 text-purple-700",
+}
+
 const STATUS_CONFIG: Record<string, { label: string; icon: React.ElementType; color: string }> = {
   uploading: { label: "Subiendo", icon: Loader2, color: "text-muted-foreground" },
   processing: { label: "Procesando", icon: Loader2, color: "text-primary" },
@@ -105,6 +111,24 @@ export function DocumentCard({ document, onClick, onDeleted }: DocumentCardProps
                 </span>
               )}
             </div>
+            {/* Tags preview - show up to 3 */}
+            {document.status === "ready" && (document.tags?.length || 0) > 0 && (
+              <div className="flex flex-wrap gap-1 mt-2">
+                {document.tags!.slice(0, 3).map((tag) => (
+                  <span
+                    key={tag.id}
+                    className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${TAG_COLORS[tag.tag_type] || ""}`}
+                  >
+                    {tag.tag_value}
+                  </span>
+                ))}
+                {document.tags!.length > 3 && (
+                  <span className="inline-block rounded px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                    +{document.tags!.length - 3}
+                  </span>
+                )}
+              </div>
+            )}
             {document.status === "error" && document.processing_error && (
               <p className="text-xs text-destructive mt-1 truncate">{document.processing_error}</p>
             )}

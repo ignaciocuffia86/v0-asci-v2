@@ -62,6 +62,44 @@ export async function getUserDocuments(): Promise<{ data: UserDocument[] | null;
 }
 
 /**
+ * Fetch all documents for the current user WITH their tags
+ */
+export async function getUserDocumentsWithTags(): Promise<{ data: UserDocument[] | null; error: string | null }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { data: null, error: "No autenticado" }
+
+  const { data: docs, error: docsError } = await supabase
+    .from("user_documents")
+    .select("*")
+    .eq("user_id", user.id)
+    .order("created_at", { ascending: false })
+
+  if (docsError) return { data: null, error: docsError.message }
+
+  // Fetch all tags at once
+  const { data: allTags } = await supabase
+    .from("document_tags")
+    .select("*")
+    .eq("user_id", user.id)
+    .order("confidence", { ascending: false })
+
+  // Group tags by document_id
+  const tagsByDoc = (allTags || []).reduce((acc, tag) => {
+    if (!acc[tag.document_id]) acc[tag.document_id] = []
+    acc[tag.document_id].push(tag)
+    return acc
+  }, {} as Record<string, DocumentTag[]>)
+
+  const docsWithTags = (docs || []).map((doc) => ({
+    ...doc,
+    tags: tagsByDoc[doc.id] || [],
+  }))
+
+  return { data: docsWithTags as UserDocument[], error: null }
+}
+
+/**
  * Fetch a single document with its tags
  */
 export async function getDocumentWithTags(documentId: string): Promise<{ data: UserDocument | null; error: string | null }> {
@@ -242,6 +280,41 @@ export async function getUserValueProfile(): Promise<{ data: UserValueProfile | 
 
   if (error) return { data: null, error: error.message }
   return { data: data as UserValueProfile | null, error: null }
+}
+
+/**
+ * Get a signed URL for document preview
+ */
+export async function getDocumentPreviewUrl(documentId: string): Promise<{ url: string | null; error: string | null }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { url: null, error: "No autenticado" }
+
+  const { data: doc } = await supabase
+    .from("user_documents")
+    .select("storage_path, source_url, type")
+    .eq("id", documentId)
+    .eq("user_id", user.id)
+    .single()
+
+  if (!doc) return { url: null, error: "Documento no encontrado" }
+
+  // For URLs, return the source URL directly
+  if (doc.type === "url" && doc.source_url) {
+    return { url: doc.source_url, error: null }
+  }
+
+  // For files, generate a signed URL (valid for 1 hour)
+  if (doc.storage_path) {
+    const { data, error } = await supabase.storage
+      .from("user-documents")
+      .createSignedUrl(doc.storage_path, 3600)
+
+    if (error) return { url: null, error: error.message }
+    return { url: data.signedUrl, error: null }
+  }
+
+  return { url: null, error: "Sin archivo asociado" }
 }
 
 /**
