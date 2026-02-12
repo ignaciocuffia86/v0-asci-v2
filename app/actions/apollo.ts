@@ -308,19 +308,9 @@ async function callApolloAPI(
     const data: ApolloSearchResponse = await response.json()
 
     if (data.people && data.people.length > 0) {
-      // Apollo docs say: "use the id values from this response and include them 
-      // in the details array when calling the people/bulk_match endpoint"
-      // bulk_match max 10 per call
+      // api_search returns minimal data (first_name, title, id only)
+      // Enrich each person via people/match with their id to get full data
       const enrichedPeople = await enrichApolloContacts(data.people, apiKey)
-      console.log("[v0] Apollo search returned", data.people.length, "people, enriched:", enrichedPeople.length)
-      if (enrichedPeople.length > 0) {
-        // Log sample enriched person to debug
-        const s = enrichedPeople[0]
-        console.log("[v0] Enriched sample:", JSON.stringify({
-          id: s.id, name: s.name, first_name: s.first_name, last_name: s.last_name,
-          email: s.email, linkedin_url: s.linkedin_url, phone_numbers: s.phone_numbers, photo_url: s.photo_url
-        }))
-      }
       return enrichedPeople.length > 0 ? enrichedPeople : data.people
     }
 
@@ -331,62 +321,53 @@ async function callApolloAPI(
   }
 }
 
-// Enriquecer contactos con datos completos (email, telefono, linkedin)
-// Apollo docs: "use the id values from the search response and include them
-// in the details array when calling people/bulk_match"
-// bulk_match processes max 10 people per call
+// Enrich contacts using people/match (singular) with the person's Apollo ID.
+// api_search only returns first_name, title, id. people/match with id returns
+// full data: last_name, email, linkedin_url, photo_url, seniority, etc.
+// Each call consumes 1 credit. We process sequentially with small delays.
 async function enrichApolloContacts(
   people: ApolloPersonSearchResult[],
   apiKey: string,
 ): Promise<ApolloPersonSearchResult[]> {
-  const allEnriched: ApolloPersonSearchResult[] = []
-  const BATCH_SIZE = 10
+  const enriched: ApolloPersonSearchResult[] = []
 
-  try {
-    for (let i = 0; i < people.length; i += BATCH_SIZE) {
-      const batch = people.slice(i, i + BATCH_SIZE)
-      const details = batch.map((p) => ({ id: p.id }))
-
-      console.log("[v0] bulk_match request body:", JSON.stringify({ details, reveal_personal_emails: true, reveal_phone_number: true }))
-
-      const response = await fetch("https://api.apollo.io/api/v1/people/bulk_match", {
+  for (const person of people) {
+    try {
+      const response = await fetch("https://api.apollo.io/api/v1/people/match", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "x-api-key": apiKey,
         },
         body: JSON.stringify({
-          details,
+          id: person.id,
           reveal_personal_emails: true,
-          reveal_phone_number: true,
         }),
       })
 
       if (!response.ok) {
-        const errorBody = await response.text()
-        console.error("[v0] Apollo bulk_match error:", response.status, errorBody)
+        // If enrichment fails for one person, keep the search data
+        enriched.push(person)
         continue
       }
 
       const data = await response.json()
-      console.log("[v0] bulk_match raw response keys:", Object.keys(data))
-      console.log("[v0] bulk_match matches:", data.matches?.length, "people:", data.people?.length, "status:", data.status)
-      
-      // Log the raw first match to see its structure
-      if (data.matches?.[0]) {
-        console.log("[v0] bulk_match first match type:", typeof data.matches[0])
-        console.log("[v0] bulk_match first match keys:", Object.keys(data.matches[0]))
-        console.log("[v0] bulk_match first match:", JSON.stringify(data.matches[0]).slice(0, 500))
+      if (data.person) {
+        enriched.push(data.person)
+      } else {
+        enriched.push(person)
       }
 
-      const results = data.matches || data.people || []
-      allEnriched.push(...results)
+      // Small delay between calls to respect rate limits
+      if (people.length > 1) {
+        await new Promise((resolve) => setTimeout(resolve, 200))
+      }
+    } catch (error) {
+      enriched.push(person)
     }
-  } catch (error) {
-    console.error("[v0] Error enriching Apollo contacts:", error)
   }
 
-  return allEnriched
+  return enriched
 }
 
 // Guardar contactos en cache global
