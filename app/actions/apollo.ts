@@ -308,8 +308,29 @@ async function callApolloAPI(
     const data: ApolloSearchResponse = await response.json()
 
     if (data.people && data.people.length > 0) {
+      // Log first person from search to see what fields come back
+      const sample = data.people[0]
+      console.log("[v0] Apollo search sample person keys:", Object.keys(sample))
+      console.log("[v0] Apollo search sample:", JSON.stringify({ 
+        name: sample.name, first_name: sample.first_name, last_name: sample.last_name,
+        email: sample.email, linkedin_url: sample.linkedin_url, 
+        phone: sample.phone_numbers, photo: sample.photo_url,
+        title: sample.title, headline: sample.headline
+      }))
+      
       const personIds = data.people.map((p) => p.id)
       const enrichedPeople = await enrichApolloContacts(personIds, apiKey)
+      
+      if (enrichedPeople.length > 0) {
+        const enrichedSample = enrichedPeople[0]
+        console.log("[v0] Enriched sample keys:", Object.keys(enrichedSample))
+        console.log("[v0] Enriched sample:", JSON.stringify({
+          name: enrichedSample.name, first_name: enrichedSample.first_name, last_name: enrichedSample.last_name,
+          email: enrichedSample.email, linkedin_url: enrichedSample.linkedin_url,
+          phone: enrichedSample.phone_numbers, photo: enrichedSample.photo_url
+        }))
+      }
+      
       return enrichedPeople.length > 0 ? enrichedPeople : data.people
     }
 
@@ -343,6 +364,11 @@ async function enrichApolloContacts(personIds: string[], apiKey: string): Promis
     }
 
     const data = await response.json()
+    console.log("[v0] bulk_match response keys:", Object.keys(data))
+    console.log("[v0] bulk_match matches count:", data.matches?.length, "people count:", data.people?.length, "status:", data.status)
+    if (data.matches?.[0]) {
+      console.log("[v0] bulk_match first match keys:", Object.keys(data.matches[0]))
+    }
     return data.matches || data.people || []
   } catch (error) {
     console.error("Error enriching Apollo contacts:", error)
