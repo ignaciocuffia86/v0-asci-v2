@@ -385,7 +385,7 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite }: Prospe
               {reasoning && <p className="text-xs text-muted-foreground italic">{reasoning}</p>}
 
               <div className="flex flex-wrap gap-2">
-                {suggestedJobTitles.map((title) => (
+                {[...new Set(suggestedJobTitles)].map((title) => (
                   <Badge
                     key={title}
                     variant={selectedJobTitles.includes(title) ? "default" : "outline"}
