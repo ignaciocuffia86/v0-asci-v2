@@ -43,8 +43,7 @@ export async function analyzeDocument(extractedText: string): Promise<DocumentAn
     industryList = uniqueIndustries.join(", ")
   }
 
-  const prompt = `Analiza el siguiente texto de un documento comercial de una empresa de tecnologia / servicios / consultoría. 
-Tu objetivo es entender QUE VENDE o QUE OFRECE esta empresa, y extraer información estructurada.
+  const prompt = `Analiza el siguiente texto de un documento comercial de una empresa de tecnologia / servicios / consultoría.
 
 TEXTO DEL DOCUMENTO:
 ---
@@ -60,9 +59,15 @@ ${processList}
 INDUSTRIAS CONOCIDAS EN NUESTRA BASE:
 ${industryList}
 
+PRIMERO: Determina el TIPO de documento. Puede ser:
+- CASO DE EXITO: describe un proyecto realizado para un cliente especifico
+- BROCHURE/PROPUESTA: describe servicios o capacidades generales del vendor
+- OTRO: cualquier otro tipo
+
 Responde en formato JSON estricto (sin markdown, sin backticks):
 {
-  "summary": "Resumen conciso (2-4 oraciones) de que ofrece/vende la empresa segun este documento. Enfocate en la propuesta de valor, no en describir el documento.",
+  "document_type": "CASO_DE_EXITO" | "BROCHURE" | "OTRO",
+  "summary": "Ver instrucciones segun tipo de documento abajo",
   "industries": [
     {"name": "nombre EXACTO de la lista de industrias", "confidence": 0.9}
   ],
@@ -74,18 +79,31 @@ Responde en formato JSON estricto (sin markdown, sin backticks):
   ]
 }
 
-REGLAS CRITICAS:
-- Para technologies: SOLO incluye nombres que existan TEXTUALMENTE en el DICCIONARIO DE TECNOLOGIAS proporcionado arriba. Busca cuidadosamente cada tecnologia mencionada en el documento contra el diccionario.
-  - Si el documento menciona "Amazon Bedrock" y en el diccionario existe "AWS", incluye "AWS".
-  - Si el documento menciona "SAP S/4HANA" y en el diccionario existe "SAP ERP", incluye "SAP ERP".
+=== INSTRUCCIONES PARA EL SUMMARY SEGUN TIPO ===
+
+SI ES CASO DE EXITO, el summary DEBE incluir estos elementos en 3-5 oraciones:
+1. QUIEN fue el cliente (nombre y breve descripcion)
+2. QUE industria tiene el cliente
+3. CUAL era el problema o necesidad del cliente
+4. QUE solucion se implemento (tecnologias, procesos, metodologia)
+5. QUE resultados concretos se obtuvieron (metricas, porcentajes, mejoras cuantificables)
+Ejemplo: "Proyecto para Arcor (multinacional argentina de alimentos/consumo masivo). El cliente necesitaba modernizar su gestion de activo fijo que operaba con sistemas legacy desactualizados. Se implemento una solucion de automatizacion que digitalizo el proceso de altas, bajas y transferencias de activos. Como resultado se redujo el tiempo de gestion en un 60% y se elimino el uso de planillas manuales."
+
+SI ES BROCHURE/PROPUESTA, el summary debe describir en 2-4 oraciones:
+1. Que ofrece/vende la empresa
+2. En que industrias o verticales se especializa
+3. Que tecnologias o capacidades principales tiene
+
+=== REGLAS CRITICAS PARA TAGS ===
+- Para technologies: SOLO incluye nombres que existan TEXTUALMENTE en el DICCIONARIO DE TECNOLOGIAS. Busca cuidadosamente.
   - Si el documento menciona un servicio de una plataforma (ej: "EC2", "Lambda", "Bedrock") busca si la plataforma madre existe (ej: "AWS").
+  - Si el documento menciona "SAP S/4HANA" y en el diccionario existe "SAP ERP", incluye "SAP ERP".
   - Si una tecnologia mencionada NO tiene ningun equivalente en el diccionario, NO la incluyas.
 - Para processes: misma logica, SOLO nombres del diccionario de procesos.
-- Para industries: SOLO nombres de la lista de industrias proporcionada.
-- Confidence: 0.9-1.0 si se menciona explicitamente, 0.7-0.89 si se infiere del contexto, 0.5-0.69 si es una referencia indirecta.
-- El summary debe ser en español.
-- Si el documento es un caso de exito, extrae la industria del CLIENTE (no del vendor).
-- Se exhaustivo buscando en el diccionario. Lee cada tecnologia mencionada en el texto y buscala cuidadosamente en la lista.`
+- Para industries: SOLO nombres de la lista de industrias. SI ES CASO DE EXITO, usa la industria del CLIENTE, no del vendor.
+- Confidence: 0.9-1.0 mencion explicita, 0.7-0.89 inferida, 0.5-0.69 indirecta.
+- El summary debe ser en espanol.
+- Se exhaustivo: lee cada tecnologia/proceso mencionado y buscalo cuidadosamente en los diccionarios.`
 
   const responseText = await generateGeminiContent(prompt, "gemini-2.5-flash", 0.2)
 

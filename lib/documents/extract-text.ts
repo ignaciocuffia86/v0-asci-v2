@@ -104,12 +104,79 @@ Devuelve SOLO el texto extraido, organizado de manera coherente. Si realmente no
 }
 
 /**
- * Extract text from a PDF buffer using pdf-parse
+ * Extract text from a PDF buffer using pdf-parse.
+ * Falls back to Gemini vision extraction for designed/graphical PDFs
+ * where pdf-parse fails to capture meaningful content.
  */
 export async function extractTextFromPdf(buffer: Buffer): Promise<string> {
   const pdfParse = (await import("pdf-parse")).default
   const data = await pdfParse(buffer)
-  return data.text.trim().slice(0, 50000)
+  const parsedText = data.text.trim()
+
+  // If pdf-parse extracted enough text, use it
+  const MIN_PDF_CHARS = 1000
+  if (parsedText.length >= MIN_PDF_CHARS) {
+    return parsedText.slice(0, 50000)
+  }
+
+  // For designed PDFs (brochures, case studies, etc.) where pdf-parse
+  // extracts very little text, use Gemini to read the PDF visually
+  console.log(`[v0] PDF text too short (${parsedText.length} chars), using Gemini visual extraction`)
+
+  try {
+    const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY
+    if (!apiKey) throw new Error("Google API Key is missing for PDF fallback")
+
+    const base64Data = buffer.toString("base64")
+
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: "application/pdf",
+                    data: base64Data,
+                  },
+                },
+                {
+                  text: `Extrae TODO el contenido textual de este documento PDF. 
+Este documento puede ser un brochure, caso de exito, propuesta comercial o presentacion con diseno grafico.
+Incluye ABSOLUTAMENTE TODO el texto visible: titulos, subtitulos, cuerpo, datos en tablas, cifras, nombres de empresas, 
+metricas, citas, pie de pagina, textos en graficos o diagramas.
+Respeta el orden de lectura logico del documento.
+Devuelve SOLO el texto extraido, sin comentarios adicionales tuyos.`,
+                },
+              ],
+            },
+          ],
+          generationConfig: { temperature: 0.1, thinkingConfig: { thinkingBudget: 0 } },
+        }),
+      },
+    )
+
+    if (!response.ok) {
+      throw new Error(`Gemini PDF extraction failed: ${response.status}`)
+    }
+
+    const responseData = await response.json()
+    const geminiText = responseData.candidates?.[0]?.content?.parts?.[0]?.text?.trim()
+
+    if (geminiText && geminiText.length > parsedText.length) {
+      console.log(`[v0] Gemini extracted ${geminiText.length} chars vs pdf-parse ${parsedText.length} chars`)
+      return geminiText.slice(0, 50000)
+    }
+  } catch (error) {
+    console.error("[v0] Gemini PDF fallback failed:", error)
+  }
+
+  // Return whatever pdf-parse got as last resort
+  return parsedText.slice(0, 50000)
 }
 
 /**
