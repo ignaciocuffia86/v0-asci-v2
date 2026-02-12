@@ -30,6 +30,7 @@ import {
   getContactsForIcebreaker,
   searchDecisionMakers,
 } from "@/app/actions/workspace"
+import { getActiveIcebreakerTemplates, type IcebreakerTemplate } from "@/app/actions/templates"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import {
   Dialog,
@@ -89,6 +90,8 @@ interface IcebreakerHistory {
 export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: string; companyName: string }) {
   const [contacts, setContacts] = useState<Contact[]>([])
   const [icebreakers, setIcebreakers] = useState<IcebreakerHistory[]>([])
+  const [templates, setTemplates] = useState<IcebreakerTemplate[]>([])
+  const [selectedTemplate, setSelectedTemplate] = useState<string>("")
   const [isLoading, setIsLoading] = useState(true)
   const [isGenerating, setIsGenerating] = useState(false)
   const [selectedContact, setSelectedContact] = useState<string>("")
@@ -103,12 +106,17 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
   const loadData = async () => {
     setIsLoading(true)
     try {
-      const [contactsData, icebreakersData] = await Promise.all([
+      const [contactsData, icebreakersData, templatesData] = await Promise.all([
         getContactsForIcebreaker(bookmarkId),
         getIcebreakers(bookmarkId),
+        getActiveIcebreakerTemplates(),
       ])
       setContacts(contactsData ?? [])
       setIcebreakers(icebreakersData ?? [])
+      setTemplates(templatesData ?? [])
+      if (templatesData?.length > 0 && !selectedTemplate) {
+        setSelectedTemplate(templatesData[0].id)
+      }
     } catch (error) {
       console.error("[v0] Error loading icebreaker data:", error)
       setContacts([])
@@ -134,7 +142,7 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
       const contactData = contacts.find((c) => c.id === selectedContact)
       const contactSource = contactData?.source || "signal"
 
-      const result = await generateSimplifiedIcebreaker(bookmarkId, selectedContact, contactSource)
+      const result = await generateSimplifiedIcebreaker(bookmarkId, selectedContact, contactSource, selectedTemplate || undefined)
       setGeneratedResult(result)
       await loadData()
     } catch (error) {
@@ -475,6 +483,30 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
                     </div>
                   </CardContent>
                 </Card>
+              )}
+
+              {/* Selector de tono */}
+              {templates.length > 0 && (
+                <div className="space-y-2">
+                  <Label>Tono del mensaje</Label>
+                  <Select value={selectedTemplate} onValueChange={setSelectedTemplate}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecciona un tono..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {templates.map((t) => (
+                        <SelectItem key={t.id} value={t.id}>
+                          <div className="flex flex-col">
+                            <span>{t.name}</span>
+                            {t.description && (
+                              <span className="text-muted-foreground text-xs">{t.description}</span>
+                            )}
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               )}
 
               <Button

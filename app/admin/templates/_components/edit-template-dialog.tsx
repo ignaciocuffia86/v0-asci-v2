@@ -21,11 +21,10 @@ import { type IcebreakerTemplate, updateIcebreakerTemplate } from "@/app/actions
 import { useRouter } from "next/navigation"
 
 const TONE_OPTIONS = [
-  { value: "profesional", label: "Profesional" },
-  { value: "casual", label: "Casual" },
-  { value: "directo", label: "Directo" },
-  { value: "consultivo", label: "Consultivo" },
-  { value: "amigable", label: "Amigable" },
+  { value: "industry_insight", label: "Insight de Industria" },
+  { value: "case_reference", label: "Referencia a Caso Real" },
+  { value: "consultive", label: "Pregunta Consultiva" },
+  { value: "direct", label: "Conexion Directa" },
 ]
 
 interface EditTemplateDialogProps {
@@ -107,20 +106,17 @@ export function EditTemplateDialog({ template, onClose }: EditTemplateDialogProp
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="prompt_template">Prompt Template</Label>
+              <Label htmlFor="prompt_template">Instrucciones de Tono y Enfoque</Label>
               <Textarea
                 id="prompt_template"
                 value={formData.prompt_template}
                 onChange={(e) => setFormData({ ...formData, prompt_template: e.target.value })}
-                rows={8}
+                rows={16}
                 className="font-mono text-sm"
                 required
               />
               <p className="text-xs text-muted-foreground">
-                Variables disponibles: {"{"}
-                {"{"}company_name{"}"}, {"{"}contact_name{"}"}, {"{"}contact_role{"}"}, {"{"}
-                signal{"}"}, {"{"}tone{"}"}
-                {"}"}
+                Define el estilo, enfoque y estructura de los mensajes (LinkedIn + Email). Los datos del prospecto, empresa, casos de exito y propuesta de valor se inyectan automaticamente.
               </p>
             </div>
 

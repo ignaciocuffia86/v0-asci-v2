@@ -789,7 +789,7 @@ export async function getContactsForIcebreakerFromContacts(bookmarkId: string) {
   return contacts || []
 }
 
-export async function generateSimplifiedIcebreaker(bookmarkId: string, contactId: string, contactSource: string) {
+export async function generateSimplifiedIcebreaker(bookmarkId: string, contactId: string, contactSource: string, templateId?: string) {
   const supabase = await createClient()
   const {
     data: { user },
@@ -972,6 +972,78 @@ export async function generateSimplifiedIcebreaker(bookmarkId: string, contactId
   const userCompanyName = profileResult.data?.company || "nuestra empresa"
   const valueProposition = strategyResult.data?.sender_context_override || profileResult.data?.value_proposition || ""
 
+  // Load selected template (or default to first active)
+  let templateInstructions = ""
+  let templateName = "Default"
+  let templateTone = "industry_insight"
+  if (templateId) {
+    const { data: template } = await supabase
+      .from("icebreaker_templates")
+      .select("name, tone, prompt_template")
+      .eq("id", templateId)
+      .single()
+    if (template) {
+      templateInstructions = template.prompt_template
+      templateName = template.name
+      templateTone = template.tone
+    }
+  }
+  if (!templateInstructions) {
+    const { data: defaultTemplate } = await supabase
+      .from("icebreaker_templates")
+      .select("name, tone, prompt_template")
+      .eq("is_active", true)
+      .order("name")
+      .limit(1)
+      .single()
+    if (defaultTemplate) {
+      templateInstructions = defaultTemplate.prompt_template
+      templateName = defaultTemplate.name
+      templateTone = defaultTemplate.tone
+    }
+  }
+
+  // Load relevant DOCs (user_documents with ai_summary) for context injection
+  // Select up to 3 most relevant based on keyword matching with company/industry/signals
+  const searchKeywords = [
+    filterContextName,
+    company?.name,
+    contactData.role,
+    ...signalInfo.map((s: any) => s.signal_name).filter(Boolean),
+  ].filter(Boolean).join(" ").toLowerCase()
+
+  let relevantDocs = ""
+  const { data: allDocs } = await supabase
+    .from("user_documents")
+    .select("title, ai_summary")
+    .eq("user_id", user.id)
+    .not("ai_summary", "is", null)
+
+  if (allDocs && allDocs.length > 0) {
+    // Score each doc by keyword overlap
+    const scored = allDocs.map((doc) => {
+      const text = `${doc.title} ${doc.ai_summary}`.toLowerCase()
+      const words = searchKeywords.split(/\s+/)
+      const score = words.filter((w) => w.length > 3 && text.includes(w)).length
+      return { ...doc, score }
+    })
+    const topDocs = scored.sort((a, b) => b.score - a.score).slice(0, 3).filter((d) => d.score > 0)
+    if (topDocs.length > 0) {
+      relevantDocs = topDocs.map((d) => `- ${d.title}: ${d.ai_summary}`).join("\n")
+    }
+  }
+
+  // Load user value profile for richer company context
+  const { data: valueProfile } = await supabase
+    .from("user_value_profiles")
+    .select("profile_summary")
+    .eq("user_id", user.id)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  const profileSummary = valueProfile?.profile_summary || ""
+
   // Construir contexto para el prompt
   const firstName = contactData.first_name || contactData.full_name?.split(" ")[0] || ""
   const companyName = company?.name || "la empresa"
@@ -1035,64 +1107,47 @@ ${filterType === "process" ? "PROCESOS" : "TECNOLOGÍAS"} USADAS EN LA EMPRESA: 
     .slice(0, 3)
     .join(", ")
 
-  const prompt = `Eres un experto en ventas B2B que escribe mensajes de prospección ALTAMENTE PERSONALIZADOS.
+  const prompt = `Eres un experto en ventas B2B consultivas. Escribis mensajes de prospección personalizados, conversacionales y humanos. NUNCA escribas mensajes que suenen a template o a pitch de ventas.
 
-Tu tarea es generar DOS mensajes únicos basándote en la información ESPECÍFICA del perfil del contacto.
+REGLAS GENERALES:
+- Idioma: Español rioplatense (vos/sos/tenes), informal pero profesional
+- NO uses frases genéricas como "optimizar sus operaciones" o "potenciar sus procesos"
+- NO cierres con "Cual consideras seria el camino correcto para ser tenidos en cuenta"
+- Cada mensaje debe ser UNICO para esta persona. Extrae algo concreto de su perfil o contexto.
+- Usa el nombre de pila (${firstName}), nunca el apellido solo.
 
 ═══════════════════════════════════════════════════════════════
-INFORMACIÓN DEL CONTACTO (USA ESTO PARA PERSONALIZAR)
+DATOS DEL PROSPECTO
 ═══════════════════════════════════════════════════════════════
 Nombre: ${firstName}
 Empresa: ${companyName}
-Cargo/Headline: ${contactData.headline || contactData.role || "No disponible"}
-Rol: ${contactData.role || contactData.current_position_title || "No especificado"}
-Descripción del puesto actual:
-${contactData.current_position_description || "No disponible"}
-
-${filterType === "process" ? "Proceso" : "Tecnología"} que nos interesa: ${filterContextName || signalsList || "No especificada"}
-
-${
-  snippetsList
-    ? `Fragmentos CLAVE encontrados en su perfil (ÚSALOS para personalizar):
-${snippetsList}`
-    : ""
-}
+Cargo: ${contactData.role || contactData.current_position_title || "No especificado"}
+Headline: ${contactData.headline || "No disponible"}
+Descripcion del puesto: ${contactData.current_position_description || "No disponible"}
+${filterType === "process" ? "Proceso" : "Tecnologia"} detectada: ${filterContextName || signalsList || "No especificada"}
+${snippetsList ? `\nFragmentos del perfil:\n${snippetsList}` : ""}
 
 ═══════════════════════════════════════════════════════════════
-MI EMPRESA
+MI EMPRESA (${userCompanyName})
 ═══════════════════════════════════════════════════════════════
-Empresa: ${userCompanyName}
-Propuesta de valor: ${valueProposition}
+${profileSummary ? `Perfil: ${profileSummary}\n` : ""}Propuesta de valor: ${valueProposition}
+${relevantDocs ? `\nCASOS DE EXITO Y EXPERIENCIA RELEVANTE:\n${relevantDocs}` : ""}
 
 ═══════════════════════════════════════════════════════════════
-INSTRUCCIONES CRÍTICAS
+INSTRUCCIONES DE TONO Y ENFOQUE
 ═══════════════════════════════════════════════════════════════
+${templateInstructions}
 
-**MENSAJE 1 - LINKEDIN (máximo 280 caracteres)**
-Estructura:
-1. "Hola ${firstName}, vi en tu perfil que..."
-2. Menciona ESPECÍFICAMENTE algo de su headline, descripción del puesto, o los fragmentos encontrados
-3. Conecta eso con ${filterContextName || "lo que buscamos"}
-4. Cierra con: "¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?"
-
-IMPORTANTE: El mensaje debe ser ÚNICO para esta persona. No uses frases genéricas como "aplicado a sus operaciones". Extrae algo concreto de su perfil.
-
-**MENSAJE 2 - EMAIL DE SEGUIMIENTO (3-5 oraciones)**
-1. Comienza: "Hola ${firstName}, te escribí por LinkedIn hace unos días."
-2. Profundiza en lo que viste en su perfil - menciona algo ESPECÍFICO de su headline o descripción
-3. Explica cómo ${userCompanyName} puede ayudar concretamente con ${filterContextName || "sus necesidades"}
-4. Cierra: "¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?"
-
-════════════════════════���═════════════════════════════════════��
-FORMATO DE RESPUESTA (SIN INCLUIR LOS TAGS EN EL MENSAJE FINAL)
+═══════════════════════════════════════════════════════════════
+FORMATO DE RESPUESTA
 ═══════════════════════════════════════════════════════════════
 ---LINKEDIN---
-(mensaje de LinkedIn aquí, sin el tag)
+(mensaje de LinkedIn aqui)
 
 ---EMAIL---
-(email de seguimiento aquí, sin el tag)
+(email de seguimiento aqui)
 
-RECUERDA: Cada mensaje debe ser ÚNICO y personalizado. Si el headline dice "DevOps Engineer enfocado en CI/CD para fintech", menciona CI/CD y fintech, no solo "DevOps".`
+IMPORTANTE: Los mensajes deben sonar como si los escribiera una persona real, no una IA. Evita estructuras rigidas. Se conversacional.`
 
   // Generar con IA
   let generatedText = ""
@@ -1108,7 +1163,7 @@ RECUERDA: Cada mensaje debe ser ÚNICO y personalizado. Si el headline dice "Dev
       generatedText = await generateGeminiContent(prompt, "gemini-2.0-flash", 0.7)
     } catch (fallbackError: any) {
       console.error("Fallback AI Generation failed", fallbackError)
-      generatedText = `[LINKEDIN]\nHola ${firstName}, vi en tu perfil que trabajan con ${filterContextName || signalTypeLabel}. ¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?\n\n[EMAIL]\nHola ${firstName}, te escribí por LinkedIn hace unos días. ¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?`
+      generatedText = `---LINKEDIN---\nHola ${firstName}, vi que en ${companyName} trabajan con ${filterContextName || signalTypeLabel}. Me genera curiosidad como lo estan abordando. Estarias abierto a intercambiar perspectivas?\n\n---EMAIL---\nHola ${firstName}, te escribi por LinkedIn hace unos dias. Queria compartirte algo que puede ser relevante dado tu rol en ${companyName}. Si te interesa, feliz de charlarlo.`
     }
   }
 
@@ -1166,11 +1221,7 @@ RECUERDA: Cada mensaje debe ser ÚNICO y personalizado. Si el headline dice "Dev
 
   // Asegurar que el email siempre tenga contenido
   if (!emailMessage || emailMessage.length < 20) {
-    emailMessage = `Hola ${firstName}, te escribí por LinkedIn hace unos días.
-        
-        Noté en tu perfil el trabajo con ${filterContextName || signalTypeLabel}. En ${userCompanyName}, ${valueProposition || "colaboramos con empresas para mejorar sus operaciones"}.
-        
-        ¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?`
+    emailMessage = `Hola ${firstName}, te escribi por LinkedIn hace unos dias. Queria retomar la conversacion - vi que en ${companyName} trabajan con ${filterContextName || signalTypeLabel} y me parecio relevante compartirte nuestra experiencia en el tema. Si te sirve, feliz de charlarlo sin compromiso.`
   }
 
   console.log("[v0] Final LinkedIn message:", linkedinMessage)
@@ -1183,46 +1234,24 @@ RECUERDA: Cada mensaje debe ser ÚNICO y personalizado. Si el headline dice "Dev
     bookmark_id: bookmarkId,
     contact_id: contactId,
     generated_text: linkedinMessage,
-    template_used: "Simplified Icebreaker",
+    template_used: templateName,
     context_used: JSON.stringify({
-      template_name: "Simplified Icebreaker",
-      context_options: ["contact", "company", "search_context", "signals", "strategy"],
-      company_name: company?.name || "la empresa",
-      company_description: "",
-      company_website: "",
-      industry: "",
+      template_name: templateName,
+      template_tone: templateTone,
+      context_options: ["contact", "company", "search_context", "signals", "strategy", "docs"],
+      company_name: companyName,
       contact_name: contactData.full_name || "",
-      contact_first_name: contactData.first_name || "",
-      contact_last_name: "",
       contact_role: contactData.role || "",
       contact_headline: contactData.headline || "",
-      contact_linkedin: "",
       filter_type: filterType,
       filter_context_name: filterContextName,
-      filter_signal_ids: filterSignalIds,
-      technology: filterType === "technology" ? filterContextName : "",
-      process: filterType === "process" ? filterContextName : "",
-      signal: "",
-      signals_list: signalInfo
-        .map((s) => s.signal_name)
-        .filter(Boolean)
-        .join(", "),
-      news: "",
-      implementations: "",
-      snippets: signalInfo
-        .filter((s) => s.snippet)
-        .map((s) => s.snippet)
-        .join("\n"),
+      signals_list: signalInfo.map((s: any) => s.signal_name).filter(Boolean).join(", "),
+      docs_injected: relevantDocs ? true : false,
       strategy: valueProposition,
-      recommended_pitch: strategyResult.data?.recommended_pitch || "",
-      tone: "professional",
       user_company_name: userCompanyName,
-      news_count: 0,
-      implementations_count: 0,
-      snippets_count: signalInfo.filter((s) => s.snippet).length,
       signals_count: signalInfo.length,
     }),
-    tone: "professional",
+    tone: templateTone,
     message_type: "linkedin",
     created_at: new Date().toISOString(),
   })
@@ -1233,46 +1262,23 @@ RECUERDA: Cada mensaje debe ser ÚNICO y personalizado. Si el headline dice "Dev
     bookmark_id: bookmarkId,
     contact_id: contactId,
     generated_text: emailMessage,
-    template_used: "Simplified Icebreaker",
+    template_used: templateName,
     context_used: JSON.stringify({
-      template_name: "Simplified Icebreaker",
-      context_options: ["contact", "company", "search_context", "signals", "strategy"],
-      company_name: company?.name || "la empresa",
-      company_description: "",
-      company_website: "",
-      industry: "",
+      template_name: templateName,
+      template_tone: templateTone,
+      context_options: ["contact", "company", "search_context", "signals", "strategy", "docs"],
+      company_name: companyName,
       contact_name: contactData.full_name || "",
-      contact_first_name: contactData.first_name || "",
-      contact_last_name: "",
       contact_role: contactData.role || "",
-      contact_headline: contactData.headline || "",
-      contact_linkedin: "",
       filter_type: filterType,
       filter_context_name: filterContextName,
-      filter_signal_ids: filterSignalIds,
-      technology: filterType === "technology" ? filterContextName : "",
-      process: filterType === "process" ? filterContextName : "",
-      signal: "",
-      signals_list: signalInfo
-        .map((s) => s.signal_name)
-        .filter(Boolean)
-        .join(", "),
-      news: "",
-      implementations: "",
-      snippets: signalInfo
-        .filter((s) => s.snippet)
-        .map((s) => s.snippet)
-        .join("\n"),
+      signals_list: signalInfo.map((s: any) => s.signal_name).filter(Boolean).join(", "),
+      docs_injected: relevantDocs ? true : false,
       strategy: valueProposition,
-      recommended_pitch: strategyResult.data?.recommended_pitch || "",
-      tone: "professional",
       user_company_name: userCompanyName,
-      news_count: 0,
-      implementations_count: 0,
-      snippets_count: signalInfo.filter((s) => s.snippet).length,
       signals_count: signalInfo.length,
     }),
-    tone: "professional",
+    tone: templateTone,
     message_type: "email",
     created_at: new Date().toISOString(),
   })

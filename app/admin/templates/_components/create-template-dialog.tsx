@@ -23,11 +23,10 @@ import { createIcebreakerTemplate } from "@/app/actions/templates"
 import { useRouter } from "next/navigation"
 
 const TONE_OPTIONS = [
-  { value: "profesional", label: "Profesional" },
-  { value: "casual", label: "Casual" },
-  { value: "directo", label: "Directo" },
-  { value: "consultivo", label: "Consultivo" },
-  { value: "amigable", label: "Amigable" },
+  { value: "industry_insight", label: "Insight de Industria" },
+  { value: "case_reference", label: "Referencia a Caso Real" },
+  { value: "consultive", label: "Pregunta Consultiva" },
+  { value: "direct", label: "Conexion Directa" },
 ]
 
 export function CreateTemplateDialog() {
@@ -39,7 +38,7 @@ export function CreateTemplateDialog() {
     name: "",
     description: "",
     prompt_template: "",
-    tone: "profesional",
+    tone: "industry_insight",
     is_active: true,
   })
 
@@ -54,7 +53,7 @@ export function CreateTemplateDialog() {
         name: "",
         description: "",
         prompt_template: "",
-        tone: "profesional",
+        tone: "industry_insight",
         is_active: true,
       })
       router.refresh()
@@ -122,21 +121,18 @@ export function CreateTemplateDialog() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="prompt_template">Prompt Template</Label>
+              <Label htmlFor="prompt_template">Instrucciones de Tono y Enfoque</Label>
               <Textarea
                 id="prompt_template"
-                placeholder="Usa variables como {{company_name}}, {{contact_name}}, {{contact_role}}, {{signal}}, etc."
+                placeholder={"ESTILO: Conversacional, informado, curioso.\nENFOQUE: Liderar con una observacion relevante...\n\nLINKEDIN (max 300 caracteres):\n- Instrucciones para el mensaje de LinkedIn...\n\nEMAIL DE SEGUIMIENTO (max 150 palabras):\n- Instrucciones para el email..."}
                 value={formData.prompt_template}
                 onChange={(e) => setFormData({ ...formData, prompt_template: e.target.value })}
-                rows={8}
+                rows={16}
                 className="font-mono text-sm"
                 required
               />
               <p className="text-xs text-muted-foreground">
-                Variables disponibles: {"{"}
-                {"{"}company_name{"}"}, {"{"}contact_name{"}"}, {"{"}contact_role{"}"}, {"{"}
-                signal{"}"}, {"{"}tone{"}"}
-                {"}"}
+                Define el estilo, enfoque y estructura de los mensajes (LinkedIn + Email). Los datos del prospecto, empresa, casos de exito y propuesta de valor se inyectan automaticamente.
               </p>
             </div>
 

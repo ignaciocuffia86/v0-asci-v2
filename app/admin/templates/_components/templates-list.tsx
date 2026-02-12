@@ -10,6 +10,13 @@ import { EditTemplateDialog } from "./edit-template-dialog"
 import { deleteIcebreakerTemplate, toggleTemplateActive } from "@/app/actions/templates"
 import { useRouter } from "next/navigation"
 
+const TONE_LABELS: Record<string, string> = {
+  industry_insight: "Insight de Industria",
+  case_reference: "Caso Real",
+  consultive: "Consultivo",
+  direct: "Directo",
+}
+
 interface TemplatesListProps {
   templates: IcebreakerTemplate[]
 }
@@ -60,7 +67,7 @@ export function TemplatesList({ templates }: TemplatesListProps) {
                   <Badge variant={template.is_active ? "default" : "secondary"}>
                     {template.is_active ? "Activo" : "Inactivo"}
                   </Badge>
-                  <Badge variant="outline">{template.tone}</Badge>
+                  <Badge variant="outline">{TONE_LABELS[template.tone] || template.tone}</Badge>
                 </div>
                 {template.description && <CardDescription>{template.description}</CardDescription>}
               </div>
