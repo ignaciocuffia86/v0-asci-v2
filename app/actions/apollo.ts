@@ -308,8 +308,7 @@ async function callApolloAPI(
     const data: ApolloSearchResponse = await response.json()
 
     if (data.people && data.people.length > 0) {
-      const personIds = data.people.map((p) => p.id)
-      const enrichedPeople = await enrichApolloContacts(personIds, apiKey)
+      const enrichedPeople = await enrichApolloContacts(data.people, apiKey, companyDomain || "")
       return enrichedPeople.length > 0 ? enrichedPeople : data.people
     }
 
@@ -321,8 +320,24 @@ async function callApolloAPI(
 }
 
 // Enriquecer contactos con datos completos (email, teléfono)
-async function enrichApolloContacts(personIds: string[], apiKey: string): Promise<ApolloPersonSearchResult[]> {
+// bulk_match requires identifying info (name+domain, email, or linkedin_url), NOT just id
+async function enrichApolloContacts(
+  people: ApolloPersonSearchResult[],
+  apiKey: string,
+  companyDomain: string,
+): Promise<ApolloPersonSearchResult[]> {
   try {
+    const details = people.map((p) => {
+      // Prefer linkedin_url, then email, then name+domain
+      if (p.linkedin_url) return { linkedin_url: p.linkedin_url }
+      if (p.email) return { email: p.email }
+      return {
+        first_name: p.first_name,
+        last_name: p.last_name,
+        organization_domain: companyDomain,
+      }
+    })
+
     const response = await fetch("https://api.apollo.io/api/v1/people/bulk_match", {
       method: "POST",
       headers: {
@@ -330,7 +345,7 @@ async function enrichApolloContacts(personIds: string[], apiKey: string): Promis
         "x-api-key": apiKey,
       },
       body: JSON.stringify({
-        details: personIds.map((id) => ({ id })),
+        details,
         reveal_personal_emails: true,
         reveal_phone_number: true,
       }),
@@ -338,7 +353,7 @@ async function enrichApolloContacts(personIds: string[], apiKey: string): Promis
 
     if (!response.ok) {
       const errorBody = await response.text()
-      console.error("[v0] Apollo bulk_match error:", response.status, errorBody)
+      console.error("Apollo bulk_match error:", response.status, errorBody)
       return []
     }
 
