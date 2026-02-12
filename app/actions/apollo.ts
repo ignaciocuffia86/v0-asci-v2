@@ -344,7 +344,6 @@ async function enrichApolloContacts(
         body: JSON.stringify({
           id: person.id,
           reveal_personal_emails: true,
-          reveal_phone_number: true,
         }),
       })
 
@@ -357,6 +356,25 @@ async function enrichApolloContacts(
       const data = await response.json()
       if (data.person) {
         enriched.push(data.person)
+
+        // Request phone number asynchronously via webhook (Apollo requires this)
+        const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://asci.bigua.lat"
+        try {
+          await fetch("https://api.apollo.io/api/v1/people/match", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": apiKey,
+            },
+            body: JSON.stringify({
+              id: person.id,
+              reveal_phone_number: true,
+              webhook_url: `${baseUrl}/api/webhooks/apollo`,
+            }),
+          })
+        } catch {
+          // Phone reveal is best-effort, don't break the flow
+        }
       } else {
         enriched.push(person)
       }
