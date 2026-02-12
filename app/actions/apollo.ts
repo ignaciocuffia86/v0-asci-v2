@@ -306,11 +306,14 @@ async function callApolloAPI(
     }
 
     const data: ApolloSearchResponse = await response.json()
+    console.log("[v0] Apollo search response - people count:", data.people?.length || 0)
 
     if (data.people && data.people.length > 0) {
       const personIds = data.people.map((p) => p.id)
+      console.log("[v0] Enriching", personIds.length, "contacts via bulk_match")
       const enrichedPeople = await enrichApolloContacts(personIds, apiKey)
-      return enrichedPeople
+      console.log("[v0] Enriched results:", enrichedPeople.length)
+      return enrichedPeople.length > 0 ? enrichedPeople : data.people
     }
 
     return data.people || []
@@ -338,11 +341,12 @@ async function enrichApolloContacts(personIds: string[], apiKey: string): Promis
 
     if (!response.ok) {
       const errorBody = await response.text()
-      console.error("Apollo bulk_match error:", response.status, errorBody)
+      console.error("[v0] Apollo bulk_match error:", response.status, errorBody)
       return []
     }
 
     const data = await response.json()
+    console.log("[v0] bulk_match response keys:", Object.keys(data), "matches:", data.matches?.length, "status:", data.status)
     return data.matches || data.people || []
   } catch (error) {
     console.error("Error enriching Apollo contacts:", error)
@@ -448,9 +452,12 @@ export async function searchApolloProspects(
   const finalJobTitles = customJobTitles?.length ? customJobTitles : jobTitles
 
   let contacts = await searchApolloCache(companyDomain, company.linkedin_url, finalJobTitles)
+  console.log("[v0] Apollo cache results:", contacts.length, "for domain:", companyDomain)
 
   if (contacts.length < 3) {
+    console.log("[v0] Cache insufficient, calling Apollo API with titles:", finalJobTitles)
     const apiContacts = await callApolloAPI(companyDomain, company.name, finalJobTitles, 10)
+    console.log("[v0] Apollo API returned:", apiContacts.length, "contacts")
 
     if (apiContacts.length > 0) {
       await saveToApolloCache(apiContacts, companyDomain, company.linkedin_url, finalJobTitles)
@@ -458,6 +465,7 @@ export async function searchApolloProspects(
     }
   }
 
+  console.log("[v0] Total contacts to save:", contacts.length)
   let savedCount = 0
   for (const contact of contacts) {
     const mobileEntry = contact.phone_numbers?.find((p) => p.type === "mobile")
