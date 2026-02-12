@@ -306,13 +306,10 @@ async function callApolloAPI(
     }
 
     const data: ApolloSearchResponse = await response.json()
-    console.log("[v0] Apollo search response - people count:", data.people?.length || 0)
 
     if (data.people && data.people.length > 0) {
       const personIds = data.people.map((p) => p.id)
-      console.log("[v0] Enriching", personIds.length, "contacts via bulk_match")
       const enrichedPeople = await enrichApolloContacts(personIds, apiKey)
-      console.log("[v0] Enriched results:", enrichedPeople.length)
       return enrichedPeople.length > 0 ? enrichedPeople : data.people
     }
 
@@ -346,7 +343,6 @@ async function enrichApolloContacts(personIds: string[], apiKey: string): Promis
     }
 
     const data = await response.json()
-    console.log("[v0] bulk_match response keys:", Object.keys(data), "matches:", data.matches?.length, "status:", data.status)
     return data.matches || data.people || []
   } catch (error) {
     console.error("Error enriching Apollo contacts:", error)
@@ -375,9 +371,9 @@ async function saveToApolloCache(
         apollo_id: contact.id,
         company_domain: companyDomain,
         company_linkedin_url: companyLinkedIn,
-        first_name: contact.first_name,
-        last_name: contact.last_name,
-        full_name: contact.name || `${contact.first_name} ${contact.last_name}`,
+        first_name: contact.first_name || null,
+        last_name: contact.last_name || null,
+        full_name: contact.name || [contact.first_name, contact.last_name].filter(Boolean).join(" ") || "Sin nombre",
         title: contact.title,
         headline: contact.headline,
         email: contact.email,
@@ -452,12 +448,9 @@ export async function searchApolloProspects(
   const finalJobTitles = customJobTitles?.length ? customJobTitles : jobTitles
 
   let contacts = await searchApolloCache(companyDomain, company.linkedin_url, finalJobTitles)
-  console.log("[v0] Apollo cache results:", contacts.length, "for domain:", companyDomain)
 
   if (contacts.length < 3) {
-    console.log("[v0] Cache insufficient, calling Apollo API with titles:", finalJobTitles)
     const apiContacts = await callApolloAPI(companyDomain, company.name, finalJobTitles, 10)
-    console.log("[v0] Apollo API returned:", apiContacts.length, "contacts")
 
     if (apiContacts.length > 0) {
       await saveToApolloCache(apiContacts, companyDomain, company.linkedin_url, finalJobTitles)
@@ -465,7 +458,6 @@ export async function searchApolloProspects(
     }
   }
 
-  console.log("[v0] Total contacts to save:", contacts.length)
   let savedCount = 0
   for (const contact of contacts) {
     const mobileEntry = contact.phone_numbers?.find((p) => p.type === "mobile")
@@ -483,13 +475,17 @@ export async function searchApolloProspects(
       .maybeSingle()
 
     if (!existing) {
+      const firstName = contact.first_name || ""
+      const lastName = contact.last_name || ""
+      const fullName = contact.name || [firstName, lastName].filter(Boolean).join(" ") || "Sin nombre"
+
       const { error } = await supabase.from("user_company_contacts").insert({
         user_id: user.id,
         company_id: company.id,
         bookmark_id: bookmarkId,
-        first_name: contact.first_name,
-        last_name: contact.last_name,
-        full_name: contact.name || `${contact.first_name} ${contact.last_name}`,
+        first_name: firstName || null,
+        last_name: lastName || null,
+        full_name: fullName,
         role: contact.title,
         headline: contact.headline,
         email: contact.email,

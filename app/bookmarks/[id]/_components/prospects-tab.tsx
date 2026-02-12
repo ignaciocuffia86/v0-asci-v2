@@ -42,6 +42,15 @@ import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import { exportToCSV, exportToExcel, prepareProspectsForExport } from "@/lib/export-utils"
 
+function proxyImageUrl(url: string | undefined | null): string {
+  if (!url) return ""
+  // Proxy external images to avoid CORS issues
+  if (url.includes("salesql.s3") || url.includes("d2ojpxxtu63wzl") || url.includes("licdn.com")) {
+    return `/api/proxy-image?url=${encodeURIComponent(url)}`
+  }
+  return url
+}
+
 interface Prospect {
   id: string
   full_name: string
@@ -524,7 +533,7 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite }: Prospe
 
                       {/* Avatar */}
                       <Avatar className="h-12 w-12 flex-shrink-0">
-                        <AvatarImage src={prospect.profile_picture_url || ""} />
+                        <AvatarImage src={proxyImageUrl(prospect.profile_picture_url)} />
                         <AvatarFallback>
                           {prospect.first_name?.[0]}
                           {prospect.last_name?.[0]}
@@ -684,7 +693,7 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite }: Prospe
                   >
                     <div className="flex items-center gap-3">
                       <Avatar className="h-8 w-8">
-                        <AvatarImage src={prospect.profile_picture_url || ""} />
+                        <AvatarImage src={proxyImageUrl(prospect.profile_picture_url)} />
                         <AvatarFallback className="text-xs">
                           {prospect.first_name?.[0]}
                           {prospect.last_name?.[0]}
