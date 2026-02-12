@@ -157,10 +157,14 @@ export async function getPrivateContacts(bookmarkId: string) {
   } = await supabase.auth.getUser()
   if (!user) return []
 
+  // Resolve company_id from bookmark so contacts survive bookmark deletion
+  const { data: bookmark } = await supabase.from("bookmarks").select("company_id").eq("id", bookmarkId).single()
+  if (!bookmark) return []
+
   const { data } = await supabase
     .from("user_company_contacts")
     .select("*")
-    .eq("bookmark_id", bookmarkId)
+    .eq("company_id", bookmark.company_id)
     .eq("user_id", user.id)
     .order("created_at", { ascending: false })
 
@@ -732,10 +736,11 @@ export async function getContactsForIcebreaker(bookmarkId: string) {
   }
 
   // 4. Obtener contactos privados (decision makers agregados manualmente)
+  // Use company_id so contacts survive bookmark deletion and are reusable
   const { data: privateContacts } = await supabase
     .from("user_company_contacts")
     .select("id, full_name, first_name, role")
-    .eq("bookmark_id", bookmarkId)
+    .eq("company_id", bookmark.company_id)
     .eq("user_id", user.id)
 
   // Agregar contactos privados que no estén ya en el map
@@ -1078,7 +1083,7 @@ IMPORTANTE: El mensaje debe ser ÚNICO para esta persona. No uses frases genéri
 3. Explica cómo ${userCompanyName} puede ayudar concretamente con ${filterContextName || "sus necesidades"}
 4. Cierra: "¿Cuál consideras sería el camino correcto para ser tenidos en cuenta ante futuros requerimientos?"
 
-══════════════════════════════════════════════════════════════��
+════════════════════════���═════════════════════════════════════��
 FORMATO DE RESPUESTA (SIN INCLUIR LOS TAGS EN EL MENSAJE FINAL)
 ═══════════════════════════════════════════════════════════════
 ---LINKEDIN---

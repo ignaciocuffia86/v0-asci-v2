@@ -71,7 +71,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         supabase
           .from("user_company_contacts")
           .select("full_name, role, email, phone, mobile_phone, seniority, headline, is_decision_maker, linkedin_url")
-          .eq("bookmark_id", bookmarkId)
+          .eq("company_id", company.id)
           .eq("user_id", user.id)
           .eq("is_decision_maker", true)
           .limit(20),

@@ -462,7 +462,7 @@ export async function searchApolloProspects(
       .from("user_company_contacts")
       .select("id")
       .eq("user_id", user.id)
-      .eq("bookmark_id", bookmarkId)
+      .eq("company_id", company.id)
       .eq("linkedin_url", contact.linkedin_url)
       .maybeSingle()
 
@@ -502,7 +502,7 @@ export async function searchApolloProspects(
   return { success: true, count: savedCount }
 }
 
-// Obtener prospectos (DMs) guardados
+// Obtener prospectos (DMs) guardados - busca por company_id para reutilizar entre bookmarks
 export async function getProspects(bookmarkId: string) {
   const supabase = await createClient()
   const {
@@ -511,10 +511,13 @@ export async function getProspects(bookmarkId: string) {
 
   if (!user) return []
 
+  const { data: bookmark } = await supabase.from("bookmarks").select("company_id").eq("id", bookmarkId).single()
+  if (!bookmark) return []
+
   const { data } = await supabase
     .from("user_company_contacts")
     .select("*")
-    .eq("bookmark_id", bookmarkId)
+    .eq("company_id", bookmark.company_id)
     .eq("user_id", user.id)
     .eq("is_decision_maker", true)
     .neq("status", "removed")
@@ -579,10 +582,13 @@ export async function getRemovedProspects(bookmarkId: string) {
 
   if (!user) return []
 
+  const { data: bookmark } = await supabase.from("bookmarks").select("company_id").eq("id", bookmarkId).single()
+  if (!bookmark) return []
+
   const { data } = await supabase
     .from("user_company_contacts")
     .select("*")
-    .eq("bookmark_id", bookmarkId)
+    .eq("company_id", bookmark.company_id)
     .eq("user_id", user.id)
     .eq("is_decision_maker", true)
     .eq("status", "removed")
@@ -615,7 +621,7 @@ export async function getContactsForIcebreaker(bookmarkId: string) {
   const { data: prospects } = await supabase
     .from("user_company_contacts")
     .select("*")
-    .eq("bookmark_id", bookmarkId)
+    .eq("company_id", bookmark.company_id)
     .eq("user_id", user.id)
     .eq("is_decision_maker", true)
 

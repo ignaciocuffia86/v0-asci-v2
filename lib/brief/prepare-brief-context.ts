@@ -93,7 +93,7 @@ export async function prepareBriefContext(options: PrepareContextOptions): Promi
       .select(
         "id, full_name, role, email, email_status, phone, mobile_phone, linkedin_url, profile_picture_url, seniority, is_decision_maker, status",
       )
-      .eq("bookmark_id", bookmarkId)
+      .eq("company_id", company.id)
       .eq("user_id", userId)
       .eq("is_decision_maker", true)
       .neq("status", "removed")

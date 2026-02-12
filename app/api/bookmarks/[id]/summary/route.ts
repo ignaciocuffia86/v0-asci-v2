@@ -73,7 +73,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
         supabase
           .from("user_company_contacts")
           .select("full_name, role, email, phone")
-          .eq("bookmark_id", bookmarkId)
+          .eq("company_id", bookmark.company_id)
           .eq("user_id", user.id)
           .limit(10),
 
