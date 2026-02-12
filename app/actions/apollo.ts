@@ -14,7 +14,8 @@ interface ApolloPersonSearchResult {
   headline?: string
   email?: string
   email_status?: string
-  phone_numbers?: { raw_number: string; type: string }[]
+  phone_numbers?: { raw_number: string; sanitized_number?: string; type: string }[]
+  sanitized_phone?: string
   linkedin_url?: string
   photo_url?: string
   city?: string
@@ -331,6 +332,7 @@ async function enrichApolloContacts(personIds: string[], apiKey: string): Promis
       body: JSON.stringify({
         details: personIds.map((id) => ({ id })),
         reveal_personal_emails: true,
+        reveal_phone_number: true,
       }),
     })
 
@@ -358,8 +360,11 @@ async function saveToApolloCache(
   const supabase = await createClient()
 
   for (const contact of contacts) {
-    const phoneNumber = contact.phone_numbers?.find((p) => p.type === "mobile")?.raw_number
-    const workPhone = contact.phone_numbers?.find((p) => p.type === "work")?.raw_number
+    const mobileEntry = contact.phone_numbers?.find((p) => p.type === "mobile")
+    const workEntry = contact.phone_numbers?.find((p) => p.type === "work")
+    const anyEntry = contact.phone_numbers?.[0]
+    const phoneNumber = mobileEntry?.raw_number || mobileEntry?.sanitized_number || contact.sanitized_phone || null
+    const workPhone = workEntry?.raw_number || workEntry?.sanitized_number || anyEntry?.raw_number || anyEntry?.sanitized_number || null
 
     await supabase.from("apollo_contacts_cache").upsert(
       {
@@ -455,8 +460,11 @@ export async function searchApolloProspects(
 
   let savedCount = 0
   for (const contact of contacts) {
-    const phoneNumber = contact.phone_numbers?.find((p) => p.type === "mobile")?.raw_number
-    const workPhone = contact.phone_numbers?.find((p) => p.type === "work")?.raw_number
+    const mobileEntry = contact.phone_numbers?.find((p) => p.type === "mobile")
+    const workEntry = contact.phone_numbers?.find((p) => p.type === "work")
+    const anyEntry = contact.phone_numbers?.[0]
+    const phoneNumber = mobileEntry?.raw_number || mobileEntry?.sanitized_number || contact.sanitized_phone || null
+    const workPhone = workEntry?.raw_number || workEntry?.sanitized_number || anyEntry?.raw_number || anyEntry?.sanitized_number || null
 
     const { data: existing } = await supabase
       .from("user_company_contacts")
