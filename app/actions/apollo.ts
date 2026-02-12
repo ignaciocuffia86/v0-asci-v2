@@ -308,7 +308,19 @@ async function callApolloAPI(
     const data: ApolloSearchResponse = await response.json()
 
     if (data.people && data.people.length > 0) {
-      const enrichedPeople = await enrichApolloContacts(data.people, apiKey, companyDomain || "")
+      // Apollo docs say: "use the id values from this response and include them 
+      // in the details array when calling the people/bulk_match endpoint"
+      // bulk_match max 10 per call
+      const enrichedPeople = await enrichApolloContacts(data.people, apiKey)
+      console.log("[v0] Apollo search returned", data.people.length, "people, enriched:", enrichedPeople.length)
+      if (enrichedPeople.length > 0) {
+        // Log sample enriched person to debug
+        const s = enrichedPeople[0]
+        console.log("[v0] Enriched sample:", JSON.stringify({
+          id: s.id, name: s.name, first_name: s.first_name, last_name: s.last_name,
+          email: s.email, linkedin_url: s.linkedin_url, phone_numbers: s.phone_numbers, photo_url: s.photo_url
+        }))
+      }
       return enrichedPeople.length > 0 ? enrichedPeople : data.people
     }
 
@@ -319,50 +331,62 @@ async function callApolloAPI(
   }
 }
 
-// Enriquecer contactos con datos completos (email, teléfono)
-// bulk_match requires identifying info (name+domain, email, or linkedin_url), NOT just id
+// Enriquecer contactos con datos completos (email, telefono, linkedin)
+// Apollo docs: "use the id values from the search response and include them
+// in the details array when calling people/bulk_match"
+// bulk_match processes max 10 people per call
 async function enrichApolloContacts(
   people: ApolloPersonSearchResult[],
   apiKey: string,
-  companyDomain: string,
 ): Promise<ApolloPersonSearchResult[]> {
+  const allEnriched: ApolloPersonSearchResult[] = []
+  const BATCH_SIZE = 10
+
   try {
-    const details = people.map((p) => {
-      // Prefer linkedin_url, then email, then name+domain
-      if (p.linkedin_url) return { linkedin_url: p.linkedin_url }
-      if (p.email) return { email: p.email }
-      return {
-        first_name: p.first_name,
-        last_name: p.last_name,
-        organization_domain: companyDomain,
+    for (let i = 0; i < people.length; i += BATCH_SIZE) {
+      const batch = people.slice(i, i + BATCH_SIZE)
+      const details = batch.map((p) => ({ id: p.id }))
+
+      console.log("[v0] bulk_match request body:", JSON.stringify({ details, reveal_personal_emails: true, reveal_phone_number: true }))
+
+      const response = await fetch("https://api.apollo.io/api/v1/people/bulk_match", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          details,
+          reveal_personal_emails: true,
+          reveal_phone_number: true,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorBody = await response.text()
+        console.error("[v0] Apollo bulk_match error:", response.status, errorBody)
+        continue
       }
-    })
 
-    const response = await fetch("https://api.apollo.io/api/v1/people/bulk_match", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-      },
-      body: JSON.stringify({
-        details,
-        reveal_personal_emails: true,
-        reveal_phone_number: true,
-      }),
-    })
+      const data = await response.json()
+      console.log("[v0] bulk_match raw response keys:", Object.keys(data))
+      console.log("[v0] bulk_match matches:", data.matches?.length, "people:", data.people?.length, "status:", data.status)
+      
+      // Log the raw first match to see its structure
+      if (data.matches?.[0]) {
+        console.log("[v0] bulk_match first match type:", typeof data.matches[0])
+        console.log("[v0] bulk_match first match keys:", Object.keys(data.matches[0]))
+        console.log("[v0] bulk_match first match:", JSON.stringify(data.matches[0]).slice(0, 500))
+      }
 
-    if (!response.ok) {
-      const errorBody = await response.text()
-      console.error("Apollo bulk_match error:", response.status, errorBody)
-      return []
+      const results = data.matches || data.people || []
+      allEnriched.push(...results)
     }
-
-    const data = await response.json()
-    return data.matches || data.people || []
   } catch (error) {
-    console.error("Error enriching Apollo contacts:", error)
-    return []
+    console.error("[v0] Error enriching Apollo contacts:", error)
   }
+
+  return allEnriched
 }
 
 // Guardar contactos en cache global
