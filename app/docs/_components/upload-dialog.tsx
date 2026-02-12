@@ -15,8 +15,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Upload, Link2, FileText, Loader2, AlertCircle } from "lucide-react"
+import { Upload, Link2, FileText, Loader2, AlertCircle, FolderOpen } from "lucide-react"
 import { toast } from "sonner"
+import { FolderUploadTab } from "./folder-upload-tab"
 
 const ACCEPTED_TYPES: Record<string, string[]> = {
   "application/pdf": [".pdf"],
@@ -178,7 +179,7 @@ export function UploadDialog({ open, onOpenChange, onDocumentCreated }: UploadDi
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>Agregar documento</DialogTitle>
           <DialogDescription>
@@ -187,10 +188,14 @@ export function UploadDialog({ open, onOpenChange, onDocumentCreated }: UploadDi
         </DialogHeader>
 
         <Tabs defaultValue="file" className="mt-2">
-          <TabsList className="grid w-full grid-cols-2">
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="file" className="gap-2">
               <Upload className="h-4 w-4" />
               Archivo
+            </TabsTrigger>
+            <TabsTrigger value="folder" className="gap-2">
+              <FolderOpen className="h-4 w-4" />
+              Carpeta
             </TabsTrigger>
             <TabsTrigger value="url" className="gap-2">
               <Link2 className="h-4 w-4" />
@@ -236,6 +241,13 @@ export function UploadDialog({ open, onOpenChange, onDocumentCreated }: UploadDi
                 </div>
               )}
             </div>
+          </TabsContent>
+
+          <TabsContent value="folder" className="mt-4">
+            <FolderUploadTab
+              onDocumentCreated={onDocumentCreated}
+              onOpenChange={onOpenChange}
+            />
           </TabsContent>
 
           <TabsContent value="url" className="mt-4 space-y-4">
