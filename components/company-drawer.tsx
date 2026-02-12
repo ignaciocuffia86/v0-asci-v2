@@ -365,6 +365,7 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
     return (
       <Sheet open={isOpen} onOpenChange={onClose}>
         <SheetContent className="w-full sm:max-w-3xl overflow-y-auto bg-white dark:bg-slate-950 p-0 flex flex-col h-full items-center justify-center">
+          <SheetTitle className="sr-only">Cargando empresa</SheetTitle>
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
           <p className="mt-4 text-muted-foreground">Cargando información...</p>
         </SheetContent>
