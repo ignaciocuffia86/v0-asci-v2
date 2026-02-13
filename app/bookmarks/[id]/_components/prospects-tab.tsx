@@ -42,6 +42,15 @@ import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import { exportToCSV, exportToExcel, prepareProspectsForExport } from "@/lib/export-utils"
 
+function proxyImageUrl(url: string | undefined | null): string {
+  if (!url) return ""
+  // Proxy external images to avoid CORS issues
+  if (url.includes("salesql.s3") || url.includes("d2ojpxxtu63wzl") || url.includes("licdn.com")) {
+    return `/api/proxy-image?url=${encodeURIComponent(url)}`
+  }
+  return url
+}
+
 interface Prospect {
   id: string
   full_name: string
@@ -96,6 +105,13 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite }: Prospe
   const [reasoning, setReasoning] = useState("")
   const [customJobTitle, setCustomJobTitle] = useState("")
 
+  // Value profile for enriched job title suggestions
+  const [valueProfile, setValueProfile] = useState<{
+    profileSummary: string
+    targetTechnologies: string[]
+    targetProcesses: string[]
+  } | null>(null)
+
   // Copiar al portapapeles
   const [copiedId, setCopiedId] = useState<string | null>(null)
 
@@ -109,11 +125,25 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite }: Prospe
   const loadData = useCallback(async () => {
     setIsLoading(true)
 
-    // Cargar contexto de búsqueda
-    const context = await getBookmarkSearchContext(bookmarkId)
+    // Cargar contexto de busqueda + value profile en paralelo
+    const [context, profileRes] = await Promise.all([
+      getBookmarkSearchContext(bookmarkId),
+      fetch(`/api/documents/context-for-bookmark?bookmarkId=${bookmarkId}`).then((r) =>
+        r.ok ? r.json() : null
+      ).catch(() => null),
+    ])
+
     setTechnologies(context.technologies)
     setProcesses(context.processes)
     setCompany(context.company)
+
+    if (profileRes?.valueProfile) {
+      setValueProfile({
+        profileSummary: profileRes.valueProfile.profile_summary || "",
+        targetTechnologies: profileRes.valueProfile.target_technologies || [],
+        targetProcesses: profileRes.valueProfile.target_processes || [],
+      })
+    }
 
     // Cargar prospectos existentes
     const existingProspects = await getProspects(bookmarkId)
@@ -133,7 +163,7 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite }: Prospe
   const handleInferJobTitles = async () => {
     setIsInferring(true)
     try {
-      const result = await inferJobTitles(technologies, processes)
+      const result = await inferJobTitles(technologies, processes, valueProfile)
       setSuggestedJobTitles(result.jobTitles)
       setSelectedJobTitles(result.jobTitles.slice(0, 4)) // Seleccionar los primeros 4 por defecto
       setReasoning(result.reasoning)
@@ -355,7 +385,7 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite }: Prospe
               {reasoning && <p className="text-xs text-muted-foreground italic">{reasoning}</p>}
 
               <div className="flex flex-wrap gap-2">
-                {suggestedJobTitles.map((title) => (
+                {[...new Set(suggestedJobTitles)].map((title) => (
                   <Badge
                     key={title}
                     variant={selectedJobTitles.includes(title) ? "default" : "outline"}
@@ -503,7 +533,7 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite }: Prospe
 
                       {/* Avatar */}
                       <Avatar className="h-12 w-12 flex-shrink-0">
-                        <AvatarImage src={prospect.profile_picture_url || ""} />
+                        <AvatarImage src={proxyImageUrl(prospect.profile_picture_url)} />
                         <AvatarFallback>
                           {prospect.first_name?.[0]}
                           {prospect.last_name?.[0]}
@@ -663,7 +693,7 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite }: Prospe
                   >
                     <div className="flex items-center gap-3">
                       <Avatar className="h-8 w-8">
-                        <AvatarImage src={prospect.profile_picture_url || ""} />
+                        <AvatarImage src={proxyImageUrl(prospect.profile_picture_url)} />
                         <AvatarFallback className="text-xs">
                           {prospect.first_name?.[0]}
                           {prospect.last_name?.[0]}

@@ -71,7 +71,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         supabase
           .from("user_company_contacts")
           .select("full_name, role, email, phone, mobile_phone, seniority, headline, is_decision_maker, linkedin_url")
-          .eq("bookmark_id", bookmarkId)
+          .eq("company_id", company.id)
           .eq("user_id", user.id)
           .eq("is_decision_maker", true)
           .limit(20),
@@ -384,10 +384,10 @@ REGLAS:
 
     let summary: string
     try {
-      summary = await generateGeminiContent(prompt, "gemini-2.0-flash", 0.4)
+      summary = await generateGeminiContent(prompt, "gemini-2.5-flash", 0.4)
     } catch (error) {
-      console.error("[v0] Gemini 2.0 Flash falló, intentando con 1.5 Pro...")
-      summary = await generateGeminiContent(prompt, "gemini-1.5-pro", 0.4)
+      console.error("[v0] Gemini 2.5 Flash fallo, intentando con 2.0 Flash...")
+      summary = await generateGeminiContent(prompt, "gemini-2.0-flash", 0.4)
     }
 
     const keyContacts = [

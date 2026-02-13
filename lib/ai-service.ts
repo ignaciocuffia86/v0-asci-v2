@@ -1,14 +1,24 @@
 export async function generateGeminiContent(
   prompt: string,
-  model = "gemini-2.0-flash",
+  model = "gemini-2.5-flash",
   temperature = 0.7,
+  thinkingBudget?: number,
 ): Promise<string> {
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY
   if (!apiKey) throw new Error("Google API Key is missing")
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`
 
-  console.log(`[v0] Sending request to Gemini (${model})...`)
+  const isThinkingModel = model.includes("2.5")
+  const generationConfig: Record<string, any> = {
+    temperature: temperature,
+  }
+
+  // For 2.5 models: control thinking budget to reduce latency on simple tasks
+  // thinkingBudget=0 disables thinking, undefined uses default
+  if (isThinkingModel && thinkingBudget !== undefined) {
+    generationConfig.thinkingConfig = { thinkingBudget }
+  }
 
   try {
     const response = await fetch(url, {
@@ -22,9 +32,7 @@ export async function generateGeminiContent(
             parts: [{ text: prompt }],
           },
         ],
-        generationConfig: {
-          temperature: temperature,
-        },
+        generationConfig,
       }),
     })
 

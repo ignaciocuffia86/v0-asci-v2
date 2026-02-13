@@ -195,7 +195,7 @@ export default function BookmarksPage() {
   }
 
   const deleteBookmark = async (id: string) => {
-    if (confirm("¿Estás seguro de eliminar este bookmark? Se borrarán también las estrategias y señales privadas.")) {
+    if (confirm("Eliminar este bookmark?\n\nSe eliminan: estrategia, icebreakers, brief y senales privadas.\nSe conservan: noticias, implementaciones y contactos (reutilizables por otros usuarios).")) {
       await supabase.from("bookmarks").delete().eq("id", id)
       fetchBookmarks()
     }

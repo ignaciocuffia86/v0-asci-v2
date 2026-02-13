@@ -30,6 +30,7 @@ import {
   getContactsForIcebreaker,
   searchDecisionMakers,
 } from "@/app/actions/workspace"
+import { getActiveIcebreakerTemplates, type IcebreakerTemplate } from "@/app/actions/templates"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import {
   Dialog,
@@ -89,6 +90,8 @@ interface IcebreakerHistory {
 export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: string; companyName: string }) {
   const [contacts, setContacts] = useState<Contact[]>([])
   const [icebreakers, setIcebreakers] = useState<IcebreakerHistory[]>([])
+  const [templates, setTemplates] = useState<IcebreakerTemplate[]>([])
+  const [selectedTemplate, setSelectedTemplate] = useState<string>("")
   const [isLoading, setIsLoading] = useState(true)
   const [isGenerating, setIsGenerating] = useState(false)
   const [selectedContact, setSelectedContact] = useState<string>("")
@@ -103,12 +106,17 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
   const loadData = async () => {
     setIsLoading(true)
     try {
-      const [contactsData, icebreakersData] = await Promise.all([
+      const [contactsData, icebreakersData, templatesData] = await Promise.all([
         getContactsForIcebreaker(bookmarkId),
         getIcebreakers(bookmarkId),
+        getActiveIcebreakerTemplates(),
       ])
       setContacts(contactsData ?? [])
       setIcebreakers(icebreakersData ?? [])
+      setTemplates(templatesData ?? [])
+      if (templatesData?.length > 0 && !selectedTemplate) {
+        setSelectedTemplate(templatesData[0].id)
+      }
     } catch (error) {
       console.error("[v0] Error loading icebreaker data:", error)
       setContacts([])
@@ -134,7 +142,7 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
       const contactData = contacts.find((c) => c.id === selectedContact)
       const contactSource = contactData?.source || "signal"
 
-      const result = await generateSimplifiedIcebreaker(bookmarkId, selectedContact, contactSource)
+      const result = await generateSimplifiedIcebreaker(bookmarkId, selectedContact, contactSource, selectedTemplate || undefined)
       setGeneratedResult(result)
       await loadData()
     } catch (error) {
@@ -265,6 +273,20 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
                 Generar Icebreaker
               </CardTitle>
               <CardDescription>Genera un mensaje de LinkedIn y un email de seguimiento personalizados.</CardDescription>
+              {/* Signal tags at tab level (shown once, not per contact) */}
+              {(() => {
+                const allProducts = [...new Set(signalContacts.flatMap((c) => c.products ?? []))]
+                if (allProducts.length === 0) return null
+                return (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {allProducts.map((p) => (
+                      <Badge key={p} variant="secondary" className="text-[10px] px-1.5 h-5">
+                        {p}
+                      </Badge>
+                    ))}
+                  </div>
+                )
+              })()}
             </CardHeader>
             <CardContent className="space-y-4">
               {/* Selector de contacto */}
@@ -320,16 +342,16 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
                     {signalContacts.length > 0 && (
                       <>
                         <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
-                          Contactos con Señales
+                          Contactos con Senales
                         </div>
                         {signalContacts.map((c) => (
                           <SelectItem key={c.id} value={c.id}>
                             <div className="flex items-center gap-2">
                               <span>{c.full_name}</span>
-                              {(c.products ?? []).length > 0 && (
-                                <Badge variant="secondary" className="text-[10px] px-1 h-4">
-                                  {(c.products ?? []).slice(0, 2).join(", ")}
-                                </Badge>
+                              {(c.current_position_title || c.headline) && (
+                                <span className="text-muted-foreground text-xs truncate max-w-[180px]">
+                                  {c.current_position_title || c.headline}
+                                </span>
                               )}
                             </div>
                           </SelectItem>
@@ -341,13 +363,17 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
                       <>
                         <Separator className="my-1" />
                         <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
-                          Tomadores de Decisión
+                          Tomadores de Decision
                         </div>
                         {decisionMakerContacts.map((c) => (
                           <SelectItem key={c.id} value={c.id}>
                             <div className="flex items-center gap-2">
                               <span>{c.full_name}</span>
-                              <span className="text-muted-foreground text-xs">({c.role})</span>
+                              {c.role && (
+                                <span className="text-muted-foreground text-xs truncate max-w-[180px]">
+                                  {c.role}
+                                </span>
+                              )}
                             </div>
                           </SelectItem>
                         ))}
@@ -457,6 +483,30 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
                     </div>
                   </CardContent>
                 </Card>
+              )}
+
+              {/* Selector de tono */}
+              {templates.length > 0 && (
+                <div className="space-y-2">
+                  <Label>Tono del mensaje</Label>
+                  <Select value={selectedTemplate} onValueChange={setSelectedTemplate}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecciona un tono..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {templates.map((t) => (
+                        <SelectItem key={t.id} value={t.id}>
+                          <div className="flex flex-col">
+                            <span>{t.name}</span>
+                            {t.description && (
+                              <span className="text-muted-foreground text-xs">{t.description}</span>
+                            )}
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               )}
 
               <Button

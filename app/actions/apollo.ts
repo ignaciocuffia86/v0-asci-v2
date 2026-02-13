@@ -14,7 +14,8 @@ interface ApolloPersonSearchResult {
   headline?: string
   email?: string
   email_status?: string
-  phone_numbers?: { raw_number: string; type: string }[]
+  phone_numbers?: { raw_number: string; sanitized_number?: string; type: string }[]
+  sanitized_phone?: string
   linkedin_url?: string
   photo_url?: string
   city?: string
@@ -45,49 +46,60 @@ interface ApolloSearchResponse {
 export async function inferJobTitles(
   technologies: string[],
   processes: string[],
+  valueProfile?: {
+    profileSummary: string
+    targetTechnologies: string[]
+    targetProcesses: string[]
+  } | null,
 ): Promise<{ jobTitles: string[]; reasoning: string }> {
   const isGeneralBookmark = technologies.length === 0 && processes.length === 0
 
-  const prompt = `Eres un experto en estructuras organizacionales B2B.
-Dado el contexto de búsqueda (tecnologías y/o procesos), devuelve los job titles más relevantes de tomadores de decisión.
+  const valueProfileSection = valueProfile
+    ? `\n=== PROPUESTA DE VALOR DEL VENDEDOR ===
+Lo que vendo/ofrezco: ${valueProfile.profileSummary || "No definido"}
+Tecnologias que manejo: ${valueProfile.targetTechnologies.join(", ") || "No definidas"}
+Procesos que resuelvo: ${valueProfile.targetProcesses.join(", ") || "No definidos"}
 
-Contexto de búsqueda:
-- Tecnologías: ${technologies.length > 0 ? technologies.join(", ") : "No especificadas"}
-- Procesos: ${processes.length > 0 ? processes.join(", ") : "No especificados"}
-- Tipo de búsqueda: ${isGeneralBookmark ? "BÚSQUEDA GENERAL (sin filtros específicos)" : "Búsqueda filtrada"}
+IMPORTANTE: Usa esta informacion para recomendar job titles que sean COMPRADORES de lo que el vendedor ofrece.
+Por ejemplo: si el vendedor implementa SAP y la empresa tiene senales de SAP, recomienda roles que deciden sobre SAP (Director de Sistemas, Gerente de ERP, etc.).
+Si el vendedor ofrece automatizacion de procesos financieros, recomienda CFO, Controller, Director de Finanzas, etc.`
+    : ""
 
-Reglas:
-1. **SI ES BÚSQUEDA GENERAL (sin tecnologías ni procesos especificados)**: Recomendar C-Level y Directores de cada vertical de la empresa:
-   - CEO, COO, CFO, CMO, CTO, CHRO
-   - Y sus sinónimos: Chief Executive Officer, Chief Operating Officer, Chief Financial Officer, Chief Marketing Officer, Chief Technology Officer, Chief Human Resources Officer
-   - También incluir: Managing Director, General Manager, VP Operations, VP Finance, VP Marketing
-   
-2. Si son tecnologías de cloud/infraestructura (AWS, Azure, GCP, Kubernetes, Docker) → incluir CTO, VP Engineering, Cloud Architect, DevOps Manager, IT Director
+  const prompt = `Eres un experto en estructuras organizacionales B2B en empresas de Latinoamerica.
+Dado el contexto de busqueda (tecnologias y/o procesos de la empresa target) y la propuesta de valor del vendedor, devuelve los job titles mas relevantes de tomadores de decision.
 
-3. Si son tecnologías de datos (Snowflake, Databricks, BigQuery) → incluir CDO, Data Engineering Manager, Analytics Director, Head of Data
+=== SENALES DE LA EMPRESA TARGET ===
+- Tecnologias detectadas: ${technologies.length > 0 ? technologies.join(", ") : "No especificadas"}
+- Procesos detectados: ${processes.length > 0 ? processes.join(", ") : "No especificados"}
+- Tipo de busqueda: ${isGeneralBookmark ? "BUSQUEDA GENERAL (sin filtros especificos)" : "Busqueda filtrada"}
+${valueProfileSection}
 
-4. Si son tecnologías de software/desarrollo → incluir CTO, VP Engineering, Engineering Manager, Software Architect
+=== REGLAS CRITICAS ===
 
-5. Si son tecnologías de seguridad → incluir CISO, Security Director, VP Security
+1. Los job titles DEBEN estar en el formato que las personas usan en LinkedIn en Latinoamerica. Incluir SIEMPRE variantes en espanol Y en ingles porque en LATAM se usan ambos indistintamente:
+   - Para TI: "Director de TI", "Director de Sistemas", "Director de IT", "IT Manager", "Gerente de Sistemas", "Jefe de Sistemas", "CTO"
+   - Para Finanzas: "Director de Finanzas", "CFO", "Gerente de Finanzas", "Controller", "Contralor"
+   - Para Operaciones: "Director de Operaciones", "COO", "Gerente de Operaciones", "VP Operaciones"
+   - Para RRHH: "Director de RRHH", "Director de Recursos Humanos", "CHRO", "Gerente de Capital Humano", "VP People"
+   - Para Compras: "Director de Compras", "Procurement Manager", "Gerente de Abastecimiento"
+   - Para Comercial: "Director Comercial", "VP Sales", "Gerente Comercial", "Chief Revenue Officer"
 
-6. Si son procesos de transformación digital → incluir COO, Digital Transformation Lead, Chief Digital Officer
+2. SI HAY PROPUESTA DE VALOR DEL VENDEDOR: Prioriza roles que COMPRAN lo que el vendedor ofrece, no solo roles relacionados con la tecnologia detectada.
 
-7. Si son procesos de RRHH → incluir CHRO, VP People, HR Director
+3. SI ES BUSQUEDA GENERAL: Incluir C-Level y Directores principales en espanol e ingles.
 
-8. Si son procesos financieros → incluir CFO, VP Finance, Controller
+4. Incluir variantes como las personas realmente ponen en LinkedIn (abreviaciones, mezcla de idiomas, cargo con "de" o sin "de").
 
-9. Siempre incluir variantes y sinónimos comunes (IT Manager = Technology Manager = Systems Manager)
+5. Maximo 12 job titles, ordenados por relevancia para la venta.
 
-10. Máximo 10 job titles, ordenados por relevancia
-
-Devuelve SOLO un JSON válido con este formato exacto:
+Devuelve SOLO un JSON valido con este formato exacto:
 {
-  "jobTitles": ["CTO", "VP Engineering", "..."],
-  "reasoning": "Breve explicación de por qué estos roles (1-2 oraciones)"
+  "jobTitles": ["Director de TI", "IT Manager", "CTO", "Gerente de Sistemas", "..."],
+  "reasoning": "Breve explicacion de por que estos roles son los compradores mas relevantes (1-2 oraciones en espanol)"
 }`
 
   try {
-    const text = await generateGeminiContent(prompt, "gemini-2.0-flash", 0.5)
+    const text = await generateGeminiContent(prompt, "gemini-2.5-flash", 0.5)
 
     const jsonMatch = text.match(/\{[\s\S]*\}/)
     if (jsonMatch) {
@@ -101,7 +113,7 @@ Devuelve SOLO un JSON válido con este formato exacto:
     console.error("Error inferring job titles with Gemini:", error)
 
     try {
-      const text = await generateGeminiContent(prompt, "gemini-1.5-pro", 0.5)
+      const text = await generateGeminiContent(prompt, "gemini-2.0-flash", 0.5)
       const jsonMatch = text.match(/\{[\s\S]*\}/)
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0])
@@ -117,14 +129,14 @@ Devuelve SOLO un JSON válido con este formato exacto:
 
   if (isGeneralBookmark) {
     return {
-      jobTitles: ["CEO", "COO", "CFO", "CTO", "CMO", "CHRO", "Managing Director", "General Manager"],
-      reasoning: "Job titles de C-Level y directivos por defecto para búsqueda general",
+      jobTitles: ["CEO", "Director General", "COO", "Director de Operaciones", "CFO", "Director de Finanzas", "CTO", "Director de TI"],
+      reasoning: "Job titles de C-Level y directivos por defecto para busqueda general (espanol e ingles)",
     }
   }
 
   return {
-    jobTitles: ["CTO", "VP Engineering", "IT Director", "Technology Manager"],
-    reasoning: "Job titles genéricos por defecto",
+    jobTitles: ["CTO", "Director de TI", "IT Manager", "Gerente de Sistemas"],
+    reasoning: "Job titles genericos por defecto en formato LATAM",
   }
 }
 
@@ -218,6 +230,8 @@ async function searchApolloCache(
 
   return cached
     .filter((c) => {
+      // Quality check: skip un-enriched entries (no last_name = not enriched)
+      if (!c.last_name && !c.linkedin_url && !c.email) return false
       const cachedTitle = (c.title || "").toLowerCase()
       return normalizedJobTitles.some((jt) => cachedTitle.includes(jt) || jt.includes(cachedTitle.split(",")[0]))
     })
@@ -296,9 +310,10 @@ async function callApolloAPI(
     const data: ApolloSearchResponse = await response.json()
 
     if (data.people && data.people.length > 0) {
-      const personIds = data.people.map((p) => p.id)
-      const enrichedPeople = await enrichApolloContacts(personIds, apiKey)
-      return enrichedPeople
+      // api_search returns minimal data (first_name, title, id only)
+      // Enrich each person via people/match with their id to get full data
+      const enrichedPeople = await enrichApolloContacts(data.people, apiKey)
+      return enrichedPeople.length > 0 ? enrichedPeople : data.people
     }
 
     return data.people || []
@@ -308,33 +323,72 @@ async function callApolloAPI(
   }
 }
 
-// Enriquecer contactos con datos completos (email, teléfono)
-async function enrichApolloContacts(personIds: string[], apiKey: string): Promise<ApolloPersonSearchResult[]> {
-  try {
-    const response = await fetch("https://api.apollo.io/api/v1/people/bulk_match", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-      },
-      body: JSON.stringify({
-        details: personIds.map((id) => ({ id })),
-        reveal_personal_emails: true,
-      }),
-    })
+// Enrich contacts using people/match (singular) with the person's Apollo ID.
+// api_search only returns first_name, title, id. people/match with id returns
+// full data: last_name, email, linkedin_url, photo_url, seniority, etc.
+// Each call consumes 1 credit. We process sequentially with small delays.
+async function enrichApolloContacts(
+  people: ApolloPersonSearchResult[],
+  apiKey: string,
+): Promise<ApolloPersonSearchResult[]> {
+  const enriched: ApolloPersonSearchResult[] = []
 
-    if (!response.ok) {
-      const errorBody = await response.text()
-      console.error("Apollo bulk_match error:", response.status, errorBody)
-      return []
+  for (const person of people) {
+    try {
+      const response = await fetch("https://api.apollo.io/api/v1/people/match", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          id: person.id,
+          reveal_personal_emails: true,
+        }),
+      })
+
+      if (!response.ok) {
+        // If enrichment fails for one person, keep the search data
+        enriched.push(person)
+        continue
+      }
+
+      const data = await response.json()
+      if (data.person) {
+        enriched.push(data.person)
+
+        // Request phone number asynchronously via webhook (Apollo requires this)
+        const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://asci.bigua.lat"
+        try {
+          await fetch("https://api.apollo.io/api/v1/people/match", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": apiKey,
+            },
+            body: JSON.stringify({
+              id: person.id,
+              reveal_phone_number: true,
+              webhook_url: `${baseUrl}/api/webhooks/apollo`,
+            }),
+          })
+        } catch {
+          // Phone reveal is best-effort, don't break the flow
+        }
+      } else {
+        enriched.push(person)
+      }
+
+      // Small delay between calls to respect rate limits
+      if (people.length > 1) {
+        await new Promise((resolve) => setTimeout(resolve, 200))
+      }
+    } catch (error) {
+      enriched.push(person)
     }
-
-    const data = await response.json()
-    return data.matches || data.people || []
-  } catch (error) {
-    console.error("Error enriching Apollo contacts:", error)
-    return []
   }
+
+  return enriched
 }
 
 // Guardar contactos en cache global
@@ -347,17 +401,23 @@ async function saveToApolloCache(
   const supabase = await createClient()
 
   for (const contact of contacts) {
-    const phoneNumber = contact.phone_numbers?.find((p) => p.type === "mobile")?.raw_number
-    const workPhone = contact.phone_numbers?.find((p) => p.type === "work")?.raw_number
+    // Only cache enriched contacts (must have at least last_name or linkedin_url)
+    if (!contact.last_name && !contact.linkedin_url && !contact.email) continue
+
+    const mobileEntry = contact.phone_numbers?.find((p) => p.type === "mobile")
+    const workEntry = contact.phone_numbers?.find((p) => p.type === "work")
+    const anyEntry = contact.phone_numbers?.[0]
+    const phoneNumber = mobileEntry?.raw_number || mobileEntry?.sanitized_number || contact.sanitized_phone || null
+    const workPhone = workEntry?.raw_number || workEntry?.sanitized_number || anyEntry?.raw_number || anyEntry?.sanitized_number || null
 
     await supabase.from("apollo_contacts_cache").upsert(
       {
         apollo_id: contact.id,
         company_domain: companyDomain,
         company_linkedin_url: companyLinkedIn,
-        first_name: contact.first_name,
-        last_name: contact.last_name,
-        full_name: contact.name || `${contact.first_name} ${contact.last_name}`,
+        first_name: contact.first_name || null,
+        last_name: contact.last_name || null,
+        full_name: contact.name || [contact.first_name, contact.last_name].filter(Boolean).join(" ") || "Sin nombre",
         title: contact.title,
         headline: contact.headline,
         email: contact.email,
@@ -444,25 +504,42 @@ export async function searchApolloProspects(
 
   let savedCount = 0
   for (const contact of contacts) {
-    const phoneNumber = contact.phone_numbers?.find((p) => p.type === "mobile")?.raw_number
-    const workPhone = contact.phone_numbers?.find((p) => p.type === "work")?.raw_number
+    // Skip un-enriched contacts (only have first_name from search, nothing useful)
+    if (!contact.last_name && !contact.linkedin_url && !contact.email) continue
 
-    const { data: existing } = await supabase
+    const mobileEntry = contact.phone_numbers?.find((p) => p.type === "mobile")
+    const workEntry = contact.phone_numbers?.find((p) => p.type === "work")
+    const anyEntry = contact.phone_numbers?.[0]
+    const phoneNumber = mobileEntry?.raw_number || mobileEntry?.sanitized_number || contact.sanitized_phone || null
+    const workPhone = workEntry?.raw_number || workEntry?.sanitized_number || anyEntry?.raw_number || anyEntry?.sanitized_number || null
+
+    // Check for duplicate: by linkedin_url if available, otherwise by name
+    const firstName = contact.first_name || ""
+    const lastName = contact.last_name || ""
+    const fullName = contact.name || [firstName, lastName].filter(Boolean).join(" ") || "Sin nombre"
+
+    let existingQuery = supabase
       .from("user_company_contacts")
       .select("id")
       .eq("user_id", user.id)
-      .eq("bookmark_id", bookmarkId)
-      .eq("linkedin_url", contact.linkedin_url)
-      .maybeSingle()
+      .eq("company_id", company.id)
+
+    if (contact.linkedin_url) {
+      existingQuery = existingQuery.eq("linkedin_url", contact.linkedin_url)
+    } else {
+      existingQuery = existingQuery.eq("full_name", fullName)
+    }
+
+    const { data: existing } = await existingQuery.maybeSingle()
 
     if (!existing) {
       const { error } = await supabase.from("user_company_contacts").insert({
         user_id: user.id,
         company_id: company.id,
         bookmark_id: bookmarkId,
-        first_name: contact.first_name,
-        last_name: contact.last_name,
-        full_name: contact.name || `${contact.first_name} ${contact.last_name}`,
+        first_name: firstName || null,
+        last_name: lastName || null,
+        full_name: fullName,
         role: contact.title,
         headline: contact.headline,
         email: contact.email,
@@ -491,7 +568,7 @@ export async function searchApolloProspects(
   return { success: true, count: savedCount }
 }
 
-// Obtener prospectos (DMs) guardados
+// Obtener prospectos (DMs) guardados - busca por company_id para reutilizar entre bookmarks
 export async function getProspects(bookmarkId: string) {
   const supabase = await createClient()
   const {
@@ -500,10 +577,13 @@ export async function getProspects(bookmarkId: string) {
 
   if (!user) return []
 
+  const { data: bookmark } = await supabase.from("bookmarks").select("company_id").eq("id", bookmarkId).single()
+  if (!bookmark) return []
+
   const { data } = await supabase
     .from("user_company_contacts")
     .select("*")
-    .eq("bookmark_id", bookmarkId)
+    .eq("company_id", bookmark.company_id)
     .eq("user_id", user.id)
     .eq("is_decision_maker", true)
     .neq("status", "removed")
@@ -568,10 +648,13 @@ export async function getRemovedProspects(bookmarkId: string) {
 
   if (!user) return []
 
+  const { data: bookmark } = await supabase.from("bookmarks").select("company_id").eq("id", bookmarkId).single()
+  if (!bookmark) return []
+
   const { data } = await supabase
     .from("user_company_contacts")
     .select("*")
-    .eq("bookmark_id", bookmarkId)
+    .eq("company_id", bookmark.company_id)
     .eq("user_id", user.id)
     .eq("is_decision_maker", true)
     .eq("status", "removed")
@@ -604,7 +687,7 @@ export async function getContactsForIcebreaker(bookmarkId: string) {
   const { data: prospects } = await supabase
     .from("user_company_contacts")
     .select("*")
-    .eq("bookmark_id", bookmarkId)
+    .eq("company_id", bookmark.company_id)
     .eq("user_id", user.id)
     .eq("is_decision_maker", true)
 

@@ -133,6 +133,24 @@ export interface BriefContext {
 
   // User info
   userEmail: string
+
+  // User value profile from Docs feature (optional)
+  valueProfile?: {
+    profileSummary: string
+    targetIndustries: string[]
+    targetTechnologies: string[]
+    targetProcesses: string[]
+  } | null
+
+  // Ranked relevant documents for this bookmark (optional, max 3)
+  relevantDocs?: {
+    title: string
+    type: string
+    summary: string | null
+    matchedTags: { type: "industry" | "technology" | "process"; value: string }[]
+    score: number
+    extractedText: string | null
+  }[]
 }
 
 export interface BriefMetadata {
