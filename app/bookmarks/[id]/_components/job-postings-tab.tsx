@@ -36,41 +36,21 @@ export function BookmarkJobPostings({ bookmarkId }: { bookmarkId: string }) {
         .single()
 
       if (!bookmark) {
-        console.log("[v0] No bookmark found for id:", bookmarkId)
         setJobPostings([])
         setIsLoading(false)
         return
       }
 
-      console.log("[v0] Bookmark data:", JSON.stringify({
-        company_id: bookmark.company_id,
-        search_context: bookmark.search_context,
-      }))
-
       const filterSignalIds = bookmark.search_context?.filterSignalIds || null
 
       const isGeneralBookmark = !filterSignalIds || filterSignalIds.length === 0
 
-      console.log("[v0] RPC call params:", JSON.stringify({
-        p_company_id: bookmark.company_id,
-        p_signal_ids: isGeneralBookmark ? null : filterSignalIds,
-        isGeneralBookmark,
-        filterSignalIdsLength: filterSignalIds?.length,
-        p_limit: 100,
-      }))
-
       // Fetch job postings using RPC
-      const { data: jobPostingsData, error: rpcError } = await supabase.rpc("get_company_job_postings", {
+      const { data: jobPostingsData } = await supabase.rpc("get_company_job_postings", {
         p_company_id: bookmark.company_id,
         p_signal_ids: isGeneralBookmark ? null : filterSignalIds,
         p_limit: 100,
       })
-
-      console.log("[v0] RPC result:", JSON.stringify({
-        count: jobPostingsData?.length ?? 0,
-        error: rpcError,
-        firstFew: jobPostingsData?.slice(0, 2),
-      }))
 
       setJobPostings(jobPostingsData || [])
     } catch (error) {

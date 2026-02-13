@@ -1,11 +1,14 @@
 -- Fix: Job postings not showing in workspace after bookmarking from process search
 --
--- Root cause: get_company_job_postings filters on jp.company_id (job_postings table),
+-- Root cause #1: get_company_job_postings filters on jp.company_id (job_postings table),
 -- but many job_postings have company_id = NULL. The drawer RPC (get_company_drawer_data)
 -- works because it starts FROM signals and filters on s.company_id (always populated).
 --
--- Fix: Rewrite get_company_job_postings to start FROM signals (like the drawer),
--- joining to job_postings, and filtering on s.company_id instead of jp.company_id.
+-- Root cause #2: get_company_job_postings was SECURITY INVOKER (default), meaning RLS
+-- applies. The job_postings table has RLS enabled but NO SELECT policy, so all reads
+-- are blocked for authenticated users. The drawer RPC works because it's SECURITY DEFINER.
+--
+-- Fix: Rewrite query to start FROM signals (like the drawer) + add SECURITY DEFINER.
 
 CREATE OR REPLACE FUNCTION get_company_job_postings(
   p_company_id UUID,
@@ -53,4 +56,4 @@ BEGIN
   ORDER BY jp.posted_at DESC
   LIMIT p_limit;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
