@@ -9,7 +9,6 @@ import { Search, Building2, Loader2, Users, GraduationCap, Flame } from "lucide-
 import { searchCompaniesByName, getCompanySignalSummary, type CompanySignalSummary } from "@/app/actions/search-v2"
 import { CompanyDrawer } from "@/components/company-drawer"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { createClient } from "@/lib/supabase/client"
 
 export function CompanySearch() {
   const [query, setQuery] = useState("")
@@ -18,7 +17,6 @@ export function CompanySearch() {
   const [summary, setSummary] = useState<CompanySignalSummary | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
-  const [jobPostingsCount, setJobPostingsCount] = useState(0)
 
   useEffect(() => {
     const timer = setTimeout(async () => {
@@ -42,14 +40,6 @@ export function CompanySearch() {
     try {
       const data = await getCompanySignalSummary(company.id)
       setSummary(data)
-
-      const supabase = createClient()
-      const { count } = await supabase
-        .from("job_postings")
-        .select("id", { count: "exact", head: true })
-        .eq("company_id", company.id)
-        .eq("is_active", true)
-      setJobPostingsCount(count || 0)
     } catch (error) {
       console.error(error)
     } finally {
@@ -62,7 +52,7 @@ export function CompanySearch() {
     setSelectedCompany(null)
     setSummary(null)
     setSuggestions([])
-    setJobPostingsCount(0)
+
   }
 
   return (
@@ -176,17 +166,17 @@ export function CompanySearch() {
                   <div className="text-3xl font-bold text-muted-foreground">{summary.alumni_with_tech_signals}</div>
                 </CardContent>
               </Card>
-              <Card className={jobPostingsCount > 0 ? "border-orange-200 bg-orange-50/50" : ""}>
+              <Card className={(selectedCompany?.job_postings_count || 0) > 0 ? "border-orange-200 bg-orange-50/50" : ""}>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                    <Flame className={`h-4 w-4 ${jobPostingsCount > 0 ? "text-orange-500" : ""}`} /> Búsquedas Laborales
+                    <Flame className={`h-4 w-4 ${(selectedCompany?.job_postings_count || 0) > 0 ? "text-orange-500" : ""}`} /> Búsquedas Laborales
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div
-                    className={`text-3xl font-bold ${jobPostingsCount > 0 ? "text-orange-600" : "text-muted-foreground"}`}
+                    className={`text-3xl font-bold ${(selectedCompany?.job_postings_count || 0) > 0 ? "text-orange-600" : "text-muted-foreground"}`}
                   >
-                    {jobPostingsCount}
+                    {selectedCompany?.job_postings_count || 0}
                   </div>
                 </CardContent>
               </Card>
