@@ -1,1086 +1,226 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextResponse } from "next/server"
+import { parallelSearch, buildImplementationsSearchParams } from "@/lib/parallel"
+import { GoogleGenerativeAI } from "@google/generative-ai"
 
-const SERPAPI_URL = "https://serpapi.com/search"
-const PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions"
-const CACHE_DAYS = 14
+const IMPL_CACHE_DAYS = 7
+const MAX_IMPLEMENTATIONS = 10
 
-const SERPAPI_COUNTRY_CODES = ["ar", "es", "mx", "cl", "co", "pe", "us"]
+// ── Gemini structuring ─────────────────────────────────────────────────
+const GEMINI_SYSTEM = `Eres un investigador de implementaciones tecnologicas e innovacion empresarial.
+Se te dan excerpts de paginas web sobre proyectos, casos de exito e implementaciones tecnologicas de una empresa.
+Tu tarea es extraer implementaciones y casos de exito relevantes.
 
-const PARTNER_NETWORK_DOMAINS = [
-  // AWS
-  "aws.amazon.com/partners",
-  "aws.amazon.com/solutions/case-studies",
-  "aws.amazon.com/es/solutions/case-studies",
+REGLAS:
+1. Responde UNICAMENTE con JSON valido (sin markdown, sin texto extra).
+2. Resume con TUS PROPIAS PALABRAS, NO copies texto literal.
+3. Maximo 10 implementaciones. Prioriza calidad y evidencia fuerte.
+4. Si no hay implementaciones relevantes, devuelve {"implementations":[]}
+5. Las fechas deben ser YYYY-MM-DD. Si no hay fecha exacta, intenta inferirla. Si es imposible, usa null.
 
-  // Microsoft
-  "microsoft.com/es-es/partner",
-  "customers.microsoft.com",
-  "azure.microsoft.com/es-es/case-studies",
-  "azure.microsoft.com/en-us/resources/customer-stories",
+EVIDENCE LEVELS:
+- strong: Case study oficial, comunicado de prensa del vendor, announcement oficial
+- medium: Articulo con fuentes nombradas, LinkedIn post de ejecutivos, industry report
+- weak: Mencion indirecta, partnership announcement, inferencia de uso de tecnologia
 
-  // Google Cloud
-  "cloud.google.com/customers",
-  "cloud.google.com/partners",
+AREAS validas: finanzas | ventas | logistica | rrhh | it | ciberseguridad | ecommerce | operaciones
 
-  // SAP
-  "sap.com/latinamerica",
-  "news.sap.com/latinamerica",
-  "sap.com/about/customer-stories",
-
-  // Oracle
-  "oracle.com/customers",
-  "oracle.com/es/customer-success",
-  "oracle.com/corporate/features",
-
-  // Salesforce
-  "salesforce.com/customer-success-stories",
-  "salesforce.com/stories",
-
-  // IBM
-  "ibm.com/case-studies",
-  "ibm.com/es-es/case-studies",
-
-  // Cisco
-  "cisco.com/c/es_mx/customer-references",
-  "cisco.com/c/en/us/about/case-studies-customer-success-stories",
-
-  // Otros vendors principales
-  "servicenow.com/customers",
-  "workday.com/en-us/customer-success.html",
-  "adobe.com/customer-success-stories",
-  "hubspot.com/case-studies",
-  "zendesk.com/customer",
-
-  // Consultoras globales
-  "accenture.com/us-en/case-studies",
-  "deloitte.com/insights/case-studies",
-  "pwc.com/gx/en/services/consulting/case-studies.html",
-  "ey.com/en_gl/case-studies",
-  "kpmg.com/xx/en/home/insights/2019/09/client-stories.html",
-
-  // Consultoras LATAM
-  "globant.com/success-stories",
-  "globant.com/es/casos-de-exito",
-]
-
-const VENDOR_DOMAINS = [
-  // Vendors de Tecnología
-  "microsoft.com",
-  "salesforce.com",
-  "oracle.com",
-  "sap.com",
-  "ibm.com",
-  "aws.amazon.com",
-  "cloud.google.com",
-  "servicenow.com",
-  "workday.com",
-  "adobe.com",
-  "hubspot.com",
-  "zendesk.com",
-  "atlassian.com",
-  "tableau.com",
-  "snowflake.com",
-  "databricks.com",
-  "twilio.com",
-  "stripe.com",
-  "segment.com",
-  "mulesoft.com",
-  "redhat.com",
-  "vmware.com",
-  "citrix.com",
-  "paloaltonetworks.com",
-  "okta.com",
-  "zoom.us",
-  "slack.com",
-  "asana.com",
-  "dropbox.com",
-
-  // Consultoras Globales
-  "accenture.com",
-  "deloitte.com",
-  "pwc.com",
-  "ey.com",
-  "kpmg.com",
-  "mckinsey.com",
-  "bain.com",
-  "bcg.com",
-  "capgemini.com",
-  "cognizant.com",
-  "infosys.com",
-  "tcs.com",
-  "wipro.com",
-  "atos.net",
-  "dxc.com",
-
-  // Consultoras/Tech Regionales (LATAM)
-  "globant.com",
-  "mercadolibre.com",
-  "despegar.com",
-]
-
-function sanitizeDate(dateStr: string | null | undefined): string | null {
-  if (!dateStr) return null
-
-  // Rechazar fechas con placeholders como "XX", "TBD", etc.
-  if (/XX|TBD|unknown/i.test(dateStr)) {
-    return null
-  }
-
-  // Intentar parsear la fecha
-  const date = new Date(dateStr)
-  if (isNaN(date.getTime())) {
-    return null
-  }
-
-  // Verificar que sea una fecha razonable (no en el futuro lejano ni muy antigua)
-  const now = new Date()
-  const threeYearsAgo = new Date()
-  threeYearsAgo.setFullYear(threeYearsAgo.getFullYear() - 3)
-
-  if (date > now || date < threeYearsAgo) {
-    return null
-  }
-
-  return date.toISOString().split("T")[0] // Retornar solo YYYY-MM-DD
-}
-
-const IMPLEMENTATIONS_SYSTEM_PROMPT = `Eres un buscador de implementaciones tecnológicas. Tu ÚNICA tarea es buscar casos de éxito e implementaciones y devolverlas en formato JSON.
-
-INSTRUCCIONES CRÍTICAS DE FORMATO:
-1. Responde ÚNICAMENTE con un objeto JSON válido
-2. NO escribas explicaciones, análisis ni texto adicional
-3. NO uses markdown, solo JSON puro
-4. Si no encuentras implementaciones, devuelve {"implementations": []}
-
-INSTRUCCIONES DE CONTENIDO - MUY IMPORTANTE:
-5. RESUME cada implementación con TUS PROPIAS PALABRAS - NO copies texto literal de las fuentes
-6. Analiza e interpreta la información, sintetiza los puntos clave
-7. El summary debe ser tu descripción del caso, no una cita textual
-
-Busca implementaciones de los últimos 24 meses:
-- ERP/Core: SAP, Oracle, Microsoft Dynamics
-- CRM: Salesforce, HubSpot, Zoho
-- Cloud: AWS, Azure, Google Cloud
-- Analytics: Tableau, Power BI, Looker
-- Ciberseguridad: firewalls, SOC, identity
-- Automatización: RPA, BPM
-- eCommerce: plataformas online
-- HR: Workday, SuccessFactors
-
-Niveles de evidencia:
-- strong: Caso de éxito oficial, comunicado de prensa
-- medium: Artículo con fuentes nombradas
-- weak: Inferencia indirecta
-
-FORMATO JSON OBLIGATORIO:
+FORMATO JSON:
 {
   "implementations": [
     {
-      "title": "Título descriptivo del caso",
-      "provider_name": "Nombre del proveedor/implementador",
-      "technology": "Tecnología implementada",
-      "area": "finanzas|ventas|logistica|rrhh|it|ciberseguridad|ecommerce|operaciones",
-      "summary": "Tu descripción del caso en 2-3 oraciones",
-      "results": "Resultados obtenidos si están disponibles, o null",
-      "evidence_level": "strong|medium|weak",
-      "source_url": "URL de la fuente",
-      "source_name": "Nombre del medio/sitio",
+      "title": "string (titulo descriptivo del caso/proyecto)",
+      "provider_name": "string (vendor/consultora que implemento)",
+      "technology": "string (tecnologia implementada)",
+      "area": "string (area de la empresa)",
+      "summary": "string (descripcion del caso en 2-3 oraciones)",
+      "results": "string o null (resultados obtenidos si estan disponibles)",
+      "evidence_level": "strong | medium | weak",
+      "source_name": "string (nombre del medio/sitio)",
       "published_at": "YYYY-MM-DD o null"
     }
   ]
 }`
 
-function buildPerplexityPrompt(context: {
-  company_name: string
-  industry?: string
-  country?: string
-  keywords?: string[]
-}): { system: string; user: string } {
-  const industryTerms = getIndustryTranslations(context.industry)
-  const industryText = industryTerms.join(", ")
-  const countryText = context.country || "Latinoamérica"
+async function structureImplementationsWithGemini(
+  excerpts: { url: string; title: string; publish_date: string | null; content: string }[],
+  companyName: string,
+  keywords: string[],
+): Promise<any[]> {
+  const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY
+  if (!apiKey) throw new Error("GOOGLE_GENERATIVE_AI_API_KEY not configured")
 
-  const system = `Eres un investigador de implementaciones tecnológicas e innovación empresarial especializado en LATAM.
+  const genAI = new GoogleGenerativeAI(apiKey)
+  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" })
 
-IMPORTANTE:
-1. Responde ÚNICAMENTE con un objeto JSON válido
-2. Resume con TUS PROPIAS PALABRAS - NO copies texto literal
-3. NO incluyas "source_url" en el JSON (se extraerá de tus citations automáticamente)
-4. Acepta evidence levels "weak" - Cualquier mención de adopción o uso de tecnología es válida
+  const excerptText = excerpts
+    .map(
+      (e, i) =>
+        `--- Fuente ${i + 1}: ${e.title} (${e.url}) [fecha: ${e.publish_date || "desconocida"}] ---\n${e.content.slice(0, 5000)}`,
+    )
+    .join("\n\n")
 
-FUENTES PRIORITARIAS:
-- AWS Partner Network y casos de éxito de AWS
-- Microsoft Partner Portal y Customer Stories
-- Google Cloud casos de clientes
-- SAP News Latinoamérica y Customer Stories
-- Oracle Customer Success
-- Salesforce Success Stories
-- Cisco Customer References
-- Blogs de consultoras (Accenture, Deloitte, Globant, etc.)
-- LinkedIn posts de vendors/partners mencionando implementaciones
-- Industry reports y analyst publications
-- Noticias sobre transformación digital y modernización
-
-FORMATO JSON OBLIGATORIO:
-{
-  "implementations": [
-    {
-      "title": "string",
-      "provider_name": "string (nombre del vendor/consultora)",
-      "technology": "string (tecnología implementada)",
-      "area": "finanzas|ventas|logistica|rrhh|it|ciberseguridad|ecommerce|operaciones",
-      "summary": "Tu descripción del caso (2-3 oraciones)",
-      "results": "string o null (resultados obtenidos)",
-      "evidence_level": "strong|medium|weak",
-      "source_name": "string",
-      "published_at": "YYYY-MM-DD"
-    }
-  ]
-}
-
-EVIDENCE LEVELS:
-- strong: Press release oficial, case study publicado, announcement del vendor
-- medium: LinkedIn post de executives, industry report, vendor announcement
-- weak: Mention en artículo, partnership announcement, customer reference, noticia de transformación digital
-
-Si encuentras entre 1-5 implementaciones válidas, inclúyelas. Es preferible tener resultados aunque sean "weak" que devolver vacío.
-Si no encuentras nada, responde: {"implementations":[]}`
-
-  const keywordsText = context.keywords?.length ? ` Tecnologías de interés: ${context.keywords.join(", ")}.` : ""
-
-  const user = `Busca noticias, implementaciones tecnológicas e innovación de "${context.company_name}" (industria: ${industryText}) en ${countryText}.${keywordsText}
-
-ESTRATEGIA DE BÚSQUEDA:
-Busca CUALQUIER MENCIÓN de que la empresa está usando, implementando, modernizando o transformando su infraestructura/procesos con tecnología.
-
-TÉRMINOS CLAVE EN ESPAÑOL (busca variaciones y combina):
-"${context.company_name}" AND (
-
-  # INNOVACIÓN y TRANSFORMACIÓN (AMPLIOS - PRIORIDAD)
-  "innovación" OR "transformación digital" OR "modernización" OR
-  "digitalización" OR "tecnología" OR "cloud" OR "infraestructura" OR
-  "automatización" OR "sistemas" OR "plataforma" OR
-
-  # IMPLEMENTACIÓN (ESPECÍFICO)
-  "implementación" OR "migración" OR "adopción" OR "implementó" OR
-  "selecciona" OR "elige" OR "cliente de" OR
-
-  # PARTNERSHIP y COLABORACIÓN
-  "partnership" OR "acuerdo con" OR "colaboración con" OR
-  "powered by" OR "usa" OR "utiliza" OR "proveedor de" OR
-
-  # MODERNIZACIÓN OPERACIONAL
-  "transformación empresarial" OR "mejora de procesos" OR
-  "eficiencia operacional" OR "modelo de negocio" OR
-  "experiencia del cliente" OR "digital-first"
-)
-
-VENDORS Y TECNOLOGÍAS A BUSCAR:
-SAP, Oracle, Microsoft, AWS, IBM, Google Cloud, Cisco, Salesforce,
-Workday, ServiceNow, Adobe, Tableau, Snowflake, HubSpot, Slack,
-Zoom, Atlassian, Jira, Asana, Monday.com, Stripe, Shopify,
-Kubernetes, Docker, Python, Java, Node.js, React, Angular
-
-EXCLUIR:
-- Solo páginas web institucionales de ${context.company_name} sin noticias
-- Resultados no relacionados con ${context.company_name}
-- Prioriza fuentes en español de LATAM o fuentes internacionales con menciones
-
-⏰ RANGO TEMPORAL:
-- Busca noticias y anuncios de los últimos 12 meses (PRIORIDAD)
-- Incluye eventos importantes de hace 24 meses si son relevantes
-- Acepta 1-10 resultados (número flexible según relevancia)
-
-Recuerda: Una mención de que "implementó cloud" cuenta. Una noticia sobre "modernizó su infraestructura" cuenta.
-No necesitas un case study formal - CUALQUIER evidencia de adopción tecnológica es válida.
-
-Responde SOLO JSON válido.`
-
-  return { system, user }
-}
-
-function buildImplementationsUserPrompt(context: {
-  company_name: string
-  industry?: string
-  country?: string
-  website?: string
-  keywords?: string[]
-}): string {
-  const keywordsText = context.keywords?.length
-    ? `\n**Tecnologías/procesos de interés**: ${context.keywords.join(", ")}`
+  const keywordsCtx = keywords.length > 0
+    ? `\nTecnologias/procesos de interes: ${keywords.join(", ")}`
     : ""
 
-  return `Busca implementaciones tecnológicas y casos de éxito realizados EN la siguiente organización (últimos 24 meses):
+  const result = await model.generateContent({
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            text: `${GEMINI_SYSTEM}\n\n---\nEmpresa: "${companyName}"${keywordsCtx}\n\nExcerpts de busqueda web:\n\n${excerptText}\n\nExtrae las implementaciones relevantes en JSON.`,
+          },
+        ],
+      },
+    ],
+    generationConfig: {
+      temperature: 0.2,
+      maxOutputTokens: 4000,
+      responseMimeType: "application/json",
+    },
+  })
 
-**Organización**: ${context.company_name}
-**Industria**: ${context.industry || "No especificada"}
-**País principal**: ${context.country || "No especificado"}
-**Sitio web**: ${context.website || "No disponible"}${keywordsText}
-
-Busca en:
-1. Secciones de "casos de éxito" o "clientes" de consultoras grandes (Accenture, IBM, Deloitte, etc.)
-2. Notas de prensa del vendor o la organización
-3. Artículos en medios de tecnología y negocios
-
-Devuelve máximo 10 implementaciones ordenadas por nivel de evidencia (strong primero).`
+  const text = result.response.text()
+  const parsed = JSON.parse(text)
+  return parsed.implementations ?? parsed ?? []
 }
 
-async function getImplementationsFromCache(supabase: any, companyId: string) {
-  const cacheDate = new Date()
-  cacheDate.setDate(cacheDate.getDate() - CACHE_DAYS)
+// ── Date helpers ────────────────────────────────────────────────────────
+function sanitizeDate(dateStr: string | null | undefined): string | null {
+  if (!dateStr) return null
+  if (/XX|TBD|unknown/i.test(dateStr)) return null
 
-  const { data: cached } = await supabase
+  const date = new Date(dateStr)
+  if (isNaN(date.getTime())) return null
+
+  const now = new Date()
+  const threeYearsAgo = new Date()
+  threeYearsAgo.setFullYear(threeYearsAgo.getFullYear() - 3)
+
+  if (date > now || date < threeYearsAgo) return null
+  return date.toISOString().split("T")[0]
+}
+
+// ── Cache helpers (public by company_id) ─────────────────────────────
+async function getRecentCache(supabase: any, companyId: string) {
+  const cacheDate = new Date()
+  cacheDate.setDate(cacheDate.getDate() - IMPL_CACHE_DAYS)
+
+  const { data } = await supabase
     .from("company_implementations")
     .select("*")
     .eq("company_id", companyId)
     .gte("created_at", cacheDate.toISOString())
     .order("published_at", { ascending: false, nullsFirst: false })
-    .limit(10)
+    .limit(MAX_IMPLEMENTATIONS)
 
-  return cached
+  return data
 }
 
-async function getOldCache(supabase: any, companyId: string) {
-  const { data: oldCache } = await supabase
+async function getAnyCache(supabase: any, companyId: string) {
+  const { data } = await supabase
     .from("company_implementations")
     .select("*")
     .eq("company_id", companyId)
     .order("published_at", { ascending: false, nullsFirst: false })
-    .limit(10)
+    .limit(MAX_IMPLEMENTATIONS)
 
-  return oldCache
+  return data
 }
 
+// ── User interaction tracking ────────────────────────────────────────
 async function registerUserInteractions(
   supabase: any,
   userId: string,
   companyId: string,
-  implementationIds: string[],
-  source: "search" | "digest" | "browse" = "search",
+  implIds: string[],
 ) {
-  if (implementationIds.length === 0) return
-
-  const interactions = implementationIds.map((implId) => ({
-    user_id: userId,
-    implementation_id: implId,
-    company_id: companyId,
-    source,
-    viewed_at: new Date().toISOString(),
-  }))
-
-  for (const interaction of interactions) {
+  if (implIds.length === 0) return
+  for (const implId of implIds) {
     await supabase
       .from("user_implementation_interactions")
-      .upsert(interaction, { onConflict: "user_id,implementation_id", ignoreDuplicates: true })
-  }
-}
-
-function extractGroundingUrls(groundingMetadata: any): Map<string, string> {
-  const urlMap = new Map<string, string>()
-
-  try {
-    const chunks = groundingMetadata?.groundingChunks || []
-    for (const chunk of chunks) {
-      if (chunk.web?.uri && chunk.web?.title) {
-        const uri = chunk.web.uri
-
-        if (uri.includes("vertexaisearch.cloud.google.com") || uri.includes("grounding-api-redirect")) {
-          continue // Skip internal Google URLs
-        }
-
-        const title = chunk.web.title.toLowerCase()
-        urlMap.set(title, uri)
-      }
-    }
-
-    const supports = groundingMetadata?.groundingSupports || []
-    for (const support of supports) {
-      if (support.groundingChunkIndices) {
-        for (const idx of support.groundingChunkIndices) {
-          const chunk = chunks[idx]
-          if (chunk?.web?.uri) {
-            const uri = chunk.web.uri
-
-            if (uri.includes("vertexaisearch.cloud.google.com") || uri.includes("grounding-api-redirect")) {
-              continue
-            }
-
-            urlMap.set(`chunk_${idx}`, uri)
-          }
-        }
-      }
-    }
-  } catch (e) {
-    console.log("[v0] Implementations: Error extracting grounding URLs:", e)
-  }
-
-  return urlMap
-}
-
-function findBestUrl(providedUrl: string, groundingUrls: Map<string, string>, sourceName: string): string {
-  try {
-    const url = new URL(providedUrl)
-    const domain = url.hostname.replace("www.", "")
-
-    for (const [_, realUrl] of groundingUrls) {
-      try {
-        const realUrlObj = new URL(realUrl)
-        const realDomain = realUrlObj.hostname.replace("www.", "")
-        if (realDomain === domain) {
-          return realUrl
-        }
-      } catch {}
-    }
-  } catch {}
-
-  return providedUrl
-}
-
-function getIndustryTranslations(industry: string | undefined): string[] {
-  if (!industry) return ["negocios", "empresas", "corporativo"]
-
-  const translations: Record<string, string[]> = {
-    banking: ["banca", "sector bancario", "servicios financieros"],
-    insurance: ["seguros", "aseguradoras", "sector asegurador"],
-    technology: ["tecnología", "TI", "tecnologías de la información", "tech"],
-    retail: ["comercio minorista", "retail", "ventas al detalle"],
-    healthcare: ["salud", "sector sanitario", "atención médica"],
-    manufacturing: ["manufactura", "industria manufacturera", "fabricación"],
-    telecommunications: ["telecomunicaciones", "telcos", "telefonía"],
-    energy: ["energía", "sector energético", "utilities"],
-    "real estate": ["inmobiliario", "bienes raíces", "real estate"],
-    education: ["educación", "sector educativo", "instituciones educativas"],
-    logistics: ["logística", "transporte y logística", "supply chain"],
-    consulting: ["consultoría", "servicios profesionales", "asesoría"],
-    fintech: ["fintech", "tecnología financiera", "servicios financieros digitales"],
-    automotive: ["automotriz", "sector automotor", "industria del automóvil"],
-    pharmaceuticals: ["farmacéutico", "industria farmacéutica", "farma"],
-    construction: ["construcción", "sector constructivo", "infraestructura"],
-    hospitality: ["hotelería", "turismo", "hospitalidad"],
-    agriculture: ["agricultura", "agroindustria", "sector agropecuario"],
-    mining: ["minería", "sector minero", "extractivo"],
-  }
-
-  const industryLower = industry.toLowerCase()
-  return translations[industryLower] || [industry, `sector ${industry}`, `industria ${industry}`]
-}
-
-function getCompanyDomain(companyName: string, website?: string): string {
-  if (website) {
-    try {
-      const urlObj = new URL(website.startsWith("http") ? website : `https://${website}`)
-      return urlObj.hostname.replace("www.", "")
-    } catch {}
-  }
-
-  // Fallback: nombre de empresa en minúsculas sin espacios
-  return companyName.toLowerCase().replace(/\s+/g, "")
-}
-
-const INSTITUTIONAL_KEYWORDS = [
-  "memoria anual",
-  "annual report",
-  "reporte anual",
-  "informe anual",
-  "investor relations",
-  "relación con inversores",
-  "sustainability report",
-  "reporte de sostenibilidad",
-  "financial results",
-  "resultados financieros",
-  "earnings report",
-  "quarterly report",
-]
-
-const OTHER_COMPANY_INDICATORS = ["caso de éxito:", "case study:", "customer story:", "cliente:", "historia de"]
-
-async function searchWithSerpAPIGoogle(context: {
-  company_name: string
-  industry?: string
-  country?: string
-  keywords?: string[]
-  website?: string
-}): Promise<{ success: boolean; data?: any; error?: string }> {
-  try {
-    const apiKey = process.env.SERPAPI_API_KEY
-    if (!apiKey) {
-      return { success: false, error: "SERPAPI_API_KEY not configured" }
-    }
-
-    console.log("[v0] Implementations: Calling SerpAPI Google Search as FALLBACK...")
-
-    const industryTerms = getIndustryTranslations(context.industry)
-    const industryText = industryTerms[0] || ""
-
-    // Build query with broad keywords (innovación, transformación, tecnología, etc.)
-    const broadKeywords = [
-      "innovación",
-      "transformación digital",
-      "modernización",
-      "tecnología",
-      "implementación",
-      "adopción",
-    ].join(" OR ")
-
-    const excludeTerms = ["-memoria", "-anual", '-"annual report"', '-"reporte anual"'].join(" ")
-    const query = `"${context.company_name}" ${industryText} (${broadKeywords}) ${excludeTerms}`.trim()
-
-    console.log("[v0] Implementations: SerpAPI Query:", query)
-
-    const allResults: any[] = []
-
-    // Search across multiple countries
-    for (const countryCode of SERPAPI_COUNTRY_CODES) {
-      const params = new URLSearchParams({
-        engine: "google",
-        q: query,
-        gl: countryCode,
-        hl: "es",
-        num: "10",
-        api_key: apiKey,
-      })
-
-      const response = await fetch(`${SERPAPI_URL}?${params}`)
-
-      if (!response.ok) {
-        console.error("[v0] Implementations: SerpAPI error for", countryCode, response.status)
-        continue
-      }
-
-      const data = await response.json()
-      const results = data.organic_results || []
-
-      // Map SerpAPI results to our format
-      const implementations = results.map((result: any) => ({
-        title: result.title,
-        provider_name: extractProviderFromDomain(result.link) || extractProviderFromContent(result.snippet) || "N/A",
-        technology: inferTechnologyFromContent(result.title + " " + (result.snippet || "")),
-        area: categorizeImplementation(result.title + " " + (result.snippet || "")),
-        summary: result.snippet || result.title,
-        results: null,
-        evidence_level: inferEvidenceLevel(result.snippet || result.title),
-        source_url: result.link,
-        source_name: extractDomain(result.link),
-        published_at: result.date || new Date().toISOString().split("T")[0],
-      }))
-
-      allResults.push(...implementations)
-    }
-
-    if (allResults.length === 0) {
-      return { success: false, error: "No results from SerpAPI" }
-    }
-
-    // Remove duplicates by URL
-    const seenUrls = new Set<string>()
-    const uniqueImplementations = allResults.filter((item) => {
-      if (seenUrls.has(item.source_url)) return false
-      seenUrls.add(item.source_url)
-      return true
-    })
-
-    console.log("[v0] Implementations: SerpAPI SUCCESS - Got", uniqueImplementations.length, "unique items")
-
-    return {
-      success: true,
-      data: { implementations: uniqueImplementations.slice(0, 10) }, // Limit to 10
-    }
-  } catch (error) {
-    console.error("[v0] Implementations: SerpAPI error:", error)
-    return { success: false, error: String(error) }
-  }
-}
-
-function extractProviderFromContent(content: string): string {
-  if (!content) return ""
-
-  const lowerContent = content.toLowerCase()
-
-  const providers: Record<string, string> = {
-    sap: "SAP",
-    oracle: "Oracle",
-    microsoft: "Microsoft",
-    salesforce: "Salesforce",
-    aws: "AWS",
-    "amazon web services": "AWS",
-    "google cloud": "Google Cloud",
-    ibm: "IBM",
-    cisco: "Cisco",
-    servicenow: "ServiceNow",
-    workday: "Workday",
-    accenture: "Accenture",
-    deloitte: "Deloitte",
-    globant: "Globant",
-    genpact: "Genpact",
-    capgemini: "Capgemini",
-    wipro: "Wipro",
-    infosys: "Infosys",
-    cognizant: "Cognizant",
-    tcs: "TCS",
-  }
-
-  for (const [keyword, name] of Object.entries(providers)) {
-    if (lowerContent.includes(keyword)) {
-      return name
-    }
-  }
-
-  return ""
-}
-
-function categorizeImplementation(text: string): string {
-  const lowerText = text.toLowerCase()
-
-  if (lowerText.match(/finanzas|contabilidad|erp|sap|oracle|facturación|fiscal|tesorería|contable/)) return "finanzas"
-  if (lowerText.match(/ventas|crm|salesforce|hubspot|comercial|marketing|atencion al cliente|gestion de clientes/))
-    return "ventas"
-  if (lowerText.match(/logística|transporte|supply chain|cadena de suministro|inventario|almacen|distribución/))
-    return "logistica"
-  if (lowerText.match(/recursos humanos|rrhh|workday|talento|nómina|hr|capital humano|empleados/)) return "rrhh"
-  if (
-    lowerText.match(
-      /ciberseguridad|seguridad|firewall|soc|identity|endpoint|proteccion de datos|ransomware|vulnerabilidad/,
-    )
-  )
-    return "ciberseguridad"
-  if (lowerText.match(/ecommerce|comercio electrónico|tienda online|venta online|plataforma ecommerce/))
-    return "ecommerce"
-  if (lowerText.match(/infraestructura|cloud|aws|azure|google cloud|servidores|data center|redes|it|tecnologia/))
-    return "it"
-
-  return "operaciones" // Default
-}
-
-function inferEvidenceLevel(text: string): "strong" | "medium" | "weak" {
-  const lowerText = text.toLowerCase()
-
-  if (
-    lowerText.match(
-      /caso de éxito oficial|official case study|comunicado de prensa|press release|announcement|anuncio oficial/,
-    )
-  )
-    return "strong"
-  if (lowerText.match(/según fuentes|reporta|informó|article|artículo|blog post|post de linkedin|linkedin post/))
-    return "medium"
-
-  return "weak"
-}
-
-async function searchWithPerplexity(context: {
-  company_name: string
-  industry?: string
-  country?: string
-  keywords?: string[]
-}): Promise<{ success: boolean; data?: any; error?: string; citations?: string[] }> {
-  try {
-    const apiKey = process.env.PERPLEXITY_API_KEY
-    if (!apiKey) {
-      return { success: false, error: "PERPLEXITY_API_KEY not configured" }
-    }
-
-    console.log("[v0] Implementations: Calling Perplexity API as PRIMARY...")
-
-    const prompts = buildPerplexityPrompt(context)
-
-    const response = await fetch(PERPLEXITY_API_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: "sonar-pro",
-        messages: [
-          { role: "system", content: prompts.system },
-          { role: "user", content: prompts.user },
-        ],
-        temperature: 0.2,
-        max_tokens: 4000,
-        return_citations: true,
-        search_recency_filter: "year",
-      }),
-    })
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error("[v0] Implementations: Perplexity API error:", response.status, errorText)
-      return { success: false, error: `Perplexity API error: ${response.status}` }
-    }
-
-    const data = await response.json()
-    const content = data.choices?.[0]?.message?.content
-    const citations = data.citations || []
-
-    console.log("[v0] Implementations: Perplexity response received", {
-      contentLength: content?.length || 0,
-      citationsCount: citations.length,
-      citationsPreview: citations.slice(0, 3),
-    })
-
-    if (!content) {
-      console.error("[v0] Implementations: Perplexity no content in response")
-      return { success: false, error: "No content from Perplexity" }
-    }
-
-    const parsed = parsePerplexityJson(content)
-    let items = []
-
-    if (Array.isArray(parsed)) {
-      items = parsed
-    } else if (parsed.implementations && Array.isArray(parsed.implementations)) {
-      items = parsed.implementations
-    }
-
-    console.log("[v0] Implementations: Perplexity SUCCESS - Got", items.length, "items")
-
-    const itemsWithUrls = mapImplementationsToCitations(items, citations, context.company_name)
-
-    return {
-      success: true,
-      data: { implementations: itemsWithUrls },
-      citations,
-    }
-  } catch (error) {
-    console.error("[v0] Implementations: Perplexity error:", error)
-    return { success: false, error: String(error) }
-  }
-}
-
-function parsePerplexityJson(content: string): any {
-  let jsonContent = content.trim()
-
-  // Paso 1: Remover markdown code blocks si existen
-  if (jsonContent.startsWith("```")) {
-    jsonContent = jsonContent.replace(/```json?\n?/g, "").replace(/```$/g, "")
-  }
-
-  // Paso 2: Extraer JSON si viene con texto adicional
-  if (!jsonContent.startsWith("{") && !jsonContent.startsWith("[")) {
-    const jsonMatch = jsonContent.match(/\{[\s\S]*?"implementations"[\s\S]*?\}/) || jsonContent.match(/\[[\s\S]*?\]/)
-    if (jsonMatch) {
-      jsonContent = jsonMatch[0]
-    } else {
-      throw new Error("No JSON found in response")
-    }
-  }
-
-  // Paso 3: Intentar parsear JSON directamente
-  try {
-    return JSON.parse(jsonContent)
-  } catch (firstError) {
-    console.log("[v0] Implementations: First JSON parse failed, attempting cleanup...")
-
-    // Paso 4: Limpiar caracteres problemáticos
-    try {
-      // Remover trailing commas
-      jsonContent = jsonContent.replace(/,(\s*[}\]])/g, "$1")
-
-      return JSON.parse(jsonContent)
-    } catch (secondError) {
-      console.log("[v0] Implementations: Second JSON parse failed, attempting regex extraction...")
-
-      // Paso 5: Extraer campos manualmente con regex
-      try {
-        const implementationsArray: any[] = []
-        const implRegex =
-          /"title"\s*:\s*"([^"]+)"[\s\S]*?"provider_name"\s*:\s*"([^"]+)"[\s\S]*?"technology"\s*:\s*"([^"]+)"[\s\S]*?"area"\s*:\s*"([^"]+)"[\s\S]*?"summary"\s*:\s*"([^"]+)"[\s\S]*?"results"\s*:\s*("([^"]*)"|null)[\s\S]*?"evidence_level"\s*:\s*"([^"]+)"/g
-
-        let match
-        while ((match = implRegex.exec(content)) !== null) {
-          implementationsArray.push({
-            title: match[1],
-            provider_name: match[2],
-            technology: match[3],
-            area: match[4],
-            summary: match[5],
-            results: match[7] || null, // Handle null for results
-            evidence_level: match[8],
-            source_name: "",
-            published_at: null,
-          })
-        }
-
-        if (implementationsArray.length > 0) {
-          console.log("[v0] Implementations: Regex extraction successful -", implementationsArray.length, "items")
-          return { implementations: implementationsArray }
-        }
-      } catch (regexError) {
-        console.error("[v0] Implementations: Regex extraction failed:", regexError)
-      }
-
-      // Si todo falla, lanzar error original
-      throw new Error(`JSON parsing failed: ${firstError.message}`)
-    }
-  }
-}
-
-function mapImplementationsToCitations(items: any[], citations: string[], company_name: string): any[] {
-  return items.map((item, index) => {
-    let bestCitation = citations[index] || null
-
-    // Intentar encontrar una cita que coincida con el source_name del item
-    if (!bestCitation && item.source_name && citations.length > 0) {
-      const sourceDomain = item.source_name.toLowerCase().replace("www.", "")
-      bestCitation =
-        citations.find((url) => {
-          const citationDomain = extractDomain(url).toLowerCase().replace("www.", "")
-          return sourceDomain.includes(citationDomain) || citationDomain.includes(sourceDomain)
-        }) || null
-    }
-
-    // Si no hay coincidencia directa de dominio, usar la primera cita como fallback
-    if (!bestCitation && citations.length > 0) {
-      bestCitation = citations[0]
-    }
-
-    // Si aún no hay cita, intentar construir una URL basada en source_name
-    if (!bestCitation && item.source_name) {
-      const cleanName = item.source_name.toLowerCase().replace(/\s+/g, "")
-      // Añadir un check para evitar dominios genéricos o irrelevantes
-      if (cleanName.length > 3 && !cleanName.includes("example")) {
-        bestCitation = `https://www.${cleanName}.com`
-      }
-    }
-
-    // Si no hay una cita clara, intentamos buscar una URL que contenga el nombre de la empresa
-    if (!bestCitation && company_name) {
-      const companyNameLower = company_name.toLowerCase().replace(/\s/g, "")
-      bestCitation = citations.find((url) => url.toLowerCase().includes(companyNameLower)) || null
-    }
-
-    // Si finalmente no tenemos URL, usar un placeholder
-    const finalUrl = bestCitation || "https://example.com"
-
-    return {
-      ...item,
-      source_url: finalUrl,
-    }
-  })
-}
-
-function extractDomain(url: string): string {
-  try {
-    // Handle cases where URL might not have a protocol
-    if (!url.startsWith("http://") && !url.startsWith("https://")) {
-      url = `https://${url}`
-    }
-    const urlObj = new URL(url)
-    return urlObj.hostname.replace("www.", "")
-  } catch {
-    // If URL parsing fails, return the original string or a safe fallback
-    return url.replace("www.", "") // Attempt to remove www if it's just a string
-  }
-}
-
-async function mapToGroundingUrls(items: any[], groundingUrls: Map<string, string>): Promise<any[]> {
-  const results = await Promise.all(
-    items.map(async (item) => {
-      let finalUrl = item.source_url
-      let fromGrounding = false
-
-      // Buscar por título
-      const titleLower = item.title.toLowerCase()
-      for (const [groundingTitle, realUrl] of groundingUrls) {
-        // Matching logic can be refined - simple substring check for now
-        if (titleLower.includes(groundingTitle.substring(0, 30).toLowerCase())) {
-          finalUrl = realUrl
-          fromGrounding = true
-          break
-        }
-      }
-
-      // Buscar por dominio
-      if (!fromGrounding && item.source_name) {
-        const sourceDomain = extractDomain(item.source_name)
-        for (const [_, realUrl] of groundingUrls) {
-          const groundingDomain = extractDomain(realUrl)
-          if (sourceDomain === groundingDomain) {
-            finalUrl = realUrl
-            fromGrounding = true
-            break
-          }
-        }
-      }
-
-      // Validate URL if it's not from grounding and not a placeholder
-      if (
-        !fromGrounding &&
-        finalUrl &&
-        finalUrl !== "https://example.com" &&
-        !finalUrl.includes("vertexaisearch.cloud.google.com")
-      ) {
-        const isValid = await validateUrl(finalUrl)
-        if (!isValid) {
-          const domain = extractDomain(finalUrl)
-          // Fallback to just the domain if the full URL is invalid
-          finalUrl = `https://${domain}`
-          console.log("[v0] Implementations: URL validation failed, using domain:", finalUrl)
-        }
-      }
-
-      // Handle specific cases like Vertex AI Search URLs
-      if (finalUrl?.includes("vertexaisearch.cloud.google.com")) {
-        const sourceName = item.source_name || ""
-        // Attempt to extract domain from source_name if available
-        const domainMatch = sourceName.match(/([a-z0-9-]+\.(com|net|org|io|ar|cl|pe|mx|co))/i)
-        if (domainMatch) {
-          finalUrl = `https://${domainMatch[0]}`
-        } else {
-          // If domain cannot be inferred, set URL to '#' or remove it
-          finalUrl = "#"
-        }
-      }
-
-      return {
-        ...item,
-        source_url: finalUrl,
-        _fromGrounding: fromGrounding, // For debugging/tracking
-      }
-    }),
-  )
-
-  return results
-}
-
-async function validateUrl(url: string): Promise<boolean> {
-  try {
-    // Skip validation for known problematic or internal URLs
-    if (url.includes("vertexaisearch.cloud.google.com") || url.includes("grounding-api-redirect")) {
-      return false
-    }
-
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 3000) // 3-second timeout
-
-    console.log("[v0] Implementations: Validating URL:", url)
-
-    const response = await fetch(url, {
-      method: "HEAD", // Use HEAD request to get headers without downloading the body
-      signal: controller.signal,
-      redirect: "follow", // Allow redirects
-    })
-
-    clearTimeout(timeoutId) // Clear the timeout if fetch completes
-    const isValid = response.ok // Consider 2xx status codes as valid
-
-    if (!isValid) {
-      console.log(
-        "[v0] Implementations: URL returned non-OK status (expected, will fallback to domain):",
-        response.status,
+      .upsert(
+        { user_id: userId, implementation_id: implId, company_id: companyId, source: "search", viewed_at: new Date().toISOString() },
+        { onConflict: "user_id,implementation_id", ignoreDuplicates: true },
       )
-    }
-
-    return isValid
-  } catch (error) {
-    // Network errors, timeouts, etc. are considered invalid URLs
-    console.log("[v0] Implementations: URL validation failed (expected, will fallback to domain):", error)
-    return false
   }
 }
 
-function extractProviderFromDomain(domain: string): string {
-  const providers: Record<string, string> = {
-    "aws.amazon.com": "AWS",
-    "microsoft.com": "Microsoft",
-    "salesforce.com": "Salesforce",
-    "oracle.com": "Oracle",
-    "sap.com": "SAP",
-    "ibm.com": "IBM",
-    "cloud.google.com": "Google Cloud",
-    "cisco.com": "Cisco",
-    "servicenow.com": "ServiceNow",
-    "workday.com": "Workday",
-    "accenture.com": "Accenture",
-    "deloitte.com": "Deloitte",
-    "globant.com": "Globant",
-    "genpact.com": "Genpact",
-    "capgemini.com": "Capgemini",
-    "wipro.com": "Wipro",
-    "infosys.com": "Infosys",
-    "cognizant.com": "Cognizant",
-    "tcs.com": "TCS",
+// ── Get signals/keywords from bookmark context ───────────────────────
+async function getBookmarkKeywords(supabase: any, bookmarkId: string): Promise<string[]> {
+  // Get signals associated with the bookmark's company
+  const { data: bookmark } = await supabase
+    .from("bookmarks")
+    .select("company_id, signal_type, signal_id")
+    .eq("id", bookmarkId)
+    .single()
+
+  if (!bookmark) return []
+
+  const keywords: string[] = []
+
+  // If bookmark has a specific signal, get its name
+  if (bookmark.signal_type === "process" && bookmark.signal_id) {
+    const { data } = await supabase
+      .from("dictionary_processes")
+      .select("name")
+      .eq("id", bookmark.signal_id)
+      .single()
+    if (data?.name) keywords.push(data.name)
+  } else if (bookmark.signal_type === "technology" && bookmark.signal_id) {
+    const { data } = await supabase
+      .from("dictionary_products")
+      .select("name")
+      .eq("id", bookmark.signal_id)
+      .single()
+    if (data?.name) keywords.push(data.name)
   }
 
-  for (const [keyword, name] of Object.entries(providers)) {
-    if (domain.includes(keyword)) {
-      return name
+  // Also get top signals for this company
+  const { data: topSignals } = await supabase.rpc("get_company_signal_summary", {
+    p_company_id: bookmark.company_id,
+  })
+
+  if (topSignals?.[0]) {
+    const summary = topSignals[0]
+    if (summary.top_processes) {
+      for (const p of summary.top_processes.slice(0, 3)) {
+        if (p.process_name && !keywords.includes(p.process_name)) {
+          keywords.push(p.process_name)
+        }
+      }
+    }
+    if (summary.top_technologies) {
+      for (const t of summary.top_technologies.slice(0, 3)) {
+        if (t.product_name && !keywords.includes(t.product_name)) {
+          keywords.push(t.product_name)
+        }
+      }
     }
   }
 
-  return ""
+  return keywords.slice(0, 5) // max 5 keywords
 }
 
-function inferTechnologyFromContent(content: string): string {
-  const technologies: Record<string, string> = {
-    aws: "AWS",
-    "amazon web services": "AWS",
-    "google cloud": "Google Cloud",
-    ibm: "IBM",
-    cisco: "Cisco",
-    servicenow: "ServiceNow",
-    workday: "Workday",
-    accenture: "Accenture",
-    deloitte: "Deloitte",
-    globant: "Globant",
-    genpact: "Genpact",
-    capgemini: "Capgemini",
-    wipro: "Wipro",
-    infosys: "Infosys",
-    cognizant: "Cognizant",
-    tcs: "TCS",
-    microsoft: "Microsoft",
-    salesforce: "Salesforce",
-    oracle: "Oracle",
-    sap: "SAP",
-    tableau: "Tableau",
-    snowflake: "Snowflake",
-    hubspot: "HubSpot",
-    slack: "Slack",
-    zoom: "Zoom",
-    atlassian: "Atlassian",
-    jira: "Jira",
-    asana: "Asana",
-    "monday.com": "Monday.com",
-    stripe: "Stripe",
-    shopify: "Shopify",
-    kubernetes: "Kubernetes",
-    docker: "Docker",
-    python: "Python",
-    java: "Java",
-    "node.js": "Node.js",
-    react: "React",
-    angular: "Angular",
-  }
-
-  for (const [keyword, name] of Object.entries(technologies)) {
-    if (content.toLowerCase().includes(keyword)) {
-      return name
-    }
-  }
-
-  return "Unknown Technology"
-}
-
+// ── Main handler ─────────────────────────────────────────────────────
 export async function POST(request: Request) {
   try {
     const supabase = await createClient()
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
+    const { data: { user } } = await supabase.auth.getUser()
 
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const body = await request.json()
-    const { bookmarkId, forceRefresh = false } = body
+    const { bookmarkId, forceRefresh = false } = await request.json()
 
     if (!bookmarkId) {
       return NextResponse.json({ error: "bookmarkId is required" }, { status: 400 })
     }
 
+    // Get bookmark + company
     const { data: bookmark, error: bookmarkError } = await supabase
       .from("bookmarks")
       .select("*, company:companies(*)")
@@ -1098,162 +238,159 @@ export async function POST(request: Request) {
 
     const companyId = company.id
     const companyName = company.name
-    const companyWebsite = company.website
 
-    if (!forceRefresh) {
-      const cached = await getImplementationsFromCache(supabase, companyId)
-      if (cached && cached.length > 0) {
-        console.log("[v0] Implementations: Returning from cache")
-        await registerUserInteractions(
-          supabase,
-          user.id,
-          companyId,
-          cached.map((n: any) => n.id),
-        )
-        return NextResponse.json({
-          implementations: cached,
-          cached: true,
-          provider: "cache",
-        })
+    // Only superadmins can force refresh
+    if (forceRefresh) {
+      const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single()
+      if (profile?.role !== "superadmin") {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
       }
     }
 
-    const perplexityResult = await searchWithPerplexity({
+    // ── 1. Check public cache (by company_id, visible to all users) ──
+    if (!forceRefresh) {
+      const cached = await getRecentCache(supabase, companyId)
+      if (cached && cached.length > 0) {
+        console.log("[v0] Implementations: Public cache hit -", cached.length, "items")
+        await registerUserInteractions(supabase, user.id, companyId, cached.map((i: any) => i.id))
+        return NextResponse.json({ implementations: cached, cached: true, provider: "cache" })
+      }
+    }
+
+    // ── 2. Get signal keywords from bookmark context ─────────────────
+    const keywords = await getBookmarkKeywords(supabase, bookmarkId)
+    console.log("[v0] Implementations: Keywords for search:", keywords)
+
+    // ── 3. Search with Parallel ──────────────────────────────────────
+    console.log("[v0] Implementations: Searching with Parallel for", companyName)
+
+    const searchParams = buildImplementationsSearchParams({
       company_name: companyName,
       industry: company.industry,
       country: company.country,
-      keywords: [], // Assuming keywords are not directly available from bookmark
+      keywords,
     })
 
     let implementations: any[] = []
-    let provider = "none"
 
-    if (perplexityResult.success && perplexityResult.data?.implementations?.length > 0) {
-      implementations = perplexityResult.data.implementations
-      provider = "perplexity"
-      console.log(`[v0] Implementations: Using Perplexity results (${implementations.length} items)`)
-    } else {
-      console.log("[v0] Implementations: Perplexity failed or returned 0 results, trying SerpAPI fallback...")
+    try {
+      const searchResult = await parallelSearch(searchParams)
+      console.log("[v0] Implementations: Parallel returned", searchResult.results.length, "results")
 
-      const serpApiResult = await searchWithSerpAPIGoogle({
-        company_name: companyName,
-        industry: company.industry,
-        country: company.country,
-        keywords: [],
-        website: companyWebsite,
-      })
+      if (searchResult.results.length > 0) {
+        // Prepare excerpts for Gemini structuring
+        const excerpts = searchResult.results.map(r => ({
+          url: r.url,
+          title: r.title,
+          publish_date: r.publish_date,
+          content: r.excerpts.join("\n"),
+        }))
 
-      if (serpApiResult.success && serpApiResult.data?.implementations?.length > 0) {
-        implementations = serpApiResult.data.implementations
-        provider = "serpapi"
-        console.log(`[v0] Implementations: Using SerpAPI results (${implementations.length} items)`)
-      } else {
-        console.log("[v0] Implementations: Both Perplexity and SerpAPI failed, checking old cache...")
+        // Structure with Gemini
+        console.log("[v0] Implementations: Structuring with Gemini...")
+        const structured = await structureImplementationsWithGemini(excerpts, companyName, keywords)
+        console.log("[v0] Implementations: Gemini structured", structured.length, "items")
 
-        const oldCache = await getOldCache(supabase, companyId)
-        if (oldCache && oldCache.length > 0) {
-          console.log("[v0] Implementations: Returning old cache")
-          await registerUserInteractions(
-            supabase,
-            user.id,
-            companyId,
-            oldCache.map((n: any) => n.id),
+        // Map structured items back to source URLs from Parallel
+        implementations = structured.slice(0, MAX_IMPLEMENTATIONS).map((item: any, idx: number) => {
+          const matchingResult = searchResult.results.find(r =>
+            r.title.toLowerCase().includes((item.title || "").toLowerCase().slice(0, 30)) ||
+            (item.source_name && r.url.toLowerCase().includes(item.source_name.toLowerCase().replace(/\s/g, "")))
           )
-          return NextResponse.json({
-            implementations: oldCache,
-            cached: true,
-            provider: "old_cache",
-          })
-        }
+          const sourceResult = matchingResult || searchResult.results[idx] || searchResult.results[0]
 
-        console.log("[v0] Implementations: No results from any source")
-        return NextResponse.json({
-          implementations: [],
-          cached: false,
-          provider: "none",
+          return {
+            title: item.title,
+            provider_name: item.provider_name || "N/A",
+            technology: item.technology || "N/A",
+            area: item.area || "operaciones",
+            summary: item.summary,
+            results: item.results || null,
+            evidence_level: item.evidence_level || "weak",
+            source_url: sourceResult?.url || "#",
+            source_name: item.source_name || sourceResult?.title || "Desconocido",
+            published_at: sanitizeDate(item.published_at) || sanitizeDate(sourceResult?.publish_date),
+          }
         })
       }
+    } catch (parallelError) {
+      console.error("[v0] Implementations: Parallel search error:", parallelError)
     }
 
-    const seenUrls = new Set<string>()
-    const uniqueImplementations = implementations.filter((item) => {
-      if (seenUrls.has(item.source_url)) {
-        return false
+    // ── 4. Fallback to old cache if no results ───────────────────────
+    if (implementations.length === 0) {
+      const oldCache = await getAnyCache(supabase, companyId)
+      if (oldCache && oldCache.length > 0) {
+        console.log("[v0] Implementations: Using old cache -", oldCache.length, "items")
+        await registerUserInteractions(supabase, user.id, companyId, oldCache.map((i: any) => i.id))
+        return NextResponse.json({ implementations: oldCache, cached: true, provider: "old_cache" })
       }
+      return NextResponse.json({ implementations: [], cached: false, provider: "none" })
+    }
+
+    // ── 5. Deduplicate and save to public cache ──────────────────────
+    const seenUrls = new Set<string>()
+    const uniqueItems = implementations.filter(item => {
+      if (seenUrls.has(item.source_url)) return false
       seenUrls.add(item.source_url)
       return true
     })
 
-    // Obtener URLs de implementaciones existentes para esta empresa
     const { data: existingImpls } = await supabase
       .from("company_implementations")
       .select("source_url")
       .eq("company_id", companyId)
 
-    const existingUrls = new Set(existingImpls?.map((i) => i.source_url) || [])
+    const existingUrls = new Set(existingImpls?.map((i: any) => i.source_url) || [])
 
-    // Filtrar solo implementaciones nuevas que no existen en la DB
-    const newImplementationsToInsert = uniqueImplementations
-      .filter((item) => !existingUrls.has(item.source_url))
-      .map((item) => ({
+    const newToInsert = uniqueItems
+      .filter(item => !existingUrls.has(item.source_url))
+      .map(item => ({
         company_id: companyId,
         title: item.title,
         summary: item.summary,
         source_url: item.source_url,
         source_name: item.source_name,
-        published_at: sanitizeDate(item.published_at),
-        ai_provider: provider,
+        published_at: item.published_at,
+        ai_provider: "parallel",
         technology: item.technology,
         area: item.area,
         provider_name: item.provider_name,
         evidence_level: item.evidence_level,
       }))
 
-    console.log(
-      `[v0] Implementations: Inserting ${newImplementationsToInsert.length} new items (${uniqueImplementations.length - newImplementationsToInsert.length} duplicates skipped)`,
-    )
+    console.log(`[v0] Implementations: Inserting ${newToInsert.length} new items`)
 
-    let saved = []
-
-    // Solo insertar si hay implementaciones nuevas
-    if (newImplementationsToInsert.length > 0) {
-      const { data: inserted, error: insertError } = await supabase
+    if (newToInsert.length > 0) {
+      const { error: insertError } = await supabase
         .from("company_implementations")
-        .insert(newImplementationsToInsert)
+        .insert(newToInsert)
         .select()
 
       if (insertError) {
         console.error("[v0] Implementations: Error inserting:", insertError)
-        return NextResponse.json({ error: "Failed to save implementations" }, { status: 500 })
       }
-
-      saved = inserted || []
     }
 
-    // Obtener todas las implementaciones de esta empresa (incluyendo las que ya existían)
-    const { data: allCompanyImpls } = await supabase
+    // ── 6. Return all implementations for this company (public) ──────
+    const { data: allImpls } = await supabase
       .from("company_implementations")
       .select("*")
       .eq("company_id", companyId)
-      .order("published_at", { ascending: false })
-      .limit(15)
+      .order("published_at", { ascending: false, nullsFirst: false })
+      .limit(MAX_IMPLEMENTATIONS)
 
-    const finalImplementations = allCompanyImpls || saved
+    const finalImpls = allImpls || []
 
-    await registerUserInteractions(
-      supabase,
-      user.id,
-      companyId,
-      finalImplementations.map((i: any) => i.id),
-    )
+    await registerUserInteractions(supabase, user.id, companyId, finalImpls.map((i: any) => i.id))
 
     return NextResponse.json({
-      implementations: finalImplementations,
+      implementations: finalImpls,
       cached: false,
-      provider: provider,
+      provider: "parallel",
     })
   } catch (error) {
-    console.error("[v0] Implementations: Unexpected error:", error)
+    console.error("[v0] Implementations: Error in POST handler:", error)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
   }
 }

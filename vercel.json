@@ -8,10 +8,7 @@
       "path": "/api/cron/process-dictionary",
       "schedule": "* * * * *"
     },
-    {
-      "path": "/api/cron/refresh-news",
-      "schedule": "0 8 1,15 * *"
-    },
+
     {
       "path": "/api/cron/monitor",
       "schedule": "*/15 * * * *"
