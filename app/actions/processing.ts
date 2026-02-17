@@ -80,7 +80,6 @@ export async function getBatchErrors(batchId: string) {
 
   if (error || !data) return []
 
-  // Group by error message
   const grouped: Record<string, number> = {}
   for (const row of data) {
     const msg = row.error_message || "Unknown error"
@@ -117,7 +116,7 @@ export async function getCronHealth() {
     "process-dictionary": 1,
     "monitor": 15,
     "sync-users": 1440,
-    "cleanup": 10080, // weekly
+    "cleanup": 10080,
   }
 
   const labels: Record<string, string> = {
@@ -128,11 +127,19 @@ export async function getCronHealth() {
     "cleanup": "Limpieza de Datos",
   }
 
+  const schedules: Record<string, string> = {
+    "process-queue": "Cada 1 min",
+    "process-dictionary": "Cada 1 min",
+    "monitor": "Cada 15 min",
+    "sync-users": "Diario 2am",
+    "cleanup": "Semanal Dom 3am",
+  }
+
   const now = new Date()
 
   return results.map(({ name, execution }) => {
     if (!execution?.started_at) {
-      return { name, label: labels[name] || name, status: "unknown" as const, lastRun: null, minutesAgo: null, recordsProcessed: 0, error: null }
+      return { name, label: labels[name] || name, schedule: schedules[name] || "", status: "unknown" as const, lastRun: null, minutesAgo: null, recordsProcessed: 0, error: null, executionStatus: null }
     }
 
     const lastRun = new Date(execution.started_at)
@@ -153,6 +160,7 @@ export async function getCronHealth() {
     return {
       name,
       label: labels[name] || name,
+      schedule: schedules[name] || "",
       status,
       lastRun: execution.started_at,
       completedAt: execution.completed_at,
@@ -165,7 +173,7 @@ export async function getCronHealth() {
 }
 
 // ─── Recent processing activity from debug_events ───
-export async function getRecentActivity(limit = 30) {
+export async function getRecentActivity(limit = 50) {
   const supabase = await createClient()
 
   const { data, error } = await supabase
@@ -182,20 +190,20 @@ export async function getRecentActivity(limit = 30) {
   return data || []
 }
 
-// ─── Pending signals count ───
-export async function getPendingSignalsCount() {
+// ─── Pending import rows count (across all batches) ───
+export async function getPendingImportRowsCount() {
   const supabase = await createClient()
 
   const { count } = await supabase
-    .from("pending_signals")
+    .from("import_rows")
     .select("id", { count: "exact", head: true })
-    .is("processed_at", null)
+    .eq("status", "pending")
 
   return count || 0
 }
 
 // ─── Dictionary jobs status ───
-export async function getDictionaryJobs(limit = 10) {
+export async function getDictionaryJobs(limit = 20) {
   const supabase = await createClient()
 
   const { data, error } = await supabase
