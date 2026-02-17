@@ -182,7 +182,26 @@ export async function POST(request: Request) {
       )
     }
 
-    // 7. Create batch record
+    // 7. Check for duplicate filename (prevent reprocessing the same file)
+    const { data: existing } = await supabase
+      .from("import_batches")
+      .select("id, status, created_at")
+      .eq("filename", filename)
+      .not("status", "eq", "failed")
+      .limit(1)
+      .maybeSingle()
+
+    if (existing) {
+      await del(blobUrl).catch(() => {})
+      return NextResponse.json(
+        {
+          error: `El archivo "${filename}" ya fue subido el ${new Date(existing.created_at).toLocaleDateString("es-AR")} (estado: ${existing.status}). Si necesitas reprocesarlo, cambia el nombre del archivo.`,
+        },
+        { status: 409 },
+      )
+    }
+
+    // 8. Create batch record
     const { data: batch, error: batchError } = await supabase
       .from("import_batches")
       .insert({
