@@ -7,12 +7,29 @@ export const maxDuration = 60
 export async function GET(request: Request) {
   const authHeader = request.headers.get("authorization")
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}` && process.env.NODE_ENV === "production") {
-    console.warn("[Cron] Unauthorized attempt or missing CRON_SECRET")
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  )
 
-  // Register cron execution start
+  // Concurrency guard: skip if another cron is already running
+  const { data: running } = await supabase
+    .from("cron_executions")
+    .select("id")
+    .eq("cron_name", "process-queue")
+    .eq("status", "running")
+    .gte("started_at", new Date(Date.now() - 120_000).toISOString()) // within last 2 min
+    .limit(1)
+
+  if (running && running.length > 0) {
+    console.log("[Cron] Another execution already running, skipping")
+    return NextResponse.json({ skipped: true, reason: "concurrent execution" })
+  }
+
+  // Register this execution
   const { data: execution } = await supabase
     .from("cron_executions")
     .insert({
@@ -24,120 +41,121 @@ export async function GET(request: Request) {
     .single()
 
   const executionId = execution?.id
-
   const startTime = Date.now()
-  const MAX_EXECUTION_TIME = 50000 // 50 seconds to leave margin
+
+  const MAX_TIME = 50_000 // 50s safety margin within 60s maxDuration
   let totalProcessed = 0
-  let batchesProcessed = 0
-  let loops = 0
-  const errors: string[] = []
+  let calls = 0
+  let lastBatchId = ""
+  let lastStatus = ""
+  let lastPending = 0
 
   try {
-    console.log("[Cron] Starting import batch processing...")
-
-    while (Date.now() - startTime < MAX_EXECUTION_TIME) {
-      loops++
-
-      // Fetch pending/processing batches - NEWEST first so recent uploads get priority
-      const { data: batches, error: batchError } = await supabase
+    // Loop: make multiple RPC calls within our time window
+    while (Date.now() - startTime < MAX_TIME) {
+      // Get the NEWEST pending/processing batch
+      const { data: batch, error: fetchErr } = await supabase
         .from("import_batches")
-        .select("id, batch_type")
+        .select("id, batch_type, filename")
         .in("status", ["pending", "processing"])
         .order("created_at", { ascending: false })
-        .limit(3)
+        .limit(1)
+        .single()
 
-      if (batchError) {
-        console.error("[Cron] Error fetching batches:", batchError.message)
-        errors.push(`Fetch error: ${batchError.message}`)
+      if (fetchErr || !batch) {
+        console.log("[Cron] No pending batches found")
         break
       }
 
-      if (!batches || batches.length === 0) {
-        console.log("[Cron] No pending batches found. Done.")
+      lastBatchId = batch.id
+
+      // chunk_size=5 means 5 rows per iteration x 10 internal iterations = 50 rows per call
+      // Each call takes ~5-15s depending on signal matching complexity
+      const { data: rpcResult, error: rpcError } = await supabase.rpc("process_import_batch", {
+        p_batch_id: batch.id,
+        p_chunk_size: 5,
+      })
+
+      calls++
+
+      if (rpcError) {
+        console.error(`[Cron] RPC error on call ${calls}:`, rpcError.message)
         break
       }
 
-      console.log(`[Cron] Loop ${loops}: Found ${batches.length} batches`)
-
-      for (const batch of batches) {
-        if (Date.now() - startTime >= MAX_EXECUTION_TIME) break
-
-        try {
-          console.log(`[Cron] Processing batch ${batch.id} (${batch.batch_type})`)
-
-          const { data: result, error: processError } = await supabase.rpc("process_import_batch", {
-            p_batch_id: batch.id,
-            p_chunk_size: 100,
-          })
-
-          if (processError) {
-            console.error(`[Cron] RPC error for ${batch.id}:`, processError.message)
-            errors.push(`Batch ${batch.id}: ${processError.message}`)
-            continue
-          }
-
-          // Supabase-js returns jsonb as a parsed object directly
-          const res = typeof result === "string" ? JSON.parse(result) : result
-          console.log(`[Cron] Batch ${batch.id} result:`, JSON.stringify(res))
-
-          if (res?.status === "completed") {
-            totalProcessed += res.total_processed || 0
-            batchesProcessed++
-          } else if (res?.status === "partial") {
-            totalProcessed += res.processed_this_call || 0
-          } else if (res?.status === "error") {
-            errors.push(`Batch ${batch.id}: ${res.message}`)
-          }
-
-          // Small delay between batches to avoid overloading
-          await new Promise((resolve) => setTimeout(resolve, 500))
-        } catch (batchErr: any) {
-          console.error(`[Cron] Unexpected error for ${batch.id}:`, batchErr.message)
-          errors.push(`Batch ${batch.id}: ${batchErr.message}`)
-        }
+      // Parse result
+      let result: any
+      try {
+        result = typeof rpcResult === "string" ? JSON.parse(rpcResult) : rpcResult
+      } catch {
+        result = { status: "unknown", raw: String(rpcResult) }
       }
 
-      // Small delay between loops
-      await new Promise((resolve) => setTimeout(resolve, 500))
+      const processed = result?.processed_this_call || result?.total_processed || 0
+      totalProcessed += processed
+      lastStatus = result?.status || "unknown"
+      lastPending = result?.pending_remaining ?? 0
+
+      console.log(`[Cron] Call ${calls}: ${processed} rows (${lastStatus}), ${lastPending} pending`)
+
+      // If batch completed, loop will pick the next one
+      if (lastStatus === "completed" || processed === 0) {
+        // No progress or batch done - check if there are more batches
+        continue
+      }
     }
 
     const duration = Math.round((Date.now() - startTime) / 1000)
-    console.log(`[Cron] Done. ${duration}s, ${loops} loops, ${batchesProcessed} completed, ${totalProcessed} rows`)
+    console.log(`[Cron] Done: ${calls} calls, ${totalProcessed} rows in ${duration}s`)
 
-    if (executionId) {
-      await supabase
-        .from("cron_executions")
-        .update({
-          status: "completed",
-          completed_at: new Date().toISOString(),
-          records_processed: totalProcessed,
-          details: { loops, batchesProcessed, duration, errors: errors.length > 0 ? errors : undefined },
-        })
-        .eq("id", executionId)
-    }
+    await finishExecution(supabase, executionId, "completed", totalProcessed, {
+      calls,
+      totalProcessed,
+      lastBatchId,
+      lastStatus,
+      lastPending,
+      duration,
+    })
 
     return NextResponse.json({
       success: true,
-      loops,
-      batchesProcessed,
+      calls,
       totalProcessed,
+      lastBatchId,
+      lastStatus,
+      lastPending,
       duration,
-      errors: errors.length > 0 ? errors : undefined,
     })
   } catch (err: any) {
     console.error("[Cron] Fatal error:", err.message)
-
-    if (executionId) {
-      await supabase
-        .from("cron_executions")
-        .update({
-          status: "failed",
-          completed_at: new Date().toISOString(),
-          error_message: err.message,
-        })
-        .eq("id", executionId)
-    }
-
+    await finishExecution(supabase, executionId, "failed", totalProcessed, {
+      error: err.message,
+      calls,
+      totalProcessed,
+    })
     return NextResponse.json({ error: err.message }, { status: 500 })
+  }
+}
+
+async function finishExecution(
+  supabase: any,
+  executionId: string | undefined,
+  status: string,
+  processed: number,
+  details: Record<string, any>
+) {
+  if (!executionId) return
+  try {
+    await supabase
+      .from("cron_executions")
+      .update({
+        status,
+        completed_at: new Date().toISOString(),
+        records_processed: processed,
+        details,
+      })
+      .eq("id", executionId)
+  } catch (e: any) {
+    console.error("[Cron] Failed to update execution:", e.message)
   }
 }
