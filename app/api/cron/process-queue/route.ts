@@ -5,10 +5,9 @@ export const dynamic = "force-dynamic"
 export const maxDuration = 60
 
 export async function GET(request: Request) {
-  // Security check: Vercel sends this header
   const authHeader = request.headers.get("authorization")
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}` && process.env.NODE_ENV === "production") {
-    console.warn("[Cron] Warning: Unauthorized attempt or missing CRON_SECRET")
+    console.warn("[Cron] Unauthorized attempt or missing CRON_SECRET")
   }
 
   const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
@@ -27,10 +26,11 @@ export async function GET(request: Request) {
   const executionId = execution?.id
 
   const startTime = Date.now()
-  const MAX_EXECUTION_TIME = 55000 // Run for 55 seconds max to avoid timeout
+  const MAX_EXECUTION_TIME = 50000 // 50 seconds to leave margin
   let totalProcessed = 0
   let batchesProcessed = 0
   let loops = 0
+  const errors: string[] = []
 
   try {
     console.log("[Cron] Starting import batch processing...")
@@ -38,30 +38,32 @@ export async function GET(request: Request) {
     while (Date.now() - startTime < MAX_EXECUTION_TIME) {
       loops++
 
-      // Fetch pending/processing batches
+      // Fetch pending/processing batches - NEWEST first so recent uploads get priority
       const { data: batches, error: batchError } = await supabase
         .from("import_batches")
         .select("id, batch_type")
         .in("status", ["pending", "processing"])
-        .order("created_at", { ascending: true })
-        .limit(3) // Process max 3 batches per loop
+        .order("created_at", { ascending: false })
+        .limit(3)
 
       if (batchError) {
-        console.error("[Cron] Error fetching batches:", batchError)
-        await new Promise((resolve) => setTimeout(resolve, 5000))
-        continue
+        console.error("[Cron] Error fetching batches:", batchError.message)
+        errors.push(`Fetch error: ${batchError.message}`)
+        break
       }
 
       if (!batches || batches.length === 0) {
-        console.log("[Cron] No pending batches found, waiting...")
-        await new Promise((resolve) => setTimeout(resolve, 5000))
-        continue
+        console.log("[Cron] No pending batches found. Done.")
+        break
       }
 
-      // Process each batch with the new process_import_batch function
+      console.log(`[Cron] Loop ${loops}: Found ${batches.length} batches`)
+
       for (const batch of batches) {
+        if (Date.now() - startTime >= MAX_EXECUTION_TIME) break
+
         try {
-          console.log(`[Cron] Processing batch ${batch.id} (${batch.batch_type})...`)
+          console.log(`[Cron] Processing batch ${batch.id} (${batch.batch_type})`)
 
           const { data: result, error: processError } = await supabase.rpc("process_import_batch", {
             p_batch_id: batch.id,
@@ -69,38 +71,39 @@ export async function GET(request: Request) {
           })
 
           if (processError) {
-            console.error(`[Cron] Error processing batch ${batch.id}:`, processError)
+            console.error(`[Cron] RPC error for ${batch.id}:`, processError.message)
+            errors.push(`Batch ${batch.id}: ${processError.message}`)
             continue
           }
 
-          console.log(`[Cron] Batch result:`, result)
+          // Supabase-js returns jsonb as a parsed object directly
+          const res = typeof result === "string" ? JSON.parse(result) : result
+          console.log(`[Cron] Batch ${batch.id} result:`, JSON.stringify(res))
 
-          if (result?.status === "completed") {
-            totalProcessed += result.total_processed || 0
-            batchesProcessed += 1
-            console.log(
-              `[Cron] Batch ${batch.id} completed. Processed: ${result.total_processed} rows in ${result.iterations} iterations`,
-            )
-          } else if (result?.status === "partial") {
-            totalProcessed += result.processed_this_call || 0
-            console.log(
-              `[Cron] Batch ${batch.id} partial. Processed: ${result.processed_this_call} rows. ${result.pending_remaining} remaining. Will retry on next cron.`,
-            )
+          if (res?.status === "completed") {
+            totalProcessed += res.total_processed || 0
+            batchesProcessed++
+          } else if (res?.status === "partial") {
+            totalProcessed += res.processed_this_call || 0
+          } else if (res?.status === "error") {
+            errors.push(`Batch ${batch.id}: ${res.message}`)
           }
 
-          // Small delay between batches
-          await new Promise((resolve) => setTimeout(resolve, 1000))
+          // Small delay between batches to avoid overloading
+          await new Promise((resolve) => setTimeout(resolve, 500))
         } catch (batchErr: any) {
-          console.error(`[Cron] Unexpected error processing batch ${batch.id}:`, batchErr)
+          console.error(`[Cron] Unexpected error for ${batch.id}:`, batchErr.message)
+          errors.push(`Batch ${batch.id}: ${batchErr.message}`)
         }
       }
+
+      // Small delay between loops
+      await new Promise((resolve) => setTimeout(resolve, 500))
     }
 
-    console.log(
-      `[Cron] Loop finished. Loops: ${loops}, Batches Processed: ${batchesProcessed}, Total Rows: ${totalProcessed}`,
-    )
+    const duration = Math.round((Date.now() - startTime) / 1000)
+    console.log(`[Cron] Done. ${duration}s, ${loops} loops, ${batchesProcessed} completed, ${totalProcessed} rows`)
 
-    // Register cron execution completion
     if (executionId) {
       await supabase
         .from("cron_executions")
@@ -108,22 +111,22 @@ export async function GET(request: Request) {
           status: "completed",
           completed_at: new Date().toISOString(),
           records_processed: totalProcessed,
-          details: { loops, batchesProcessed },
+          details: { loops, batchesProcessed, duration, errors: errors.length > 0 ? errors : undefined },
         })
         .eq("id", executionId)
     }
 
     return NextResponse.json({
       success: true,
-      message: `Processed ${totalProcessed} rows in ${batchesProcessed} batches`,
       loops,
       batchesProcessed,
       totalProcessed,
+      duration,
+      errors: errors.length > 0 ? errors : undefined,
     })
   } catch (err: any) {
-    console.error("[Cron] Unexpected error:", err)
+    console.error("[Cron] Fatal error:", err.message)
 
-    // Register cron execution failure
     if (executionId) {
       await supabase
         .from("cron_executions")
