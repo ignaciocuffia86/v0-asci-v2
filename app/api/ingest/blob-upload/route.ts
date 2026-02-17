@@ -1,31 +1,42 @@
-import { put } from "@vercel/blob"
+import { handleUpload, type HandleUploadBody } from "@vercel/blob/client"
 import { type NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 
-export async function PUT(request: NextRequest) {
-  // Authenticate
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+// This route handles the token generation for client-side Blob uploads.
+// The actual file never passes through this serverless function -- it goes
+// directly from the browser to Vercel Blob, bypassing the 4.5MB body limit.
+export async function POST(request: NextRequest) {
+  const body = (await request.json()) as HandleUploadBody
 
-  if (!user) {
-    return NextResponse.json({ error: "No autenticado" }, { status: 401 })
+  try {
+    const jsonResponse = await handleUpload({
+      body,
+      request,
+      onBeforeGenerateToken: async () => {
+        // Authenticate the user before allowing upload
+        const supabase = await createClient()
+        const {
+          data: { user },
+        } = await supabase.auth.getUser()
+
+        if (!user) {
+          throw new Error("No autenticado")
+        }
+
+        return {
+          allowedContentTypes: ["text/csv", "application/vnd.ms-excel", "application/octet-stream"],
+          maximumSizeInBytes: 100 * 1024 * 1024, // 100MB max
+          tokenPayload: JSON.stringify({ userId: user.id }),
+        }
+      },
+      onUploadCompleted: async () => {
+        // Nothing needed here -- the frontend will call /api/ingest/upload
+        // with the blob URL to trigger processing
+      },
+    })
+
+    return NextResponse.json(jsonResponse)
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 400 })
   }
-
-  const filename = request.nextUrl.searchParams.get("filename")
-  if (!filename) {
-    return NextResponse.json({ error: "Falta filename" }, { status: 400 })
-  }
-
-  if (!request.body) {
-    return NextResponse.json({ error: "No se proporcionó archivo" }, { status: 400 })
-  }
-
-  // Upload to Vercel Blob with a unique path
-  const blob = await put(`ingest/${Date.now()}-${filename}`, request.body, {
-    access: "public",
-  })
-
-  return NextResponse.json({ url: blob.url })
 }

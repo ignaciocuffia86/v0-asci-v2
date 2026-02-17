@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react"
 import { useDropzone } from "react-dropzone"
+import { upload } from "@vercel/blob/client"
 import { Upload, FileUp, CheckCircle, AlertCircle, Loader2, Activity, Database } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
@@ -98,18 +99,12 @@ export default function IngestPage() {
     setErrorMessage(null)
 
     try {
-      // Step 1: Upload CSV to Vercel Blob (no body size limit)
-      const blobResponse = await fetch(`/api/ingest/blob-upload?filename=${encodeURIComponent(file.name)}`, {
-        method: "PUT",
-        body: file,
+      // Step 1: Upload CSV directly to Vercel Blob from browser (bypasses serverless 4.5MB limit)
+      const blob = await upload(file.name, file, {
+        access: "public",
+        handleUploadUrl: "/api/ingest/blob-upload",
       })
-
-      if (!blobResponse.ok) {
-        const blobText = await blobResponse.text()
-        throw new Error(`Error subiendo archivo: ${blobText}`)
-      }
-
-      const { url: blobUrl } = await blobResponse.json()
+      const blobUrl = blob.url
       setProgress(30)
 
       // Step 2: Tell the API route to process the blob (lightweight JSON request)
