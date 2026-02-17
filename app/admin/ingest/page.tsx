@@ -2,13 +2,13 @@
 
 import { useState, useCallback, useEffect } from "react"
 import { useDropzone } from "react-dropzone"
-import Papa from "papaparse"
-import { Upload, FileUp, CheckCircle, AlertCircle, Loader2, Activity, Database, Play } from "lucide-react"
+import { upload } from "@vercel/blob/client"
+import { Upload, FileUp, CheckCircle, AlertCircle, Loader2, Activity, Database } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { createImportBatch, uploadBatchRows, triggerBatchProcessing, getBatchStatus } from "@/app/actions/ingest"
+import { getBatchStatus } from "@/app/actions/ingest"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Label } from "@/components/ui/label"
 
@@ -93,110 +93,57 @@ export default function IngestPage() {
   const processFile = async () => {
     if (!file) return
 
-    console.log("[v0] Starting file processing for batch type:", batchType)
     setIsUploading(true)
-    setStatus("parsing")
+    setStatus("uploading")
     setStats({ total: 0, processed: 0, failed: 0, errors: 0 })
-
-    const REQUIRED_HEADERS = BATCH_TYPES[batchType].requiredHeaders
-
-    // 1. Parse CSV
-    Papa.parse(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: async (results) => {
-        const rows = results.data as any[]
-        const totalRows = rows.length
-        console.log("[v0] Parsed CSV, total rows:", totalRows)
-        setStats((prev) => ({ ...prev, total: totalRows }))
-
-        // Validate Headers
-        const headers = results.meta.fields || []
-        const missingHeaders = REQUIRED_HEADERS.filter((h) => !headers.includes(h))
-
-        if (missingHeaders.length > 0) {
-          console.error("[v0] Missing headers:", missingHeaders)
-          setErrorMessage(
-            `Faltan columnas requeridas para ${BATCH_TYPES[batchType].label}: ${missingHeaders.join(", ")}`,
-          )
-          setStatus("error")
-          setIsUploading(false)
-          return
-        }
-
-        // 2. Create Import Batch (with batch_type)
-        console.log("[v0] Creating import batch with type:", batchType)
-        const newBatchId = await createImportBatch(file.name, totalRows, batchType)
-        if (!newBatchId) {
-          console.error("[v0] Failed to create import batch")
-          setErrorMessage("Error al crear el lote de importación.")
-          setIsUploading(false)
-          setStatus("error")
-          return
-        }
-        console.log("[v0] Created batch with ID:", newBatchId)
-        setBatchId(newBatchId)
-        setStatus("uploading")
-
-        // 3. Upload to Raw Tables in Batches (with batch_type)
-        const BATCH_SIZE = 50 // Reduced batch size from 500 to 50 to avoid "Request Entity Too Large" errors with large HTML job descriptions
-        console.log("[v0] Starting upload of", totalRows, "rows in batches of", BATCH_SIZE)
-
-        for (let i = 0; i < totalRows; i += BATCH_SIZE) {
-          const batch = rows.slice(i, i + BATCH_SIZE)
-
-          console.log("[v0] Uploading batch", Math.floor(i / BATCH_SIZE) + 1, "with", batch.length, "rows")
-          const result = await uploadBatchRows(newBatchId, batch, batchType)
-          if (!result.success) {
-            console.error("[v0] Upload failed:", result.error)
-            setErrorMessage(`Error al subir filas: ${result.error}`)
-            setStatus("error")
-            setIsUploading(false)
-            return
-          }
-
-          const currentProgress = Math.round(((i + batch.length) / totalRows) * 50)
-          setProgress(currentProgress)
-        }
-        console.log("[v0] Upload completed successfully")
-
-        // 4. Trigger Initial Processing and Switch to Background Mode
-        console.log("[v0] Starting background processing")
-        setStatus("processing")
-
-        const triggerResult = await triggerBatchProcessing(newBatchId)
-
-        if (!triggerResult.success) {
-          console.warn("[v0] Immediate trigger warning:", triggerResult.error)
-        } else {
-          setStats((prev) => ({
-            ...prev,
-            processed: (prev.processed || 0) + (triggerResult.processedCount || 0),
-          }))
-        }
-      },
-      error: (error) => {
-        console.error("[v0] CSV parsing error:", error)
-        setErrorMessage(`Error al leer el CSV: ${error.message}`)
-        setStatus("error")
-        setIsUploading(false)
-      },
-    })
-  }
-
-  const handleManualTrigger = async () => {
-    if (!batchId) return
+    setErrorMessage(null)
 
     try {
-      const result = await triggerBatchProcessing(batchId)
-      if (result.success) {
-        setStats((prev) => ({
-          ...prev,
-          processed: (prev.processed || 0) + (result.processedCount || 0),
-        }))
+      // Step 1: Upload CSV directly to Vercel Blob from browser (bypasses serverless 4.5MB limit)
+      const blob = await upload(file.name, file, {
+        access: "public",
+        handleUploadUrl: "/api/ingest/blob-upload",
+      })
+      const blobUrl = blob.url
+      setProgress(30)
+
+      // Step 2: Tell the API route to process the blob (lightweight JSON request)
+      setStatus("parsing")
+      const processResponse = await fetch("/api/ingest/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          blobUrl,
+          filename: file.name,
+          batchType,
+        }),
+      })
+
+      let result
+      try {
+        result = await processResponse.json()
+      } catch {
+        const text = await processResponse.text()
+        throw new Error(`Respuesta inesperada del servidor: ${text.substring(0, 100)}`)
       }
-    } catch (error) {
-      console.error("Manual trigger failed:", error)
+
+      if (!processResponse.ok || !result.success) {
+        setErrorMessage(result.error || "Error al procesar el archivo")
+        setStatus("error")
+        setIsUploading(false)
+        return
+      }
+
+      // Server created the batch and inserted all rows
+      setBatchId(result.batchId)
+      setStats((prev) => ({ ...prev, total: result.totalRows }))
+      setProgress(50)
+      setStatus("processing")
+      // The Vercel cron picks up the batch automatically
+    } catch (err: any) {
+      setErrorMessage(err.message || "Error de conexion")
+      setStatus("error")
+      setIsUploading(false)
     }
   }
 
@@ -348,18 +295,7 @@ export default function IngestPage() {
                       plano (aprox. 50 filas/minuto).
                       <br />
                       <br />
-                      <strong>Ya puedes cerrar esta pestaña.</strong> Si te quedas, verás el progreso en tiempo real.
-                      <div className="mt-4">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleManualTrigger}
-                          className="bg-background/50 hover:bg-background/80"
-                        >
-                          <Play className="mr-2 h-3 w-3" />
-                          Procesar lote manualmente ahora
-                        </Button>
-                      </div>
+                      <strong>Ya puedes cerrar esta pestaña.</strong> Si te quedas, veras el progreso en tiempo real.
                     </AlertDescription>
                   </Alert>
                 )}

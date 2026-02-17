@@ -184,7 +184,7 @@ export async function triggerBatchProcessing(batchId: string) {
   try {
     const { data, error } = await supabase.rpc("process_import_batch", {
       p_batch_id: batchId,
-      p_chunk_size: 100, // Changed from p_limit: 10 to p_chunk_size: 100 to match the RPC function signature
+      p_chunk_size: 100,
     })
 
     if (error) {
@@ -192,7 +192,13 @@ export async function triggerBatchProcessing(batchId: string) {
       return { success: false, error: error.message }
     }
 
-    return { success: true, processedCount: data }
+    // The RPC now returns JSONB: {status, total_processed, pending_remaining, iterations}
+    console.log("[v0] RPC result:", data)
+    
+    // Extract the processed count for backward compatibility
+    const processedCount = data?.total_processed || data?.processed_this_call || 0
+    
+    return { success: true, processedCount, result: data }
   } catch (error: any) {
     console.error("[v0] Trigger Error:", error)
     return { success: false, error: error.message }
