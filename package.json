@@ -60,6 +60,7 @@
     "mammoth": "^1.8.0",
     "next": "16.0.10",
     "next-themes": "latest",
+    "parallel-web": "latest",
     "papaparse": "latest",
     "pdf-parse": "^1.1.1",
     "react": "19.2.0",

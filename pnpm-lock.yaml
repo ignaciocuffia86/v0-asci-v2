@@ -164,6 +164,9 @@ importers:
       papaparse:
         specifier: latest
         version: 5.5.3
+      parallel-web:
+        specifier: latest
+        version: 0.3.1
       pdf-parse:
         specifier: ^1.1.1
         version: 1.1.4
@@ -2386,6 +2389,9 @@ packages:
 
   papaparse@5.5.3:
     resolution: {integrity: sha512-5QvjGxYVjxO59MGU2lHVYpRWBBtKHnlIAcSe1uNFCkkptUh63NFRj0FJQm7nR67puEruUci/ZkjmEFrjCAyP4A==}
+
+  parallel-web@0.3.1:
+    resolution: {integrity: sha512-1yLiqdjFFhwgZUV2qOLTvu36A3wiCld8/Y8Zu1FsGk6y4ov4cZPhXNGafjDkM68aFc1c5KVB9ZYpkJZZ/mZW/w==}
 
   parse-svg-path@0.1.2:
     resolution: {integrity: sha512-JyPSBnkTJ0AI8GGJLfMXvKq42cj5c006fnLz6fXy6zfoVjJizi8BNTpu8on8ziI1cKy9d9DGNuY17Ce7wuejpQ==}
@@ -4958,6 +4964,8 @@ snapshots:
   pako@2.1.0: {}
 
   papaparse@5.5.3: {}
+
+  parallel-web@0.3.1: {}
 
   parse-svg-path@0.1.2: {}
 
