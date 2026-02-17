@@ -1,9 +1,10 @@
 import { createClient } from "@supabase/supabase-js"
 import { NextResponse } from "next/server"
 import { createClient as createServerClient } from "@/lib/supabase/server"
+import { del } from "@vercel/blob"
 import Papa from "papaparse"
 
-export const maxDuration = 60
+export const maxDuration = 300
 
 const BATCH_TYPES = {
   contacts: {
@@ -122,13 +123,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "No autenticado" }, { status: 401 })
   }
 
-  // 2. Parse the FormData
-  const formData = await request.formData()
-  const file = formData.get("file") as File | null
-  const batchType = (formData.get("batchType") as BatchType) || "contacts"
+  // 2. Parse the JSON body (contains blobUrl, filename, batchType)
+  let body: { blobUrl: string; filename: string; batchType: BatchType }
+  try {
+    body = await request.json()
+  } catch {
+    return NextResponse.json({ error: "Body inválido" }, { status: 400 })
+  }
 
-  if (!file) {
-    return NextResponse.json({ error: "No se proporcionó archivo" }, { status: 400 })
+  const { blobUrl, filename, batchType } = body
+
+  if (!blobUrl || !filename) {
+    return NextResponse.json({ error: "Falta blobUrl o filename" }, { status: 400 })
   }
 
   if (!BATCH_TYPES[batchType]) {
@@ -142,8 +148,12 @@ export async function POST(request: Request) {
   )
 
   try {
-    // 4. Read the file content
-    const csvText = await file.text()
+    // 4. Download CSV from Blob
+    const csvResponse = await fetch(blobUrl)
+    if (!csvResponse.ok) {
+      return NextResponse.json({ error: "No se pudo descargar el archivo desde Blob" }, { status: 500 })
+    }
+    const csvText = await csvResponse.text()
 
     // 5. Parse CSV server-side
     const parseResult = await new Promise<Papa.ParseResult<any>>((resolve, reject) => {
@@ -164,6 +174,8 @@ export async function POST(request: Request) {
     const missingHeaders = requiredHeaders.filter((h) => !headers.includes(h))
 
     if (missingHeaders.length > 0) {
+      // Clean up blob since validation failed
+      await del(blobUrl).catch(() => {})
       return NextResponse.json(
         { error: `Faltan columnas requeridas: ${missingHeaders.join(", ")}` },
         { status: 400 },
@@ -175,7 +187,7 @@ export async function POST(request: Request) {
       .from("import_batches")
       .insert({
         user_id: user.id,
-        filename: file.name,
+        filename,
         status: "processing",
         total_rows: totalRows,
         processed_rows: 0,
@@ -185,7 +197,7 @@ export async function POST(request: Request) {
       .single()
 
     if (batchError || !batch) {
-      console.error("[Ingest API] Error creating batch:", batchError)
+      await del(blobUrl).catch(() => {})
       return NextResponse.json({ error: "Error al crear el lote de importación" }, { status: 500 })
     }
 
@@ -207,13 +219,12 @@ export async function POST(request: Request) {
       const { error: insertError } = await supabase.from("import_rows").insert(formattedChunk)
 
       if (insertError) {
-        console.error(`[Ingest API] Error inserting chunk at offset ${i}:`, insertError)
-        // Mark batch as failed if bulk insert fails
         await supabase
           .from("import_batches")
           .update({ status: "failed", error_message: insertError.message })
           .eq("id", batchId)
 
+        await del(blobUrl).catch(() => {})
         return NextResponse.json(
           { error: `Error al insertar filas: ${insertError.message}`, batchId },
           { status: 500 },
@@ -223,9 +234,8 @@ export async function POST(request: Request) {
       insertedRows += chunk.length
     }
 
-    // 9. Batch is now "processing" - the Vercel cron will pick it up automatically
-    // No need to call triggerBatchProcessing - the cron runs every minute
-    console.log(`[Ingest API] Batch ${batchId} created with ${insertedRows} rows. Cron will process.`)
+    // 9. Clean up blob - CSV is now in the database
+    await del(blobUrl).catch(() => {})
 
     return NextResponse.json({
       success: true,
@@ -234,7 +244,8 @@ export async function POST(request: Request) {
       message: `${insertedRows} filas cargadas. El procesamiento comenzará automáticamente.`,
     })
   } catch (err: any) {
-    console.error("[Ingest API] Unexpected error:", err)
+    // Clean up blob on any error
+    await del(blobUrl).catch(() => {})
     return NextResponse.json({ error: err.message }, { status: 500 })
   }
 }

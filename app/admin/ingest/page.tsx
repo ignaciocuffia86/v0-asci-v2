@@ -98,20 +98,41 @@ export default function IngestPage() {
     setErrorMessage(null)
 
     try {
-      // Single request: upload file to API route which handles
-      // CSV parsing, validation, batch creation, and row insertion server-side
-      const formData = new FormData()
-      formData.append("file", file)
-      formData.append("batchType", batchType)
-
-      const response = await fetch("/api/ingest/upload", {
-        method: "POST",
-        body: formData,
+      // Step 1: Upload CSV to Vercel Blob (no body size limit)
+      const blobResponse = await fetch(`/api/ingest/blob-upload?filename=${encodeURIComponent(file.name)}`, {
+        method: "PUT",
+        body: file,
       })
 
-      const result = await response.json()
+      if (!blobResponse.ok) {
+        const blobText = await blobResponse.text()
+        throw new Error(`Error subiendo archivo: ${blobText}`)
+      }
 
-      if (!response.ok || !result.success) {
+      const { url: blobUrl } = await blobResponse.json()
+      setProgress(30)
+
+      // Step 2: Tell the API route to process the blob (lightweight JSON request)
+      setStatus("parsing")
+      const processResponse = await fetch("/api/ingest/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          blobUrl,
+          filename: file.name,
+          batchType,
+        }),
+      })
+
+      let result
+      try {
+        result = await processResponse.json()
+      } catch {
+        const text = await processResponse.text()
+        throw new Error(`Respuesta inesperada del servidor: ${text.substring(0, 100)}`)
+      }
+
+      if (!processResponse.ok || !result.success) {
         setErrorMessage(result.error || "Error al procesar el archivo")
         setStatus("error")
         setIsUploading(false)
@@ -123,9 +144,9 @@ export default function IngestPage() {
       setStats((prev) => ({ ...prev, total: result.totalRows }))
       setProgress(50)
       setStatus("processing")
-      // The Vercel cron picks up the batch automatically - no need to trigger manually
+      // The Vercel cron picks up the batch automatically
     } catch (err: any) {
-      setErrorMessage(err.message || "Error de conexión")
+      setErrorMessage(err.message || "Error de conexion")
       setStatus("error")
       setIsUploading(false)
     }
