@@ -3,7 +3,7 @@ import { NextResponse } from "next/server"
 import { parallelSearch, buildNewsSearchParams } from "@/lib/parallel"
 import { GoogleGenerativeAI } from "@google/generative-ai"
 
-const NEWS_CACHE_HOURS = 24
+const NEWS_CACHE_DAYS = 30 // Refresh at most once per month
 const MAX_NEWS = 15
 
 // ── Gemini structuring ─────────────────────────────────────────────────
@@ -105,18 +105,30 @@ function categorizeNews(text: string): string {
 // ── Cache helpers (public by company_id) ─────────────────────────────
 async function getRecentCache(supabase: any, companyId: string) {
   const cacheDate = new Date()
-  cacheDate.setHours(cacheDate.getHours() - NEWS_CACHE_HOURS)
+  cacheDate.setDate(cacheDate.getDate() - NEWS_CACHE_DAYS)
 
-  const { data } = await supabase
+  // Check if we have ANY news fetched within the cache window
+  const { data: recentFetch } = await supabase
     .from("company_news")
-    .select("*")
+    .select("id")
     .eq("company_id", companyId)
     .gte("created_at", cacheDate.toISOString())
-    .order("published_at", { ascending: false, nullsFirst: false })
-    .order("created_at", { ascending: false })
-    .limit(MAX_NEWS)
+    .limit(1)
 
-  return data
+  // If there was a recent fetch, return ALL news for this company (no duplicates)
+  if (recentFetch && recentFetch.length > 0) {
+    const { data } = await supabase
+      .from("company_news")
+      .select("*")
+      .eq("company_id", companyId)
+      .order("published_at", { ascending: false, nullsFirst: false })
+      .order("created_at", { ascending: false })
+      .limit(MAX_NEWS)
+
+    return data
+  }
+
+  return null // Cache expired, needs refresh
 }
 
 async function getAnyCache(supabase: any, companyId: string) {

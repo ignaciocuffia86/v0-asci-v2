@@ -3,7 +3,7 @@ import { NextResponse } from "next/server"
 import { parallelSearch, buildImplementationsSearchParams } from "@/lib/parallel"
 import { GoogleGenerativeAI } from "@google/generative-ai"
 
-const IMPL_CACHE_DAYS = 7
+const IMPL_CACHE_DAYS = 30 // Refresh at most once per month per company+signal
 const MAX_IMPLEMENTATIONS = 10
 
 // ── Gemini structuring ─────────────────────────────────────────────────
@@ -103,20 +103,45 @@ function sanitizeDate(dateStr: string | null | undefined): string | null {
   return date.toISOString().split("T")[0]
 }
 
-// ── Cache helpers (public by company_id) ─────────────────────────────
-async function getRecentCache(supabase: any, companyId: string) {
+// ── Cache helpers (public by company_id, scoped by search_context) ────
+// search_context is a hash of the keywords used for the search, allowing
+// per-signal caching: company+process A vs company+technology B have separate caches
+function buildSearchContext(keywords: string[]): string {
+  if (keywords.length === 0) return "general"
+  return keywords.sort().join("|").toLowerCase()
+}
+
+async function getRecentCache(supabase: any, companyId: string, searchContext: string) {
   const cacheDate = new Date()
   cacheDate.setDate(cacheDate.getDate() - IMPL_CACHE_DAYS)
 
-  const { data } = await supabase
+  // Check if we have implementations fetched within the cache window for this context
+  let query = supabase
     .from("company_implementations")
-    .select("*")
+    .select("id")
     .eq("company_id", companyId)
     .gte("created_at", cacheDate.toISOString())
-    .order("published_at", { ascending: false, nullsFirst: false })
-    .limit(MAX_IMPLEMENTATIONS)
+    .limit(1)
 
-  return data
+  if (searchContext !== "general") {
+    query = query.eq("search_context", searchContext)
+  }
+
+  const { data: recentFetch } = await query
+
+  if (recentFetch && recentFetch.length > 0) {
+    // Cache is fresh -- return ALL implementations for this company (company-wide view)
+    const { data } = await supabase
+      .from("company_implementations")
+      .select("*")
+      .eq("company_id", companyId)
+      .order("published_at", { ascending: false, nullsFirst: false })
+      .limit(MAX_IMPLEMENTATIONS)
+
+    return data
+  }
+
+  return null // Cache expired for this context
 }
 
 async function getAnyCache(supabase: any, companyId: string) {
@@ -247,19 +272,20 @@ export async function POST(request: Request) {
       }
     }
 
-    // ── 1. Check public cache (by company_id, visible to all users) ──
+    // ── 1. Get signal keywords from bookmark context ───────────────────
+    const keywords = await getBookmarkKeywords(supabase, bookmarkId)
+    const searchContext = buildSearchContext(keywords)
+    console.log("[v0] Implementations: Keywords:", keywords, "| Context:", searchContext)
+
+    // ── 2. Check public cache (by company_id + search_context) ───────
     if (!forceRefresh) {
-      const cached = await getRecentCache(supabase, companyId)
+      const cached = await getRecentCache(supabase, companyId, searchContext)
       if (cached && cached.length > 0) {
         console.log("[v0] Implementations: Public cache hit -", cached.length, "items")
         await registerUserInteractions(supabase, user.id, companyId, cached.map((i: any) => i.id))
         return NextResponse.json({ implementations: cached, cached: true, provider: "cache" })
       }
     }
-
-    // ── 2. Get signal keywords from bookmark context ─────────────────
-    const keywords = await getBookmarkKeywords(supabase, bookmarkId)
-    console.log("[v0] Implementations: Keywords for search:", keywords)
 
     // ── 3. Search with Parallel ──────────────────────────────────────
     console.log("[v0] Implementations: Searching with Parallel for", companyName)
@@ -357,6 +383,7 @@ export async function POST(request: Request) {
         area: item.area,
         provider_name: item.provider_name,
         evidence_level: item.evidence_level,
+        search_context: searchContext,
       }))
 
     console.log(`[v0] Implementations: Inserting ${newToInsert.length} new items`)
