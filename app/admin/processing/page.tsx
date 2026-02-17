@@ -171,9 +171,10 @@ export default function ProcessingPage() {
       </div>
 
       {/* Top Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
         <StatCard icon={<TrendingUp className="h-4 w-4" />} label="Senales" value={formatNumber(counts?.signals_total)} sub={`Procesos: ${formatNumber(counts?.signals_process)} | Tech: ${formatNumber(counts?.signals_technology)}`} />
         <StatCard icon={<Users className="h-4 w-4" />} label="Contactos" value={formatNumber(counts?.contacts_total)} />
+        <StatCard icon={<FileText className="h-4 w-4" />} label="Job Postings" value={formatNumber(counts?.job_postings_total)} />
         <StatCard icon={<Building2 className="h-4 w-4" />} label="Companias" value={formatNumber(counts?.companies_total)} />
         <StatCard icon={<Briefcase className="h-4 w-4" />} label="Jobs Completados" value={formatNumber(counts?.jobs_completed)} />
         <StatCard
