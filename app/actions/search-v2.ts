@@ -45,6 +45,7 @@ export type CompanySignalSummary = {
   total_signals: number
   current_employees_with_signals: number
   alumni_with_tech_signals: number
+  job_postings_count: number
   top_processes: { process_name: string; count: number }[]
   top_technologies: { product_name: string; count: number }[]
 }
