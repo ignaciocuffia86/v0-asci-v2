@@ -166,17 +166,17 @@ export function CompanySearch() {
                   <div className="text-3xl font-bold text-muted-foreground">{summary.alumni_with_tech_signals}</div>
                 </CardContent>
               </Card>
-              <Card className={(selectedCompany?.job_postings_count || 0) > 0 ? "border-orange-200 bg-orange-50/50" : ""}>
+              <Card className={(summary.job_postings_count || 0) > 0 ? "border-orange-200 bg-orange-50/50" : ""}>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                    <Flame className={`h-4 w-4 ${(selectedCompany?.job_postings_count || 0) > 0 ? "text-orange-500" : ""}`} /> Búsquedas Laborales
+                    <Flame className={`h-4 w-4 ${(summary.job_postings_count || 0) > 0 ? "text-orange-500" : ""}`} /> Búsquedas Laborales
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div
-                    className={`text-3xl font-bold ${(selectedCompany?.job_postings_count || 0) > 0 ? "text-orange-600" : "text-muted-foreground"}`}
+                    className={`text-3xl font-bold ${(summary.job_postings_count || 0) > 0 ? "text-orange-600" : "text-muted-foreground"}`}
                   >
-                    {selectedCompany?.job_postings_count || 0}
+                    {summary.job_postings_count || 0}
                   </div>
                 </CardContent>
               </Card>
