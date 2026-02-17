@@ -96,7 +96,8 @@ export async function GET(request: Request) {
         continue
       }
 
-      // Call RPC: chunk_size=5 => 50 rows per call (5 per iteration x 10 iterations)
+      // Call RPC: chunk_size=5 => 50 rows per call (5 per iteration x 10 internal iterations)
+      // statement_timeout=55s is SET on the SQL function to override PostgREST's 8s default
       const { data: rpcResult, error: rpcError } = await supabase.rpc("process_import_batch", {
         p_batch_id: batch.id,
         p_chunk_size: 5,
