@@ -507,6 +507,7 @@ export async function searchApolloProspects(
   }
 
   const finalJobTitles = customJobTitles?.length ? customJobTitles : jobTitles
+  console.log("[v0] Company context:", { name: company.name, domain: companyDomain, linkedin: company.linkedin_url })
   console.log("[v0] Final job titles to search:", finalJobTitles)
 
   let contacts = await searchApolloCache(companyDomain, company.linkedin_url, finalJobTitles)
@@ -586,6 +587,17 @@ export async function searchApolloProspects(
 
   revalidatePath(`/bookmarks/${bookmarkId}`)
 
+  // Include debug info if no prospects found
+  const debugInfo = `Company: ${company.name}, Domain: ${companyDomain || "N/A"}, LinkedIn: ${company.linkedin_url || "N/A"}, Titles: ${finalJobTitles.join(", ")}`
+  
+  if (savedCount === 0) {
+    return { 
+      success: true, 
+      count: 0, 
+      error: `No se encontraron prospectos. Debug: ${debugInfo}` 
+    }
+  }
+  
   return { success: true, count: savedCount }
 }
 
