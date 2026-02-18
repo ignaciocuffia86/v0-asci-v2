@@ -292,6 +292,8 @@ async function callApolloAPI(
       requestBody.q_organization_name = companyName
     }
 
+    console.log("[v0] Apollo API call starting:", { companyDomain, companyName, jobTitlesCount: jobTitles.length })
+
     const response = await fetch("https://api.apollo.io/api/v1/mixed_people/api_search", {
       method: "POST",
       headers: {
@@ -300,25 +302,37 @@ async function callApolloAPI(
         "x-api-key": apiKey,
       },
       body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(30000), // 30s timeout
     })
 
+    console.log("[v0] Apollo API response status:", response.status)
+
     if (!response.ok) {
-      console.error("Apollo API error:", response.status, await response.text())
+      const errorText = await response.text()
+      console.error("[v0] Apollo API error:", response.status, errorText)
       return []
     }
 
     const data: ApolloSearchResponse = await response.json()
 
+    console.log("[v0] Apollo API returned:", data.people?.length || 0, "people")
+
     if (data.people && data.people.length > 0) {
       // api_search returns minimal data (first_name, title, id only)
       // Enrich each person via people/match with their id to get full data
+      console.log("[v0] Starting enrichment for", data.people.length, "people")
       const enrichedPeople = await enrichApolloContacts(data.people, apiKey)
+      console.log("[v0] Enrichment complete:", enrichedPeople.length, "enriched")
       return enrichedPeople.length > 0 ? enrichedPeople : data.people
     }
 
+    console.log("[v0] No people found in Apollo response")
     return data.people || []
   } catch (error) {
-    console.error("Error calling Apollo API:", error)
+    console.error("[v0] Error calling Apollo API:", error)
+    if (error instanceof Error) {
+      console.error("[v0] Error details:", error.message, error.stack)
+    }
     return []
   }
 }
@@ -450,12 +464,15 @@ export async function searchApolloProspects(
   jobTitles: string[],
   customJobTitles?: string[],
 ): Promise<{ success: boolean; count: number; error?: string }> {
+  console.log("[v0] searchApolloProspects called:", { bookmarkId, jobTitlesCount: jobTitles.length })
+  
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
 
   if (!user) {
+    console.log("[v0] No user authenticated")
     return { success: false, count: 0, error: "No autorizado" }
   }
 
@@ -490,11 +507,15 @@ export async function searchApolloProspects(
   }
 
   const finalJobTitles = customJobTitles?.length ? customJobTitles : jobTitles
+  console.log("[v0] Final job titles to search:", finalJobTitles)
 
   let contacts = await searchApolloCache(companyDomain, company.linkedin_url, finalJobTitles)
+  console.log("[v0] Cache search returned:", contacts.length, "contacts")
 
   if (contacts.length < 3) {
+    console.log("[v0] Cache insufficient, calling Apollo API...")
     const apiContacts = await callApolloAPI(companyDomain, company.name, finalJobTitles, 10)
+    console.log("[v0] Apollo API returned:", apiContacts.length, "contacts")
 
     if (apiContacts.length > 0) {
       await saveToApolloCache(apiContacts, companyDomain, company.linkedin_url, finalJobTitles)
