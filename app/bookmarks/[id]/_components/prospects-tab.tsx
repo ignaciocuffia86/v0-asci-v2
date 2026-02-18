@@ -210,11 +210,6 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite }: Prospe
     }
     setIsSearching(false)
   }
-    } catch (error) {
-      console.error("Error searching prospects:", error)
-    }
-    setIsSearching(false)
-  }
 
   const handleRemoveProspect = async (prospectId: string) => {
     setRemovingId(prospectId)
