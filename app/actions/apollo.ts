@@ -300,10 +300,12 @@ async function callApolloAPI(
         "x-api-key": apiKey,
       },
       body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(30000), // 30s timeout
     })
 
     if (!response.ok) {
-      console.error("Apollo API error:", response.status, await response.text())
+      const errorText = await response.text()
+      console.error("Apollo API error:", response.status, errorText)
       return []
     }
 

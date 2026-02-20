@@ -16,7 +16,10 @@ import {
   Users,
   Sparkles,
   Download,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react"
+import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { createClient } from "@/lib/supabase/client"
 import { useRouter } from "next/navigation"
@@ -73,11 +76,14 @@ export function AdminSidebar() {
   const pathname = usePathname()
   const router = useRouter()
   const supabase = createClient()
+  const [companiesOpen, setCompaniesOpen] = useState(pathname.startsWith("/admin/companies"))
 
   const handleSignOut = async () => {
     await supabase.auth.signOut()
     router.push("/auth/login")
   }
+
+  const isCompaniesPage = pathname.startsWith("/admin/companies")
 
   return (
     <aside className="w-64 bg-sidebar border-r border-sidebar-border flex flex-col h-screen sticky top-0">
@@ -100,20 +106,74 @@ export function AdminSidebar() {
 
         <div className="text-xs font-semibold text-muted-foreground mb-2 px-2 uppercase tracking-wider">Gestión</div>
 
-        {sidebarItems.map((item) => (
-          <Link key={item.href} href={item.href}>
-            <Button
-              variant={pathname === item.href ? "secondary" : "ghost"}
-              className={cn(
-                "w-full justify-start gap-2",
-                pathname === item.href && "bg-sidebar-accent text-sidebar-accent-foreground",
-              )}
-            >
-              <item.icon className="h-4 w-4" />
-              {item.title}
-            </Button>
-          </Link>
-        ))}
+        {sidebarItems.map((item) => {
+          // Special handling for Companies submenu
+          if (item.title === "Compañías") {
+            return (
+              <div key="companies">
+                <Button
+                  variant={isCompaniesPage ? "secondary" : "ghost"}
+                  className={cn(
+                    "w-full justify-start gap-2",
+                    isCompaniesPage && "bg-sidebar-accent text-sidebar-accent-foreground"
+                  )}
+                  onClick={() => setCompaniesOpen(!companiesOpen)}
+                >
+                  <item.icon className="h-4 w-4" />
+                  {item.title}
+                  {companiesOpen ? (
+                    <ChevronDown className="h-4 w-4 ml-auto" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4 ml-auto" />
+                  )}
+                </Button>
+                {companiesOpen && (
+                  <div className="ml-6 mt-1 space-y-1">
+                    <Link href="/admin/companies">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className={cn(
+                          "w-full justify-start text-sm",
+                          pathname === "/admin/companies" && "bg-sidebar-accent/50"
+                        )}
+                      >
+                        Gestión de Compañías
+                      </Button>
+                    </Link>
+                    <Link href="/admin/companies/duplicates">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className={cn(
+                          "w-full justify-start text-sm",
+                          pathname === "/admin/companies/duplicates" && "bg-sidebar-accent/50"
+                        )}
+                      >
+                        Ver Duplicados
+                      </Button>
+                    </Link>
+                  </div>
+                )}
+              </div>
+            )
+          }
+
+          return (
+            <Link key={item.href} href={item.href}>
+              <Button
+                variant={pathname === item.href ? "secondary" : "ghost"}
+                className={cn(
+                  "w-full justify-start gap-2",
+                  pathname === item.href && "bg-sidebar-accent text-sidebar-accent-foreground"
+                )}
+              >
+                <item.icon className="h-4 w-4" />
+                {item.title}
+              </Button>
+            </Link>
+          )
+        })}
       </div>
 
       <div className="p-4 border-t border-sidebar-border">

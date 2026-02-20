@@ -194,11 +194,15 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite }: Prospe
     setIsSearching(true)
     try {
       const result = await searchApolloProspects(bookmarkId, selectedJobTitles)
+      
       if (result.success) {
         await loadData() // Recargar prospectos
+      } else {
+        alert(`Error en la búsqueda: ${result.error || "No se pudieron encontrar prospectos"}`)
       }
     } catch (error) {
-      console.error("Error searching prospects:", error)
+      console.error("Error searching:", error)
+      alert(`Error inesperado: ${error instanceof Error ? error.message : "Error desconocido"}`)
     }
     setIsSearching(false)
   }
