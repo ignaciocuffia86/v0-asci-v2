@@ -66,7 +66,7 @@ const sidebarItems = [
     icon: Users,
   },
   {
-    title: "Export Compañías",
+    title: "Exportaciones",
     href: "/admin/export",
     icon: Download,
   },
@@ -77,6 +77,7 @@ export function AdminSidebar() {
   const router = useRouter()
   const supabase = createClient()
   const [companiesOpen, setCompaniesOpen] = useState(pathname.startsWith("/admin/companies"))
+  const [exportOpen, setExportOpen] = useState(pathname.startsWith("/admin/export"))
 
   const handleSignOut = async () => {
     await supabase.auth.signOut()
@@ -84,6 +85,7 @@ export function AdminSidebar() {
   }
 
   const isCompaniesPage = pathname.startsWith("/admin/companies")
+  const isExportPage = pathname.startsWith("/admin/export")
 
   return (
     <aside className="w-64 bg-sidebar border-r border-sidebar-border flex flex-col h-screen sticky top-0">
@@ -151,6 +153,58 @@ export function AdminSidebar() {
                         )}
                       >
                         Ver Duplicados
+                      </Button>
+                    </Link>
+                  </div>
+                )}
+              </div>
+            )
+          }
+
+          // Special handling for Exportaciones submenu
+          if (item.title === "Exportaciones") {
+            return (
+              <div key="export">
+                <Button
+                  variant={isExportPage ? "secondary" : "ghost"}
+                  className={cn(
+                    "w-full justify-start gap-2",
+                    isExportPage && "bg-sidebar-accent text-sidebar-accent-foreground"
+                  )}
+                  onClick={() => setExportOpen(!exportOpen)}
+                >
+                  <item.icon className="h-4 w-4" />
+                  {item.title}
+                  {exportOpen ? (
+                    <ChevronDown className="h-4 w-4 ml-auto" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4 ml-auto" />
+                  )}
+                </Button>
+                {exportOpen && (
+                  <div className="ml-6 mt-1 space-y-1">
+                    <Link href="/admin/export">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className={cn(
+                          "w-full justify-start text-sm",
+                          pathname === "/admin/export" && "bg-sidebar-accent/50"
+                        )}
+                      >
+                        Export Companias
+                      </Button>
+                    </Link>
+                    <Link href="/admin/export/contacts">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className={cn(
+                          "w-full justify-start text-sm",
+                          pathname === "/admin/export/contacts" && "bg-sidebar-accent/50"
+                        )}
+                      >
+                        Export Contactos
                       </Button>
                     </Link>
                   </div>
