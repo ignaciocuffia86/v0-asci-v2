@@ -132,12 +132,13 @@ export async function getContactIndustries(): Promise<string[]> {
     .map(([industry]) => industry)
 }
 
-// Preview contacts (returns first rows for preview table)
+// Preview contacts (returns only 15 rows for preview table)
 export async function previewContactExport(
   filters: ContactExportFilters
 ): Promise<{ data: ContactExportRow[]; total: number }> {
   const supabase = await createClient()
 
+  // Preview: only fetch 15 rows for the table
   const { data, error } = await supabase.rpc("export_contacts", {
     p_process_ids: filters.processIds?.length ? filters.processIds : null,
     p_tech_ids: filters.techIds?.length ? filters.techIds : null,
@@ -146,7 +147,7 @@ export async function previewContactExport(
     p_search_text: filters.searchText || null,
     p_only_with_email: filters.onlyWithEmail || false,
     p_only_with_phone: filters.onlyWithPhone || false,
-    p_limit_count: Math.min(filters.limit, 1000),
+    p_limit_count: 15,
   })
 
   if (error) {

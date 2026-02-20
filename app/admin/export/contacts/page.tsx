@@ -386,12 +386,12 @@ export default function ExportContactsPage() {
               {isExporting ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Exportando...
+                  Exportando {limit} contactos...
                 </>
               ) : (
                 <>
                   <Download className="h-4 w-4 mr-2" />
-                  Exportar CSV {results.length > 0 ? `(${results.length})` : ""}
+                  Exportar CSV ({limit} contactos)
                 </>
               )}
             </Button>
@@ -411,7 +411,7 @@ export default function ExportContactsPage() {
             </CardTitle>
             {results.length > 0 && (
               <CardDescription>
-                Preview de los primeros 15 resultados. El CSV incluira los {results.length} registros completos.
+                Preview de los primeros {results.length} resultados. El CSV exportara hasta {limit} registros completos.
               </CardDescription>
             )}
           </CardHeader>
