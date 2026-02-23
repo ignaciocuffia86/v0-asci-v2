@@ -1423,7 +1423,7 @@ export async function searchWeb(bookmarkId: string, query: string) {
 
 // --- SMART CONTEXT ---
 
-export async function getBookmarkSmartContext(bookmarkId: string) {
+export async function getBookmarkSmartContext(bookmarkId: string, countryFilter?: string | null) {
   const supabase = await createClient()
   const {
     data: { user },
@@ -1470,6 +1470,7 @@ export async function getBookmarkSmartContext(bookmarkId: string) {
         current_position_title,
         profile_picture_url,
         linkedin_url,
+        country,
         email1,
         email1_status,
         email1_type,
@@ -1488,7 +1489,15 @@ export async function getBookmarkSmartContext(bookmarkId: string) {
     signalsQuery = signalsQuery.in("signal_id", filterSignalIds)
   }
 
-  const { data: signals } = await signalsQuery
+  const { data: rawSignals } = await signalsQuery
+
+  // Apply country filter on contact's country
+  const signals = countryFilter
+    ? (rawSignals || []).filter((s: any) => {
+        const contact = s.contacts as any
+        return contact?.country && contact.country.toLowerCase().includes(countryFilter.toLowerCase())
+      })
+    : rawSignals
 
   if (!signals || signals.length === 0) {
     return {

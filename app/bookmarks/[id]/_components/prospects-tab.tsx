@@ -77,9 +77,10 @@ interface ProspectsTabProps {
   bookmarkId: string
   companyName: string
   companyWebsite?: string
+  defaultCountry?: string
 }
 
-export function ProspectsTab({ bookmarkId, companyName, companyWebsite }: ProspectsTabProps) {
+export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultCountry }: ProspectsTabProps) {
   const [prospects, setProspects] = useState<Prospect[]>([])
   const [removedProspects, setRemovedProspects] = useState<Prospect[]>([])
   const [showRemoved, setShowRemoved] = useState(false)
@@ -93,6 +94,16 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite }: Prospe
   const [isLoading, setIsLoading] = useState(true)
   const [isSearching, setIsSearching] = useState(false)
   const [isInferring, setIsInferring] = useState(false)
+
+  // Country filter for Apollo search
+  const [prospectCountry, setProspectCountry] = useState(defaultCountry || "")
+
+  // Sync with parent country filter changes
+  useEffect(() => {
+    if (defaultCountry !== undefined) {
+      setProspectCountry(defaultCountry)
+    }
+  }, [defaultCountry])
 
   // Contexto de búsqueda
   const [technologies, setTechnologies] = useState<string[]>([])
@@ -193,7 +204,7 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite }: Prospe
 
     setIsSearching(true)
     try {
-      const result = await searchApolloProspects(bookmarkId, selectedJobTitles)
+      const result = await searchApolloProspects(bookmarkId, selectedJobTitles, undefined, prospectCountry || undefined)
       
       if (result.success) {
         await loadData() // Recargar prospectos
@@ -416,6 +427,22 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite }: Prospe
                 </Button>
               </div>
 
+              {/* Filtro de país para Apollo */}
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-muted-foreground">
+                  Filtrar por pais (Apollo)
+                </label>
+                <Input
+                  placeholder="Ej: Argentina, Mexico, Colombia..."
+                  value={prospectCountry}
+                  onChange={(e) => setProspectCountry(e.target.value)}
+                  className="max-w-xs"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Apollo buscara prospectos en este pais. Dejalo vacio para buscar en todos los paises.
+                </p>
+              </div>
+
               {/* Botón de búsqueda */}
               <Button
                 onClick={handleSearch}
@@ -426,7 +453,12 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite }: Prospe
                 Buscar Prospectos en Apollo.io
                 {selectedJobTitles.length > 0 && (
                   <Badge variant="secondary" className="ml-2">
-                    {selectedJobTitles.length} títulos
+                    {selectedJobTitles.length} titulos
+                  </Badge>
+                )}
+                {prospectCountry && (
+                  <Badge variant="outline" className="ml-1">
+                    {prospectCountry}
                   </Badge>
                 )}
               </Button>

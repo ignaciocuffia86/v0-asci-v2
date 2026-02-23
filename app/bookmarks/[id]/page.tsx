@@ -18,7 +18,9 @@ import {
   Briefcase,
   Target,
   Sparkles,
+  MapPin,
 } from "lucide-react"
+import { Input } from "@/components/ui/input"
 import Link from "next/link"
 import { 
   BOOKMARK_STATUS_CONFIG, 
@@ -50,6 +52,8 @@ export default function BookmarkWorkspacePage() {
   const [bookmark, setBookmark] = useState<any>(null)
   const [company, setCompany] = useState<any>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [countryFilter, setCountryFilter] = useState<string>("")
+  const [availableCountries, setAvailableCountries] = useState<string[]>([])
   const supabase = createClient()
 
   useEffect(() => {
@@ -81,6 +85,28 @@ export default function BookmarkWorkspacePage() {
         console.error("Error fetching company:", companyError)
       } else {
         setCompany(companyData)
+        // Default country filter to company's country
+        if (companyData.country) {
+          setCountryFilter(companyData.country)
+        }
+      }
+
+      // 3. Fetch distinct countries from contacts linked to this company's signals
+      const { data: contactCountries } = await supabase
+        .from("signals")
+        .select("contacts!inner(country)")
+        .eq("company_id", bookmarkData.company_id)
+        .not("contact_id", "is", null)
+
+      if (contactCountries) {
+        const countriesSet = new Set<string>()
+        contactCountries.forEach((s: any) => {
+          const country = (s.contacts as any)?.country
+          if (country && country.trim()) countriesSet.add(country.trim())
+        })
+        // Sort and add company country at top if not present
+        const sorted = Array.from(countriesSet).sort()
+        setAvailableCountries(sorted)
       }
 
       setIsLoading(false)
@@ -181,8 +207,31 @@ export default function BookmarkWorkspacePage() {
             </div>
           </div>
 
-          {/* Status and Priority Controls */}
+          {/* Status, Priority, and Country Controls */}
           <div className="flex flex-col sm:flex-row gap-3 lg:items-start">
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-muted-foreground font-medium flex items-center gap-1">
+                <MapPin className="h-3 w-3" />
+                Filtro de Pais
+              </span>
+              <Select
+                value={countryFilter || "_all"}
+                onValueChange={(val) => setCountryFilter(val === "_all" ? "" : val)}
+              >
+                <SelectTrigger className="w-[170px] h-9">
+                  <SelectValue placeholder="Todos los paises" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="_all">Todos los paises</SelectItem>
+                  {availableCountries.map((c) => (
+                    <SelectItem key={c} value={c}>
+                      {c}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
             <div className="flex flex-col gap-1">
               <span className="text-xs text-muted-foreground font-medium">Estado</span>
               <Select
@@ -284,11 +333,11 @@ export default function BookmarkWorkspacePage() {
           </TabsList>
 
           <TabsContent value="overview" className="m-0 focus-visible:ring-0">
-            <BookmarkOverview bookmarkId={bookmarkId} company={company} />
+            <BookmarkOverview bookmarkId={bookmarkId} company={company} countryFilter={countryFilter || null} />
           </TabsContent>
 
           <TabsContent value="jobpostings" className="m-0 focus-visible:ring-0">
-            <BookmarkJobPostings bookmarkId={bookmarkId} />
+            <BookmarkJobPostings bookmarkId={bookmarkId} countryFilter={countryFilter || null} />
           </TabsContent>
 
           <TabsContent value="news" className="m-0 focus-visible:ring-0">
@@ -308,6 +357,7 @@ export default function BookmarkWorkspacePage() {
               bookmarkId={bookmarkId} 
               companyName={company.name}
               companyWebsite={company.website}
+              defaultCountry={countryFilter || company.country || ""}
             />
           </TabsContent>
 
