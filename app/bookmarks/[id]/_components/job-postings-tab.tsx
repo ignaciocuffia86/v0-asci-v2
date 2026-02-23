@@ -10,20 +10,21 @@ import { createClient } from "@/lib/supabase/client"
 type JobPosting = {
   id: string
   title: string
+  location: string | null
   posted_at: string
   apply_url: string | null
   detected_keywords: any[]
   is_recent: boolean
 }
 
-export function BookmarkJobPostings({ bookmarkId }: { bookmarkId: string }) {
+export function BookmarkJobPostings({ bookmarkId, countryFilter }: { bookmarkId: string; countryFilter?: string | null }) {
   const [jobPostings, setJobPostings] = useState<JobPosting[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const supabase = createClient()
 
   useEffect(() => {
     loadJobPostings()
-  }, [bookmarkId])
+  }, [bookmarkId, countryFilter])
 
   const loadJobPostings = async () => {
     setIsLoading(true)
@@ -50,6 +51,7 @@ export function BookmarkJobPostings({ bookmarkId }: { bookmarkId: string }) {
         p_company_id: bookmark.company_id,
         p_signal_ids: isGeneralBookmark ? null : filterSignalIds,
         p_limit: 100,
+        p_location_filter: countryFilter || null,
       })
 
       setJobPostings(jobPostingsData || [])
@@ -136,7 +138,7 @@ export function BookmarkJobPostings({ bookmarkId }: { bookmarkId: string }) {
                       </Badge>
                     )}
                   </div>
-                  <p className="text-xs text-muted-foreground">{formatDate(jp.posted_at)}</p>
+                  <p className="text-xs text-muted-foreground">{formatDate(jp.posted_at)}{jp.location ? ` · ${jp.location}` : ""}</p>
                 </div>
               </div>
             </CardHeader>

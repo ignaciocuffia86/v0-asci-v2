@@ -271,6 +271,7 @@ async function callApolloAPI(
   companyName: string,
   jobTitles: string[],
   limit = 10,
+  countryFilter?: string | null,
 ): Promise<ApolloPersonSearchResult[]> {
   const apiKey = process.env.APOLLO_API_KEY
 
@@ -290,6 +291,11 @@ async function callApolloAPI(
       requestBody.q_organization_domains = companyDomain
     } else {
       requestBody.q_organization_name = companyName
+    }
+
+    // Add country filter for Apollo person_locations
+    if (countryFilter) {
+      requestBody.person_locations = [countryFilter]
     }
 
     const response = await fetch("https://api.apollo.io/api/v1/mixed_people/api_search", {
@@ -451,6 +457,7 @@ export async function searchApolloProspects(
   bookmarkId: string,
   jobTitles: string[],
   customJobTitles?: string[],
+  countryFilter?: string | null,
 ): Promise<{ success: boolean; count: number; error?: string }> {
   const supabase = await createClient()
   const {
@@ -496,7 +503,7 @@ export async function searchApolloProspects(
   let contacts = await searchApolloCache(companyDomain, company.linkedin_url, finalJobTitles)
 
   if (contacts.length < 3) {
-    const apiContacts = await callApolloAPI(companyDomain, company.name, finalJobTitles, 10)
+    const apiContacts = await callApolloAPI(companyDomain, company.name, finalJobTitles, 10, countryFilter)
 
     if (apiContacts.length > 0) {
       await saveToApolloCache(apiContacts, companyDomain, company.linkedin_url, finalJobTitles)

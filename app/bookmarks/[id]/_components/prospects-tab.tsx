@@ -39,7 +39,34 @@ import {
 } from "@/app/actions/apollo"
 import Link from "next/link"
 import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
+
+// Countries LATAM + Spain + US - label in Spanish, value in English for Apollo API
+const APOLLO_COUNTRIES = [
+  { label: "Argentina", value: "Argentina" },
+  { label: "Bolivia", value: "Bolivia" },
+  { label: "Brasil", value: "Brazil" },
+  { label: "Chile", value: "Chile" },
+  { label: "Colombia", value: "Colombia" },
+  { label: "Costa Rica", value: "Costa Rica" },
+  { label: "Cuba", value: "Cuba" },
+  { label: "Ecuador", value: "Ecuador" },
+  { label: "El Salvador", value: "El Salvador" },
+  { label: "Espana", value: "Spain" },
+  { label: "Estados Unidos", value: "United States" },
+  { label: "Guatemala", value: "Guatemala" },
+  { label: "Honduras", value: "Honduras" },
+  { label: "Mexico", value: "Mexico" },
+  { label: "Nicaragua", value: "Nicaragua" },
+  { label: "Panama", value: "Panama" },
+  { label: "Paraguay", value: "Paraguay" },
+  { label: "Peru", value: "Peru" },
+  { label: "Puerto Rico", value: "Puerto Rico" },
+  { label: "Rep. Dominicana", value: "Dominican Republic" },
+  { label: "Uruguay", value: "Uruguay" },
+  { label: "Venezuela", value: "Venezuela" },
+]
 import { exportToCSV, exportToExcel, prepareProspectsForExport } from "@/lib/export-utils"
 
 function proxyImageUrl(url: string | undefined | null): string {
@@ -77,9 +104,10 @@ interface ProspectsTabProps {
   bookmarkId: string
   companyName: string
   companyWebsite?: string
+  defaultCountry?: string
 }
 
-export function ProspectsTab({ bookmarkId, companyName, companyWebsite }: ProspectsTabProps) {
+export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultCountry }: ProspectsTabProps) {
   const [prospects, setProspects] = useState<Prospect[]>([])
   const [removedProspects, setRemovedProspects] = useState<Prospect[]>([])
   const [showRemoved, setShowRemoved] = useState(false)
@@ -93,6 +121,34 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite }: Prospe
   const [isLoading, setIsLoading] = useState(true)
   const [isSearching, setIsSearching] = useState(false)
   const [isInferring, setIsInferring] = useState(false)
+
+  // Map a country name (possibly in Spanish or from DB) to the Apollo English value
+  const mapToApolloCountry = (country: string): string => {
+    if (!country) return ""
+    // Check if it's already an Apollo value
+    const directMatch = APOLLO_COUNTRIES.find(c => c.value.toLowerCase() === country.toLowerCase())
+    if (directMatch) return directMatch.value
+    // Check if it matches a label (Spanish name)
+    const labelMatch = APOLLO_COUNTRIES.find(c => c.label.toLowerCase() === country.toLowerCase())
+    if (labelMatch) return labelMatch.value
+    // Partial match
+    const partialMatch = APOLLO_COUNTRIES.find(c => 
+      c.label.toLowerCase().includes(country.toLowerCase()) || 
+      c.value.toLowerCase().includes(country.toLowerCase())
+    )
+    if (partialMatch) return partialMatch.value
+    return country
+  }
+
+  // Country filter for Apollo search
+  const [prospectCountry, setProspectCountry] = useState(() => mapToApolloCountry(defaultCountry || ""))
+
+  // Sync with parent country filter changes
+  useEffect(() => {
+    if (defaultCountry !== undefined) {
+      setProspectCountry(mapToApolloCountry(defaultCountry))
+    }
+  }, [defaultCountry])
 
   // Contexto de búsqueda
   const [technologies, setTechnologies] = useState<string[]>([])
@@ -193,7 +249,7 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite }: Prospe
 
     setIsSearching(true)
     try {
-      const result = await searchApolloProspects(bookmarkId, selectedJobTitles)
+      const result = await searchApolloProspects(bookmarkId, selectedJobTitles, undefined, prospectCountry || undefined)
       
       if (result.success) {
         await loadData() // Recargar prospectos
@@ -416,20 +472,48 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite }: Prospe
                 </Button>
               </div>
 
-              {/* Botón de búsqueda */}
-              <Button
-                onClick={handleSearch}
-                disabled={isSearching || selectedJobTitles.length === 0}
-                className="w-full"
-              >
-                {isSearching ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Search className="h-4 w-4 mr-2" />}
-                Buscar Prospectos en Apollo.io
-                {selectedJobTitles.length > 0 && (
-                  <Badge variant="secondary" className="ml-2">
-                    {selectedJobTitles.length} títulos
-                  </Badge>
-                )}
-              </Button>
+              {/* Filtro de país para Apollo + botón de búsqueda */}
+              <div className="flex items-end gap-3 pt-2 border-t">
+                <div className="w-[200px] space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">
+                    Pais (Apollo)
+                  </label>
+                  <Select
+                    value={prospectCountry || "_all"}
+                    onValueChange={(val) => setProspectCountry(val === "_all" ? "" : val)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Todos los paises" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_all">Todos los paises</SelectItem>
+                      {APOLLO_COUNTRIES.map((c) => (
+                        <SelectItem key={c.value} value={c.value}>
+                          {c.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button
+                  onClick={handleSearch}
+                  disabled={isSearching || selectedJobTitles.length === 0}
+                  className="flex-1"
+                >
+                  {isSearching ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Search className="h-4 w-4 mr-2" />}
+                  Buscar en Apollo
+                  {selectedJobTitles.length > 0 && (
+                    <Badge variant="secondary" className="ml-2">
+                      {selectedJobTitles.length} titulos
+                    </Badge>
+                  )}
+                  {prospectCountry && (
+                    <Badge className="ml-1 bg-white/20 text-white border-0 hover:bg-white/30">
+                      {APOLLO_COUNTRIES.find(c => c.value === prospectCountry)?.label || prospectCountry}
+                    </Badge>
+                  )}
+                </Button>
+              </div>
             </div>
           )}
         </CardContent>

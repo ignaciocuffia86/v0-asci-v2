@@ -44,14 +44,15 @@ type SmartContext = {
   logicUsed: string
 }
 
-export function BookmarkOverview({ bookmarkId, company }: { bookmarkId: string; company: any }) {
+export function BookmarkOverview({ bookmarkId, company, countryFilter }: { bookmarkId: string; company: any; countryFilter?: string | null }) {
   const [smartContext, setSmartContext] = useState<SmartContext | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     const fetchContext = async () => {
+      setLoading(true)
       try {
-        const data = await getBookmarkSmartContext(bookmarkId)
+        const data = await getBookmarkSmartContext(bookmarkId, countryFilter)
         setSmartContext(data as SmartContext)
       } catch (error) {
         console.error("Failed to fetch smart context", error)
@@ -63,7 +64,7 @@ export function BookmarkOverview({ bookmarkId, company }: { bookmarkId: string; 
     if (bookmarkId) {
       fetchContext()
     }
-  }, [bookmarkId])
+  }, [bookmarkId, countryFilter])
 
   if (loading) {
     return <div className="p-4 text-center text-muted-foreground">Cargando contexto...</div>
