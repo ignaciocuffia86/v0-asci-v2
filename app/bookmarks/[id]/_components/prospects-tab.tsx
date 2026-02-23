@@ -427,41 +427,37 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
                 </Button>
               </div>
 
-              {/* Filtro de país para Apollo */}
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium text-muted-foreground">
-                  Filtrar por pais (Apollo)
-                </label>
-                <Input
-                  placeholder="Ej: Argentina, Mexico, Colombia..."
-                  value={prospectCountry}
-                  onChange={(e) => setProspectCountry(e.target.value)}
-                  className="max-w-xs"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Apollo buscara prospectos en este pais. Dejalo vacio para buscar en todos los paises.
-                </p>
+              {/* Filtro de país para Apollo + botón de búsqueda */}
+              <div className="flex items-end gap-3 pt-2 border-t">
+                <div className="flex-1 max-w-xs space-y-1">
+                  <label className="text-xs font-medium text-muted-foreground">
+                    Pais (Apollo)
+                  </label>
+                  <Input
+                    placeholder="Ej: Argentina, Mexico..."
+                    value={prospectCountry}
+                    onChange={(e) => setProspectCountry(e.target.value)}
+                  />
+                </div>
+                <Button
+                  onClick={handleSearch}
+                  disabled={isSearching || selectedJobTitles.length === 0}
+                  className="flex-1"
+                >
+                  {isSearching ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Search className="h-4 w-4 mr-2" />}
+                  Buscar en Apollo
+                  {selectedJobTitles.length > 0 && (
+                    <Badge variant="secondary" className="ml-2">
+                      {selectedJobTitles.length} titulos
+                    </Badge>
+                  )}
+                  {prospectCountry && (
+                    <Badge className="ml-1 bg-white/20 text-white border-0 hover:bg-white/30">
+                      {prospectCountry}
+                    </Badge>
+                  )}
+                </Button>
               </div>
-
-              {/* Botón de búsqueda */}
-              <Button
-                onClick={handleSearch}
-                disabled={isSearching || selectedJobTitles.length === 0}
-                className="w-full"
-              >
-                {isSearching ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Search className="h-4 w-4 mr-2" />}
-                Buscar Prospectos en Apollo.io
-                {selectedJobTitles.length > 0 && (
-                  <Badge variant="secondary" className="ml-2">
-                    {selectedJobTitles.length} titulos
-                  </Badge>
-                )}
-                {prospectCountry && (
-                  <Badge variant="outline" className="ml-1">
-                    {prospectCountry}
-                  </Badge>
-                )}
-              </Button>
             </div>
           )}
         </CardContent>
