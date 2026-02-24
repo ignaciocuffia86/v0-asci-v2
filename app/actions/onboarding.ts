@@ -13,7 +13,7 @@ export interface OnboardingState {
   progressPercentage: number
 }
 
-const TOTAL_STEPS = 21 // 8 segmentacion + 5 documentacion + 8 prospeccion
+const TOTAL_STEPS = 23 // 8 segmentacion + 5 documentacion + 10 prospeccion
 
 export async function getOnboardingState(): Promise<OnboardingState | null> {
   const supabase = await createClient()
@@ -88,7 +88,7 @@ function calculateProgress(track: OnboardingTrack, step: number, completedTracks
   const trackSteps: Record<OnboardingTrack, number> = {
     segmentacion: 8,
     documentacion: 5,
-    prospeccion: 8,
+    prospeccion: 10,
   }
 
   let completedStepsTotal = 0

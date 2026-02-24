@@ -300,11 +300,11 @@ export default function BookmarkWorkspacePage() {
               <Flame className="h-4 w-4 text-orange-500" />
               Posiciones
             </TabsTrigger>
-            <TabsTrigger value="news" className="gap-2">
+            <TabsTrigger value="news" className="gap-2" data-onboarding="workspace-tab-news">
               <Newspaper className="h-4 w-4 text-blue-500" />
               Noticias
             </TabsTrigger>
-            <TabsTrigger value="implementations" className="gap-2">
+            <TabsTrigger value="implementations" className="gap-2" data-onboarding="workspace-tab-implementations">
               <Briefcase className="h-4 w-4 text-purple-500" />
               Implementaciones
             </TabsTrigger>
