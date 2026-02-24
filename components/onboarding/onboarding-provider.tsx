@@ -19,7 +19,7 @@ import {
   TRACK_ORDER,
   type OnboardingStep,
 } from "./steps"
-import { OnboardingOverlay } from "./onboarding-overlay"
+import { OnboardingOverlay, OnboardingActionHint } from "./onboarding-overlay"
 
 interface OnboardingContextType {
   isActive: boolean
@@ -195,6 +195,42 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   // Check if current step route matches
   const stepRouteMatch = currentStep ? routeMatches(pathname, currentStep.route) : false
 
+  // For waitForAction steps: watch for the NEXT step's target to appear
+  // When user completes the action, the next target shows up and we auto-advance
+  useEffect(() => {
+    if (!isActive || !currentStep?.waitForAction || !state?.currentTrack) return
+
+    const nextStepIndex = currentStep.stepIndex + 1
+    const nextStep = getStepByTrackAndIndex(state.currentTrack, nextStepIndex)
+    if (!nextStep) return
+
+    const targetSelector = `[data-onboarding="${nextStep.targetSelector}"]`
+
+    // Check if already present
+    if (document.querySelector(targetSelector)) {
+      // Small delay to let user see the result before advancing
+      const timer = setTimeout(next, 600)
+      return () => clearTimeout(timer)
+    }
+
+    // Watch for it to appear
+    const observer = new MutationObserver(() => {
+      if (document.querySelector(targetSelector)) {
+        observer.disconnect()
+        setTimeout(next, 600)
+      }
+    })
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["data-onboarding"],
+    })
+
+    return () => observer.disconnect()
+  }, [isActive, currentStep?.id, state?.currentTrack, next])
+
   return (
     <OnboardingContext.Provider
       value={{ isActive, currentStep, state, start, next, skip, resume, isLoading }}
@@ -207,9 +243,13 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       {/* Completion celebration */}
       {showCompletion && <CompletionModal onClose={() => setShowCompletion(false)} />}
 
-      {/* Active tour overlay */}
+      {/* Active tour - action hint (non-blocking) vs overlay (blocking) */}
       {isActive && currentStep && stepRouteMatch && (
-        <OnboardingOverlay step={currentStep} state={state!} onNext={next} onSkip={skip} />
+        currentStep.waitForAction ? (
+          <OnboardingActionHint step={currentStep} state={state!} onSkip={skip} />
+        ) : (
+          <OnboardingOverlay step={currentStep} state={state!} onNext={next} onSkip={skip} />
+        )
       )}
     </OnboardingContext.Provider>
   )

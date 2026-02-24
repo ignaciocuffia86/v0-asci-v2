@@ -10,6 +10,14 @@ export interface OnboardingStep {
   position: "top" | "bottom" | "left" | "right"
   route: string // page where this step lives
   highlightPadding?: number
+  /**
+   * If true, the step pauses the tour (no blocking overlay), shows a floating hint,
+   * and waits for the user to perform an action. The tour auto-advances
+   * when the targetSelector element appears in the DOM.
+   */
+  waitForAction?: boolean
+  /** Short CTA text shown in the floating hint for action steps */
+  actionHint?: string
 }
 
 export const ONBOARDING_STEPS: OnboardingStep[] = [
@@ -62,9 +70,11 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
     stepIndex: 4,
     targetSelector: "search-filters",
     title: "Filtros de Proceso y Tecnologia",
-    content: "Te recomendamos usar estos filtros al buscar. Ayudan a dar contexto a las senales y la IA va a tener informacion mas certera, con menos ruido. Filtra por los procesos y tecnologias relevantes para tu negocio.",
+    content: "Recomendamos usar estos filtros al buscar. Ayudan a dar contexto a las senales y la IA tendra informacion mas certera, con menos ruido. Selecciona un proceso o tecnologia y hace clic en Buscar.",
     position: "right",
     route: "/search",
+    waitForAction: true,
+    actionHint: "Realiza una busqueda para continuar",
   },
   {
     id: "seg-6-results",
@@ -72,9 +82,11 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
     stepIndex: 5,
     targetSelector: "search-results",
     title: "Resultados de Busqueda",
-    content: "Aca aparecen las companias que coinciden con tu busqueda. Cada card muestra las senales detectadas, la cantidad de empleados con esas senales y las busquedas laborales activas.",
+    content: "Estas son las companias que coinciden con tu busqueda. Cada card muestra senales detectadas, cantidad de empleados y busquedas laborales activas. Hace clic en una compania para ver su detalle.",
     position: "top",
     route: "/search",
+    waitForAction: true,
+    actionHint: "Hace clic en una compania para abrir el detalle",
   },
   {
     id: "seg-7-drawer",
@@ -82,7 +94,7 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
     stepIndex: 6,
     targetSelector: "company-drawer",
     title: "Panel de Detalle",
-    content: "Al hacer clic en una compania se abre este panel lateral con toda su informacion: resumen general, senales detectadas por personas y busquedas laborales, datos de la empresa y acciones rapidas.",
+    content: "Este panel lateral muestra toda la informacion de la compania: resumen general, senales detectadas por personas y busquedas laborales, datos de la empresa y acciones rapidas.",
     position: "left",
     route: "/search",
   },
@@ -92,7 +104,7 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
     stepIndex: 7,
     targetSelector: "bookmark-button",
     title: "Guardar en Bookmarks",
-    content: "Desde el drawer podes guardar una compania como bookmark para trabajarla luego. Al bookmarkear, se crea un workspace con todo lo necesario para desarrollar la cuenta. Esto cierra el track de Segmentacion!",
+    content: "Desde aca podes guardar la compania como bookmark para trabajarla luego. Al bookmarkear, se crea un workspace con todo lo necesario para desarrollar la cuenta. Esto cierra el track de Segmentacion!",
     position: "left",
     route: "/search",
   },

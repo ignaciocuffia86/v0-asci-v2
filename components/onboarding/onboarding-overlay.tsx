@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState, useCallback, useRef } from "react"
-import { ChevronRight, Check } from "lucide-react"
+import { ChevronRight, Check, Hand } from "lucide-react"
 import type { OnboardingStep } from "./steps"
 import type { OnboardingState } from "@/app/actions/onboarding"
 import { TRACK_LABELS, TRACK_ORDER, getTrackStepCount } from "./steps"
@@ -11,6 +11,164 @@ interface OnboardingOverlayProps {
   state: OnboardingState
   onNext: () => void
   onSkip: () => void
+}
+
+// Floating non-blocking hint for action steps (user needs to interact)
+export function OnboardingActionHint({ step, state, onSkip }: Omit<OnboardingOverlayProps, "onNext">) {
+  const [targetRect, setTargetRect] = useState<TargetRect | null>(null)
+  const hasScrolled = useRef(false)
+
+  const position = useCallback(() => {
+    const el = document.querySelector(`[data-onboarding="${step.targetSelector}"]`)
+    if (!el) {
+      setTargetRect(null)
+      return
+    }
+    if (!hasScrolled.current) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" })
+      hasScrolled.current = true
+    }
+    const rect = el.getBoundingClientRect()
+    const padding = step.highlightPadding ?? 6
+    setTargetRect({
+      top: rect.top - padding,
+      left: rect.left - padding,
+      width: rect.width + padding * 2,
+      height: rect.height + padding * 2,
+    })
+  }, [step])
+
+  useEffect(() => {
+    hasScrolled.current = false
+    const timers = [
+      setTimeout(position, 200),
+      setTimeout(position, 700),
+    ]
+    const handleReposition = () => requestAnimationFrame(position)
+    window.addEventListener("resize", handleReposition)
+    window.addEventListener("scroll", handleReposition, true)
+    return () => {
+      timers.forEach(clearTimeout)
+      window.removeEventListener("resize", handleReposition)
+      window.removeEventListener("scroll", handleReposition, true)
+    }
+  }, [position])
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.preventDefault(); onSkip() }
+    }
+    window.addEventListener("keydown", handler)
+    return () => window.removeEventListener("keydown", handler)
+  }, [onSkip])
+
+  const currentTrackSteps = getTrackStepCount(state.currentTrack!)
+
+  // Compute tooltip position based on target
+  let tooltipStyle: React.CSSProperties = {
+    position: "fixed",
+    width: 340,
+    zIndex: 10001,
+  }
+
+  if (targetRect) {
+    const tooltipGap = 14
+    switch (step.position) {
+      case "bottom":
+        tooltipStyle.top = targetRect.top + targetRect.height + tooltipGap
+        tooltipStyle.left = Math.max(16, targetRect.left + targetRect.width / 2 - 170)
+        break
+      case "top":
+        tooltipStyle.bottom = window.innerHeight - targetRect.top + tooltipGap
+        tooltipStyle.left = Math.max(16, targetRect.left + targetRect.width / 2 - 170)
+        break
+      case "left":
+        tooltipStyle.top = targetRect.top + targetRect.height / 2 - 60
+        tooltipStyle.left = Math.max(16, targetRect.left - 340 - tooltipGap)
+        break
+      case "right":
+        tooltipStyle.top = targetRect.top + targetRect.height / 2 - 60
+        tooltipStyle.left = targetRect.left + targetRect.width + tooltipGap
+        break
+    }
+    const maxLeft = window.innerWidth - 356
+    if ((tooltipStyle.left as number) > maxLeft) tooltipStyle.left = maxLeft
+    if ((tooltipStyle.left as number) < 16) tooltipStyle.left = 16
+  } else {
+    // Target not found yet - show at bottom right
+    tooltipStyle = {
+      position: "fixed",
+      width: 340,
+      zIndex: 10001,
+      bottom: 24,
+      right: 24,
+    }
+  }
+
+  return (
+    <>
+      {/* Subtle highlight ring - no blocking overlay */}
+      {targetRect && (
+        <div
+          className="fixed z-[9998] rounded-lg ring-2 ring-primary/50 ring-offset-2 ring-offset-transparent pointer-events-none transition-all duration-300 animate-pulse"
+          style={{
+            top: targetRect.top,
+            left: targetRect.left,
+            width: targetRect.width,
+            height: targetRect.height,
+          }}
+        />
+      )}
+
+      {/* Non-blocking floating tooltip */}
+      <div className="pointer-events-auto" style={tooltipStyle}>
+        <div className="bg-card border border-primary/20 rounded-xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-300">
+          {/* Track breadcrumb */}
+          <div className="px-4 pt-3 pb-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+            {TRACK_ORDER.map((t, i) => {
+              const isCompleted = state.completedTracks.includes(t)
+              const isCurrent = t === state.currentTrack
+              return (
+                <span key={t} className="flex items-center gap-1.5">
+                  {i > 0 && <ChevronRight className="h-3 w-3 text-border" />}
+                  <span className={
+                    isCompleted ? "text-primary font-medium"
+                      : isCurrent ? "text-foreground font-medium"
+                        : "text-muted-foreground/50"
+                  }>
+                    {isCompleted && <Check className="h-3 w-3 inline mr-0.5" />}
+                    {TRACK_LABELS[t]}
+                  </span>
+                </span>
+              )
+            })}
+          </div>
+
+          <div className="px-4 pb-2">
+            <h3 className="text-sm font-semibold text-foreground mb-1">{step.title}</h3>
+            <p className="text-sm text-muted-foreground leading-relaxed">{step.content}</p>
+          </div>
+
+          {/* Action hint */}
+          <div className="px-4 py-2.5 flex items-center justify-between border-t border-border bg-primary/5">
+            <div className="flex items-center gap-2 text-xs text-primary font-medium">
+              <Hand className="h-3.5 w-3.5" />
+              <span>{step.actionHint || "Realiza la accion para continuar"}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-muted-foreground">{step.stepIndex + 1}/{currentTrackSteps}</span>
+              <button
+                onClick={onSkip}
+                className="text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-1"
+              >
+                Saltar
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  )
 }
 
 interface TargetRect {
