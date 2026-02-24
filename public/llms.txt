@@ -1,0 +1,26 @@
+# ASCI by Bigua
+
+> Inteligencia de mercado para equipos de ventas B2B. Identifica el stack tecnologico y procesos de cualquier empresa de Latinoamerica.
+
+ASCI es una plataforma de sales intelligence que detecta senales de compra en empresas, descubre que tecnologias y procesos utilizan, encuentra tomadores de decision y genera estrategias de acercamiento personalizadas con inteligencia artificial. Disenada para equipos de ventas B2B que operan en Latinoamerica.
+
+URL: https://asci.bigua.lat
+Creado por: Bigua (https://bigua.lat)
+Acceso: Por invitacion. Contacto en https://bigua.lat
+
+## Documentacion
+
+- [Documentacion completa para LLMs](https://asci.bigua.lat/llms-full.txt): Toda la documentacion de ASCI en un solo archivo de texto plano, optimizado para contexto de LLMs.
+
+## Secciones
+
+- Que es ASCI: Vision general, propuesta de valor y audiencia objetivo.
+- Busqueda de Leads: Tres dimensiones de busqueda (por proceso, por tecnologia, por compania) con filtros por pais y scoring de relevancia.
+- Bookmarks y Gestion de Cuentas: Guardar, organizar (Kanban/Lista) y priorizar cuentas con tiers y estados de pipeline.
+- Workspace de una Cuenta: Espacio de trabajo por cuenta con 8 tabs: Resumen, Posiciones, Noticias, Implementaciones, Estrategia, Prospectos, Icebreakers y Brief Ejecutivo.
+- Documentos: Carga de documentos de venta (PDF, DOCX, PPTX, URLs) que la IA usa como contexto.
+- Senales e Inteligencia: Tipos de senales (empleados actuales, alumni, busquedas laborales, noticias, implementaciones) y scoring.
+- Inteligencia Artificial: Generacion de estrategias, icebreakers y briefs ejecutivos con IA generativa.
+- Flujo de Trabajo Tipico: Paso a paso desde la busqueda hasta el contacto.
+- Acceso y Autenticacion: Modelo de acceso por invitacion.
+- FAQ: Preguntas frecuentes, diferenciacion vs Apollo/ZoomInfo, cobertura de paises.

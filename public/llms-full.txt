@@ -1,0 +1,384 @@
+# ASCI by Bigua - Full Documentation for LLMs
+
+> ASCI es una plataforma de inteligencia de mercado para equipos de ventas B2B.
+> Identifica el stack tecnologico y procesos de cualquier empresa de Latinoamerica.
+> URL: https://asci.bigua.lat
+> Creado por: Bigua (https://bigua.lat)
+
+---
+
+## Seccion: Que es ASCI
+
+title: Que es ASCI
+description: Vision general de la plataforma ASCI, su propuesta de valor y para quien esta disenada.
+source: https://asci.bigua.lat
+
+### Descripcion General
+
+ASCI (Automated Sales & Commercial Intelligence) es una plataforma de inteligencia comercial disenada para equipos de ventas B2B que operan en Latinoamerica. Permite identificar senales de compra en empresas, descubrir que tecnologias y procesos utilizan, encontrar tomadores de decision y generar estrategias de acercamiento personalizadas con inteligencia artificial.
+
+### Para quien es ASCI
+
+ASCI esta disenada para:
+
+- Equipos de ventas B2B que venden tecnologia, servicios o productos SaaS a empresas en Latinoamerica.
+- SDRs (Sales Development Representatives) que necesitan priorizar cuentas basandose en senales reales.
+- Account Executives que necesitan contexto profundo antes de una reunion comercial.
+- Sales Managers que quieren visibilidad sobre el pipeline y la adopcion de herramientas de su equipo.
+- Vendors internacionales que quieren entrar al mercado LATAM y necesitan entender el ecosistema local.
+
+### Propuesta de valor
+
+- **Senales de compra reales**: Detecta que tecnologias y procesos mencionan los empleados actuales de una empresa, no solo lo que dice su sitio web.
+- **Contexto profundo por cuenta**: Noticias recientes, implementaciones tecnologicas, busquedas laborales activas y datos firmograficos consolidados.
+- **Generacion de contenido con IA**: Estrategias de venta, icebreakers personalizados y briefs ejecutivos generados automaticamente usando el contexto de cada cuenta.
+- **Foco en Latinoamerica**: Base de datos y senales enfocadas en empresas que operan en la region.
+
+---
+
+## Seccion: Busqueda de Leads
+
+title: Busqueda de Leads
+description: Las tres dimensiones de busqueda inteligente que ofrece ASCI para descubrir cuentas objetivo.
+source: https://asci.bigua.lat/search
+
+### Busqueda por Proceso
+
+Encuentra empresas donde los empleados actuales mencionan procesos especificos en sus perfiles profesionales. Es ideal para identificar necesidades operativas activas dentro de una organizacion.
+
+Ejemplo: Buscar "Gestion de inventario" para encontrar empresas donde hay personas trabajando activamente en ese proceso.
+
+La busqueda considera solo empleados actuales (no alumni), lo que indica que el proceso esta activo hoy en la organizacion.
+
+### Busqueda por Tecnologia
+
+Analiza la huella tecnologica de empresas considerando tanto empleados actuales como alumni (ex-empleados). Esto permite ver tanto la adopcion actual como la historica de una tecnologia.
+
+Ejemplo: Buscar "SAP" para ver que empresas tienen (o tuvieron) usuarios de SAP, indicando familiaridad o dependencia de esa plataforma.
+
+La diferencia entre empleados actuales y alumni es clave: muchos alumni con una tecnologia puede indicar rotacion o migracion, mientras que muchos actuales indica adopcion activa.
+
+### Busqueda por Compania
+
+Permite obtener una radiografia completa de las senales de una empresa especifica. Muestra todos los procesos y tecnologias detectados, las busquedas laborales activas, y los puntajes de relevancia.
+
+### Filtros comunes
+
+- **Pais**: Filtra por pais de la empresa (Argentina, Mexico, Colombia, Chile, Brasil, etc.).
+- **Excluir proveedores**: Opcion para excluir empresas que son proveedores de tecnologia (consultoras, integradores) y quedarse solo con empresas de industria.
+- **Ordenamiento**: Por relevancia, por senales actuales, por senales alumni, o por busquedas laborales.
+
+### Resultados de busqueda
+
+Cada resultado muestra:
+
+- Nombre y logo de la empresa.
+- Industria y pais.
+- Cantidad de senales detectadas (empleados actuales que mencionan el proceso/tecnologia).
+- Cantidad de senales alumni.
+- Cantidad de busquedas laborales activas relacionadas.
+- Puntaje de relevancia calculado.
+
+Desde los resultados se puede abrir el panel de detalle de cualquier empresa, y guardarla como bookmark para trabajarla despues.
+
+---
+
+## Seccion: Bookmarks y Gestion de Cuentas
+
+title: Bookmarks y Gestion de Cuentas
+description: Como guardar, organizar y priorizar las cuentas objetivo dentro de ASCI.
+source: https://asci.bigua.lat/bookmarks
+
+### Que es un Bookmark
+
+Un bookmark es una cuenta (empresa) que el usuario guarda para trabajar. Al bookmarkear una empresa desde los resultados de busqueda, se crea un workspace dedicado con toda la informacion necesaria para desarrollar esa cuenta.
+
+El bookmark retiene el contexto de busqueda: si el usuario bookmarkeo desde una busqueda de "SAP en Argentina", ese contexto se guarda y mejora la relevancia de las recomendaciones de IA posteriores.
+
+### Vistas de Bookmarks
+
+- **Vista Kanban**: Organiza las cuentas en columnas por estado del pipeline (Nuevo, En Analisis, Contactado, En Negociacion, Ganado, Perdido).
+- **Vista Lista**: Tabla con todas las cuentas, filtrable y ordenable.
+
+### Clasificacion
+
+- **Tiers (Prioridad)**: Alta, Transaccional, Baja. Permite priorizar cuentas segun su potencial.
+- **Estados**: Nuevo, En Analisis, Contactado, En Negociacion, Ganado, Perdido. Representan el avance del vendedor con cada cuenta.
+
+### Filtros
+
+Los bookmarks se pueden filtrar por:
+
+- Busqueda de texto (nombre, notas, industria).
+- Prioridad (tier).
+- Estado del pipeline.
+
+---
+
+## Seccion: Workspace de una Cuenta
+
+title: Workspace de una Cuenta
+description: El espacio de trabajo dedicado a cada cuenta bookmarkeada, con todas las herramientas de analisis y generacion de contenido.
+source: https://asci.bigua.lat/bookmarks/[id]
+
+### Estructura del Workspace
+
+Cada cuenta bookmarkeada tiene un workspace con las siguientes tabs:
+
+#### Resumen
+
+Vision general de la empresa: datos firmograficos (industria, pais, sitio web, LinkedIn), senales detectadas (procesos y tecnologias mencionadas por empleados actuales), y un resumen de la actividad reciente.
+
+#### Posiciones (Busquedas Laborales)
+
+Listado de las busquedas laborales activas de la empresa. Las busquedas laborales son senales fuertes de inversion: si una empresa busca un "Data Engineer con experiencia en Snowflake", es probable que esten invirtiendo en datos.
+
+Se puede filtrar por pais para ver busquedas en filiales especificas.
+
+#### Noticias
+
+Noticias recientes de la compania obtenidas automaticamente. Las noticias proporcionan contexto actualizado sobre que esta pasando en la empresa: rondas de inversion, expansiones, lanzamientos de productos, alianzas.
+
+Las noticias seleccionadas como relevantes por el usuario alimentan directamente la generacion de Icebreakers y del Brief Ejecutivo, dandoles contexto fresco.
+
+#### Implementaciones
+
+A diferencia de las noticias (que son informacion general), las implementaciones son proyectos concretos que la compania realizo o esta realizando con tecnologias especificas. Son senales mas solidas de inversion y prioridad porque representan compromisos reales.
+
+Ejemplo: "Empresa X implemento Salesforce para su equipo de 200 vendedores en Q3 2025."
+
+Las implementaciones tambien impactan en los Icebreakers y el Brief Ejecutivo.
+
+#### Estrategia
+
+La estrategia de venta se genera con inteligencia artificial usando:
+
+- Las senales detectadas en la empresa (procesos, tecnologias).
+- Las noticias e implementaciones recientes.
+- Los documentos del usuario (pitch decks, casos de exito, propuestas).
+- El contexto de busqueda original.
+
+La estrategia incluye pain points identificados, propuesta de valor personalizada, objeciones anticipadas y recomendaciones de approach.
+
+Una cuenta bookmarkeada desde un proceso especifico (ej: "Gestion de inventario") genera estrategias mas enfocadas que una cuenta bookmarkeada sin contexto.
+
+#### Prospectos
+
+Permite buscar contactos (tomadores de decision) dentro de la empresa. ASCI sugiere job titles relevantes basandose en las senales detectadas y permite filtrar por pais.
+
+Esto es especialmente util para multinacionales: el usuario puede filtrar por el pais de la filial local para encontrar los contactos correctos.
+
+Los datos de contacto incluyen nombre, cargo, email y perfil de LinkedIn.
+
+#### Icebreakers
+
+Genera mensajes de apertura personalizados usando inteligencia artificial. Los icebreakers utilizan:
+
+- Senales de la empresa (procesos, tecnologias).
+- Noticias e implementaciones recientes.
+- Documentos del usuario.
+- La estrategia generada.
+
+Se pueden generar distintos tipos de mensajes segun el contacto objetivo y el canal (email, LinkedIn, llamada).
+
+#### Brief Ejecutivo
+
+El brief consolida toda la informacion en un documento ejecutivo listo para usar antes de una reunion o llamada. Incluye:
+
+- Resumen de la empresa.
+- Senales clave detectadas.
+- Noticias e implementaciones relevantes.
+- Estrategia recomendada.
+- Prospectos identificados.
+- Icebreakers sugeridos.
+
+El brief se puede exportar y compartir con el equipo.
+
+---
+
+## Seccion: Documentos
+
+title: Documentos
+description: Sistema de carga y analisis de documentos propios del usuario para enriquecer las recomendaciones de IA.
+source: https://asci.bigua.lat/docs
+
+### Que son los Documentos
+
+El usuario puede subir sus propios documentos de venta: pitch decks, propuestas comerciales, casos de exito, presentaciones de producto, battlecards, etc.
+
+Formatos soportados: PDF, DOCX, PPTX y URLs de paginas web.
+
+### Como funcionan
+
+1. El usuario sube un documento o pega una URL.
+2. ASCI extrae el texto automaticamente.
+3. La IA analiza el contenido y genera un perfil del documento con tags y un resumen.
+4. El documento queda disponible como contexto para todas las generaciones de IA (estrategia, icebreakers, brief).
+
+### Para que sirven
+
+Los documentos le dan a la IA contexto sobre que vende el usuario, cual es su propuesta de valor, sus diferenciadores y sus casos de exito. Esto hace que las estrategias, icebreakers y briefs sean mucho mas relevantes y personalizados en lugar de genericos.
+
+---
+
+## Seccion: Senales e Inteligencia
+
+title: Senales e Inteligencia
+description: Como ASCI detecta y utiliza senales de compra para calificar empresas.
+source: https://asci.bigua.lat
+
+### Tipos de senales
+
+ASCI detecta multiples tipos de senales que indican actividad o interes de una empresa:
+
+1. **Senales de empleados actuales**: Procesos y tecnologias mencionados en perfiles de empleados que trabajan actualmente en la empresa. Es la senal mas fuerte porque indica actividad presente.
+
+2. **Senales de alumni**: Procesos y tecnologias mencionados por ex-empleados. Indica experiencia historica con esa tecnologia, lo que puede significar familiaridad o una posible migracion.
+
+3. **Busquedas laborales**: Posiciones abiertas que mencionan procesos o tecnologias especificas. Indica inversion futura y prioridades actuales de la empresa.
+
+4. **Noticias**: Eventos recientes de la empresa (financiamiento, expansiones, partnerships, lanzamientos).
+
+5. **Implementaciones**: Proyectos concretos de adopcion o uso de tecnologias especificas. Senal directa de inversion.
+
+### Puntaje de relevancia
+
+Cada empresa recibe un puntaje de relevancia calculado en base a la cantidad y tipo de senales. Las senales de empleados actuales tienen mayor peso que alumni, y las busquedas laborales suman un bonus adicional.
+
+---
+
+## Seccion: Inteligencia Artificial
+
+title: Inteligencia Artificial
+description: Como ASCI utiliza IA generativa para crear contenido de ventas personalizado.
+source: https://asci.bigua.lat
+
+### Generacion de Estrategia
+
+La IA analiza las senales de la empresa, las noticias, implementaciones y los documentos del usuario para generar una estrategia de venta personalizada. Incluye:
+
+- Analisis de pain points.
+- Propuesta de valor adaptada.
+- Objeciones anticipadas.
+- Plan de approach recomendado.
+
+### Generacion de Icebreakers
+
+Mensajes de apertura personalizados basados en el contexto completo de la cuenta. La IA combina senales de la empresa con el perfil del contacto objetivo para generar mensajes relevantes y no genericos.
+
+### Brief Ejecutivo
+
+Documento consolidado que la IA genera combinando toda la informacion disponible de una cuenta en un formato ejecutivo listo para una reunion.
+
+### Contexto que alimenta la IA
+
+Todas las generaciones de IA en ASCI se nutren de:
+
+- Senales de la empresa (procesos, tecnologias, empleados).
+- Noticias e implementaciones recientes.
+- Busquedas laborales activas.
+- Documentos del usuario (pitch decks, casos de exito).
+- Contexto de busqueda original (desde que proceso/tecnologia se bookmarkeo).
+
+---
+
+## Seccion: Flujo de Trabajo Tipico
+
+title: Flujo de Trabajo Tipico
+description: El recorrido habitual de un usuario en ASCI, desde la busqueda hasta el contacto.
+source: https://asci.bigua.lat
+
+### Paso 1: Subir documentos de venta
+
+El usuario sube sus pitch decks, propuestas y casos de exito para que la IA tenga contexto sobre su producto.
+
+### Paso 2: Buscar cuentas objetivo
+
+Usa la busqueda por proceso, tecnologia o compania para encontrar empresas con senales relevantes. Filtra por pais y excluye proveedores si es necesario.
+
+### Paso 3: Bookmarkear cuentas
+
+Guarda las empresas interesantes como bookmarks. El contexto de busqueda se preserva.
+
+### Paso 4: Analizar la cuenta
+
+Dentro del workspace, revisa noticias, implementaciones y busquedas laborales para entender el momento de la empresa.
+
+### Paso 5: Generar estrategia
+
+Usa la tab de Estrategia para que la IA genere un plan de approach personalizado.
+
+### Paso 6: Encontrar prospectos
+
+Busca tomadores de decision en la tab de Prospectos. Filtra por pais si es una multinacional.
+
+### Paso 7: Crear icebreakers
+
+Genera mensajes de apertura personalizados para cada contacto.
+
+### Paso 8: Preparar el brief
+
+Genera el brief ejecutivo antes de la reunion para tener toda la informacion consolidada.
+
+---
+
+## Seccion: Acceso y Autenticacion
+
+title: Acceso y Autenticacion
+description: Como acceder a ASCI y modelo de acceso.
+source: https://asci.bigua.lat/auth/login
+
+### Acceso
+
+ASCI es un producto de acceso por invitacion. Los usuarios acceden a traves de un login con email y contrasena.
+
+URL: https://asci.bigua.lat
+
+No hay un plan de precios publico. Para solicitar acceso, contactar a Bigua en https://bigua.lat.
+
+### Perfiles de usuario
+
+- **Usuario**: Acceso completo a busqueda, bookmarks, documentos y workspace.
+- **Administrador**: Acceso adicional a metricas de uso, gestion de usuarios y configuracion de prompts de IA.
+
+---
+
+## Seccion: Sobre Bigua
+
+title: Sobre Bigua
+description: Informacion sobre la empresa detras de ASCI.
+source: https://bigua.lat
+
+### Bigua
+
+ASCI es un producto desarrollado por Bigua, una empresa enfocada en soluciones de inteligencia comercial para el mercado B2B latinoamericano.
+
+Sitio web: https://bigua.lat
+
+---
+
+## Seccion: FAQ
+
+title: Preguntas Frecuentes
+description: Respuestas a las preguntas mas comunes sobre ASCI.
+source: https://asci.bigua.lat
+
+### Que diferencia a ASCI de herramientas como Apollo, ZoomInfo o LinkedIn Sales Navigator?
+
+ASCI se enfoca en senales de compra reales extraidas de la actividad de empleados, no solo datos firmograficos. Ademas, genera contenido de ventas (estrategias, icebreakers, briefs) automaticamente con IA usando el contexto profundo de cada cuenta. Esta especificamente disenado para equipos que venden en Latinoamerica.
+
+### De donde vienen las senales?
+
+Las senales se extraen de perfiles profesionales publicos, busquedas laborales activas, noticias corporativas e implementaciones tecnologicas reportadas. ASCI procesa y normaliza esta informacion para hacerla actionable.
+
+### Que tipo de documentos puedo subir?
+
+PDF, DOCX, PPTX y URLs de paginas web. Idealmente: pitch decks, propuestas comerciales, casos de exito, presentaciones de producto y battlecards.
+
+### En que paises funciona?
+
+ASCI tiene cobertura en toda Latinoamerica, con mayor densidad de datos en Argentina, Mexico, Colombia, Chile, Brasil, Peru y Uruguay.
+
+### Puedo usar ASCI en ingles?
+
+La interfaz esta en espanol. Las senales y datos de empresas se muestran en el idioma original. La IA puede generar contenido tanto en espanol como en ingles dependiendo del contexto.
