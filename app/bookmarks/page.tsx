@@ -250,16 +250,16 @@ export default function BookmarksPage() {
   return (
     <div className="p-8 space-y-6">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4" data-onboarding="bookmarks-header">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Mis Cuentas</h1>
           <p className="text-muted-foreground">
-            Gestiona tu pipeline de prospección. {stats?.total || 0} cuentas guardadas.
+            Gestiona tu pipeline de prospeccion. {stats?.total || 0} cuentas guardadas.
           </p>
         </div>
         <div className="flex items-center gap-2">
           <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as ViewMode)}>
-            <TabsList>
+            <TabsList data-onboarding="bookmarks-view-toggle">
               <TabsTrigger value="kanban" className="gap-2">
                 <LayoutGrid className="h-4 w-4" />
                 Kanban
@@ -317,9 +317,9 @@ export default function BookmarksPage() {
           />
         </div>
 
-        {/* Priority Filters */}
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">Tier:</span>
+      {/* Priority Filters */}
+      <div className="flex items-center gap-2" data-onboarding="bookmarks-tier-filter">
+      <span className="text-sm text-muted-foreground">Tier:</span>
           {(Object.keys(PRIORITY_CONFIG) as Array<keyof typeof PRIORITY_CONFIG>).map((priority) => {
             const config = PRIORITY_CONFIG[priority]
             const isSelected = selectedPriorities.includes(priority)

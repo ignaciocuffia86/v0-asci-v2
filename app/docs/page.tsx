@@ -134,14 +134,14 @@ export default function DocsPage() {
       </Button>
 
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between" data-onboarding="docs-header">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Docs</h1>
           <p className="text-muted-foreground">
             Tu base de conocimiento. Subi documentos para que ASCI entienda tu propuesta de valor.
           </p>
         </div>
-        <Button onClick={() => setUploadOpen(true)} className="gap-2">
+        <Button onClick={() => setUploadOpen(true)} className="gap-2" data-onboarding="docs-upload">
           <Plus className="h-4 w-4" />
           Agregar
         </Button>
@@ -162,9 +162,9 @@ export default function DocsPage() {
 
           {/* Documents Section */}
           {documents.length > 0 ? (
-            <div className="space-y-3">
+            <div className="space-y-3" data-onboarding="docs-list">
               {/* Documents header with filter toggle */}
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between" data-onboarding="docs-folders">
                 <h2 className="text-sm font-medium text-muted-foreground">
                   Documentos ({filteredDocuments.length}{activeFilters.size > 0 ? ` de ${documents.length}` : ""})
                 </h2>
@@ -188,7 +188,7 @@ export default function DocsPage() {
 
               {/* Tag filters */}
               {showFilters && allTags.length > 0 && (
-                <div className="rounded-lg border bg-card p-3 space-y-2.5">
+                <div className="rounded-lg border bg-card p-3 space-y-2.5" data-onboarding="docs-tags">
                   {(["industry", "technology", "process"] as const).map((type) => {
                     const tagsOfType = allTags.filter((t) => t.type === type)
                     if (tagsOfType.length === 0) return null

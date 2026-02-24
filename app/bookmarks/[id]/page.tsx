@@ -291,7 +291,7 @@ export default function BookmarkWorkspacePage() {
       {/* Main Content */}
       <main className="flex-1 p-6 overflow-auto">
         <Tabs defaultValue="overview" className="space-y-6">
-          <TabsList className="bg-muted/50 p-1 flex-wrap h-auto gap-1">
+          <TabsList className="bg-muted/50 p-1 flex-wrap h-auto gap-1" data-onboarding="workspace-tabs">
             <TabsTrigger value="overview" className="gap-2">
               <Building2 className="h-4 w-4" />
               Resumen
@@ -308,25 +308,25 @@ export default function BookmarkWorkspacePage() {
               <Briefcase className="h-4 w-4 text-purple-500" />
               Implementaciones
             </TabsTrigger>
-            <TabsTrigger value="strategy" className="gap-2">
+            <TabsTrigger value="strategy" className="gap-2" data-onboarding="workspace-tab-strategy">
               <BrainCircuit className="h-4 w-4" />
               Estrategia
             </TabsTrigger>
-            <TabsTrigger value="prospects" className="gap-2">
+            <TabsTrigger value="prospects" className="gap-2" data-onboarding="workspace-tab-prospects">
               <Target className="h-4 w-4 text-green-500" />
               Prospectos
               <Badge variant="secondary" className="ml-1 text-[10px] px-1 h-4">
                 Apollo
               </Badge>
             </TabsTrigger>
-            <TabsTrigger value="icebreakers" className="gap-2">
+            <TabsTrigger value="icebreakers" className="gap-2" data-onboarding="workspace-tab-icebreakers">
               <Sparkles className="h-4 w-4 text-amber-500" />
               Icebreakers
               <Badge variant="secondary" className="ml-1 text-[10px] px-1 h-4">
                 AI
               </Badge>
             </TabsTrigger>
-            <TabsTrigger value="summary" className="gap-2">
+            <TabsTrigger value="summary" className="gap-2" data-onboarding="workspace-tab-brief">
               <FileText className="h-4 w-4 text-primary" />
               Brief Ejecutivo
             </TabsTrigger>

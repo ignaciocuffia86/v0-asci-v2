@@ -107,7 +107,7 @@ export function ProcessSearch() {
   return (
     <div className="space-y-6">
       <div className="bg-card border rounded-lg p-6 space-y-6">
-        <div className="grid gap-6 md:grid-cols-2">
+        <div className="grid gap-6 md:grid-cols-2" data-onboarding="search-filters">
           {/* Process Selection */}
           <div className="space-y-2">
             <Label>Procesos (Tags)</Label>
@@ -209,7 +209,7 @@ export function ProcessSearch() {
             </div>
           </div>
 
-          <div className="grid gap-4">
+          <div className="grid gap-4" data-onboarding="search-results">
             {sortedResults.map((company) => (
               <ResultItem
                 key={company.company_id}

@@ -4,8 +4,10 @@ import Link from "next/link"
 import Image from "next/image"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { Search, Bookmark, User, LogOut, Settings, Loader2, FileText } from "lucide-react"
+import { Search, Bookmark, User, LogOut, Settings, Loader2, FileText, GraduationCap } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { useOnboarding } from "@/components/onboarding/onboarding-provider"
+import { Progress } from "@/components/ui/progress"
 import { createClient } from "@/lib/supabase/client"
 import { useRouter } from "next/navigation"
 import { useState, useEffect } from "react"
@@ -148,6 +150,8 @@ export function MainSidebar() {
         ) : null}
       </div>
 
+      <SidebarOnboardingButton />
+
       <div className="p-4 border-t border-sidebar-border">
         <Button
           variant="ghost"
@@ -156,9 +160,46 @@ export function MainSidebar() {
           disabled={isLoggingOut}
         >
           {isLoggingOut ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
-          {isLoggingOut ? "Cerrando..." : "Cerrar Sesión"}
+          {isLoggingOut ? "Cerrando..." : "Cerrar Sesion"}
         </Button>
       </div>
     </aside>
+  )
+}
+
+function SidebarOnboardingButton() {
+  const { state, resume, start, isLoading } = useOnboarding()
+
+  if (isLoading || !state) return null
+  if (state.status === "completed") return null
+
+  const showResume = state.status === "skipped" || (state.status === "in_progress" && state.progressPercentage > 0)
+  const showStart = state.status === "pending"
+
+  if (!showResume && !showStart) return null
+
+  return (
+    <div className="px-4 pb-2">
+      <button
+        onClick={showResume ? resume : start}
+        className="w-full rounded-lg border border-primary/20 bg-primary/5 p-3 text-left hover:bg-primary/10 transition-colors"
+      >
+        <div className="flex items-center gap-2 mb-1.5">
+          <GraduationCap className="h-4 w-4 text-primary" />
+          <span className="text-xs font-medium text-foreground">
+            {showResume ? "Retomar tour" : "Tour de la plataforma"}
+          </span>
+        </div>
+        {state.progressPercentage > 0 && (
+          <div className="space-y-1">
+            <Progress value={state.progressPercentage} className="h-1.5" />
+            <span className="text-[10px] text-muted-foreground">{state.progressPercentage}% completado</span>
+          </div>
+        )}
+        {state.progressPercentage === 0 && (
+          <p className="text-[10px] text-muted-foreground">Recorri la plataforma en 3 minutos</p>
+        )}
+      </button>
+    </div>
   )
 }
