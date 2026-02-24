@@ -63,7 +63,8 @@ interface OnboardingRow {
 interface DashboardProps {
   userRows: UserRow[]
   onboardingRows: OnboardingRow[]
-  weeklyData: WeeklyActivityData[]
+  weeklyDataAll: WeeklyActivityData[]
+  weeklyDataFiltered: WeeklyActivityData[]
 }
 
 function getEngagement(total: number) {
@@ -73,7 +74,7 @@ function getEngagement(total: number) {
   return { label: "Alto", variant: "default" as const, icon: ArrowUpRight }
 }
 
-export function UsageDashboardClient({ userRows, onboardingRows, weeklyData }: DashboardProps) {
+export function UsageDashboardClient({ userRows, onboardingRows, weeklyDataAll, weeklyDataFiltered }: DashboardProps) {
   const [hideAdmins, setHideAdmins] = useState(true)
 
   const filtered = useMemo(() => hideAdmins ? userRows.filter((u) => !u.isAdmin) : userRows, [userRows, hideAdmins])
@@ -205,7 +206,7 @@ export function UsageDashboardClient({ userRows, onboardingRows, weeklyData }: D
       {/* Charts Row 2 */}
       <div className="grid gap-6 lg:grid-cols-2">
         <FeatureUsageChart data={featureUsageData} />
-        <WeeklyActivityChart data={weeklyData} />
+        <WeeklyActivityChart data={hideAdmins ? weeklyDataFiltered : weeklyDataAll} />
       </div>
 
       {/* User Detail Table */}

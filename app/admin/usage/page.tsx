@@ -49,10 +49,10 @@ export default async function AdminUsagePage() {
     { data: profiles },
   ] = await Promise.all([
     adminClient.auth.admin.listUsers(),
-    adminClient.from("bookmarks").select("id, user_id, priority, status, created_at"),
+    adminClient.from("bookmarks").select("id, user_id, company_id, priority, status, created_at"),
     adminClient.from("user_company_contacts").select("id, user_id, created_at"),
-    adminClient.from("company_news").select("id, user_id, requested_by, created_at"),
-    adminClient.from("company_implementations").select("id, user_id, requested_by, created_at"),
+    adminClient.from("company_news").select("id, company_id, requested_by, created_at"),
+    adminClient.from("company_implementations").select("id, company_id, requested_by, created_at"),
     adminClient.from("user_company_strategies").select("id, user_id, created_at"),
     adminClient.from("user_icebreakers").select("id, user_id, created_at"),
     adminClient.from("bookmark_summaries").select("id, bookmark_id, created_at, user_email"),
@@ -71,9 +71,23 @@ export default async function AdminUsagePage() {
     const isAdmin = adminUserIds.has(uid)
 
     const userBookmarks = (bookmarks || []).filter((b) => b.user_id === uid)
+    const userCompanyIds = new Set(userBookmarks.map((b) => b.company_id))
     const userContacts = (contacts || []).filter((c) => c.user_id === uid).length
-    const userNews = (news || []).filter((n) => n.requested_by === uid || n.user_id === uid).length
-    const userImpl = (implementations || []).filter((i) => i.requested_by === uid || i.user_id === uid).length
+    // News/implementations: count distinct items where the company is in the user's bookmarks OR they requested it
+    const userNewsSet = new Set<string>()
+    for (const n of news || []) {
+      if (n.requested_by === uid || (n.company_id && userCompanyIds.has(n.company_id))) {
+        userNewsSet.add(n.id)
+      }
+    }
+    const userNews = userNewsSet.size
+    const userImplSet = new Set<string>()
+    for (const i of implementations || []) {
+      if (i.requested_by === uid || (i.company_id && userCompanyIds.has(i.company_id))) {
+        userImplSet.add(i.id)
+      }
+    }
+    const userImpl = userImplSet.size
     const userStrategies = (strategies || []).filter((s) => s.user_id === uid).length
     const userIcebreakers = (icebreakers || []).filter((i) => i.user_id === uid).length
     const userBriefs = (briefs || []).filter((b) => {
@@ -89,8 +103,8 @@ export default async function AdminUsagePage() {
     for (const c of contacts || []) if (c.user_id === uid && c.created_at) allDates.push(new Date(c.created_at).getTime())
     for (const i of icebreakers || []) if (i.user_id === uid && i.created_at) allDates.push(new Date(i.created_at).getTime())
     for (const s of strategies || []) if (s.user_id === uid && s.created_at) allDates.push(new Date(s.created_at).getTime())
-    for (const n of news || []) if ((n.requested_by === uid || n.user_id === uid) && n.created_at) allDates.push(new Date(n.created_at).getTime())
-    for (const im of implementations || []) if ((im.requested_by === uid || im.user_id === uid) && im.created_at) allDates.push(new Date(im.created_at).getTime())
+    for (const n of news || []) if (n.requested_by === uid && n.created_at) allDates.push(new Date(n.created_at).getTime())
+    for (const im of implementations || []) if (im.requested_by === uid && im.created_at) allDates.push(new Date(im.created_at).getTime())
 
     const lastActivity = allDates.length > 0
       ? new Date(Math.max(...allDates)).toLocaleDateString("es-AR")
@@ -124,50 +138,71 @@ export default async function AdminUsagePage() {
     isAdmin: adminUserIds.has(o.user_id),
   }))
 
-  // Weekly activity (last 8 weeks)
+  // Weekly activity (last 8 weeks) - build for ALL and for NON-ADMIN
   const now = new Date()
   const eightWeeksAgo = new Date(now)
   eightWeeksAgo.setDate(eightWeeksAgo.getDate() - 56)
 
-  const weekBuckets = new Map<string, { bookmarks: number; contacts: number; icebreakers: number; briefs: number; documents: number }>()
-  for (let i = 0; i < 8; i++) {
-    const d = new Date(now)
-    d.setDate(d.getDate() - i * 7)
-    const key = getWeekStart(d)
-    weekBuckets.set(key, { bookmarks: 0, contacts: 0, icebreakers: 0, briefs: 0, documents: 0 })
+  type WeekBucket = { bookmarks: number; contacts: number; icebreakers: number; briefs: number; documents: number }
+  const makeWeekBuckets = () => {
+    const m = new Map<string, WeekBucket>()
+    for (let i = 0; i < 8; i++) {
+      const d = new Date(now)
+      d.setDate(d.getDate() - i * 7)
+      m.set(getWeekStart(d), { bookmarks: 0, contacts: 0, icebreakers: 0, briefs: 0, documents: 0 })
+    }
+    return m
   }
 
-  const bucketItem = (
-    items: Array<{ created_at: string }> | null,
-    field: "bookmarks" | "contacts" | "icebreakers" | "briefs" | "documents"
+  const weekBucketsAll = makeWeekBuckets()
+  const weekBucketsFiltered = makeWeekBuckets()
+
+  const bucketItemWithUser = (
+    items: Array<{ created_at: string; user_id?: string | null }> | null,
+    field: keyof WeekBucket,
   ) => {
     for (const item of items || []) {
       const created = new Date(item.created_at)
       if (created < eightWeeksAgo) continue
       const key = getWeekStart(created)
-      const bucket = weekBuckets.get(key)
-      if (bucket) bucket[field]++
+      const bucketAll = weekBucketsAll.get(key)
+      if (bucketAll) bucketAll[field]++
+      if (item.user_id && !adminUserIds.has(item.user_id)) {
+        const bucketF = weekBucketsFiltered.get(key)
+        if (bucketF) bucketF[field]++
+      }
     }
   }
 
-  bucketItem(bookmarks, "bookmarks")
-  bucketItem(contacts, "contacts")
-  bucketItem(icebreakers, "icebreakers")
-  bucketItem(briefs, "briefs")
-  bucketItem(documents, "documents")
+  bucketItemWithUser(bookmarks, "bookmarks")
+  bucketItemWithUser(contacts, "contacts")
+  bucketItemWithUser(icebreakers, "icebreakers")
+  bucketItemWithUser(
+    (briefs || []).map((b) => {
+      const bk = (bookmarks || []).find((bm) => bm.id === b.bookmark_id)
+      return { ...b, user_id: bk?.user_id ?? null }
+    }),
+    "briefs",
+  )
+  bucketItemWithUser(documents, "documents")
 
-  const weeklyData: WeeklyActivityData[] = Array.from(weekBuckets.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([weekStart, counts]) => ({
-      week: getWeekLabel(new Date(weekStart)),
-      ...counts,
-    }))
+  const toWeeklyArr = (buckets: Map<string, WeekBucket>): WeeklyActivityData[] =>
+    Array.from(buckets.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([weekStart, counts]) => ({
+        week: getWeekLabel(new Date(weekStart)),
+        ...counts,
+      }))
+
+  const weeklyDataAll = toWeeklyArr(weekBucketsAll)
+  const weeklyDataFiltered = toWeeklyArr(weekBucketsFiltered)
 
   return (
     <UsageDashboardClient
       userRows={userRows}
       onboardingRows={onboardingRows}
-      weeklyData={weeklyData}
+      weeklyDataAll={weeklyDataAll}
+      weeklyDataFiltered={weeklyDataFiltered}
     />
   )
 }
