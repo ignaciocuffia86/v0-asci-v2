@@ -8,15 +8,12 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  PieChart,
-  Pie,
   Cell,
   Legend,
   AreaChart,
   Area,
 } from "recharts"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { ChartTooltipContent } from "@/components/ui/chart"
 
 // -- Colors (computed, not CSS vars) --
 const COLORS = {
@@ -50,6 +47,25 @@ export interface UserActivityData {
   icebreakers: number
   briefs: number
   documents: number
+}
+
+// Custom tooltip for all charts
+function CustomTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ name: string; value: number; color?: string; fill?: string }>; label?: string }) {
+  if (!active || !payload?.length) return null
+  return (
+    <div className="rounded-lg border border-border/50 bg-background px-3 py-2 text-xs shadow-xl">
+      {label && <p className="font-medium mb-1 text-foreground">{label}</p>}
+      <div className="space-y-0.5">
+        {payload.map((entry, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <div className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: entry.color || entry.fill }} />
+            <span className="text-muted-foreground">{entry.name}</span>
+            <span className="font-mono font-medium text-foreground ml-auto">{entry.value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 export interface OnboardingStatusData {
@@ -92,25 +108,20 @@ export function UserActivityChart({ data }: { data: UserActivityData[] }) {
         <CardDescription>Top 15 usuarios por acciones totales en la plataforma</CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="h-[350px]">
+        <div className="h-[400px]">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={sorted} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+            <BarChart data={sorted} margin={{ top: 5, right: 10, left: 0, bottom: 60 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey="name"
-                tick={{ fontSize: 10 }}
-                angle={-40}
+                tick={{ fontSize: 9 }}
+                angle={-45}
                 textAnchor="end"
-                height={80}
+                height={90}
                 interval={0}
               />
               <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip
-                content={({ active, payload, label }) => (
-                  <ChartTooltipContent active={active} payload={payload as never} label={label} />
-                )}
-              />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
+              <Tooltip content={<CustomTooltip />} />
               <Bar dataKey="bookmarks" name="Bookmarks" fill={COLORS.primary} stackId="a" radius={[0, 0, 0, 0]} />
               <Bar dataKey="contacts" name="Prospectos" fill={COLORS.secondary} stackId="a" />
               <Bar dataKey="icebreakers" name="Icebreakers" fill={COLORS.accent} stackId="a" />
@@ -122,14 +133,63 @@ export function UserActivityChart({ data }: { data: UserActivityData[] }) {
             </BarChart>
           </ResponsiveContainer>
         </div>
+        {/* Legend below chart with proper spacing */}
+        <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 mt-3">
+          {[
+            { label: "Bookmarks", color: COLORS.primary },
+            { label: "Prospectos", color: COLORS.secondary },
+            { label: "Icebreakers", color: COLORS.accent },
+            { label: "Briefs", color: COLORS.success },
+            { label: "Estrategias", color: COLORS.sky },
+            { label: "Noticias", color: COLORS.orange },
+            { label: "Impl.", color: COLORS.pink },
+            { label: "Docs", color: COLORS.indigo },
+          ].map((item) => (
+            <div key={item.label} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <div className="h-2.5 w-2.5 rounded-sm shrink-0" style={{ backgroundColor: item.color }} />
+              {item.label}
+            </div>
+          ))}
+        </div>
       </CardContent>
     </Card>
   )
 }
 
-// -- 2. Onboarding Status Pie Chart --
+// -- 2. Onboarding Status Pie Chart (pure SVG donut to avoid Recharts color issues) --
 export function OnboardingPieChart({ data }: { data: OnboardingStatusData[] }) {
   const total = data.reduce((sum, d) => sum + d.value, 0)
+  const size = 200
+  const cx = size / 2
+  const cy = size / 2
+  const outerR = 88
+  const innerR = 56
+  const gap = 0.03 // radians gap between slices
+
+  // Build SVG arcs
+  let startAngle = -Math.PI / 2
+  const arcs = data.map((d) => {
+    const sliceAngle = total > 0 ? (d.value / total) * Math.PI * 2 : 0
+    const arcStart = startAngle + gap / 2
+    const arcEnd = startAngle + sliceAngle - gap / 2
+    startAngle += sliceAngle
+
+    const largeArc = sliceAngle > Math.PI ? 1 : 0
+    const outerStart = { x: cx + outerR * Math.cos(arcStart), y: cy + outerR * Math.sin(arcStart) }
+    const outerEnd = { x: cx + outerR * Math.cos(arcEnd), y: cy + outerR * Math.sin(arcEnd) }
+    const innerStart = { x: cx + innerR * Math.cos(arcEnd), y: cy + innerR * Math.sin(arcEnd) }
+    const innerEnd = { x: cx + innerR * Math.cos(arcStart), y: cy + innerR * Math.sin(arcStart) }
+
+    const path = [
+      `M ${outerStart.x} ${outerStart.y}`,
+      `A ${outerR} ${outerR} 0 ${largeArc} 1 ${outerEnd.x} ${outerEnd.y}`,
+      `L ${innerStart.x} ${innerStart.y}`,
+      `A ${innerR} ${innerR} 0 ${largeArc} 0 ${innerEnd.x} ${innerEnd.y}`,
+      `Z`,
+    ].join(" ")
+
+    return { path, color: d.color, name: d.name, value: d.value }
+  })
 
   return (
     <Card>
@@ -138,53 +198,38 @@ export function OnboardingPieChart({ data }: { data: OnboardingStatusData[] }) {
         <CardDescription>Distribucion de usuarios por estado del tour</CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="h-[260px]">
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie
-                data={data}
-                cx="50%"
-                cy="50%"
-                innerRadius={55}
-                outerRadius={90}
-                paddingAngle={3}
-                dataKey="value"
-                labelLine={false}
-              >
-                {data.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={entry.color} stroke={entry.color} />
-                ))}
-              </Pie>
-              <Tooltip
-                content={({ active, payload }) => {
-                  if (!active || !payload?.length) return null
-                  const item = payload[0]
-                  const entry = data.find((d) => d.name === item.name)
-                  return (
-                    <div className="rounded-lg border border-border/50 bg-background px-3 py-2 text-xs shadow-xl">
-                      <div className="flex items-center gap-2">
-                        <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: entry?.color }} />
-                        <span className="font-medium">{item.name}</span>
-                        <span className="font-mono font-medium ml-auto">
-                          {String(item.value)} ({total > 0 ? Math.round((Number(item.value) / total) * 100) : 0}%)
-                        </span>
-                      </div>
-                    </div>
-                  )
-                }}
-              />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-        {/* Custom legend with proper colors */}
-        <div className="flex flex-wrap justify-center gap-x-4 gap-y-1.5 mt-2">
-          {data.map((entry) => (
-            <div key={entry.name} className="flex items-center gap-1.5 text-xs">
-              <div className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: entry.color }} />
-              <span className="text-muted-foreground">{entry.name}</span>
-              <span className="font-mono font-medium text-foreground">{entry.value}</span>
-            </div>
-          ))}
+        <div className="flex flex-col items-center">
+          {/* SVG donut */}
+          <div className="relative">
+            <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+              {arcs.map((arc, i) => (
+                <path key={i} d={arc.path} fill={arc.color} className="transition-opacity hover:opacity-80" />
+              ))}
+              {/* Center text */}
+              <text x={cx} y={cy - 6} textAnchor="middle" className="fill-foreground text-2xl font-bold" fontSize="28">
+                {total}
+              </text>
+              <text x={cx} y={cy + 14} textAnchor="middle" className="fill-muted-foreground text-xs" fontSize="11">
+                usuarios
+              </text>
+            </svg>
+          </div>
+
+          {/* Legend */}
+          <div className="flex flex-wrap justify-center gap-x-4 gap-y-2 mt-4">
+            {data.map((entry) => (
+              <div key={entry.name} className="flex items-center gap-2 text-xs">
+                <div className="h-3 w-3 rounded-full shrink-0" style={{ backgroundColor: entry.color }} />
+                <span className="text-muted-foreground">{entry.name}</span>
+                <span className="font-mono font-semibold text-foreground">
+                  {entry.value}
+                  <span className="text-muted-foreground font-normal ml-0.5">
+                    ({total > 0 ? Math.round((entry.value / total) * 100) : 0}%)
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       </CardContent>
     </Card>
@@ -206,11 +251,7 @@ export function FeatureUsageChart({ data }: { data: FeatureUsageData[] }) {
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" horizontal={false} />
               <XAxis type="number" tick={{ fontSize: 11 }} />
               <YAxis dataKey="name" type="category" tick={{ fontSize: 11 }} width={100} />
-              <Tooltip
-                content={({ active, payload, label }) => (
-                  <ChartTooltipContent active={active} payload={payload as never} label={label} />
-                )}
-              />
+              <Tooltip content={<CustomTooltip />} />
               <Bar dataKey="count" name="Total" radius={[0, 4, 4, 0]}>
                 {data.map((entry, index) => (
                   <Cell key={`cell-${index}`} fill={entry.color} />
@@ -261,12 +302,8 @@ export function WeeklyActivityChart({ data }: { data: WeeklyActivityData[] }) {
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis dataKey="week" tick={{ fontSize: 11 }} />
               <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip
-                content={({ active, payload, label }) => (
-                  <ChartTooltipContent active={active} payload={payload as never} label={label} />
-                )}
-              />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
+              <Tooltip content={<CustomTooltip />} />
+              <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
               <Area type="monotone" dataKey="bookmarks" name="Bookmarks" stroke={COLORS.primary} fill="url(#gradBookmarks)" strokeWidth={2} />
               <Area type="monotone" dataKey="contacts" name="Prospectos" stroke={COLORS.secondary} fill="url(#gradContacts)" strokeWidth={2} />
               <Area type="monotone" dataKey="icebreakers" name="Icebreakers" stroke={COLORS.accent} fill="url(#gradIcebreakers)" strokeWidth={2} />
