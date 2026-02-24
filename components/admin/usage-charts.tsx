@@ -70,6 +70,7 @@ export interface WeeklyActivityData {
   contacts: number
   icebreakers: number
   briefs: number
+  documents: number
 }
 
 // -- 1. User Activity Bar Chart --
@@ -79,7 +80,7 @@ export function UserActivityChart({ data }: { data: UserActivityData[] }) {
     .map((d) => ({
       ...d,
       total: d.bookmarks + d.contacts + d.news + d.implementations + d.strategies + d.icebreakers + d.briefs + d.documents,
-      name: d.email.split("@")[0],
+      name: d.email,
     }))
     .sort((a, b) => b.total - a.total)
     .slice(0, 15)
@@ -97,10 +98,11 @@ export function UserActivityChart({ data }: { data: UserActivityData[] }) {
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey="name"
-                tick={{ fontSize: 11 }}
-                angle={-35}
+                tick={{ fontSize: 10 }}
+                angle={-40}
                 textAnchor="end"
-                height={60}
+                height={80}
+                interval={0}
               />
               <YAxis tick={{ fontSize: 11 }} />
               <Tooltip
@@ -136,36 +138,53 @@ export function OnboardingPieChart({ data }: { data: OnboardingStatusData[] }) {
         <CardDescription>Distribucion de usuarios por estado del tour</CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="h-[300px]">
+        <div className="h-[260px]">
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
               <Pie
                 data={data}
                 cx="50%"
                 cy="50%"
-                innerRadius={60}
-                outerRadius={100}
+                innerRadius={55}
+                outerRadius={90}
                 paddingAngle={3}
                 dataKey="value"
-                label={({ name, value }) => `${name}: ${value}`}
-                labelLine={{ strokeWidth: 1 }}
+                labelLine={false}
               >
                 {data.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={entry.color} />
+                  <Cell key={`cell-${index}`} fill={entry.color} stroke={entry.color} />
                 ))}
               </Pie>
               <Tooltip
-                content={({ active, payload }) => (
-                  <ChartTooltipContent
-                    active={active}
-                    payload={payload as never}
-                    valueFormatter={(v) => `${v} (${total > 0 ? Math.round((v / total) * 100) : 0}%)`}
-                  />
-                )}
+                content={({ active, payload }) => {
+                  if (!active || !payload?.length) return null
+                  const item = payload[0]
+                  const entry = data.find((d) => d.name === item.name)
+                  return (
+                    <div className="rounded-lg border border-border/50 bg-background px-3 py-2 text-xs shadow-xl">
+                      <div className="flex items-center gap-2">
+                        <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: entry?.color }} />
+                        <span className="font-medium">{item.name}</span>
+                        <span className="font-mono font-medium ml-auto">
+                          {String(item.value)} ({total > 0 ? Math.round((Number(item.value) / total) * 100) : 0}%)
+                        </span>
+                      </div>
+                    </div>
+                  )
+                }}
               />
-              <Legend wrapperStyle={{ fontSize: 12 }} />
             </PieChart>
           </ResponsiveContainer>
+        </div>
+        {/* Custom legend with proper colors */}
+        <div className="flex flex-wrap justify-center gap-x-4 gap-y-1.5 mt-2">
+          {data.map((entry) => (
+            <div key={entry.name} className="flex items-center gap-1.5 text-xs">
+              <div className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: entry.color }} />
+              <span className="text-muted-foreground">{entry.name}</span>
+              <span className="font-mono font-medium text-foreground">{entry.value}</span>
+            </div>
+          ))}
         </div>
       </CardContent>
     </Card>
@@ -234,6 +253,10 @@ export function WeeklyActivityChart({ data }: { data: WeeklyActivityData[] }) {
                   <stop offset="5%" stopColor={COLORS.success} stopOpacity={0.3} />
                   <stop offset="95%" stopColor={COLORS.success} stopOpacity={0} />
                 </linearGradient>
+                <linearGradient id="gradDocuments" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={COLORS.indigo} stopOpacity={0.3} />
+                  <stop offset="95%" stopColor={COLORS.indigo} stopOpacity={0} />
+                </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis dataKey="week" tick={{ fontSize: 11 }} />
@@ -248,6 +271,7 @@ export function WeeklyActivityChart({ data }: { data: WeeklyActivityData[] }) {
               <Area type="monotone" dataKey="contacts" name="Prospectos" stroke={COLORS.secondary} fill="url(#gradContacts)" strokeWidth={2} />
               <Area type="monotone" dataKey="icebreakers" name="Icebreakers" stroke={COLORS.accent} fill="url(#gradIcebreakers)" strokeWidth={2} />
               <Area type="monotone" dataKey="briefs" name="Briefs" stroke={COLORS.success} fill="url(#gradBriefs)" strokeWidth={2} />
+              <Area type="monotone" dataKey="documents" name="Documentos" stroke={COLORS.indigo} fill="url(#gradDocuments)" strokeWidth={2} />
             </AreaChart>
           </ResponsiveContainer>
         </div>

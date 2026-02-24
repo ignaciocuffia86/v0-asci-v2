@@ -151,15 +151,15 @@ export default async function AdminUsagePage() {
   const eightWeeksAgo = new Date(now)
   eightWeeksAgo.setDate(eightWeeksAgo.getDate() - 56)
 
-  const weekBuckets = new Map<string, { bookmarks: number; contacts: number; icebreakers: number; briefs: number }>()
+  const weekBuckets = new Map<string, { bookmarks: number; contacts: number; icebreakers: number; briefs: number; documents: number }>()
   for (let i = 0; i < 8; i++) {
     const d = new Date(now)
     d.setDate(d.getDate() - i * 7)
     const key = getWeekStart(d)
-    weekBuckets.set(key, { bookmarks: 0, contacts: 0, icebreakers: 0, briefs: 0 })
+    weekBuckets.set(key, { bookmarks: 0, contacts: 0, icebreakers: 0, briefs: 0, documents: 0 })
   }
 
-  const bucketItem = (items: Array<{ created_at: string }> | null, field: "bookmarks" | "contacts" | "icebreakers" | "briefs") => {
+  const bucketItem = (items: Array<{ created_at: string }> | null, field: "bookmarks" | "contacts" | "icebreakers" | "briefs" | "documents") => {
     for (const item of items || []) {
       const created = new Date(item.created_at)
       if (created < eightWeeksAgo) continue
@@ -173,6 +173,7 @@ export default async function AdminUsagePage() {
   bucketItem(contacts, "contacts")
   bucketItem(icebreakers, "icebreakers")
   bucketItem(briefs, "briefs")
+  bucketItem(documents, "documents")
 
   const weeklyActivityData: WeeklyActivityData[] = Array.from(weekBuckets.entries())
     .sort(([a], [b]) => a.localeCompare(b))
@@ -315,14 +316,14 @@ export default async function AdminUsagePage() {
                   <TableHead className="min-w-[180px]">Usuario</TableHead>
                   <TableHead className="text-center">Engagement</TableHead>
                   <TableHead className="text-center">Onboarding</TableHead>
-                  <TableHead className="text-center"><Bookmark className="h-3.5 w-3.5 mx-auto" /></TableHead>
-                  <TableHead className="text-center"><Target className="h-3.5 w-3.5 mx-auto" /></TableHead>
-                  <TableHead className="text-center"><Newspaper className="h-3.5 w-3.5 mx-auto" /></TableHead>
-                  <TableHead className="text-center"><Briefcase className="h-3.5 w-3.5 mx-auto" /></TableHead>
-                  <TableHead className="text-center"><BrainCircuit className="h-3.5 w-3.5 mx-auto" /></TableHead>
-                  <TableHead className="text-center"><Sparkles className="h-3.5 w-3.5 mx-auto" /></TableHead>
-                  <TableHead className="text-center"><FileText className="h-3.5 w-3.5 mx-auto" /></TableHead>
-                  <TableHead className="text-center">Docs</TableHead>
+                  <TableHead className="text-center"><span title="Bookmarks - Cuentas guardadas"><Bookmark className="h-3.5 w-3.5 mx-auto" /></span></TableHead>
+                  <TableHead className="text-center"><span title="Prospectos - Contactos via Apollo"><Target className="h-3.5 w-3.5 mx-auto" /></span></TableHead>
+                  <TableHead className="text-center"><span title="Noticias - Noticias buscadas"><Newspaper className="h-3.5 w-3.5 mx-auto" /></span></TableHead>
+                  <TableHead className="text-center"><span title="Implementaciones - Casos de uso"><Briefcase className="h-3.5 w-3.5 mx-auto" /></span></TableHead>
+                  <TableHead className="text-center"><span title="Estrategias - Generadas con IA"><BrainCircuit className="h-3.5 w-3.5 mx-auto" /></span></TableHead>
+                  <TableHead className="text-center"><span title="Icebreakers - Mensajes generados"><Sparkles className="h-3.5 w-3.5 mx-auto" /></span></TableHead>
+                  <TableHead className="text-center"><span title="Briefs - Briefs ejecutivos"><FileText className="h-3.5 w-3.5 mx-auto" /></span></TableHead>
+                  <TableHead className="text-center"><span title="Documentos - Docs subidos"><FileText className="h-3.5 w-3.5 mx-auto text-indigo-500" /></span></TableHead>
                   <TableHead className="text-right">Ultima act.</TableHead>
                 </TableRow>
               </TableHeader>
