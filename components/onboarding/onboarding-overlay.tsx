@@ -24,11 +24,35 @@ export function OnboardingOverlay({ step, state, onNext, onSkip }: OnboardingOve
   const [targetRect, setTargetRect] = useState<TargetRect | null>(null)
   const [tooltipStyle, setTooltipStyle] = useState<React.CSSProperties>({})
   const [isVisible, setIsVisible] = useState(false)
+  const [targetFound, setTargetFound] = useState(false)
   const hasScrolled = useRef(false)
+  const retryCount = useRef(0)
 
   const findAndPosition = useCallback(() => {
     const el = document.querySelector(`[data-onboarding="${step.targetSelector}"]`)
-    if (!el) return
+
+    if (!el) {
+      setTargetFound(false)
+      // After retries, show tooltip centered without highlight
+      if (retryCount.current >= 3) {
+        setTargetRect(null)
+        const tooltipWidth = 360
+        setTooltipStyle({
+          position: "fixed",
+          width: tooltipWidth,
+          zIndex: 10001,
+          top: "50%",
+          left: "50%",
+          transform: "translate(-50%, -50%)",
+        })
+        setIsVisible(true)
+      }
+      retryCount.current++
+      return
+    }
+
+    setTargetFound(true)
+    retryCount.current = 0
 
     // Scroll into view only once per step
     if (!hasScrolled.current) {
@@ -90,19 +114,27 @@ export function OnboardingOverlay({ step, state, onNext, onSkip }: OnboardingOve
 
   useEffect(() => {
     setIsVisible(false)
+    setTargetFound(false)
     hasScrolled.current = false
-    // Delay to let page render after navigation
-    const timer = setTimeout(findAndPosition, 500)
+    retryCount.current = 0
+
+    // Try multiple times with increasing delays to find the element
+    const timers = [
+      setTimeout(findAndPosition, 400),
+      setTimeout(findAndPosition, 900),
+      setTimeout(findAndPosition, 1500),
+      setTimeout(findAndPosition, 2500),
+    ]
 
     const handleReposition = () => {
       requestAnimationFrame(findAndPosition)
     }
 
     window.addEventListener("resize", handleReposition)
-    window.addEventListener("scroll", handleReposition, true) // capture for nested scrolls
+    window.addEventListener("scroll", handleReposition, true)
 
     return () => {
-      clearTimeout(timer)
+      timers.forEach(clearTimeout)
       window.removeEventListener("resize", handleReposition)
       window.removeEventListener("scroll", handleReposition, true)
     }
@@ -124,9 +156,10 @@ export function OnboardingOverlay({ step, state, onNext, onSkip }: OnboardingOve
     return () => window.removeEventListener("keydown", handler)
   }, [onNext, onSkip])
 
-  if (!isVisible || !targetRect) {
+  // While still searching for element, show a subtle loading overlay
+  if (!isVisible) {
     return (
-      <div className="fixed inset-0 z-[9998] bg-black/50 backdrop-blur-[2px] transition-opacity duration-300" />
+      <div className="fixed inset-0 z-[9998] bg-black/40 transition-opacity duration-300" />
     )
   }
 
@@ -136,45 +169,51 @@ export function OnboardingOverlay({ step, state, onNext, onSkip }: OnboardingOve
 
   return (
     <>
-      {/* Dark overlay with cutout - fixed to viewport */}
-      <svg
-        className="fixed inset-0 z-[9998] pointer-events-auto"
-        width="100%"
-        height="100%"
-      >
-        <defs>
-          <mask id="onboarding-mask">
-            <rect x="0" y="0" width="100%" height="100%" fill="white" />
+      {/* Dark overlay - with cutout if target found, solid if not */}
+      {targetFound && targetRect ? (
+        <>
+          <svg
+            className="fixed inset-0 z-[9998] pointer-events-auto"
+            width="100%"
+            height="100%"
+          >
+            <defs>
+              <mask id="onboarding-mask">
+                <rect x="0" y="0" width="100%" height="100%" fill="white" />
+                <rect
+                  x={targetRect.left}
+                  y={targetRect.top}
+                  width={targetRect.width}
+                  height={targetRect.height}
+                  rx="8"
+                  fill="black"
+                />
+              </mask>
+            </defs>
             <rect
-              x={targetRect.left}
-              y={targetRect.top}
-              width={targetRect.width}
-              height={targetRect.height}
-              rx="8"
-              fill="black"
+              x="0"
+              y="0"
+              width="100%"
+              height="100%"
+              fill="rgba(0,0,0,0.55)"
+              mask="url(#onboarding-mask)"
             />
-          </mask>
-        </defs>
-        <rect
-          x="0"
-          y="0"
-          width="100%"
-          height="100%"
-          fill="rgba(0,0,0,0.55)"
-          mask="url(#onboarding-mask)"
-        />
-      </svg>
+          </svg>
 
-      {/* Highlight border around target */}
-      <div
-        className="fixed z-[9999] rounded-lg ring-2 ring-primary/60 ring-offset-2 ring-offset-transparent pointer-events-none transition-all duration-300"
-        style={{
-          top: targetRect.top,
-          left: targetRect.left,
-          width: targetRect.width,
-          height: targetRect.height,
-        }}
-      />
+          {/* Highlight border around target */}
+          <div
+            className="fixed z-[9999] rounded-lg ring-2 ring-primary/60 ring-offset-2 ring-offset-transparent pointer-events-none transition-all duration-300"
+            style={{
+              top: targetRect.top,
+              left: targetRect.left,
+              width: targetRect.width,
+              height: targetRect.height,
+            }}
+          />
+        </>
+      ) : (
+        <div className="fixed inset-0 z-[9998] bg-black/55 pointer-events-auto" />
+      )}
 
       {/* Tooltip */}
       <div

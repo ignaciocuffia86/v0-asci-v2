@@ -101,13 +101,12 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     const load = async () => {
       try {
         const s = await getOnboardingState()
-        console.log("[v0] Onboarding state loaded:", s)
         setState(s)
         if (s && s.status === "pending") {
           setShowWelcome(true)
         }
-      } catch (err) {
-        console.log("[v0] Onboarding state load error (expected if not logged in):", err)
+      } catch {
+        // Not authenticated or error - expected on public pages
       } finally {
         setIsLoading(false)
       }
