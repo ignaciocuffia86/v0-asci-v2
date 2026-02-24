@@ -16,6 +16,7 @@ interface OnboardingOverlayProps {
 // Floating non-blocking hint for action steps (user needs to interact)
 export function OnboardingActionHint({ step, state, onSkip }: Omit<OnboardingOverlayProps, "onNext">) {
   const [targetRect, setTargetRect] = useState<TargetRect | null>(null)
+  const [showFallback, setShowFallback] = useState(false)
   const hasScrolled = useRef(false)
 
   const position = useCallback(() => {
@@ -36,6 +37,21 @@ export function OnboardingActionHint({ step, state, onSkip }: Omit<OnboardingOve
       width: rect.width + padding * 2,
       height: rect.height + padding * 2,
     })
+  }, [step])
+
+  // Detect if there's no data for the fallback
+  useEffect(() => {
+    if (!step.noDataFallback) { setShowFallback(false); return }
+    const timer = setTimeout(() => {
+      // Check if the next step's target could possibly appear
+      // For bookmarks: check if there are any bookmark rows/cards
+      const bookmarkCards = document.querySelectorAll("[data-bookmark-id]")
+      const emptyMsg = document.body.textContent?.includes("No tienes cuentas guardadas")
+      if (bookmarkCards.length === 0 || emptyMsg) {
+        setShowFallback(true)
+      }
+    }, 500)
+    return () => clearTimeout(timer)
   }, [step])
 
   useEffect(() => {
@@ -146,14 +162,16 @@ export function OnboardingActionHint({ step, state, onSkip }: Omit<OnboardingOve
 
           <div className="px-4 pb-2">
             <h3 className="text-sm font-semibold text-foreground mb-1">{step.title}</h3>
-            <p className="text-sm text-muted-foreground leading-relaxed">{step.content}</p>
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              {showFallback && step.noDataFallback ? step.noDataFallback.content : step.content}
+            </p>
           </div>
 
           {/* Action hint */}
           <div className="px-4 py-2.5 flex items-center justify-between border-t border-border bg-primary/5">
             <div className="flex items-center gap-2 text-xs text-primary font-medium">
               <Hand className="h-3.5 w-3.5" />
-              <span>{step.actionHint || "Realiza la accion para continuar"}</span>
+              <span>{showFallback && step.noDataFallback ? step.noDataFallback.actionHint : (step.actionHint || "Realiza la accion para continuar")}</span>
             </div>
             <div className="flex items-center gap-2">
               <span className="text-[10px] text-muted-foreground">{step.stepIndex + 1}/{currentTrackSteps}</span>

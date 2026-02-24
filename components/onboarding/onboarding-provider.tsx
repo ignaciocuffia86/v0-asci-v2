@@ -196,7 +196,8 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   const stepRouteMatch = currentStep ? routeMatches(pathname, currentStep.route) : false
 
   // For waitForAction steps: watch for the NEXT step's target to appear
-  // When user completes the action, the next target shows up and we auto-advance
+  // When user completes the action, the next target shows up and we auto-advance.
+  // Also watches pathname changes for steps where the next step is on a different route.
   useEffect(() => {
     if (!isActive || !currentStep?.waitForAction || !state?.currentTrack) return
 
@@ -204,11 +205,18 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     const nextStep = getStepByTrackAndIndex(state.currentTrack, nextStepIndex)
     if (!nextStep) return
 
+    // Case 1: Next step is on a different route (e.g. user needs to navigate to /bookmarks/[id])
+    // Check if we just navigated there
+    if (nextStep.route !== currentStep.route && routeMatches(pathname, nextStep.route)) {
+      const timer = setTimeout(next, 800)
+      return () => clearTimeout(timer)
+    }
+
+    // Case 2: Same route - watch for the target to appear in DOM
     const targetSelector = `[data-onboarding="${nextStep.targetSelector}"]`
 
     // Check if already present
     if (document.querySelector(targetSelector)) {
-      // Small delay to let user see the result before advancing
       const timer = setTimeout(next, 600)
       return () => clearTimeout(timer)
     }
@@ -229,7 +237,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     })
 
     return () => observer.disconnect()
-  }, [isActive, currentStep?.id, state?.currentTrack, next])
+  }, [isActive, currentStep?.id, state?.currentTrack, next, pathname])
 
   return (
     <OnboardingContext.Provider

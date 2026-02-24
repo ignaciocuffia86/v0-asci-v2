@@ -18,6 +18,13 @@ export interface OnboardingStep {
   waitForAction?: boolean
   /** Short CTA text shown in the floating hint for action steps */
   actionHint?: string
+  /** Optional fallback content when the required data doesn't exist (e.g. no bookmarks) */
+  noDataFallback?: {
+    content: string
+    actionHint: string
+    /** CSS selector - if this element contains "No tienes" or is empty, show fallback */
+    checkSelector?: string
+  }
 }
 
 export const ONBOARDING_STEPS: OnboardingStep[] = [
@@ -192,9 +199,15 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
     stepIndex: 2,
     targetSelector: "bookmarks-tier-filter",
     title: "Tiers y Estados",
-    content: "Clasifica tus cuentas por tier (T1, T2, T3) segun prioridad, y por estado (Nueva, En Analisis, Contactada, etc.). Esto te ayuda a priorizar y trackear tu avance.",
+    content: "Clasifica tus cuentas por tier (T1, T2, T3) segun prioridad, y por estado (Nueva, En Analisis, Contactada, etc.). Hace clic en una cuenta para entrar a su workspace.",
     position: "bottom",
     route: "/bookmarks",
+    waitForAction: true,
+    actionHint: "Hace clic en una cuenta para continuar",
+    noDataFallback: {
+      content: "Todavia no tenes cuentas guardadas. Podes ir a la seccion de Busqueda para encontrar y guardar tu primera cuenta, o saltar este paso.",
+      actionHint: "Guarda una cuenta desde Busqueda primero",
+    },
   },
   {
     id: "pro-4-workspace-overview",

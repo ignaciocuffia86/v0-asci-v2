@@ -69,6 +69,7 @@ function KanbanCard({
 
   return (
     <Card 
+      data-bookmark-id={bookmark.id}
       draggable
       onDragStart={(e) => onDragStart(e, bookmark.id)}
       onDragEnd={onDragEnd}

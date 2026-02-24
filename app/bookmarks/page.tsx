@@ -399,7 +399,7 @@ export default function BookmarksPage() {
             </TableHeader>
             <TableBody>
               {filteredBookmarks.map((bookmark) => (
-                <TableRow key={bookmark.id}>
+                <TableRow key={bookmark.id} data-bookmark-id={bookmark.id}>
                   <TableCell 
                     className="cursor-pointer hover:bg-muted/50 transition-colors"
                     onClick={() => router.push(`/bookmarks/${bookmark.id}`)}
