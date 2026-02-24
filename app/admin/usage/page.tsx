@@ -1,193 +1,208 @@
 import { createClient } from "@/lib/supabase/server"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { redirect } from "next/navigation"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Badge } from "@/components/ui/badge"
-import { Users, Bookmark, TrendingUp, DollarSign } from "lucide-react"
+import { UsageDashboardClient, type UserRow } from "@/components/admin/usage-dashboard"
+import type { WeeklyActivityData } from "@/components/admin/usage-charts"
+
+// Helper to get ISO week label
+function getWeekLabel(date: Date): string {
+  const d = new Date(date)
+  d.setHours(0, 0, 0, 0)
+  d.setDate(d.getDate() + 3 - ((d.getDay() + 6) % 7))
+  const week1 = new Date(d.getFullYear(), 0, 4)
+  const weekNum = 1 + Math.round(((d.getTime() - week1.getTime()) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7)
+  return `S${weekNum}`
+}
+
+function getWeekStart(date: Date): string {
+  const d = new Date(date)
+  const day = d.getDay()
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1)
+  d.setDate(diff)
+  return d.toISOString().split("T")[0]
+}
 
 export default async function AdminUsagePage() {
   const supabase = await createClient()
-
   const {
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) redirect("/auth/sign-in")
 
   const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single()
-
-  if (profile?.role !== "superadmin") {
-    redirect("/")
-  }
+  if (profile?.role !== "superadmin") redirect("/")
 
   const adminClient = createAdminClient()
-  const {
-    data: { users: authUsers },
-  } = await adminClient.auth.admin.listUsers()
 
-  // Obtener todos los bookmarks
-  const { data: bookmarks } = await supabase.from("bookmarks").select("user_id, priority")
+  // Parallel data fetching
+  const [
+    { data: { users: authUsers } },
+    { data: bookmarks },
+    { data: contacts },
+    { data: news },
+    { data: implementations },
+    { data: strategies },
+    { data: icebreakers },
+    { data: briefs },
+    { data: documents },
+    { data: onboarding },
+    { data: profiles },
+  ] = await Promise.all([
+    adminClient.auth.admin.listUsers(),
+    adminClient.from("bookmarks").select("id, user_id, company_id, priority, status, created_at"),
+    adminClient.from("user_company_contacts").select("id, user_id, created_at"),
+    adminClient.from("company_news").select("id, company_id, requested_by, created_at"),
+    adminClient.from("company_implementations").select("id, company_id, requested_by, created_at"),
+    adminClient.from("user_company_strategies").select("id, user_id, created_at"),
+    adminClient.from("user_icebreakers").select("id, user_id, created_at"),
+    adminClient.from("bookmark_summaries").select("id, bookmark_id, created_at, user_email"),
+    adminClient.from("user_documents").select("id, user_id, created_at, status"),
+    adminClient.from("user_onboarding").select("user_id, status, progress_percentage, current_track, completed_tracks"),
+    adminClient.from("profiles").select("id, role"),
+  ])
 
-  const userStats = (authUsers || []).map((authUser) => {
-    const userBookmarks = (bookmarks || []).filter((b) => b.user_id === authUser.id)
+  const users = authUsers || []
+  const adminUserIds = new Set((profiles || []).filter((p) => p.role === "superadmin").map((p) => p.id))
+
+  // Build per-user rows
+  const userRows: UserRow[] = users.map((u) => {
+    const uid = u.id
+    const email = u.email || "Sin email"
+    const isAdmin = adminUserIds.has(uid)
+
+    const userBookmarks = (bookmarks || []).filter((b) => b.user_id === uid)
+    const userCompanyIds = new Set(userBookmarks.map((b) => b.company_id))
+    const userContacts = (contacts || []).filter((c) => c.user_id === uid).length
+    // News/implementations: count distinct items where the company is in the user's bookmarks OR they requested it
+    const userNewsSet = new Set<string>()
+    for (const n of news || []) {
+      if (n.requested_by === uid || (n.company_id && userCompanyIds.has(n.company_id))) {
+        userNewsSet.add(n.id)
+      }
+    }
+    const userNews = userNewsSet.size
+    const userImplSet = new Set<string>()
+    for (const i of implementations || []) {
+      if (i.requested_by === uid || (i.company_id && userCompanyIds.has(i.company_id))) {
+        userImplSet.add(i.id)
+      }
+    }
+    const userImpl = userImplSet.size
+    const userStrategies = (strategies || []).filter((s) => s.user_id === uid).length
+    const userIcebreakers = (icebreakers || []).filter((i) => i.user_id === uid).length
+    const userBriefs = (briefs || []).filter((b) => {
+      if (b.user_email === email) return true
+      const bk = userBookmarks.find((bm) => bm.id === b.bookmark_id)
+      return !!bk
+    }).length
+    const userDocs = (documents || []).filter((d) => d.user_id === uid).length
+
+    // Last activity date
+    const allDates: number[] = []
+    for (const b of userBookmarks) if (b.created_at) allDates.push(new Date(b.created_at).getTime())
+    for (const c of contacts || []) if (c.user_id === uid && c.created_at) allDates.push(new Date(c.created_at).getTime())
+    for (const i of icebreakers || []) if (i.user_id === uid && i.created_at) allDates.push(new Date(i.created_at).getTime())
+    for (const s of strategies || []) if (s.user_id === uid && s.created_at) allDates.push(new Date(s.created_at).getTime())
+    for (const n of news || []) if (n.requested_by === uid && n.created_at) allDates.push(new Date(n.created_at).getTime())
+    for (const im of implementations || []) if (im.requested_by === uid && im.created_at) allDates.push(new Date(im.created_at).getTime())
+
+    const lastActivity = allDates.length > 0
+      ? new Date(Math.max(...allDates)).toLocaleDateString("es-AR")
+      : "-"
+
+    const ob = (onboarding || []).find((o) => o.user_id === uid)
 
     return {
-      user_id: authUser.id,
-      user_email: authUser.email || "Sin email",
-      created_at: authUser.created_at,
-      total_bookmarks: userBookmarks.length,
-      high_priority: userBookmarks.filter((b) => b.priority === "alta").length,
-      medium_priority: userBookmarks.filter((b) => b.priority === "media").length,
-      low_priority: userBookmarks.filter((b) => b.priority === "baja").length,
-      no_priority: userBookmarks.filter((b) => !b.priority || !["alta", "media", "baja"].includes(b.priority)).length,
+      email,
+      isAdmin,
+      bookmarks: userBookmarks.length,
+      contacts: userContacts,
+      news: userNews,
+      implementations: userImpl,
+      strategies: userStrategies,
+      icebreakers: userIcebreakers,
+      briefs: userBriefs,
+      documents: userDocs,
+      userId: uid,
+      createdAt: u.created_at ? new Date(u.created_at).toLocaleDateString("es-AR") : "-",
+      lastActivity,
+      onboardingStatus: ob?.status || "sin registro",
+      onboardingProgress: ob?.progress_percentage || 0,
     }
   })
 
-  // Calcular totales
-  const totalUsers = userStats.length
-  const usersWithBookmarks = userStats.filter((u) => u.total_bookmarks > 0).length
-  const totalBookmarks = userStats.reduce((sum, u) => sum + u.total_bookmarks, 0)
-  const totalHighPriority = userStats.reduce((sum, u) => sum + u.high_priority, 0)
+  // Onboarding rows for pie chart (need isAdmin flag)
+  const onboardingRows = (onboarding || []).map((o) => ({
+    status: o.status,
+    userId: o.user_id,
+    isAdmin: adminUserIds.has(o.user_id),
+  }))
 
-  // Costo estimado: $0.50 por bookmark alta prioridad por mes (2 búsquedas quincenales)
-  const estimatedMonthlyCost = totalHighPriority * 0.5
+  // Weekly activity (last 8 weeks) - build for ALL and for NON-ADMIN
+  const now = new Date()
+  const eightWeeksAgo = new Date(now)
+  eightWeeksAgo.setDate(eightWeeksAgo.getDate() - 56)
+
+  type WeekBucket = { bookmarks: number; contacts: number; icebreakers: number; briefs: number; documents: number }
+  const makeWeekBuckets = () => {
+    const m = new Map<string, WeekBucket>()
+    for (let i = 0; i < 8; i++) {
+      const d = new Date(now)
+      d.setDate(d.getDate() - i * 7)
+      m.set(getWeekStart(d), { bookmarks: 0, contacts: 0, icebreakers: 0, briefs: 0, documents: 0 })
+    }
+    return m
+  }
+
+  const weekBucketsAll = makeWeekBuckets()
+  const weekBucketsFiltered = makeWeekBuckets()
+
+  const bucketItemWithUser = (
+    items: Array<{ created_at: string; user_id?: string | null }> | null,
+    field: keyof WeekBucket,
+  ) => {
+    for (const item of items || []) {
+      const created = new Date(item.created_at)
+      if (created < eightWeeksAgo) continue
+      const key = getWeekStart(created)
+      const bucketAll = weekBucketsAll.get(key)
+      if (bucketAll) bucketAll[field]++
+      if (item.user_id && !adminUserIds.has(item.user_id)) {
+        const bucketF = weekBucketsFiltered.get(key)
+        if (bucketF) bucketF[field]++
+      }
+    }
+  }
+
+  bucketItemWithUser(bookmarks, "bookmarks")
+  bucketItemWithUser(contacts, "contacts")
+  bucketItemWithUser(icebreakers, "icebreakers")
+  bucketItemWithUser(
+    (briefs || []).map((b) => {
+      const bk = (bookmarks || []).find((bm) => bm.id === b.bookmark_id)
+      return { ...b, user_id: bk?.user_id ?? null }
+    }),
+    "briefs",
+  )
+  bucketItemWithUser(documents, "documents")
+
+  const toWeeklyArr = (buckets: Map<string, WeekBucket>): WeeklyActivityData[] =>
+    Array.from(buckets.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([weekStart, counts]) => ({
+        week: getWeekLabel(new Date(weekStart)),
+        ...counts,
+      }))
+
+  const weeklyDataAll = toWeeklyArr(weekBucketsAll)
+  const weeklyDataFiltered = toWeeklyArr(weekBucketsFiltered)
 
   return (
-    <div className="space-y-8">
-      <div>
-        <h1 className="text-3xl font-bold">Uso por Usuario</h1>
-        <p className="text-muted-foreground mt-2">
-          Métricas de bookmarks y prioridades para estimar costos de búsqueda AI
-        </p>
-      </div>
-
-      {/* Summary Cards */}
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Usuarios Totales</CardTitle>
-            <Users className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{totalUsers}</div>
-            <p className="text-xs text-muted-foreground">{usersWithBookmarks} con bookmarks</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Bookmarks</CardTitle>
-            <Bookmark className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{totalBookmarks}</div>
-            <p className="text-xs text-muted-foreground">en toda la plataforma</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Alta Prioridad</CardTitle>
-            <TrendingUp className="h-4 w-4 text-red-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-red-600">{totalHighPriority}</div>
-            <p className="text-xs text-muted-foreground">con cron de noticias activo</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Costo Est. Mensual</CardTitle>
-            <DollarSign className="h-4 w-4 text-green-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-600">${estimatedMonthlyCost.toFixed(2)}</div>
-            <p className="text-xs text-muted-foreground">Perplexity (alta prioridad)</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Tabla de usuarios */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Detalle por Usuario</CardTitle>
-          <CardDescription>Distribución de bookmarks y prioridades por cada usuario</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Usuario</TableHead>
-                <TableHead>Registro</TableHead>
-                <TableHead className="text-center">Total</TableHead>
-                <TableHead className="text-center">Alta</TableHead>
-                <TableHead className="text-center">Media</TableHead>
-                <TableHead className="text-center">Baja</TableHead>
-                <TableHead className="text-center">Sin Prioridad</TableHead>
-                <TableHead className="text-right">Costo Est.</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {userStats.map((user) => (
-                <TableRow key={user.user_id}>
-                  <TableCell>
-                    <div>
-                      <p className="font-medium">{user.user_email}</p>
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {user.created_at ? new Date(user.created_at).toLocaleDateString("es-AR") : "-"}
-                  </TableCell>
-                  <TableCell className="text-center font-medium">{user.total_bookmarks}</TableCell>
-                  <TableCell className="text-center">
-                    {user.high_priority > 0 ? (
-                      <Badge variant="destructive">{user.high_priority}</Badge>
-                    ) : (
-                      <span className="text-muted-foreground">0</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-center">
-                    {user.medium_priority > 0 ? (
-                      <Badge variant="secondary">{user.medium_priority}</Badge>
-                    ) : (
-                      <span className="text-muted-foreground">0</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-center">
-                    {user.low_priority > 0 ? (
-                      <Badge variant="outline">{user.low_priority}</Badge>
-                    ) : (
-                      <span className="text-muted-foreground">0</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-center text-muted-foreground">{user.no_priority}</TableCell>
-                  <TableCell className="text-right font-medium">${(user.high_priority * 0.5).toFixed(2)}</TableCell>
-                </TableRow>
-              ))}
-              {userStats.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
-                    No hay usuarios registrados
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-
-      {/* Nota sobre costos */}
-      <Card className="bg-blue-50 dark:bg-blue-950 border-blue-200 dark:border-blue-800">
-        <CardContent className="pt-6">
-          <h4 className="font-medium text-blue-900 dark:text-blue-100">Cálculo de costos</h4>
-          <p className="text-sm text-blue-700 dark:text-blue-300 mt-1">
-            El costo estimado se basa en ~$0.50/bookmark/mes para bookmarks de alta prioridad (2 búsquedas Perplexity
-            quincenales). Los bookmarks de prioridad media y baja solo generan costos cuando el usuario hace búsquedas
-            manuales.
-          </p>
-        </CardContent>
-      </Card>
-    </div>
+    <UsageDashboardClient
+      userRows={userRows}
+      onboardingRows={onboardingRows}
+      weeklyDataAll={weeklyDataAll}
+      weeklyDataFiltered={weeklyDataFiltered}
+    />
   )
 }

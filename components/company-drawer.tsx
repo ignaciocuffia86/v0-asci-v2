@@ -399,7 +399,7 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
 
   return (
     <Sheet open={isOpen} onOpenChange={onClose}>
-      <SheetContent className="w-full sm:max-w-3xl overflow-y-auto bg-white dark:bg-slate-900 p-0 flex flex-col h-full">
+      <SheetContent className="w-full sm:max-w-3xl overflow-y-auto bg-white dark:bg-slate-900 p-0 flex flex-col h-full" data-onboarding="company-drawer">
         {isLoading && drawerData && (
           <div className="absolute top-4 right-14 z-10">
             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -515,7 +515,7 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
                         </Button>
                       </>
                     ) : (
-                      <Button variant="outline" size="sm" onClick={handleBookmark}>
+                      <Button variant="outline" size="sm" onClick={handleBookmark} data-onboarding="bookmark-button">
                         <Bookmark className="h-4 w-4 mr-2" />
                         Guardar
                       </Button>

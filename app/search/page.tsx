@@ -11,26 +11,26 @@ export default function SearchPage() {
     <div className="flex h-screen bg-background">
       <div className="flex-1 p-8 overflow-y-auto">
         <div className="max-w-5xl mx-auto space-y-8">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">Búsqueda de Leads</h1>
+          <div data-onboarding="search-header">
+            <h1 className="text-3xl font-bold tracking-tight">Busqueda de Leads</h1>
             <p className="text-muted-foreground mt-2">
-              Explora el mercado utilizando tres dimensiones de búsqueda inteligente.
+              Explora el mercado utilizando tres dimensiones de busqueda inteligente.
             </p>
           </div>
 
           <Tabs defaultValue="process" className="w-full">
             <TabsList className="grid w-full grid-cols-3 h-12 mb-8">
-              <TabsTrigger value="process" className="flex items-center gap-2 text-base">
+              <TabsTrigger value="process" className="flex items-center gap-2 text-base" data-onboarding="search-tab-proceso">
                 <Workflow className="h-4 w-4" />
                 Por Proceso
               </TabsTrigger>
-              <TabsTrigger value="technology" className="flex items-center gap-2 text-base">
+              <TabsTrigger value="technology" className="flex items-center gap-2 text-base" data-onboarding="search-tab-tecnologia">
                 <Cpu className="h-4 w-4" />
-                Por Tecnología
+                Por Tecnologia
               </TabsTrigger>
-              <TabsTrigger value="company" className="flex items-center gap-2 text-base">
+              <TabsTrigger value="company" className="flex items-center gap-2 text-base" data-onboarding="search-tab-company">
                 <Building2 className="h-4 w-4" />
-                Por Compañía
+                Por Compania
               </TabsTrigger>
             </TabsList>
 
