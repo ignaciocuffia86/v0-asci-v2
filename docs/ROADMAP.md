@@ -496,62 +496,188 @@ CREATE INDEX idx_sync_logs_status ON integration_sync_logs(status) WHERE status 
 
 ---
 
-## 8. Notificaciones por Email
+## 8. Notificaciones por Email - Digest Semanal
 
-**Objetivo**: Enviar alertas automaticas por email a los usuarios cuando sus cuentas bookmarkeadas reciban actividad nueva: busquedas laborales cargadas, noticias, implementaciones o nuevos contactos encontrados. Convertir a ASCI en una herramienta que trabaja por el vendedor incluso cuando no esta conectado.
+**Objetivo**: Enviar un resumen semanal por email a cada usuario con todas las novedades que ocurrieron en sus cuentas bookmarkeadas: noticias recientes, implementaciones descubiertas, busquedas laborales nuevas y senales detectadas en contactos. ASCI trabaja para el vendedor incluso cuando no esta conectado.
 
 ### Problema que Resuelve
-Hoy el vendedor tiene que entrar a ASCI, navegar a cada bookmark y revisar manualmente si hay novedades. Esto genera que muchos usuarios no vuelvan con frecuencia y pierdan senales de timing criticas. Las notificaciones por email resuelven esto: el vendedor recibe un resumen de novedades directamente en su casilla, puede hacer clic para ir directo a la cuenta, y ASCI se mantiene presente en su workflow diario sin esfuerzo.
+Hoy el vendedor tiene que entrar a ASCI, navegar a cada bookmark y revisar manualmente si hay novedades. Esto genera que muchos usuarios no vuelvan con frecuencia y pierdan senales de timing criticas. Un digest semanal resuelve esto sin saturar la casilla: un unico email con todo lo que paso en sus cuentas durante la semana, con links directos al workspace de cada cuenta.
 
-### Eventos que Disparan Notificaciones
+### Concepto Clave: Digest Semanal, No Reactivo
 
-| Evento | Tabla fuente | Condicion | Contenido del email |
-|--------|-------------|-----------|---------------------|
-| Nuevas busquedas laborales | `company_jobs` | job.company_id coincide con un bookmark del usuario | Titulo del puesto, ubicacion, link al workspace |
-| Noticias nuevas | `company_news` | news.company_id coincide con un bookmark del usuario | Titulo de la noticia, resumen corto, fecha |
-| Implementaciones nuevas | `company_implementations` | impl.company_id coincide con un bookmark del usuario | Titulo, descripcion corta, tecnologias |
-| Nuevos contactos cargados | `user_company_contacts` | contact.user_id = usuario Y fue creado por Apollo/sistema | Nombre, titulo, empresa |
+No se envian emails individuales por cada evento. El sistema **acumula** novedades durante la semana y envia **un unico email los lunes a las 8:00 AM Argentina** con el resumen completo. Esto:
+- Evita spam y mantiene alta la tasa de apertura
+- Es sostenible con el plan free de Resend (al ser semanal, el volumen es muy bajo)
+- El vendedor sabe que cada lunes tiene su "briefing semanal" de ASCI
 
-### Arquitectura de Envio
+### Triggers de Encolado
 
-#### Enfoque: Digest Diario (recomendado para MVP)
+Los datos llegan a ASCI por distintos caminos (un usuario busca noticias, el backend carga jobs, el ETL detecta senales). Los triggers detectan esa actividad nueva y la encolan para **todos los usuarios que tengan esa empresa en bookmarks**, de forma transparente.
 
-En lugar de enviar un email por cada evento individual (que saturaría la casilla del usuario), ASCI agrupa todas las novedades del dia en un unico **email digest**.
+#### Trigger 1: Noticias Nuevas (< 1 mes de antiguedad)
 
+**Cuando ocurre**: Un usuario (cualquiera) busca noticias de la empresa X. Se insertan noticias en `company_news`. Solo se encolan las que tengan `published_date` menor a 30 dias (son relevantes, no historicas).
+
+**A quienes notifica**: A todos los usuarios que tengan en bookmark la empresa X y que **no hayan sido notificados previamente** de esa misma noticia (deduplicacion por constraint UNIQUE).
+
+| Campo | Tabla | Detalle |
+|-------|-------|---------|
+| Fuente | `company_news` | Columnas: `id`, `company_id`, `title`, `summary`, `published_date`, `created_at` |
+| Condicion | - | `published_date > NOW() - INTERVAL '30 days'` |
+| Vinculo a usuarios | `bookmarks` | `bookmarks.company_id = company_news.company_id` |
+| Deduplicacion | `notification_queue` | UNIQUE constraint en `(user_id, event_source_id, event_type)` |
+| Dato para email | JSONB | `{ title, summary (200 chars), published_date, company_name }` |
+
+```sql
+CREATE OR REPLACE FUNCTION enqueue_news_notification()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  -- Solo noticias recientes (menos de 1 mes de antiguedad)
+  IF NEW.published_date IS NULL OR NEW.published_date < NOW() - INTERVAL '30 days' THEN
+    RETURN NEW;
+  END IF;
+
+  INSERT INTO notification_queue (user_id, bookmark_id, event_type, event_source_id, event_data)
+  SELECT
+    b.user_id,
+    b.id,
+    'new_news',
+    NEW.id,
+    jsonb_build_object(
+      'title', NEW.title,
+      'summary', left(COALESCE(NEW.summary, ''), 200),
+      'company_name', (SELECT name FROM companies WHERE id = NEW.company_id),
+      'published_date', NEW.published_date
+    )
+  FROM bookmarks b
+  WHERE b.company_id = NEW.company_id
+  ON CONFLICT (user_id, event_source_id, event_type) DO NOTHING;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_news_notification
+  AFTER INSERT ON company_news
+  FOR EACH ROW EXECUTE FUNCTION enqueue_news_notification();
 ```
-Flujo:
-1. Datos nuevos llegan a las tablas (via ETL/CRONs existentes)
-2. Se marcan como "pendientes de notificacion" en tabla intermedia
-3. CRON diario (pg_cron) a las 8:00 AM Argentina recoge pendientes
-4. Edge Function o API Route genera el digest por usuario
-5. Resend envia el email con template React Email
-6. Se marcan como "notificados"
+
+#### Trigger 2: Busquedas Laborales Nuevas (Job Postings)
+
+**Cuando ocurre**: El backend (via `dictionary_jobs` / ETL) carga nuevas posiciones abiertas en `job_postings` para la empresa X.
+
+**A quienes notifica**: A todos los usuarios que tengan en bookmark la empresa X.
+
+| Campo | Tabla | Detalle |
+|-------|-------|---------|
+| Fuente | `job_postings` | Columnas: `id`, `company_id`, `title`, `location`, `posting_url`, `posted_at`, `created_at` |
+| Vinculo a usuarios | `bookmarks` | `bookmarks.company_id = job_postings.company_id` |
+| Deduplicacion | `notification_queue` | UNIQUE constraint |
+| Dato para email | JSONB | `{ title, location, posting_url, company_name }` |
+
+```sql
+CREATE OR REPLACE FUNCTION enqueue_job_notification()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO notification_queue (user_id, bookmark_id, event_type, event_source_id, event_data)
+  SELECT
+    b.user_id,
+    b.id,
+    'new_job',
+    NEW.id,
+    jsonb_build_object(
+      'title', NEW.title,
+      'location', COALESCE(NEW.location, 'No especificada'),
+      'posting_url', NEW.posting_url,
+      'company_name', (SELECT name FROM companies WHERE id = NEW.company_id)
+    )
+  FROM bookmarks b
+  WHERE b.company_id = NEW.company_id
+  ON CONFLICT (user_id, event_source_id, event_type) DO NOTHING;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_job_notification
+  AFTER INSERT ON job_postings
+  FOR EACH ROW EXECUTE FUNCTION enqueue_job_notification();
 ```
 
-#### Por que Digest y no Real-time?
-- **Resend Free**: 100 emails/dia. Con 20 usuarios y multiples eventos, los emails individuales agotarian el cupo.
-- **UX**: Un email diario con 5 novedades > 5 emails separados. Menor spam, mayor open rate.
-- **Tecnico**: Mas simple de implementar, mas facil de debuggear.
+#### Trigger 3: Senales Nuevas en Contactos
 
-### Proveedor de Email: Resend + React Email
+**Cuando ocurre**: El backend carga contactos y se detectan senales en la tabla `signals`. Las senales indican que un contacto de la empresa X matchea con keywords del diccionario (ej: usa Kubernetes, experiencia con Salesforce, etc.).
 
-| Caracteristica | Detalle |
-|---------------|---------|
-| **Proveedor** | [Resend](https://resend.com) |
-| **Plan Free** | 100 emails/dia, 3,000/mes |
-| **Plan Pro** | $20/mes, 50,000 emails/mes |
-| **Templates** | React Email (JSX/TSX) |
-| **Integracion** | SDK oficial para Next.js, Vercel Functions compatible |
-| **Dominio** | Requiere verificar dominio (asci.bigua.lat) con DNS TXT/CNAME |
+**A quienes notifica**: A todos los usuarios que tengan en bookmark la empresa X. La notificacion incluye el tipo de senal y el keyword que matcheo.
 
-#### Configuracion de Dominio
-Para que los emails lleguen desde `notificaciones@asci.bigua.lat` (en vez de `onboarding@resend.dev`), se necesita:
-1. Agregar dominio en Resend Dashboard
-2. Configurar registros DNS:
-   - `TXT` para SPF
-   - `CNAME` para DKIM (3 registros)
-   - `TXT` para verificacion de dominio
-3. Verificar en Resend (~5 min de propagacion)
+| Campo | Tabla | Detalle |
+|-------|-------|---------|
+| Fuente | `signals` | Columnas: `id`, `company_id`, `signal_type`, `keyword_matched`, `snippet`, `contact_id`, `created_at` |
+| Vinculo a usuarios | `bookmarks` | `bookmarks.company_id = signals.company_id` |
+| Deduplicacion | `notification_queue` | UNIQUE constraint |
+| Dato para email | JSONB | `{ signal_type, keyword_matched, snippet (150 chars), company_name }` |
+
+```sql
+CREATE OR REPLACE FUNCTION enqueue_signal_notification()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO notification_queue (user_id, bookmark_id, event_type, event_source_id, event_data)
+  SELECT
+    b.user_id,
+    b.id,
+    'new_signal',
+    NEW.id,
+    jsonb_build_object(
+      'signal_type', NEW.signal_type,
+      'keyword_matched', NEW.keyword_matched,
+      'snippet', left(COALESCE(NEW.snippet, ''), 150),
+      'company_name', (SELECT name FROM companies WHERE id = NEW.company_id)
+    )
+  FROM bookmarks b
+  WHERE b.company_id = NEW.company_id
+  ON CONFLICT (user_id, event_source_id, event_type) DO NOTHING;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_signal_notification
+  AFTER INSERT ON signals
+  FOR EACH ROW EXECUTE FUNCTION enqueue_signal_notification();
+```
+
+#### Trigger 4: Implementaciones Nuevas
+
+**Cuando ocurre**: Un usuario busca implementaciones de la empresa X, o el backend las detecta. Se insertan en `company_implementations`.
+
+**A quienes notifica**: A todos los usuarios que tengan en bookmark la empresa X.
+
+```sql
+CREATE OR REPLACE FUNCTION enqueue_implementation_notification()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO notification_queue (user_id, bookmark_id, event_type, event_source_id, event_data)
+  SELECT
+    b.user_id,
+    b.id,
+    'new_implementation',
+    NEW.id,
+    jsonb_build_object(
+      'title', NEW.title,
+      'company_name', (SELECT name FROM companies WHERE id = NEW.company_id)
+    )
+  FROM bookmarks b
+  WHERE b.company_id = NEW.company_id
+  ON CONFLICT (user_id, event_source_id, event_type) DO NOTHING;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_implementation_notification
+  AFTER INSERT ON company_implementations
+  FOR EACH ROW EXECUTE FUNCTION enqueue_implementation_notification();
+```
 
 ### Modelo de Datos
 
@@ -561,79 +687,73 @@ CREATE TABLE notification_queue (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   bookmark_id UUID NOT NULL REFERENCES bookmarks(id) ON DELETE CASCADE,
-  event_type TEXT NOT NULL,                    -- 'new_job' | 'new_news' | 'new_implementation' | 'new_contact'
-  event_source_id UUID NOT NULL,               -- ID del job/news/impl/contact que genero el evento
-  event_data JSONB NOT NULL DEFAULT '{}',      -- Datos relevantes para el email
-  -- Ejemplo new_job: {"title": "Senior DevOps", "location": "Buenos Aires", "company_name": "Acme"}
-  -- Ejemplo new_news: {"title": "Acme adquiere startup de IA", "summary": "...", "date": "2026-02-25"}
+  event_type TEXT NOT NULL,                    -- 'new_news' | 'new_job' | 'new_signal' | 'new_implementation'
+  event_source_id UUID NOT NULL,               -- ID del registro fuente que genero el evento
+  event_data JSONB NOT NULL DEFAULT '{}',      -- Datos pre-computados para el template del email
   status TEXT NOT NULL DEFAULT 'pending',       -- 'pending' | 'sent' | 'skipped'
   created_at TIMESTAMPTZ DEFAULT now(),
-  sent_at TIMESTAMPTZ
+  sent_at TIMESTAMPTZ,
+
+  -- Deduplicacion: un usuario no puede tener dos notificaciones del mismo evento
+  UNIQUE(user_id, event_source_id, event_type)
 );
 
-CREATE INDEX idx_notif_queue_pending ON notification_queue(user_id, status)
+CREATE INDEX idx_notif_queue_pending ON notification_queue(status, created_at)
   WHERE status = 'pending';
+CREATE INDEX idx_notif_queue_user ON notification_queue(user_id, status);
 
 -- Preferencias de notificacion por usuario
 CREATE TABLE notification_preferences (
   user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   email_enabled BOOLEAN NOT NULL DEFAULT true,
-  digest_frequency TEXT NOT NULL DEFAULT 'daily',  -- 'daily' | 'weekly' | 'never'
   notify_new_jobs BOOLEAN NOT NULL DEFAULT true,
   notify_new_news BOOLEAN NOT NULL DEFAULT true,
   notify_new_implementations BOOLEAN NOT NULL DEFAULT true,
-  notify_new_contacts BOOLEAN NOT NULL DEFAULT true,
-  quiet_hours_start TIME,                          -- Ej: '22:00' (no enviar de noche)
-  quiet_hours_end TIME,                            -- Ej: '07:00'
+  notify_new_signals BOOLEAN NOT NULL DEFAULT true,
   timezone TEXT NOT NULL DEFAULT 'America/Argentina/Buenos_Aires',
   last_digest_sent_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- RLS
+ALTER TABLE notification_queue ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users see own notifications" ON notification_queue
+  FOR SELECT USING (auth.uid() = user_id);
+
+ALTER TABLE notification_preferences ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users manage own preferences" ON notification_preferences
+  FOR ALL USING (auth.uid() = user_id);
 ```
 
-### Trigger de Encolado
+### Proveedor de Email: Resend + React Email
 
-Cada vez que se inserta un registro nuevo en las tablas fuente, un trigger detecta si algun usuario tiene esa empresa bookmarkeada y agrega una entrada a `notification_queue`:
+| Caracteristica | Detalle |
+|---------------|---------|
+| **Proveedor** | [Resend](https://resend.com) |
+| **Plan Free** | 100 emails/dia, 3,000/mes |
+| **Plan Pro** | $20/mes, 50,000 emails/mes |
+| **Templates** | React Email (JSX/TSX, renderizado server-side) |
+| **Integracion** | SDK oficial `resend` para Next.js |
+| **Dominio** | Requiere verificar `asci.bigua.lat` con DNS TXT/CNAME |
 
-```sql
--- Trigger para company_news
-CREATE OR REPLACE FUNCTION enqueue_news_notification()
-RETURNS TRIGGER LANGUAGE plpgsql AS $$
-BEGIN
-  INSERT INTO notification_queue (user_id, bookmark_id, event_type, event_source_id, event_data)
-  SELECT
-    b.user_id,
-    b.id,
-    'new_news',
-    NEW.id,
-    jsonb_build_object(
-      'title', NEW.title,
-      'summary', left(NEW.summary, 200),
-      'company_name', (SELECT name FROM companies WHERE id = NEW.company_id),
-      'date', NEW.published_date
-    )
-  FROM bookmarks b
-  WHERE b.company_id = NEW.company_id;
+#### Configuracion de Dominio
+Para enviar desde `notificaciones@asci.bigua.lat`:
+1. Agregar dominio en Resend Dashboard
+2. Configurar registros DNS: `TXT` (SPF), `CNAME` x3 (DKIM), `TXT` (verificacion)
+3. Verificar en Resend (~5 min de propagacion)
 
-  RETURN NEW;
-END;
-$$;
+### CRON Semanal (pg_cron + pg_net)
 
-CREATE TRIGGER trg_news_notification
-  AFTER INSERT ON company_news
-  FOR EACH ROW EXECUTE FUNCTION enqueue_news_notification();
-
--- Triggers similares para company_implementations, company_jobs, user_company_contacts
-```
-
-### CRON de Envio (pg_cron + Edge Function)
+El digest se envia **una vez por semana los lunes a las 11:00 UTC (8:00 AM Argentina)**:
 
 ```sql
--- Programar digest diario a las 11:00 UTC (8:00 AM Argentina)
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+CREATE EXTENSION IF NOT EXISTS pg_net;
+
 SELECT cron.schedule(
-  'daily-email-digest',
-  '0 11 * * *',
+  'weekly-email-digest',
+  '0 11 * * 1',           -- minuto 0, hora 11 UTC, cualquier dia del mes, cualquier mes, solo LUNES
   $$
   SELECT net.http_post(
     url := 'https://asci.bigua.lat/api/notifications/send-digest',
@@ -650,133 +770,173 @@ SELECT cron.schedule(
 ### API Route: `/api/notifications/send-digest`
 
 ```
-Logica:
-1. Obtener usuarios con notificaciones pendientes (status = 'pending')
-2. Filtrar por preferencias (email_enabled = true, frecuencia correcta)
-3. Agrupar eventos por usuario
-4. Para cada usuario:
-   a. Agrupar eventos por bookmark/empresa
-   b. Renderizar template React Email con todas las novedades
-   c. Enviar via Resend API
-   d. Marcar eventos como 'sent'
-5. Log de envios exitosos/fallidos
+Logica del endpoint (protegido con service_role_key):
+
+1. Obtener todos los usuarios con notificaciones pendientes:
+   SELECT DISTINCT user_id FROM notification_queue WHERE status = 'pending'
+
+2. Para cada usuario:
+   a. Verificar preferencias: email_enabled = true
+   b. Obtener eventos pendientes:
+      SELECT nq.*, b.company_id
+      FROM notification_queue nq
+      JOIN bookmarks b ON b.id = nq.bookmark_id
+      WHERE nq.user_id = :uid AND nq.status = 'pending'
+      ORDER BY nq.bookmark_id, nq.event_type, nq.created_at
+
+   c. Filtrar por preferencias de tipo (notify_new_jobs, notify_new_news, etc.)
+
+   d. Agrupar por empresa:
+      - "Acme Corp": 3 noticias, 2 posiciones, 1 senal
+      - "Globant": 1 implementacion, 5 senales
+
+   e. Si no hay novedades despues de filtrar: skip, no enviar email vacio
+
+   f. Renderizar template React Email
+
+   g. Enviar via Resend:
+      await resend.emails.send({
+        from: 'ASCI <notificaciones@asci.bigua.lat>',
+        to: user.email,
+        subject: `${total} novedades en tus cuentas - ASCI Semanal`,
+        react: <WeeklyDigestEmail novedades={grouped} />
+      })
+
+   h. Marcar eventos como 'sent':
+      UPDATE notification_queue SET status = 'sent', sent_at = NOW()
+      WHERE user_id = :uid AND status = 'pending'
+
+   i. Actualizar last_digest_sent_at en preferences
+
+3. Loggear: cantidad de usuarios notificados, eventos enviados, errores
 ```
 
-### Template del Email (React Email)
-
-El email digest tiene esta estructura:
+### Template del Email
 
 ```
-De: ASCI Notificaciones <notificaciones@asci.bigua.lat>
-Asunto: "5 novedades en tus cuentas - ASCI Digest"
+De: ASCI <notificaciones@asci.bigua.lat>
+Asunto: "12 novedades en tus cuentas esta semana - ASCI"
 
 ---
-Logo ASCI
+[Logo ASCI]
 
 Hola {nombre},
 
-Tenes novedades en {N} cuentas que estas siguiendo:
+Esta semana hubo actividad en {N} de tus cuentas:
 
-[Acme Corp] - 3 novedades
-  - Nuevo puesto: "Senior DevOps Engineer" en Buenos Aires
-  - Noticia: "Acme cierra ronda Serie B de USD 20M"
-  - Implementacion: "Migracion a AWS con Kubernetes"
-  [Ver cuenta ->] (link a /bookmarks/{id})
+--------------------------------------------------
+ACME CORP                              5 novedades
+--------------------------------------------------
+  Noticias:
+    - "Acme cierra ronda Serie B de USD 20M" (hace 3 dias)
+    - "Acme expande operaciones a Chile" (hace 5 dias)
 
-[Globant] - 2 novedades
-  - Noticia: "Globant abre oficina en Mexico"
-  - Nuevo contacto: Maria Lopez, VP Engineering
-  [Ver cuenta ->] (link a /bookmarks/{id})
+  Posiciones abiertas:
+    - Senior DevOps Engineer - Buenos Aires
+    - Cloud Architect - Remote LATAM
+
+  Senales detectadas:
+    - Senal "Kubernetes" en 2 contactos
+
+  [Ver cuenta ->] https://asci.bigua.lat/bookmarks/{id}
+
+--------------------------------------------------
+GLOBANT                                3 novedades
+--------------------------------------------------
+  Implementacion detectada:
+    - "Migracion a AWS con Kubernetes"
+
+  Senales detectadas:
+    - Senal "Salesforce" en 1 contacto
+    - Senal "AWS" en 3 contactos
+
+  [Ver cuenta ->] https://asci.bigua.lat/bookmarks/{id}
 
 ---
-Gestionar preferencias (link a /settings/notifications)
-Dejar de recibir estos emails (unsubscribe link)
+Gestionar preferencias: https://asci.bigua.lat/settings/notifications
+Dejar de recibir: {unsubscribe_link}
 ```
 
 ### Pantalla de Preferencias (`/settings/notifications`)
 
-- Toggle general: Activar/desactivar emails
-- Frecuencia: Diario / Semanal / Nunca (radio buttons)
-- Tipos de eventos: Checkboxes para cada tipo (jobs, news, impl, contacts)
-- Zona horaria: Selector (default: Buenos Aires)
-- Preview: "Recibiras un email de resumen {frecuencia} a las 8:00 AM {timezone} con las novedades de tus {N} cuentas bookmarkeadas."
+Dentro del menu de usuario (junto a Perfil y Documentos):
 
-### Pantalla de Historial de Notificaciones (in-app)
+- **Toggle general**: Activar/desactivar digest semanal
+- **Tipos de eventos** (checkboxes individuales):
+  - Noticias nuevas
+  - Busquedas laborales abiertas
+  - Implementaciones detectadas
+  - Senales en contactos
+- **Preview**: "Cada lunes a las 8:00 AM recibiras un resumen con las novedades de tus {N} cuentas bookmarkeadas."
 
-Ademas del email, mostrar un badge y panel de notificaciones dentro de la app:
-- Icono de campana en el header con badge de notificaciones no leidas
-- Panel desplegable con las ultimas novedades agrupadas por cuenta
-- Cada item linkeado al workspace correspondiente
-- Boton "Marcar todo como leido"
+### Capacidad y Costos
 
-### Metricas y Monitoreo
+| Escenario | Emails/semana | Emails/mes | Plan necesario |
+|-----------|--------------|-----------|----------------|
+| 20 usuarios | 20 | 80 | Free (limite: 3,000/mes) |
+| 50 usuarios | 50 | 200 | Free |
+| 200 usuarios | 200 | 800 | Free |
+| 500 usuarios | 500 | 2,000 | Free |
+| 1,000 usuarios | 1,000 | 4,000 | Pro ($20/mes) |
 
-| Metrica | Como se mide |
-|---------|-------------|
-| Emails enviados/dia | Conteo en `notification_queue` WHERE status='sent' |
-| Open rate | Resend Analytics (tracking pixel automatico) |
-| Click rate | Resend Analytics (link tracking) |
-| Unsubscribes | Conteo en `notification_preferences` WHERE email_enabled=false |
-| Eventos por usuario/dia promedio | AVG de eventos agrupados por user_id |
-| Tiempo de entrega | Diferencia entre created_at y sent_at |
+Al ser semanal (no diario), el plan free de Resend cubre ampliamente hasta 500+ usuarios.
 
 ### Seguridad y Compliance
 
-- **Unsubscribe**: Cada email incluye link de unsubscribe funcional (requerido por CAN-SPAM/GDPR)
-- **Rate limiting**: Maximo 1 digest por usuario por dia (el CRON controla esto)
-- **Datos sensibles**: El email solo incluye titulos y resumenes cortos, nunca datos completos
-- **Resend API key**: Almacenada como variable de entorno `RESEND_API_KEY`, nunca expuesta al client
-- **RLS**: `notification_queue` y `notification_preferences` protegidas por user_id
+- **Unsubscribe**: Cada email incluye link de unsubscribe funcional (requerido por CAN-SPAM)
+- **Rate limiting**: 1 digest por usuario por semana (controlado por CRON + last_digest_sent_at)
+- **Datos en email**: Solo titulos y resumenes cortos, nunca datos completos ni PII de contactos
+- **Resend API key**: Variable de entorno `RESEND_API_KEY`, nunca expuesta al client
+- **Endpoint protegido**: `/api/notifications/send-digest` valida `service_role_key` en el header Authorization
+- **RLS**: Ambas tablas protegidas, cada usuario solo ve/edita sus propios datos
 
 ### Dependencias
 
-- **Resend**: Cuenta creada + dominio verificado + API key configurada
-- **pg_cron**: Extension habilitada en Supabase (ya disponible en el plan actual)
-- **pg_net**: Extension habilitada (para HTTP calls desde pg_cron)
-- **Tablas existentes**: `bookmarks`, `company_news`, `company_implementations`, `company_jobs`, `user_company_contacts` (todas existen)
-
-### Capacidad del Plan Free de Resend
-
-| Escenario | Emails/dia | Cubre Free? |
-|-----------|-----------|-------------|
-| 10 usuarios, digest diario | 10 | Si (limite: 100) |
-| 30 usuarios, digest diario | 30 | Si |
-| 50 usuarios, digest diario | 50 | Si |
-| 100 usuarios, digest diario | 100 | Limite justo, migrar a Pro |
-
-Con el volumen actual de ASCI, el plan free de Resend es mas que suficiente.
+| Dependencia | Estado | Notas |
+|-------------|--------|-------|
+| Resend (cuenta + dominio) | Por configurar | Requiere DNS de `asci.bigua.lat` |
+| pg_cron | Disponible en Supabase | Extension a habilitar |
+| pg_net | Disponible en Supabase | Extension a habilitar |
+| `bookmarks` | Existe | Join via `company_id` |
+| `company_news` | Existe | Trigger AFTER INSERT, filtra por `published_date` |
+| `company_implementations` | Existe | Trigger AFTER INSERT |
+| `job_postings` | Existe | Trigger AFTER INSERT |
+| `signals` | Existe | Trigger AFTER INSERT, incluye `signal_type` y `keyword_matched` |
 
 ### Fases de Implementacion
 
-**Fase 1 - Infraestructura de cola y triggers (2-3 dias)**
+**Fase 1 - Modelo de datos y triggers**
 - Crear tablas `notification_queue` y `notification_preferences`
-- Implementar triggers en `company_news`, `company_implementations`, `company_jobs`, `user_company_contacts`
+- Implementar los 4 triggers (news con filtro de 30 dias, jobs, signals, implementations)
 - RLS policies para ambas tablas
 - Seed de preferencias default para usuarios existentes
+- Test: insertar datos en las tablas fuente y verificar que se encolan correctamente con deduplicacion
 
-**Fase 2 - Envio de emails con Resend (2-3 dias)**
+**Fase 2 - Envio de emails con Resend**
 - Configurar cuenta Resend + verificar dominio `asci.bigua.lat`
-- Crear template React Email para el digest
-- Implementar API Route `/api/notifications/send-digest`
-- Configurar CRON en Supabase (pg_cron + pg_net)
-- Testing con envios reales
+- Instalar `resend` + `@react-email/components`
+- Crear template React Email para el digest semanal
+- Implementar API Route `/api/notifications/send-digest` con logica de agrupacion
+- Habilitar pg_cron + pg_net y programar CRON semanal (lunes 11:00 UTC)
+- Test: envio real a cuentas internas
 
-**Fase 3 - UI de preferencias y notificaciones in-app (2 dias)**
-- Pantalla `/settings/notifications` con preferencias
-- Icono de campana con badge en header
-- Panel de notificaciones desplegable
-- Integracion con onboarding (paso opcional)
+**Fase 3 - UI de preferencias**
+- Pantalla `/settings/notifications` con toggles por tipo de evento
+- Link desde el email al settings
+- Unsubscribe link funcional (one-click disable)
+- Integracion con el menu de usuario existente
 
-**Fase 4 - Monitoreo y mejoras (1 dia)**
-- Dashboard en admin: emails enviados, open rate, errores
-- Agregar frecuencia semanal (digest los lunes)
-- Agregar al llms.txt
+**Fase 4 - Monitoreo**
+- Seccion en dashboard admin: emails enviados esta semana, eventos encolados, errores
+- Resend Analytics: open rate, click rate
+- Alerta si el CRON falla (revisar pg_cron logs)
 
 ### Futuras Extensiones
-- **Alertas instantaneas**: Para eventos de alta prioridad (ej: noticia de una cuenta T1), enviar email inmediato ademas del digest
+- **Alertas instantaneas**: Para eventos de alta prioridad (ej: noticia de una cuenta T1), email inmediato ademas del digest
 - **Canales alternativos**: Slack webhook, WhatsApp Business API
 - **Email de bienvenida**: Al bookmarkear una cuenta, enviar resumen de senales existentes
-- **Digest inteligente**: IA que prioriza las novedades mas relevantes para el vendedor basandose en sus documentos
+- **Digest inteligente**: IA que prioriza las novedades mas relevantes basandose en los documentos del vendedor
+- **Frecuencia configurable**: Opcion de digest diario para power users
 
 ---
 
@@ -827,7 +987,7 @@ Con el volumen actual de ASCI, el plan free de Resend es mas que suficiente.
 
 ### Corto Plazo (Q1 2026)
 1. **Recomendaciones ASCI** - Diferenciador clave: hace que la plataforma sea proactiva
-2. **Notificaciones por Email** - Retention y engagement: mantiene a ASCI presente sin esfuerzo del usuario
+2. **Notificaciones por Email (Digest Semanal)** - Retention y engagement: mantiene a ASCI presente sin esfuerzo del usuario
 3. **Integracion HubSpot (Fase 1-2)** - Cierra el loop investigacion -> accion
 
 ### Mediano Plazo (Q2 2026)
