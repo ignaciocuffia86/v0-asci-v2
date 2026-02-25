@@ -24,8 +24,9 @@ Este documento consolida todas las features de ASCI, separando lo ya implementad
 |---|---------|--------|-----------|-----------|
 | 6 | Recomendaciones ASCI | Planificacion | Alta | [Ver plan](#6-recomendaciones-asci) |
 | 7 | Integracion con CRM (HubSpot) | Planificacion | Alta | [Ver plan](#7-integracion-con-crm-hubspot) |
-| 8 | Filtro por Industria en Busquedas | Planificacion | Media | [Ver plan](./FEATURE_INDUSTRY_FILTER_PLAN.md) |
-| 9 | FAQ Helper / Asistente de Ayuda | Planificacion | Media | [Ver plan](./FEATURE_FAQ_HELPER_PLAN.md) |
+| 8 | Notificaciones por Email | Planificacion | Alta | [Ver plan](#8-notificaciones-por-email) |
+| 9 | Filtro por Industria en Busquedas | Planificacion | Media | [Ver plan](./FEATURE_INDUSTRY_FILTER_PLAN.md) |
+| 10 | FAQ Helper / Asistente de Ayuda | Planificacion | Media | [Ver plan](./FEATURE_FAQ_HELPER_PLAN.md) |
 
 ---
 
@@ -495,7 +496,291 @@ CREATE INDEX idx_sync_logs_status ON integration_sync_logs(status) WHERE status 
 
 ---
 
-## 8. Filtro por Industria en Busquedas
+## 8. Notificaciones por Email
+
+**Objetivo**: Enviar alertas automaticas por email a los usuarios cuando sus cuentas bookmarkeadas reciban actividad nueva: busquedas laborales cargadas, noticias, implementaciones o nuevos contactos encontrados. Convertir a ASCI en una herramienta que trabaja por el vendedor incluso cuando no esta conectado.
+
+### Problema que Resuelve
+Hoy el vendedor tiene que entrar a ASCI, navegar a cada bookmark y revisar manualmente si hay novedades. Esto genera que muchos usuarios no vuelvan con frecuencia y pierdan senales de timing criticas. Las notificaciones por email resuelven esto: el vendedor recibe un resumen de novedades directamente en su casilla, puede hacer clic para ir directo a la cuenta, y ASCI se mantiene presente en su workflow diario sin esfuerzo.
+
+### Eventos que Disparan Notificaciones
+
+| Evento | Tabla fuente | Condicion | Contenido del email |
+|--------|-------------|-----------|---------------------|
+| Nuevas busquedas laborales | `company_jobs` | job.company_id coincide con un bookmark del usuario | Titulo del puesto, ubicacion, link al workspace |
+| Noticias nuevas | `company_news` | news.company_id coincide con un bookmark del usuario | Titulo de la noticia, resumen corto, fecha |
+| Implementaciones nuevas | `company_implementations` | impl.company_id coincide con un bookmark del usuario | Titulo, descripcion corta, tecnologias |
+| Nuevos contactos cargados | `user_company_contacts` | contact.user_id = usuario Y fue creado por Apollo/sistema | Nombre, titulo, empresa |
+
+### Arquitectura de Envio
+
+#### Enfoque: Digest Diario (recomendado para MVP)
+
+En lugar de enviar un email por cada evento individual (que saturaría la casilla del usuario), ASCI agrupa todas las novedades del dia en un unico **email digest**.
+
+```
+Flujo:
+1. Datos nuevos llegan a las tablas (via ETL/CRONs existentes)
+2. Se marcan como "pendientes de notificacion" en tabla intermedia
+3. CRON diario (pg_cron) a las 8:00 AM Argentina recoge pendientes
+4. Edge Function o API Route genera el digest por usuario
+5. Resend envia el email con template React Email
+6. Se marcan como "notificados"
+```
+
+#### Por que Digest y no Real-time?
+- **Resend Free**: 100 emails/dia. Con 20 usuarios y multiples eventos, los emails individuales agotarian el cupo.
+- **UX**: Un email diario con 5 novedades > 5 emails separados. Menor spam, mayor open rate.
+- **Tecnico**: Mas simple de implementar, mas facil de debuggear.
+
+### Proveedor de Email: Resend + React Email
+
+| Caracteristica | Detalle |
+|---------------|---------|
+| **Proveedor** | [Resend](https://resend.com) |
+| **Plan Free** | 100 emails/dia, 3,000/mes |
+| **Plan Pro** | $20/mes, 50,000 emails/mes |
+| **Templates** | React Email (JSX/TSX) |
+| **Integracion** | SDK oficial para Next.js, Vercel Functions compatible |
+| **Dominio** | Requiere verificar dominio (asci.bigua.lat) con DNS TXT/CNAME |
+
+#### Configuracion de Dominio
+Para que los emails lleguen desde `notificaciones@asci.bigua.lat` (en vez de `onboarding@resend.dev`), se necesita:
+1. Agregar dominio en Resend Dashboard
+2. Configurar registros DNS:
+   - `TXT` para SPF
+   - `CNAME` para DKIM (3 registros)
+   - `TXT` para verificacion de dominio
+3. Verificar en Resend (~5 min de propagacion)
+
+### Modelo de Datos
+
+```sql
+-- Cola de notificaciones pendientes
+CREATE TABLE notification_queue (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  bookmark_id UUID NOT NULL REFERENCES bookmarks(id) ON DELETE CASCADE,
+  event_type TEXT NOT NULL,                    -- 'new_job' | 'new_news' | 'new_implementation' | 'new_contact'
+  event_source_id UUID NOT NULL,               -- ID del job/news/impl/contact que genero el evento
+  event_data JSONB NOT NULL DEFAULT '{}',      -- Datos relevantes para el email
+  -- Ejemplo new_job: {"title": "Senior DevOps", "location": "Buenos Aires", "company_name": "Acme"}
+  -- Ejemplo new_news: {"title": "Acme adquiere startup de IA", "summary": "...", "date": "2026-02-25"}
+  status TEXT NOT NULL DEFAULT 'pending',       -- 'pending' | 'sent' | 'skipped'
+  created_at TIMESTAMPTZ DEFAULT now(),
+  sent_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_notif_queue_pending ON notification_queue(user_id, status)
+  WHERE status = 'pending';
+
+-- Preferencias de notificacion por usuario
+CREATE TABLE notification_preferences (
+  user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  email_enabled BOOLEAN NOT NULL DEFAULT true,
+  digest_frequency TEXT NOT NULL DEFAULT 'daily',  -- 'daily' | 'weekly' | 'never'
+  notify_new_jobs BOOLEAN NOT NULL DEFAULT true,
+  notify_new_news BOOLEAN NOT NULL DEFAULT true,
+  notify_new_implementations BOOLEAN NOT NULL DEFAULT true,
+  notify_new_contacts BOOLEAN NOT NULL DEFAULT true,
+  quiet_hours_start TIME,                          -- Ej: '22:00' (no enviar de noche)
+  quiet_hours_end TIME,                            -- Ej: '07:00'
+  timezone TEXT NOT NULL DEFAULT 'America/Argentina/Buenos_Aires',
+  last_digest_sent_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+```
+
+### Trigger de Encolado
+
+Cada vez que se inserta un registro nuevo en las tablas fuente, un trigger detecta si algun usuario tiene esa empresa bookmarkeada y agrega una entrada a `notification_queue`:
+
+```sql
+-- Trigger para company_news
+CREATE OR REPLACE FUNCTION enqueue_news_notification()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO notification_queue (user_id, bookmark_id, event_type, event_source_id, event_data)
+  SELECT
+    b.user_id,
+    b.id,
+    'new_news',
+    NEW.id,
+    jsonb_build_object(
+      'title', NEW.title,
+      'summary', left(NEW.summary, 200),
+      'company_name', (SELECT name FROM companies WHERE id = NEW.company_id),
+      'date', NEW.published_date
+    )
+  FROM bookmarks b
+  WHERE b.company_id = NEW.company_id;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_news_notification
+  AFTER INSERT ON company_news
+  FOR EACH ROW EXECUTE FUNCTION enqueue_news_notification();
+
+-- Triggers similares para company_implementations, company_jobs, user_company_contacts
+```
+
+### CRON de Envio (pg_cron + Edge Function)
+
+```sql
+-- Programar digest diario a las 11:00 UTC (8:00 AM Argentina)
+SELECT cron.schedule(
+  'daily-email-digest',
+  '0 11 * * *',
+  $$
+  SELECT net.http_post(
+    url := 'https://asci.bigua.lat/api/notifications/send-digest',
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'Authorization', 'Bearer ' || current_setting('app.settings.service_role_key')
+    ),
+    body := '{}'::jsonb
+  );
+  $$
+);
+```
+
+### API Route: `/api/notifications/send-digest`
+
+```
+Logica:
+1. Obtener usuarios con notificaciones pendientes (status = 'pending')
+2. Filtrar por preferencias (email_enabled = true, frecuencia correcta)
+3. Agrupar eventos por usuario
+4. Para cada usuario:
+   a. Agrupar eventos por bookmark/empresa
+   b. Renderizar template React Email con todas las novedades
+   c. Enviar via Resend API
+   d. Marcar eventos como 'sent'
+5. Log de envios exitosos/fallidos
+```
+
+### Template del Email (React Email)
+
+El email digest tiene esta estructura:
+
+```
+De: ASCI Notificaciones <notificaciones@asci.bigua.lat>
+Asunto: "5 novedades en tus cuentas - ASCI Digest"
+
+---
+Logo ASCI
+
+Hola {nombre},
+
+Tenes novedades en {N} cuentas que estas siguiendo:
+
+[Acme Corp] - 3 novedades
+  - Nuevo puesto: "Senior DevOps Engineer" en Buenos Aires
+  - Noticia: "Acme cierra ronda Serie B de USD 20M"
+  - Implementacion: "Migracion a AWS con Kubernetes"
+  [Ver cuenta ->] (link a /bookmarks/{id})
+
+[Globant] - 2 novedades
+  - Noticia: "Globant abre oficina en Mexico"
+  - Nuevo contacto: Maria Lopez, VP Engineering
+  [Ver cuenta ->] (link a /bookmarks/{id})
+
+---
+Gestionar preferencias (link a /settings/notifications)
+Dejar de recibir estos emails (unsubscribe link)
+```
+
+### Pantalla de Preferencias (`/settings/notifications`)
+
+- Toggle general: Activar/desactivar emails
+- Frecuencia: Diario / Semanal / Nunca (radio buttons)
+- Tipos de eventos: Checkboxes para cada tipo (jobs, news, impl, contacts)
+- Zona horaria: Selector (default: Buenos Aires)
+- Preview: "Recibiras un email de resumen {frecuencia} a las 8:00 AM {timezone} con las novedades de tus {N} cuentas bookmarkeadas."
+
+### Pantalla de Historial de Notificaciones (in-app)
+
+Ademas del email, mostrar un badge y panel de notificaciones dentro de la app:
+- Icono de campana en el header con badge de notificaciones no leidas
+- Panel desplegable con las ultimas novedades agrupadas por cuenta
+- Cada item linkeado al workspace correspondiente
+- Boton "Marcar todo como leido"
+
+### Metricas y Monitoreo
+
+| Metrica | Como se mide |
+|---------|-------------|
+| Emails enviados/dia | Conteo en `notification_queue` WHERE status='sent' |
+| Open rate | Resend Analytics (tracking pixel automatico) |
+| Click rate | Resend Analytics (link tracking) |
+| Unsubscribes | Conteo en `notification_preferences` WHERE email_enabled=false |
+| Eventos por usuario/dia promedio | AVG de eventos agrupados por user_id |
+| Tiempo de entrega | Diferencia entre created_at y sent_at |
+
+### Seguridad y Compliance
+
+- **Unsubscribe**: Cada email incluye link de unsubscribe funcional (requerido por CAN-SPAM/GDPR)
+- **Rate limiting**: Maximo 1 digest por usuario por dia (el CRON controla esto)
+- **Datos sensibles**: El email solo incluye titulos y resumenes cortos, nunca datos completos
+- **Resend API key**: Almacenada como variable de entorno `RESEND_API_KEY`, nunca expuesta al client
+- **RLS**: `notification_queue` y `notification_preferences` protegidas por user_id
+
+### Dependencias
+
+- **Resend**: Cuenta creada + dominio verificado + API key configurada
+- **pg_cron**: Extension habilitada en Supabase (ya disponible en el plan actual)
+- **pg_net**: Extension habilitada (para HTTP calls desde pg_cron)
+- **Tablas existentes**: `bookmarks`, `company_news`, `company_implementations`, `company_jobs`, `user_company_contacts` (todas existen)
+
+### Capacidad del Plan Free de Resend
+
+| Escenario | Emails/dia | Cubre Free? |
+|-----------|-----------|-------------|
+| 10 usuarios, digest diario | 10 | Si (limite: 100) |
+| 30 usuarios, digest diario | 30 | Si |
+| 50 usuarios, digest diario | 50 | Si |
+| 100 usuarios, digest diario | 100 | Limite justo, migrar a Pro |
+
+Con el volumen actual de ASCI, el plan free de Resend es mas que suficiente.
+
+### Fases de Implementacion
+
+**Fase 1 - Infraestructura de cola y triggers (2-3 dias)**
+- Crear tablas `notification_queue` y `notification_preferences`
+- Implementar triggers en `company_news`, `company_implementations`, `company_jobs`, `user_company_contacts`
+- RLS policies para ambas tablas
+- Seed de preferencias default para usuarios existentes
+
+**Fase 2 - Envio de emails con Resend (2-3 dias)**
+- Configurar cuenta Resend + verificar dominio `asci.bigua.lat`
+- Crear template React Email para el digest
+- Implementar API Route `/api/notifications/send-digest`
+- Configurar CRON en Supabase (pg_cron + pg_net)
+- Testing con envios reales
+
+**Fase 3 - UI de preferencias y notificaciones in-app (2 dias)**
+- Pantalla `/settings/notifications` con preferencias
+- Icono de campana con badge en header
+- Panel de notificaciones desplegable
+- Integracion con onboarding (paso opcional)
+
+**Fase 4 - Monitoreo y mejoras (1 dia)**
+- Dashboard en admin: emails enviados, open rate, errores
+- Agregar frecuencia semanal (digest los lunes)
+- Agregar al llms.txt
+
+### Futuras Extensiones
+- **Alertas instantaneas**: Para eventos de alta prioridad (ej: noticia de una cuenta T1), enviar email inmediato ademas del digest
+- **Canales alternativos**: Slack webhook, WhatsApp Business API
+- **Email de bienvenida**: Al bookmarkear una cuenta, enviar resumen de senales existentes
+- **Digest inteligente**: IA que prioriza las novedades mas relevantes para el vendedor basandose en sus documentos
+
+---
+
+## 9. Filtro por Industria en Busquedas
 
 **Objetivo**: Permitir filtrar resultados de busqueda por industria normalizada (~25 categorias).
 
@@ -514,7 +799,7 @@ CREATE INDEX idx_sync_logs_status ON integration_sync_logs(status) WHERE status 
 
 ---
 
-## 9. FAQ Helper / Asistente de Ayuda Flotante
+## 10. FAQ Helper / Asistente de Ayuda Flotante
 
 **Objetivo**: Boton flotante con centro de ayuda contextual para resolver dudas frecuentes de usuarios, con busqueda y fallback a soporte humano.
 
@@ -542,17 +827,19 @@ CREATE INDEX idx_sync_logs_status ON integration_sync_logs(status) WHERE status 
 
 ### Corto Plazo (Q1 2026)
 1. **Recomendaciones ASCI** - Diferenciador clave: hace que la plataforma sea proactiva
-2. **Integracion HubSpot (Fase 1-2)** - Cierra el loop investigacion -> accion
+2. **Notificaciones por Email** - Retention y engagement: mantiene a ASCI presente sin esfuerzo del usuario
+3. **Integracion HubSpot (Fase 1-2)** - Cierra el loop investigacion -> accion
 
 ### Mediano Plazo (Q2 2026)
-3. **Integracion HubSpot (Fase 3-4)** - Sync masivo y monitoreo
-4. **Filtro por Industria** - Quick win para mejorar UX de busqueda
-5. **FAQ Helper** - Reduce carga de soporte manual
+4. **Integracion HubSpot (Fase 3-4)** - Sync masivo y monitoreo
+5. **Filtro por Industria** - Quick win para mejorar UX de busqueda
+6. **FAQ Helper** - Reduce carga de soporte manual
 
 ### Largo Plazo (Q3+ 2026)
-6. **Integracion Salesforce** - Segundo CRM
-7. **OAuth HubSpot** - Marketplace
-8. **Enriquecimiento de Industrias** - API para completar el 82% sin industria
+7. **Integracion Salesforce** - Segundo CRM
+8. **OAuth HubSpot** - Marketplace
+9. **Enriquecimiento de Industrias** - API para completar el 82% sin industria
+10. **Canales alternativos de notificacion** - Slack, WhatsApp Business
 
 ---
 
@@ -560,6 +847,7 @@ CREATE INDEX idx_sync_logs_status ON integration_sync_logs(status) WHERE status 
 
 | Fecha | Cambio |
 |-------|--------|
+| 25/02/2026 | Feature 8: Notificaciones por Email (plan detallado con Resend + pg_cron) |
 | 25/02/2026 | Feature 6: Recomendaciones ASCI (plan detallado) |
 | 25/02/2026 | Feature 7: Integracion con CRM HubSpot (plan detallado con investigacion tecnica) |
 | 25/02/2026 | Actualizacion: Features 1-5 marcadas como implementadas |
