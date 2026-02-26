@@ -164,17 +164,17 @@ export function EditKeywordsDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-lg max-h-[85vh] flex flex-col">
+      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
         {view === "edit" ? (
           <>
-            <DialogHeader className="flex-shrink-0">
+            <DialogHeader>
               <DialogTitle>Editar {itemType === "product" ? "Producto" : "Proceso"}</DialogTitle>
               <DialogDescription>
                 Modifica el nombre y las keywords. Los cambios se procesarán en background.
               </DialogDescription>
             </DialogHeader>
 
-            <div className="space-y-4 py-4 overflow-y-auto flex-1 min-h-0">
+            <div className="space-y-4 py-4">
               {/* Name editing */}
               <div className="space-y-2">
                 <Label htmlFor="item-name">Nombre</Label>
@@ -232,7 +232,7 @@ export function EditKeywordsDialog({
 
               {/* Pending changes summary */}
               {hasChanges && (
-                <div className="space-y-2 p-3 border rounded-md bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800 max-h-[200px] overflow-y-auto">
+                <div className="space-y-2 p-3 border rounded-md bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800 max-h-[200px] overflow-y-auto overflow-x-hidden">
                   <div className="flex items-center gap-2 text-amber-800 dark:text-amber-200">
                     <AlertTriangle className="h-4 w-4" />
                     <span className="text-sm font-medium">Cambios pendientes</span>
@@ -271,7 +271,7 @@ export function EditKeywordsDialog({
               )}
             </div>
 
-            <DialogFooter className="flex-shrink-0 border-t pt-4">
+            <DialogFooter>
               <Button variant="outline" onClick={() => onOpenChange(false)}>
                 Cancelar
               </Button>
