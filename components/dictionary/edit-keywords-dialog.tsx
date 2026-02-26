@@ -87,9 +87,9 @@ export function EditKeywordsDialog({
   const handleAddKeyword = () => {
     if (!newKeyword.trim()) return
 
-    // Support semicolon-separated bulk add
+    // Support semicolon or comma-separated bulk add
     const newKeywords = newKeyword
-      .split(";")
+      .split(/[;,]/)
       .map((k) => k.trim())
       .filter((k) => k && !keywords.includes(k))
 
@@ -219,14 +219,14 @@ export function EditKeywordsDialog({
                     value={newKeyword}
                     onChange={(e) => setNewKeyword(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    placeholder="Separar múltiples con punto y coma (;)"
+                    placeholder="Separar múltiples con coma (,) o punto y coma (;)"
                   />
                   <Button type="button" onClick={handleAddKeyword} size="icon">
                     <Plus className="h-4 w-4" />
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Usa punto y coma (;) para agregar múltiples keywords a la vez.
+                  Usa coma (,) o punto y coma (;) para agregar múltiples keywords a la vez.
                 </p>
               </div>
 
