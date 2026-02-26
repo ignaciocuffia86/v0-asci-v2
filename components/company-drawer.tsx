@@ -918,8 +918,10 @@ const SignalCard = ({ signal, company }: { signal: Signal; company: CompanyDetai
               {signal.contact?.previous_positions &&
               signal.contact.previous_positions.some((pos: any) => pos.company_id === company.id) ? (
                 <span className="font-medium text-foreground">en Posición Anterior en {company.name}</span>
+              ) : signal.source_field === "current_position" || signal.source_field === "current_position_description" ? (
+                <span className="font-medium text-foreground">en Posición Actual en {company.name}</span>
               ) : (
-                signal.source_field
+                formatSourceField(signal.source_field)
               )}
             </span>
           </div>
