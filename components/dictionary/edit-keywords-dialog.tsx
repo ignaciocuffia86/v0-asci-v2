@@ -164,7 +164,7 @@ export function EditKeywordsDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+      <DialogContent className="max-w-lg !flex !flex-col max-h-[85vh]">
         {view === "edit" ? (
           <>
             <DialogHeader>
@@ -174,7 +174,7 @@ export function EditKeywordsDialog({
               </DialogDescription>
             </DialogHeader>
 
-            <div className="space-y-4 py-4">
+            <div className="space-y-4 py-4 overflow-y-auto min-h-0">
               {/* Name editing */}
               <div className="space-y-2">
                 <Label htmlFor="item-name">Nombre</Label>
