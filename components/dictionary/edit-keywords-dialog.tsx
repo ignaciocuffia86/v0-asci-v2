@@ -164,17 +164,17 @@ export function EditKeywordsDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg max-h-[85vh] flex flex-col">
         {view === "edit" ? (
           <>
-            <DialogHeader>
+            <DialogHeader className="flex-shrink-0">
               <DialogTitle>Editar {itemType === "product" ? "Producto" : "Proceso"}</DialogTitle>
               <DialogDescription>
                 Modifica el nombre y las keywords. Los cambios se procesarán en background.
               </DialogDescription>
             </DialogHeader>
 
-            <div className="space-y-4 py-4">
+            <div className="space-y-4 py-4 overflow-y-auto flex-1 min-h-0">
               {/* Name editing */}
               <div className="space-y-2">
                 <Label htmlFor="item-name">Nombre</Label>
@@ -246,10 +246,10 @@ export function EditKeywordsDialog({
 
                   {addedKeywords.length > 0 && (
                     <div className="text-sm">
-                      <span className="text-green-700 dark:text-green-400">+ Agregar ({addedKeywords.length}):</span>{" "}
-                      <span className="text-green-600 dark:text-green-300">
+                      <span className="text-green-700 dark:text-green-400">+ Agregar ({addedKeywords.length}):</span>
+                      <p className="text-green-600 dark:text-green-300 break-words">
                         {addedKeywords.map((c) => c.keyword).join(", ")}
-                      </span>
+                      </p>
                       <p className="text-xs text-muted-foreground mt-1">
                         Se procesará la base de datos para detectar nuevas señales.
                       </p>
@@ -258,10 +258,10 @@ export function EditKeywordsDialog({
 
                   {removedKeywords.length > 0 && (
                     <div className="text-sm">
-                      <span className="text-red-700 dark:text-red-400">- Eliminar ({removedKeywords.length}):</span>{" "}
-                      <span className="text-red-600 dark:text-red-300">
+                      <span className="text-red-700 dark:text-red-400">- Eliminar ({removedKeywords.length}):</span>
+                      <p className="text-red-600 dark:text-red-300 break-words">
                         {removedKeywords.map((c) => c.keyword).join(", ")}
-                      </span>
+                      </p>
                       <p className="text-xs text-muted-foreground mt-1">
                         Se eliminarán las señales existentes con estas keywords.
                       </p>
@@ -271,7 +271,7 @@ export function EditKeywordsDialog({
               )}
             </div>
 
-            <DialogFooter>
+            <DialogFooter className="flex-shrink-0 border-t pt-4">
               <Button variant="outline" onClick={() => onOpenChange(false)}>
                 Cancelar
               </Button>
