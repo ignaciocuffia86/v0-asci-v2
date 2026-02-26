@@ -208,7 +208,7 @@ export async function getDictionaryJobs(limit = 20) {
 
   const { data, error } = await supabase
     .from("dictionary_jobs")
-    .select("id, job_type, signal_type, keyword, status, progress, total_records, processed_records, created_at, completed_at, error_message, phase, contacts_processed, contacts_total, job_postings_processed, job_postings_total")
+    .select("id, job_type, signal_type, keyword, status, progress, total_records, processed_records, created_at, completed_at, started_at, error_message, phase, contacts_processed, contacts_total, job_postings_processed, job_postings_total")
     .order("created_at", { ascending: false })
     .limit(limit)
 
@@ -218,4 +218,80 @@ export async function getDictionaryJobs(limit = 20) {
   }
 
   return data || []
+}
+
+// ─── Dictionary jobs aggregate stats ───
+export async function getDictionaryJobStats() {
+  const supabase = await createClient()
+
+  const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString()
+
+  const { data, error } = await supabase
+    .from("dictionary_jobs")
+    .select("status, started_at, completed_at, contacts_total, contacts_processed, job_postings_total, job_postings_processed")
+
+  if (error) {
+    console.error("Error getting dictionary job stats:", error)
+    return {
+      pending: 0, processing: 0, completed: 0, failed: 0, stuck: 0, total: 0,
+      totalContactsToProcess: 0, totalContactsProcessed: 0,
+      totalJobPostingsToProcess: 0, totalJobPostingsProcessed: 0,
+      estimatedMinutesRemaining: null as number | null,
+    }
+  }
+
+  const jobs = data || []
+  let pending = 0, processing = 0, completed = 0, failed = 0, stuck = 0
+  let totalContactsToProcess = 0, totalContactsProcessed = 0
+  let totalJobPostingsToProcess = 0, totalJobPostingsProcessed = 0
+
+  for (const job of jobs) {
+    switch (job.status) {
+      case "pending":
+        pending++
+        totalContactsToProcess += job.contacts_total || 0
+        totalJobPostingsToProcess += job.job_postings_total || 0
+        break
+      case "processing":
+        processing++
+        totalContactsToProcess += job.contacts_total || 0
+        totalContactsProcessed += job.contacts_processed || 0
+        totalJobPostingsToProcess += job.job_postings_total || 0
+        totalJobPostingsProcessed += job.job_postings_processed || 0
+        if (job.started_at && new Date(job.started_at) < new Date(thirtyMinutesAgo)) {
+          stuck++
+        }
+        break
+      case "completed": completed++; break
+      case "failed": failed++; break
+    }
+  }
+
+  // Estimate remaining time based on recent completed jobs
+  let estimatedMinutesRemaining: number | null = null
+  if ((pending + processing) > 0) {
+    const { data: recentCompleted } = await supabase
+      .from("dictionary_jobs")
+      .select("started_at, completed_at")
+      .eq("status", "completed")
+      .not("started_at", "is", null)
+      .not("completed_at", "is", null)
+      .order("completed_at", { ascending: false })
+      .limit(10)
+
+    if (recentCompleted && recentCompleted.length > 0) {
+      const avgMs = recentCompleted.reduce((sum, j) => {
+        return sum + (new Date(j.completed_at!).getTime() - new Date(j.started_at!).getTime())
+      }, 0) / recentCompleted.length
+      const avgMinutes = avgMs / 60000
+      estimatedMinutesRemaining = Math.round(pending * avgMinutes + (processing > 0 ? avgMinutes * 0.5 : 0))
+    }
+  }
+
+  return {
+    pending, processing, completed, failed, stuck, total: jobs.length,
+    totalContactsToProcess, totalContactsProcessed,
+    totalJobPostingsToProcess, totalJobPostingsProcessed,
+    estimatedMinutesRemaining,
+  }
 }
