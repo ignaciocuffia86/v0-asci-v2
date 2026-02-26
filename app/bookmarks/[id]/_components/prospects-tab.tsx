@@ -13,11 +13,9 @@ import {
   Mail,
   Phone,
   Search,
-  Sparkles,
   X,
   Plus,
   CheckCircle2,
-  AlertCircle,
   Target,
   Trash2,
   RotateCcw,
@@ -29,7 +27,6 @@ import {
   Square,
 } from "lucide-react"
 import {
-  inferJobTitles,
   getBookmarkSearchContext,
   searchApolloProspects,
   getProspects,
@@ -68,6 +65,43 @@ const APOLLO_COUNTRIES = [
   { label: "Venezuela", value: "Venezuela" },
 ]
 import { exportToCSV, exportToExcel, prepareProspectsForExport } from "@/lib/export-utils"
+import { Globe } from "lucide-react"
+
+// Grupos predefinidos de job titles por area
+const PREDEFINED_JOB_TITLE_GROUPS = [
+  {
+    label: "Operaciones",
+    titles: [
+      "Director de Operaciones",
+      "COO",
+      "VP Operaciones",
+      "Gerente de Operaciones",
+      "Head of Operations",
+    ],
+  },
+  {
+    label: "TI / Sistemas",
+    titles: [
+      "Director de TI",
+      "Director de Sistemas",
+      "CTO",
+      "IT Manager",
+      "Gerente de Sistemas",
+      "Jefe de Sistemas",
+      "VP IT",
+    ],
+  },
+  {
+    label: "Innovacion / Transformacion",
+    titles: [
+      "Director de Innovacion",
+      "Chief Innovation Officer",
+      "Director de Transformacion Digital",
+      "Head of Innovation",
+      "Gerente de Innovacion",
+    ],
+  },
+]
 
 function proxyImageUrl(url: string | undefined | null): string {
   if (!url) return ""
@@ -120,7 +154,6 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
 
   const [isLoading, setIsLoading] = useState(true)
   const [isSearching, setIsSearching] = useState(false)
-  const [isInferring, setIsInferring] = useState(false)
 
   // Map a country name (possibly in Spanish or from DB) to the Apollo English value
   const mapToApolloCountry = (country: string): string => {
@@ -156,17 +189,8 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
   const [company, setCompany] = useState<{ name: string; website?: string; linkedin_url?: string } | null>(null)
 
   // Job titles
-  const [suggestedJobTitles, setSuggestedJobTitles] = useState<string[]>([])
   const [selectedJobTitles, setSelectedJobTitles] = useState<string[]>([])
-  const [reasoning, setReasoning] = useState("")
   const [customJobTitle, setCustomJobTitle] = useState("")
-
-  // Value profile for enriched job title suggestions
-  const [valueProfile, setValueProfile] = useState<{
-    profileSummary: string
-    targetTechnologies: string[]
-    targetProcesses: string[]
-  } | null>(null)
 
   // Copiar al portapapeles
   const [copiedId, setCopiedId] = useState<string | null>(null)
@@ -181,25 +205,12 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
   const loadData = useCallback(async () => {
     setIsLoading(true)
 
-    // Cargar contexto de busqueda + value profile en paralelo
-    const [context, profileRes] = await Promise.all([
-      getBookmarkSearchContext(bookmarkId),
-      fetch(`/api/documents/context-for-bookmark?bookmarkId=${bookmarkId}`).then((r) =>
-        r.ok ? r.json() : null
-      ).catch(() => null),
-    ])
+    // Cargar contexto de busqueda
+    const context = await getBookmarkSearchContext(bookmarkId)
 
     setTechnologies(context.technologies)
     setProcesses(context.processes)
     setCompany(context.company)
-
-    if (profileRes?.valueProfile) {
-      setValueProfile({
-        profileSummary: profileRes.valueProfile.profile_summary || "",
-        targetTechnologies: profileRes.valueProfile.target_technologies || [],
-        targetProcesses: profileRes.valueProfile.target_processes || [],
-      })
-    }
 
     // Cargar prospectos existentes
     const existingProspects = await getProspects(bookmarkId)
@@ -215,20 +226,6 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
     loadData()
   }, [loadData])
 
-  // Inferir job titles con IA
-  const handleInferJobTitles = async () => {
-    setIsInferring(true)
-    try {
-      const result = await inferJobTitles(technologies, processes, valueProfile)
-      setSuggestedJobTitles(result.jobTitles)
-      setSelectedJobTitles(result.jobTitles.slice(0, 4)) // Seleccionar los primeros 4 por defecto
-      setReasoning(result.reasoning)
-    } catch (error) {
-      console.error("Error inferring job titles:", error)
-    }
-    setIsInferring(false)
-  }
-
   // Toggle selección de job title
   const toggleJobTitle = (title: string) => {
     setSelectedJobTitles((prev) => (prev.includes(title) ? prev.filter((t) => t !== title) : [...prev, title]))
@@ -238,7 +235,6 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
   const addCustomJobTitle = () => {
     if (customJobTitle.trim() && !selectedJobTitles.includes(customJobTitle.trim())) {
       setSelectedJobTitles((prev) => [...prev, customJobTitle.trim()])
-      setSuggestedJobTitles((prev) => [...prev, customJobTitle.trim()])
       setCustomJobTitle("")
     }
   }
@@ -364,158 +360,165 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
         </p>
       </div>
 
-      {/* Contexto detectado */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-medium">Contexto Detectado</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {/* Compañía */}
-          {company && (
-            <div className="flex items-center gap-2 text-sm">
-              <span className="text-muted-foreground">Compañía:</span>
-              <span className="font-medium">{company.name}</span>
-              {company.website && (
-                <Badge variant="outline" className="text-xs">
-                  {company.website.replace(/^https?:\/\/(www\.)?/, "").split("/")[0]}
-                </Badge>
-              )}
+      {/* Pais de busqueda - resaltado */}
+      <Card className="border-2 border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20">
+        <CardContent className="pt-5 pb-4">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 shrink-0">
+              <Globe className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+              <span className="text-sm font-medium">Pais de busqueda</span>
             </div>
-          )}
-
-          {/* Tecnologías y Procesos */}
-          <div className="flex flex-wrap gap-2">
-            {technologies.length > 0 && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground">Tecnologías:</span>
-                {technologies.map((tech) => (
-                  <Badge key={tech} variant="secondary" className="text-xs">
-                    {tech}
-                  </Badge>
+            <Select
+              value={prospectCountry || "_all"}
+              onValueChange={(val) => setProspectCountry(val === "_all" ? "" : val)}
+            >
+              <SelectTrigger className="max-w-[240px] border-blue-300 dark:border-blue-700 bg-background">
+                <SelectValue placeholder="Todos los paises" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="_all">Todos los paises</SelectItem>
+                {APOLLO_COUNTRIES.map((c) => (
+                  <SelectItem key={c.value} value={c.value}>
+                    {c.label}
+                  </SelectItem>
                 ))}
-              </div>
-            )}
-            {processes.length > 0 && (
-              <div className="flex items-center gap-2 ml-4">
-                <span className="text-xs text-muted-foreground">Procesos:</span>
-                {processes.map((proc) => (
-                  <Badge key={proc} variant="outline" className="text-xs">
-                    {proc}
-                  </Badge>
-                ))}
-              </div>
+              </SelectContent>
+            </Select>
+            {!prospectCountry && (
+              <span className="text-xs text-amber-600 dark:text-amber-400">
+                Selecciona un pais para acotar los resultados de Apollo
+              </span>
             )}
           </div>
+        </CardContent>
+      </Card>
 
-          {technologies.length === 0 && processes.length === 0 && (
-            <p className="text-sm text-muted-foreground italic">
-              No hay contexto de búsqueda específico. Se usarán job titles genéricos.
-            </p>
-          )}
+      {/* Job Titles - seleccion por grupo */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-medium">Selecciona los cargos a buscar</CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Hace clic en los cargos relevantes para buscar decision makers en {companyName}. Podes seleccionar de los grupos o agregar manualmente.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Grupos predefinidos */}
+          {PREDEFINED_JOB_TITLE_GROUPS.map((group) => {
+            const allSelected = group.titles.every((t) => selectedJobTitles.includes(t))
+            const someSelected = group.titles.some((t) => selectedJobTitles.includes(t))
 
-          {/* Botón para inferir job titles */}
-          {suggestedJobTitles.length === 0 && (
-            <Button onClick={handleInferJobTitles} disabled={isInferring} className="w-full sm:w-auto">
-              {isInferring ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Sparkles className="h-4 w-4 mr-2" />}
-              Sugerir Job Titles con IA
-            </Button>
-          )}
-
-          {/* Job titles sugeridos */}
-          {suggestedJobTitles.length > 0 && (
-            <div className="space-y-3 pt-2 border-t">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium flex items-center gap-2">
-                  <Sparkles className="h-4 w-4 text-amber-500" />
-                  Job Titles Sugeridos por IA
-                </span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setSuggestedJobTitles([])
-                    setSelectedJobTitles([])
-                    setReasoning("")
-                  }}
-                >
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-
-              {reasoning && <p className="text-xs text-muted-foreground italic">{reasoning}</p>}
-
-              <div className="flex flex-wrap gap-2">
-                {[...new Set(suggestedJobTitles)].map((title) => (
-                  <Badge
-                    key={title}
-                    variant={selectedJobTitles.includes(title) ? "default" : "outline"}
-                    className="cursor-pointer transition-colors"
-                    onClick={() => toggleJobTitle(title)}
+            return (
+              <div key={group.label} className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="text-xs font-semibold text-muted-foreground uppercase tracking-wide hover:text-foreground transition-colors"
+                    onClick={() => {
+                      if (allSelected) {
+                        setSelectedJobTitles((prev) => prev.filter((t) => !group.titles.includes(t)))
+                      } else {
+                        setSelectedJobTitles((prev) => [...new Set([...prev, ...group.titles])])
+                      }
+                    }}
                   >
-                    {title}
-                    {selectedJobTitles.includes(title) && <CheckCircle2 className="h-3 w-3 ml-1" />}
-                  </Badge>
-                ))}
-              </div>
-
-              {/* Agregar job title personalizado */}
-              <div className="flex gap-2">
-                <Input
-                  placeholder="Agregar otro job title..."
-                  value={customJobTitle}
-                  onChange={(e) => setCustomJobTitle(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && addCustomJobTitle()}
-                  className="flex-1"
-                />
-                <Button variant="outline" size="icon" onClick={addCustomJobTitle}>
-                  <Plus className="h-4 w-4" />
-                </Button>
-              </div>
-
-              {/* Filtro de país para Apollo + botón de búsqueda */}
-              <div className="flex items-end gap-3 pt-2 border-t">
-                <div className="w-[200px] space-y-1">
-                  <label className="text-xs font-medium text-muted-foreground">
-                    Pais (Apollo)
-                  </label>
-                  <Select
-                    value={prospectCountry || "_all"}
-                    onValueChange={(val) => setProspectCountry(val === "_all" ? "" : val)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Todos los paises" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="_all">Todos los paises</SelectItem>
-                      {APOLLO_COUNTRIES.map((c) => (
-                        <SelectItem key={c.value} value={c.value}>
-                          {c.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    {group.label}
+                  </button>
+                  {someSelected && !allSelected && (
+                    <span className="text-[10px] text-muted-foreground">
+                      ({group.titles.filter((t) => selectedJobTitles.includes(t)).length}/{group.titles.length})
+                    </span>
+                  )}
+                  {allSelected && (
+                    <CheckCircle2 className="h-3 w-3 text-green-600" />
+                  )}
                 </div>
-                <Button
-                  onClick={handleSearch}
-                  disabled={isSearching || selectedJobTitles.length === 0}
-                  className="flex-1"
-                >
-                  {isSearching ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Search className="h-4 w-4 mr-2" />}
-                  Buscar en Apollo
-                  {selectedJobTitles.length > 0 && (
-                    <Badge variant="secondary" className="ml-2">
-                      {selectedJobTitles.length} titulos
+                <div className="flex flex-wrap gap-1.5">
+                  {group.titles.map((title) => (
+                    <Badge
+                      key={title}
+                      variant={selectedJobTitles.includes(title) ? "default" : "outline"}
+                      className="cursor-pointer transition-colors text-xs"
+                      onClick={() => toggleJobTitle(title)}
+                    >
+                      {title}
+                      {selectedJobTitles.includes(title) && <CheckCircle2 className="h-3 w-3 ml-1" />}
                     </Badge>
-                  )}
-                  {prospectCountry && (
-                    <Badge className="ml-1 bg-white/20 text-white border-0 hover:bg-white/30">
-                      {APOLLO_COUNTRIES.find(c => c.value === prospectCountry)?.label || prospectCountry}
+                  ))}
+                </div>
+              </div>
+            )
+          })}
+
+          {/* Títulos custom agregados (que no son de los grupos predefinidos) */}
+          {selectedJobTitles.filter(
+            (t) => !PREDEFINED_JOB_TITLE_GROUPS.some((g) => g.titles.includes(t))
+          ).length > 0 && (
+            <div className="space-y-2">
+              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                Personalizados
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {selectedJobTitles
+                  .filter((t) => !PREDEFINED_JOB_TITLE_GROUPS.some((g) => g.titles.includes(t)))
+                  .map((title) => (
+                    <Badge
+                      key={title}
+                      variant="default"
+                      className="cursor-pointer transition-colors text-xs"
+                      onClick={() => toggleJobTitle(title)}
+                    >
+                      {title}
+                      <X className="h-3 w-3 ml-1" />
                     </Badge>
-                  )}
-                </Button>
+                  ))}
               </div>
             </div>
           )}
+
+          {/* Agregar job title personalizado */}
+          <div className="pt-2 border-t">
+            <label className="text-xs font-medium text-muted-foreground mb-1.5 block">
+              Agregar cargo manualmente
+            </label>
+            <div className="flex gap-2">
+              <Input
+                placeholder="Ej: VP de Compras, CIO, Gerente de Logistica..."
+                value={customJobTitle}
+                onChange={(e) => setCustomJobTitle(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && addCustomJobTitle()}
+                className="flex-1"
+              />
+              <Button variant="outline" size="icon" onClick={addCustomJobTitle} disabled={!customJobTitle.trim()}>
+                <Plus className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+
+          {/* Resumen + Boton de busqueda */}
+          <div className="pt-3 border-t">
+            {selectedJobTitles.length > 0 && (
+              <p className="text-xs text-muted-foreground mb-3">
+                {selectedJobTitles.length} cargo{selectedJobTitles.length !== 1 ? "s" : ""} seleccionado{selectedJobTitles.length !== 1 ? "s" : ""}
+                {prospectCountry && (
+                  <> en <span className="font-medium">{APOLLO_COUNTRIES.find(c => c.value === prospectCountry)?.label || prospectCountry}</span></>
+                )}
+              </p>
+            )}
+            <Button
+              onClick={handleSearch}
+              disabled={isSearching || selectedJobTitles.length === 0}
+              className="w-full"
+              size="lg"
+            >
+              {isSearching ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Search className="h-4 w-4 mr-2" />}
+              Buscar en Apollo
+              {selectedJobTitles.length > 0 && (
+                <Badge variant="secondary" className="ml-2">
+                  {selectedJobTitles.length} cargo{selectedJobTitles.length !== 1 ? "s" : ""}
+                </Badge>
+              )}
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
