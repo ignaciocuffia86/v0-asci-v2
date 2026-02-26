@@ -565,7 +565,7 @@ function DictionaryJobsSection({ jobs, stats, onRefresh }: { jobs: DictionaryJob
           <div>
             <CardTitle>Jobs del Diccionario</CardTitle>
             <CardDescription>
-              Mostrando ultimos 50 jobs — {formatNumber(stats?.total || 0)} jobs totales en el sistema
+              Tabla: ultimos 50 jobs — Contadores: {formatNumber(stats?.total || 0)} jobs totales reales
             </CardDescription>
           </div>
           <div className="flex gap-2">
@@ -583,14 +583,14 @@ function DictionaryJobsSection({ jobs, stats, onRefresh }: { jobs: DictionaryJob
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Filter tabs */}
+        {/* Filter tabs - use real counts from stats, not from the limited 50-job list */}
         <div className="flex gap-1.5 flex-wrap">
           {([
-            { key: "all" as const, label: "Todos", count: jobs.length },
-            { key: "pending" as const, label: "Pendientes", count: jobs.filter((j) => j.status === "pending").length },
-            { key: "processing" as const, label: "Procesando", count: jobs.filter((j) => j.status === "processing").length },
-            { key: "completed" as const, label: "Completados", count: jobs.filter((j) => j.status === "completed").length },
-            { key: "failed" as const, label: "Fallidos", count: jobs.filter((j) => j.status === "failed").length },
+            { key: "all" as const, label: "Todos", count: stats?.total || jobs.length },
+            { key: "pending" as const, label: "Pendientes", count: stats?.pending || jobs.filter((j) => j.status === "pending").length },
+            { key: "processing" as const, label: "Procesando", count: stats?.processing || jobs.filter((j) => j.status === "processing").length },
+            { key: "completed" as const, label: "Completados", count: stats?.completed || jobs.filter((j) => j.status === "completed").length },
+            { key: "failed" as const, label: "Fallidos", count: stats?.failed || jobs.filter((j) => j.status === "failed").length },
           ]).map(({ key, label, count }) => (
             <Button
               key={key}

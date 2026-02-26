@@ -221,49 +221,46 @@ export async function getDictionaryJobs(limit = 20) {
 }
 
 // ─── Dictionary jobs aggregate stats ───
+// Uses targeted count queries to avoid Supabase's default 1000-row limit
 export async function getDictionaryJobStats() {
   const supabase = await createClient()
 
   const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString()
 
-  const { data, error } = await supabase
+  // Use exact counts per status to avoid the 1000-row default limit
+  const [pendingRes, processingRes, completedRes, failedRes, totalRes] = await Promise.all([
+    supabase.from("dictionary_jobs").select("*", { count: "exact", head: true }).eq("status", "pending"),
+    supabase.from("dictionary_jobs").select("*", { count: "exact", head: true }).eq("status", "processing"),
+    supabase.from("dictionary_jobs").select("*", { count: "exact", head: true }).eq("status", "completed"),
+    supabase.from("dictionary_jobs").select("*", { count: "exact", head: true }).eq("status", "failed"),
+    supabase.from("dictionary_jobs").select("*", { count: "exact", head: true }),
+  ])
+
+  const pending = pendingRes.count || 0
+  const processing = processingRes.count || 0
+  const completed = completedRes.count || 0
+  const failed = failedRes.count || 0
+  const total = totalRes.count || 0
+
+  // Get progress data only for active jobs (pending + processing) - won't hit 1000 limit
+  const { data: activeJobs } = await supabase
     .from("dictionary_jobs")
-    .select("status, started_at, completed_at, contacts_total, contacts_processed, job_postings_total, job_postings_processed")
+    .select("status, started_at, contacts_total, contacts_processed, job_postings_total, job_postings_processed")
+    .in("status", ["pending", "processing"])
 
-  if (error) {
-    console.error("Error getting dictionary job stats:", error)
-    return {
-      pending: 0, processing: 0, completed: 0, failed: 0, stuck: 0, total: 0,
-      totalContactsToProcess: 0, totalContactsProcessed: 0,
-      totalJobPostingsToProcess: 0, totalJobPostingsProcessed: 0,
-      estimatedMinutesRemaining: null as number | null,
-    }
-  }
-
-  const jobs = data || []
-  let pending = 0, processing = 0, completed = 0, failed = 0, stuck = 0
+  let stuck = 0
   let totalContactsToProcess = 0, totalContactsProcessed = 0
   let totalJobPostingsToProcess = 0, totalJobPostingsProcessed = 0
 
-  for (const job of jobs) {
-    switch (job.status) {
-      case "pending":
-        pending++
-        totalContactsToProcess += job.contacts_total || 0
-        totalJobPostingsToProcess += job.job_postings_total || 0
-        break
-      case "processing":
-        processing++
-        totalContactsToProcess += job.contacts_total || 0
-        totalContactsProcessed += job.contacts_processed || 0
-        totalJobPostingsToProcess += job.job_postings_total || 0
-        totalJobPostingsProcessed += job.job_postings_processed || 0
-        if (job.started_at && new Date(job.started_at) < new Date(thirtyMinutesAgo)) {
-          stuck++
-        }
-        break
-      case "completed": completed++; break
-      case "failed": failed++; break
+  for (const job of (activeJobs || [])) {
+    totalContactsToProcess += job.contacts_total || 0
+    totalJobPostingsToProcess += job.job_postings_total || 0
+    if (job.status === "processing") {
+      totalContactsProcessed += job.contacts_processed || 0
+      totalJobPostingsProcessed += job.job_postings_processed || 0
+      if (job.started_at && new Date(job.started_at) < new Date(thirtyMinutesAgo)) {
+        stuck++
+      }
     }
   }
 
@@ -289,7 +286,7 @@ export async function getDictionaryJobStats() {
   }
 
   return {
-    pending, processing, completed, failed, stuck, total: jobs.length,
+    pending, processing, completed, failed, stuck, total,
     totalContactsToProcess, totalContactsProcessed,
     totalJobPostingsToProcess, totalJobPostingsProcessed,
     estimatedMinutesRemaining,
