@@ -208,7 +208,7 @@ export async function getDictionaryJobs(limit = 20) {
 
   const { data, error } = await supabase
     .from("dictionary_jobs")
-    .select("id, job_type, signal_type, keyword, status, progress, total_records, processed_records, created_at, completed_at, error_message, phase, contacts_processed, contacts_total, job_postings_processed, job_postings_total")
+    .select("id, job_type, signal_type, keyword, status, progress, total_records, processed_records, created_at, completed_at, started_at, error_message, phase, contacts_processed, contacts_total, job_postings_processed, job_postings_total")
     .order("created_at", { ascending: false })
     .limit(limit)
 
@@ -218,4 +218,77 @@ export async function getDictionaryJobs(limit = 20) {
   }
 
   return data || []
+}
+
+// ─── Dictionary jobs aggregate stats ───
+// Uses targeted count queries to avoid Supabase's default 1000-row limit
+export async function getDictionaryJobStats() {
+  const supabase = await createClient()
+
+  const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString()
+
+  // Use exact counts per status to avoid the 1000-row default limit
+  const [pendingRes, processingRes, completedRes, failedRes, totalRes] = await Promise.all([
+    supabase.from("dictionary_jobs").select("*", { count: "exact", head: true }).eq("status", "pending"),
+    supabase.from("dictionary_jobs").select("*", { count: "exact", head: true }).eq("status", "processing"),
+    supabase.from("dictionary_jobs").select("*", { count: "exact", head: true }).eq("status", "completed"),
+    supabase.from("dictionary_jobs").select("*", { count: "exact", head: true }).eq("status", "failed"),
+    supabase.from("dictionary_jobs").select("*", { count: "exact", head: true }),
+  ])
+
+  const pending = pendingRes.count || 0
+  const processing = processingRes.count || 0
+  const completed = completedRes.count || 0
+  const failed = failedRes.count || 0
+  const total = totalRes.count || 0
+
+  // Get progress data only for active jobs (pending + processing) - won't hit 1000 limit
+  const { data: activeJobs } = await supabase
+    .from("dictionary_jobs")
+    .select("status, started_at, contacts_total, contacts_processed, job_postings_total, job_postings_processed")
+    .in("status", ["pending", "processing"])
+
+  let stuck = 0
+  let totalContactsToProcess = 0, totalContactsProcessed = 0
+  let totalJobPostingsToProcess = 0, totalJobPostingsProcessed = 0
+
+  for (const job of (activeJobs || [])) {
+    totalContactsToProcess += job.contacts_total || 0
+    totalJobPostingsToProcess += job.job_postings_total || 0
+    if (job.status === "processing") {
+      totalContactsProcessed += job.contacts_processed || 0
+      totalJobPostingsProcessed += job.job_postings_processed || 0
+      if (job.started_at && new Date(job.started_at) < new Date(thirtyMinutesAgo)) {
+        stuck++
+      }
+    }
+  }
+
+  // Estimate remaining time based on recent completed jobs
+  let estimatedMinutesRemaining: number | null = null
+  if ((pending + processing) > 0) {
+    const { data: recentCompleted } = await supabase
+      .from("dictionary_jobs")
+      .select("started_at, completed_at")
+      .eq("status", "completed")
+      .not("started_at", "is", null)
+      .not("completed_at", "is", null)
+      .order("completed_at", { ascending: false })
+      .limit(10)
+
+    if (recentCompleted && recentCompleted.length > 0) {
+      const avgMs = recentCompleted.reduce((sum, j) => {
+        return sum + (new Date(j.completed_at!).getTime() - new Date(j.started_at!).getTime())
+      }, 0) / recentCompleted.length
+      const avgMinutes = avgMs / 60000
+      estimatedMinutesRemaining = Math.round(pending * avgMinutes + (processing > 0 ? avgMinutes * 0.5 : 0))
+    }
+  }
+
+  return {
+    pending, processing, completed, failed, stuck, total,
+    totalContactsToProcess, totalContactsProcessed,
+    totalJobPostingsToProcess, totalJobPostingsProcessed,
+    estimatedMinutesRemaining,
+  }
 }

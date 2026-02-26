@@ -74,16 +74,23 @@ export async function processDictionaryJobs() {
 export async function getPendingDictionaryJobs() {
   const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 
-  const { data, error } = await supabase
-    .from("dictionary_jobs")
-    .select("id, job_type, keyword, status, created_at")
-    .in("status", ["pending", "processing"])
-    .order("created_at", { ascending: true })
-    .limit(50)
+  // Use exact count to get the real total, not capped by limit
+  const [countRes, dataRes] = await Promise.all([
+    supabase
+      .from("dictionary_jobs")
+      .select("*", { count: "exact", head: true })
+      .in("status", ["pending", "processing"]),
+    supabase
+      .from("dictionary_jobs")
+      .select("id, job_type, keyword, status, created_at")
+      .in("status", ["pending", "processing"])
+      .order("created_at", { ascending: true })
+      .limit(50),
+  ])
 
-  if (error) {
+  if (dataRes.error) {
     return { jobs: [], count: 0 }
   }
 
-  return { jobs: data || [], count: data?.length || 0 }
+  return { jobs: dataRes.data || [], count: countRes.count || 0 }
 }

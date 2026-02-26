@@ -24,6 +24,9 @@ import {
   Briefcase,
   Play,
   FileText,
+  Timer,
+  Hourglass,
+  CircleDashed,
 } from "lucide-react"
 import {
   getDashboardCounts,
@@ -31,6 +34,7 @@ import {
   getImportBatches,
   getRecentActivity,
   getDictionaryJobs,
+  getDictionaryJobStats,
   getPendingImportRowsCount,
   getBatchErrors,
 } from "@/app/actions/processing"
@@ -48,6 +52,7 @@ type CronEntry = Awaited<ReturnType<typeof getCronHealth>>[number]
 type ImportBatch = Awaited<ReturnType<typeof getImportBatches>>[number]
 type DictionaryJob = Awaited<ReturnType<typeof getDictionaryJobs>>[number]
 type ActivityEvent = Awaited<ReturnType<typeof getRecentActivity>>[number]
+type DictJobStats = Awaited<ReturnType<typeof getDictionaryJobStats>>
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
@@ -99,6 +104,7 @@ export default function ProcessingPage() {
   const [crons, setCrons] = useState<CronEntry[]>([])
   const [batches, setBatches] = useState<ImportBatch[]>([])
   const [dictJobs, setDictJobs] = useState<DictionaryJob[]>([])
+  const [dictStats, setDictStats] = useState<DictJobStats | null>(null)
   const [activity, setActivity] = useState<ActivityEvent[]>([])
   const [pendingRows, setPendingRows] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
@@ -107,11 +113,12 @@ export default function ProcessingPage() {
   const fetchAll = useCallback(async () => {
     setIsLoading(true)
     try {
-      const [c, cr, b, dj, act, pr] = await Promise.all([
+      const [c, cr, b, dj, ds, act, pr] = await Promise.all([
         getDashboardCounts(),
         getCronHealth(),
         getImportBatches(30),
-        getDictionaryJobs(20),
+        getDictionaryJobs(50),
+        getDictionaryJobStats(),
         getRecentActivity(50),
         getPendingImportRowsCount(),
       ])
@@ -119,6 +126,7 @@ export default function ProcessingPage() {
       setCrons(cr)
       setBatches(b)
       setDictJobs(dj)
+      setDictStats(ds)
       setActivity(act)
       setPendingRows(pr)
       setLastRefresh(new Date())
@@ -237,39 +245,115 @@ export default function ProcessingPage() {
 
         {/* ────────── Dictionary Tab ────────── */}
         <TabsContent value="dictionary" className="space-y-4">
-          {/* Summary cards */}
-          <div className="grid grid-cols-3 gap-4">
+          {/* Queue status - prominent */}
+          {dictStats && (dictStats.pending > 0 || dictStats.processing > 0) && (
+            <Card className="border-2 border-blue-200 dark:border-blue-800 bg-blue-50/30 dark:bg-blue-950/20">
+              <CardContent className="pt-5 pb-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <Hourglass className="h-5 w-5 text-blue-600 dark:text-blue-400 animate-pulse" />
+                    <span className="font-semibold text-blue-900 dark:text-blue-100">
+                      Cola de Procesamiento Activa
+                    </span>
+                  </div>
+                  {dictStats.estimatedMinutesRemaining != null && (
+                    <div className="flex items-center gap-1.5 text-sm text-blue-700 dark:text-blue-300">
+                      <Timer className="h-4 w-4" />
+                      ~{dictStats.estimatedMinutesRemaining < 60
+                        ? `${dictStats.estimatedMinutesRemaining} min`
+                        : `${Math.floor(dictStats.estimatedMinutesRemaining / 60)}h ${dictStats.estimatedMinutesRemaining % 60}m`} restantes
+                    </div>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="bg-background rounded-lg p-3 border">
+                    <div className="text-2xl font-bold text-amber-600">{dictStats.pending}</div>
+                    <div className="text-xs text-muted-foreground">En cola</div>
+                  </div>
+                  <div className="bg-background rounded-lg p-3 border">
+                    <div className="text-2xl font-bold text-blue-600">{dictStats.processing}</div>
+                    <div className="text-xs text-muted-foreground">Procesando ahora</div>
+                  </div>
+                  <div className="bg-background rounded-lg p-3 border">
+                    <div className="text-sm font-medium text-foreground">
+                      {formatNumber(dictStats.totalContactsProcessed)} / {formatNumber(dictStats.totalContactsToProcess)}
+                    </div>
+                    <div className="text-xs text-muted-foreground">Contactos (activos)</div>
+                    {dictStats.totalContactsToProcess > 0 && (
+                      <Progress
+                        value={Math.round((dictStats.totalContactsProcessed / dictStats.totalContactsToProcess) * 100)}
+                        className="h-1.5 mt-1.5"
+                      />
+                    )}
+                  </div>
+                  <div className="bg-background rounded-lg p-3 border">
+                    <div className="text-sm font-medium text-foreground">
+                      {formatNumber(dictStats.totalJobPostingsProcessed)} / {formatNumber(dictStats.totalJobPostingsToProcess)}
+                    </div>
+                    <div className="text-xs text-muted-foreground">Job Postings (activos)</div>
+                    {dictStats.totalJobPostingsToProcess > 0 && (
+                      <Progress
+                        value={Math.round((dictStats.totalJobPostingsProcessed / dictStats.totalJobPostingsToProcess) * 100)}
+                        className="h-1.5 mt-1.5"
+                      />
+                    )}
+                  </div>
+                </div>
+                {dictStats.stuck > 0 && (
+                  <Alert variant="destructive" className="mt-3">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertTitle>{dictStats.stuck} job(s) estancados</AlertTitle>
+                    <AlertDescription>
+                      Llevan mas de 30 min sin progreso. Usa "Desbloquear estancados" abajo.
+                    </AlertDescription>
+                  </Alert>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Overall stats row */}
+          <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
             <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm flex items-center gap-2"><Layers className="h-4 w-4" />Procesos</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-3xl font-bold">{counts?.dictionary_processes || 0}</div>
-                <p className="text-sm text-muted-foreground">{formatNumber(counts?.keywords_process)} keywords</p>
+              <CardContent className="pt-4 pb-3 text-center">
+                <div className="text-2xl font-bold text-amber-600">{dictStats?.pending || 0}</div>
+                <div className="text-xs text-muted-foreground flex items-center justify-center gap-1"><CircleDashed className="h-3 w-3" />Pendientes</div>
               </CardContent>
             </Card>
             <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm flex items-center gap-2"><Package className="h-4 w-4" />Productos</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-3xl font-bold">{counts?.dictionary_products || 0}</div>
-                <p className="text-sm text-muted-foreground">{formatNumber(counts?.keywords_technology)} keywords</p>
+              <CardContent className="pt-4 pb-3 text-center">
+                <div className="text-2xl font-bold text-blue-600">{dictStats?.processing || 0}</div>
+                <div className="text-xs text-muted-foreground flex items-center justify-center gap-1"><Loader2 className="h-3 w-3" />Procesando</div>
               </CardContent>
             </Card>
             <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm flex items-center gap-2"><Store className="h-4 w-4" />Vendors</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-3xl font-bold">{counts?.dictionary_vendors || 0}</div>
-                <p className="text-sm text-muted-foreground">Proveedores registrados</p>
+              <CardContent className="pt-4 pb-3 text-center">
+                <div className="text-2xl font-bold text-green-600">{dictStats?.completed || 0}</div>
+                <div className="text-xs text-muted-foreground flex items-center justify-center gap-1"><CheckCircle className="h-3 w-3" />Completados</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4 pb-3 text-center">
+                <div className="text-2xl font-bold text-red-600">{dictStats?.failed || 0}</div>
+                <div className="text-xs text-muted-foreground flex items-center justify-center gap-1"><XCircle className="h-3 w-3" />Fallidos</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4 pb-3 text-center">
+                <div className="text-2xl font-bold">{dictStats?.total || 0}</div>
+                <div className="text-xs text-muted-foreground">Total Jobs</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4 pb-3 text-center">
+                <div className="text-2xl font-bold">{counts?.dictionary_products || 0}/{counts?.dictionary_processes || 0}/{counts?.dictionary_vendors || 0}</div>
+                <div className="text-xs text-muted-foreground">Prod/Proc/Vend</div>
               </CardContent>
             </Card>
           </div>
 
-          {/* Dictionary jobs */}
-          <DictionaryJobsSection jobs={dictJobs} onRefresh={fetchAll} />
+          {/* Dictionary jobs table */}
+          <DictionaryJobsSection jobs={dictJobs} stats={dictStats} onRefresh={fetchAll} />
         </TabsContent>
 
         {/* ────────── Activity Tab ────────── */}
@@ -449,8 +533,9 @@ function BatchTable({ batches }: { batches: ImportBatch[] }) {
   )
 }
 
-function DictionaryJobsSection({ jobs, onRefresh }: { jobs: DictionaryJob[]; onRefresh: () => void }) {
+function DictionaryJobsSection({ jobs, stats, onRefresh }: { jobs: DictionaryJob[]; stats: DictJobStats | null; onRefresh: () => void }) {
   const supabase = createClient()
+  const [filter, setFilter] = useState<"all" | "pending" | "processing" | "completed" | "failed">("all")
 
   const handleRetryFailed = async () => {
     await supabase
@@ -470,61 +555,140 @@ function DictionaryJobsSection({ jobs, onRefresh }: { jobs: DictionaryJob[]; onR
     onRefresh()
   }
 
-  const failedCount = jobs.filter((j) => j.status === "failed").length
-  const processingCount = jobs.filter((j) => j.status === "processing").length
+  const filteredJobs = filter === "all" ? jobs : jobs.filter((j) => j.status === filter)
+  const failedCount = stats?.failed || jobs.filter((j) => j.status === "failed").length
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Jobs del Diccionario</CardTitle>
-        <CardDescription>
-          Ultimos 20 jobs — se generan al agregar/eliminar keywords
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {(failedCount > 0 || processingCount > 0) && (
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle>Jobs del Diccionario</CardTitle>
+            <CardDescription>
+              Tabla: ultimos 50 jobs — Contadores: {formatNumber(stats?.total || 0)} jobs totales reales
+            </CardDescription>
+          </div>
           <div className="flex gap-2">
             {failedCount > 0 && (
               <Button variant="outline" size="sm" onClick={handleRetryFailed}>
                 <RefreshCw className="h-3 w-3 mr-1" />Reintentar {failedCount} fallidos
               </Button>
             )}
-            <Button variant="outline" size="sm" onClick={handleUnstickJobs}>
-              <Play className="h-3 w-3 mr-1" />Desbloquear estancados
-            </Button>
+            {(stats?.stuck || 0) > 0 && (
+              <Button variant="outline" size="sm" onClick={handleUnstickJobs}>
+                <Play className="h-3 w-3 mr-1" />Desbloquear {stats?.stuck} estancados
+              </Button>
+            )}
           </div>
-        )}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* Filter tabs - use real counts from stats, not from the limited 50-job list */}
+        <div className="flex gap-1.5 flex-wrap">
+          {([
+            { key: "all" as const, label: "Todos", count: stats?.total || jobs.length },
+            { key: "pending" as const, label: "Pendientes", count: stats?.pending || jobs.filter((j) => j.status === "pending").length },
+            { key: "processing" as const, label: "Procesando", count: stats?.processing || jobs.filter((j) => j.status === "processing").length },
+            { key: "completed" as const, label: "Completados", count: stats?.completed || jobs.filter((j) => j.status === "completed").length },
+            { key: "failed" as const, label: "Fallidos", count: stats?.failed || jobs.filter((j) => j.status === "failed").length },
+          ]).map(({ key, label, count }) => (
+            <Button
+              key={key}
+              variant={filter === key ? "default" : "outline"}
+              size="sm"
+              onClick={() => setFilter(key)}
+              className="text-xs"
+            >
+              {label} ({count})
+            </Button>
+          ))}
+        </div>
 
-        <div className="overflow-auto max-h-[400px]">
+        <div className="overflow-auto max-h-[500px]">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-24">Estado</TableHead>
+                <TableHead className="w-28">Estado</TableHead>
                 <TableHead>Keyword</TableHead>
                 <TableHead>Accion</TableHead>
                 <TableHead>Tipo</TableHead>
-                <TableHead className="text-right">Progreso</TableHead>
+                <TableHead className="w-48">Progreso</TableHead>
+                <TableHead className="text-right">Duracion</TableHead>
                 <TableHead className="text-right">Fecha</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {jobs.map((job) => (
-                <TableRow key={job.id}>
-                  <TableCell><StatusBadge status={job.status} /></TableCell>
-                  <TableCell className="font-mono text-sm truncate max-w-xs">{job.keyword || "N/A"}</TableCell>
-                  <TableCell className="text-sm">{job.job_type === "add_keyword" ? "Agregar" : "Eliminar"}</TableCell>
-                  <TableCell className="text-sm capitalize">{job.signal_type}</TableCell>
-                  <TableCell className="text-right text-sm">
-                    {job.total_records > 0
-                      ? `${Math.round((job.processed_records / job.total_records) * 100)}%`
-                      : "-"}
-                  </TableCell>
-                  <TableCell className="text-right text-xs text-muted-foreground">{formatTimeAgo(job.created_at)}</TableCell>
-                </TableRow>
-              ))}
-              {jobs.length === 0 && (
+              {filteredJobs.map((job) => {
+                const contactsPct = (job.contacts_total || 0) > 0
+                  ? Math.round(((job.contacts_processed || 0) / job.contacts_total) * 100)
+                  : 0
+                const jpPct = (job.job_postings_total || 0) > 0
+                  ? Math.round(((job.job_postings_processed || 0) / job.job_postings_total) * 100)
+                  : 0
+                const overallPct = job.total_records > 0
+                  ? Math.round((job.processed_records / job.total_records) * 100)
+                  : (job.contacts_total || 0) > 0 ? contactsPct : 0
+
+                // Duration calculation
+                let duration = ""
+                if (job.started_at && job.completed_at) {
+                  const ms = new Date(job.completed_at).getTime() - new Date(job.started_at).getTime()
+                  const mins = Math.floor(ms / 60000)
+                  const secs = Math.floor((ms % 60000) / 1000)
+                  duration = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`
+                } else if (job.started_at && job.status === "processing") {
+                  const ms = Date.now() - new Date(job.started_at).getTime()
+                  const mins = Math.floor(ms / 60000)
+                  duration = `${mins}m...`
+                }
+
+                return (
+                  <TableRow key={job.id}>
+                    <TableCell><StatusBadge status={job.status} /></TableCell>
+                    <TableCell>
+                      <span className="font-mono text-sm truncate max-w-xs block">{job.keyword || "N/A"}</span>
+                      {job.error_message && (
+                        <span className="text-[11px] text-red-600 dark:text-red-400 block truncate max-w-xs mt-0.5" title={job.error_message}>
+                          {job.error_message}
+                        </span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      <Badge variant={job.job_type === "add_keyword" ? "secondary" : "outline"} className="text-xs">
+                        {job.job_type === "add_keyword" ? "Agregar" : "Eliminar"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-sm capitalize">{job.signal_type}</TableCell>
+                    <TableCell>
+                      {job.status === "processing" || job.status === "completed" ? (
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <Progress value={overallPct} className="h-2 flex-1" />
+                            <span className="text-xs text-muted-foreground w-8 text-right">{overallPct}%</span>
+                          </div>
+                          <div className="text-[10px] text-muted-foreground">
+                            {formatNumber(job.contacts_processed || 0)}/{formatNumber(job.contacts_total || 0)} contactos
+                            {(job.job_postings_total || 0) > 0 && (
+                              <> &middot; {formatNumber(job.job_postings_processed || 0)}/{formatNumber(job.job_postings_total || 0)} JP</>
+                            )}
+                          </div>
+                        </div>
+                      ) : job.status === "pending" ? (
+                        <span className="text-xs text-muted-foreground">En cola</span>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">-</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right text-xs text-muted-foreground whitespace-nowrap">{duration || "-"}</TableCell>
+                    <TableCell className="text-right text-xs text-muted-foreground whitespace-nowrap">{formatTimeAgo(job.created_at)}</TableCell>
+                  </TableRow>
+                )
+              })}
+              {filteredJobs.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">No hay jobs recientes.</TableCell>
+                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                    {filter === "all" ? "No hay jobs recientes." : `No hay jobs con estado "${filter}".`}
+                  </TableCell>
                 </TableRow>
               )}
             </TableBody>

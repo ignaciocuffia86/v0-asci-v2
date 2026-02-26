@@ -87,9 +87,9 @@ export function EditKeywordsDialog({
   const handleAddKeyword = () => {
     if (!newKeyword.trim()) return
 
-    // Support semicolon-separated bulk add
+    // Support semicolon or comma-separated bulk add
     const newKeywords = newKeyword
-      .split(";")
+      .split(/[;,]/)
       .map((k) => k.trim())
       .filter((k) => k && !keywords.includes(k))
 
@@ -164,7 +164,7 @@ export function EditKeywordsDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg !flex !flex-col max-h-[85vh]">
         {view === "edit" ? (
           <>
             <DialogHeader>
@@ -174,7 +174,7 @@ export function EditKeywordsDialog({
               </DialogDescription>
             </DialogHeader>
 
-            <div className="space-y-4 py-4">
+            <div className="space-y-4 py-4 overflow-y-auto min-h-0">
               {/* Name editing */}
               <div className="space-y-2">
                 <Label htmlFor="item-name">Nombre</Label>
@@ -219,20 +219,20 @@ export function EditKeywordsDialog({
                     value={newKeyword}
                     onChange={(e) => setNewKeyword(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    placeholder="Separar múltiples con punto y coma (;)"
+                    placeholder="Separar múltiples con coma (,) o punto y coma (;)"
                   />
                   <Button type="button" onClick={handleAddKeyword} size="icon">
                     <Plus className="h-4 w-4" />
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Usa punto y coma (;) para agregar múltiples keywords a la vez.
+                  Usa coma (,) o punto y coma (;) para agregar múltiples keywords a la vez.
                 </p>
               </div>
 
               {/* Pending changes summary */}
               {hasChanges && (
-                <div className="space-y-2 p-3 border rounded-md bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800 max-h-[200px] overflow-y-auto">
+                <div className="space-y-2 p-3 border rounded-md bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800 max-h-[200px] overflow-y-auto overflow-x-hidden">
                   <div className="flex items-center gap-2 text-amber-800 dark:text-amber-200">
                     <AlertTriangle className="h-4 w-4" />
                     <span className="text-sm font-medium">Cambios pendientes</span>
@@ -246,10 +246,10 @@ export function EditKeywordsDialog({
 
                   {addedKeywords.length > 0 && (
                     <div className="text-sm">
-                      <span className="text-green-700 dark:text-green-400">+ Agregar ({addedKeywords.length}):</span>{" "}
-                      <span className="text-green-600 dark:text-green-300">
+                      <span className="text-green-700 dark:text-green-400">+ Agregar ({addedKeywords.length}):</span>
+                      <p className="text-green-600 dark:text-green-300 break-words">
                         {addedKeywords.map((c) => c.keyword).join(", ")}
-                      </span>
+                      </p>
                       <p className="text-xs text-muted-foreground mt-1">
                         Se procesará la base de datos para detectar nuevas señales.
                       </p>
@@ -258,10 +258,10 @@ export function EditKeywordsDialog({
 
                   {removedKeywords.length > 0 && (
                     <div className="text-sm">
-                      <span className="text-red-700 dark:text-red-400">- Eliminar ({removedKeywords.length}):</span>{" "}
-                      <span className="text-red-600 dark:text-red-300">
+                      <span className="text-red-700 dark:text-red-400">- Eliminar ({removedKeywords.length}):</span>
+                      <p className="text-red-600 dark:text-red-300 break-words">
                         {removedKeywords.map((c) => c.keyword).join(", ")}
-                      </span>
+                      </p>
                       <p className="text-xs text-muted-foreground mt-1">
                         Se eliminarán las señales existentes con estas keywords.
                       </p>
