@@ -12,10 +12,10 @@ import {
   Building2,
   Globe,
   ChevronRight,
-  Layers,
+
   FileText,
   Sparkles,
-  BarChart3,
+
   Menu,
   X,
 } from "lucide-react"
@@ -143,36 +143,7 @@ function StepCard({ number, title, description, index }: { number: number; title
 }
 
 /* ─── Testimonial Card ─── */
-function TestimonialCard({ quote, name, role, company, index }: { quote: string; name: string; role: string; company: string; index: number }) {
-  const ref = useRef(null)
-  const isInView = useInView(ref, { once: true, margin: "-40px" })
-  return (
-    <motion.div
-      ref={ref}
-      initial={{ opacity: 0, y: 24 }}
-      animate={isInView ? { opacity: 1, y: 0 } : {}}
-      transition={{ duration: 0.5, delay: index * 0.12, ease: [0.22, 1, 0.36, 1] }}
-      className="rounded-2xl p-6 md:p-8"
-      style={{ border: `1px solid ${BORDER}`, backgroundColor: "#111111" }}
-    >
-      <p className="mb-6 text-base leading-relaxed italic" style={{ color: "#b3b3b3" }}>
-        {'"'}{quote}{'"'}
-      </p>
-      <div className="flex items-center gap-4">
-        <div
-          className="flex h-11 w-11 items-center justify-center rounded-full text-sm font-bold"
-          style={{ backgroundColor: `${LIME}18`, color: LIME }}
-        >
-          {name.split(" ").map(n => n[0]).join("")}
-        </div>
-        <div>
-          <div className="font-medium" style={{ color: OFF_WHITE }}>{name}</div>
-          <div className="text-sm" style={{ color: GRAY }}>{role}, {company}</div>
-        </div>
-      </div>
-    </motion.div>
-  )
-}
+
 
 /* ═══════════════════════════════════════════════════
    MAIN PAGE
@@ -194,8 +165,7 @@ export default function HomePage() {
   const navLinks = [
     { href: "#features", label: "Producto" },
     { href: "#how-it-works", label: "Como Funciona" },
-    { href: "#testimonials", label: "Testimonios" },
-    { href: "#request-access", label: "Acceso" },
+    { href: "#request-access", label: "Contacto" },
   ]
 
   return (
@@ -493,12 +463,12 @@ export default function HomePage() {
               </p>
             </div>
             <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
-              <FeatureCard index={0} icon={Search} title="Busqueda por Tecnologia" description="Encuentra empresas que usan SAP, AWS, Salesforce o cualquier tecnologia. Filtra por pais e industria." />
-              <FeatureCard index={1} icon={BarChart3} title="Busqueda por Proceso" description="Identifica empresas con equipos de DevOps, QA, Data Science o cualquier capacidad operativa." />
-              <FeatureCard index={2} icon={Building2} title="Perfil 360 de Empresa" description="Stack tecnologico, procesos internos, empleados clave y busquedas laborales activas en una sola vista." />
-              <FeatureCard index={3} icon={Users} title="Decision Makers" description="Identifica a las personas correctas dentro de cada empresa basandote en las senales detectadas." />
-              <FeatureCard index={4} icon={Globe} title="Senales Web con IA" description="Busca noticias, implementaciones y casos de exito de tus prospectos usando inteligencia artificial." />
-              <FeatureCard index={5} icon={FileText} title="Brief Ejecutivo con IA" description="Genera resumenes ejecutivos de cada cuenta combinando senales, noticias y estrategia comercial." />
+              <FeatureCard index={0} icon={Search} title="Segmentacion por Senales" description="Busca empresas por tecnologia, proceso o nombre. Cada senal proviene de perfiles reales de empleados actuales y pasados, o de busquedas laborales activas." />
+              <FeatureCard index={1} icon={Building2} title="Perfil 360 de Empresa" description="Cada empresa tiene un panel con su stack tecnologico, procesos internos, empleados detectados, busquedas laborales activas y noticias recientes." />
+              <FeatureCard index={2} icon={FileText} title="Documentacion & Value Profile" description="Subi tus casos de exito, propuestas de valor y brochures. La IA los vincula con el diccionario de senales para entender tu fit con cada cuenta." />
+              <FeatureCard index={3} icon={Users} title="Prospectos & Decision Makers" description="Busca contactos relevantes en Apollo.io desde el workspace. La IA sugiere job titles basandose en las senales detectadas de cada cuenta." />
+              <FeatureCard index={4} icon={Globe} title="Noticias e Implementaciones" description="Investiga con IA las noticias recientes e implementaciones de cada cuenta. Alimentan los icebreakers y el brief ejecutivo con contexto actualizado." />
+              <FeatureCard index={5} icon={Sparkles} title="Estrategia, Icebreakers & Brief" description="Genera estrategias de abordaje, icebreakers personalizados y briefs ejecutivos. Todo basado en senales, documentacion y noticias reales." />
             </div>
           </div>
         </Section>
@@ -521,10 +491,10 @@ export default function HomePage() {
             </div>
 
             <div className="grid grid-cols-1 gap-12 md:grid-cols-4">
-              <StepCard index={0} number={1} title="Ingesta de datos" description="Importa contactos de LinkedIn y busquedas laborales. ASCI analiza perfiles de empleados actuales y pasados para extraer menciones de tecnologias y procesos." />
-              <StepCard index={1} number={2} title="Deteccion de senales" description="Nuestro motor matchea contra un diccionario de 1,100+ tecnologias y procesos, creando senales unicas por empresa con nivel de confianza." />
-              <StepCard index={2} number={3} title="Segmentacion inteligente" description="Busca por tecnologia, proceso o empresa. Filtra por industria y pais. Guarda cuentas como bookmarks y clasificalas por prioridad (T1, T2, T3)." />
-              <StepCard index={3} number={4} title="Accion con contexto" description="Genera estrategias de cuenta, icebreakers personalizados, briefs ejecutivos y encuentra decision makers. Todo basado en senales reales." />
+              <StepCard index={0} number={1} title="Ingesta & Senales" description="Importa contactos y busquedas laborales. ASCI analiza cada perfil contra un diccionario de tecnologias y procesos, creando senales unicas por empresa." />
+              <StepCard index={1} number={2} title="Documentacion" description="Subi tus propuestas de valor, casos de exito y brochures. La IA los analiza, extrae tags de industria, tecnologia y proceso, y construye tu perfil de valor." />
+              <StepCard index={2} number={3} title="Segmentacion" description="Busca por tecnologia, proceso o empresa. Filtra por pais e industria. Guarda cuentas como bookmarks con prioridad (T1, T2, T3) y estado de avance." />
+              <StepCard index={3} number={4} title="Workspace & Accion" description="Cada cuenta tiene su workspace con estrategia IA, noticias, implementaciones, prospectos, icebreakers y brief ejecutivo. Todo conectado a tus documentos y senales." />
             </div>
           </div>
         </Section>
@@ -544,13 +514,13 @@ export default function HomePage() {
                   Tu centro de comando para cada cuenta
                 </h2>
                 <p className="mb-10 text-lg leading-relaxed" style={{ color: GRAY }}>
-                  Cada cuenta guardada tiene su workspace privado donde la IA trabaja para vos. Investiga, analiza y genera contenido sin salir de la plataforma.
+                  Cada cuenta guardada tiene su workspace privado. La IA cruza las senales detectadas con tus documentos de propuesta de valor y casos de exito para generar estrategias, icebreakers y briefs personalizados.
                 </p>
                 <div className="space-y-6">
                   {[
-                    { icon: Target, title: "Estrategia con IA", desc: "Analiza el sitio web del prospecto y genera angulos de venta automaticamente." },
-                    { icon: Layers, title: "Pipeline Kanban", desc: "Gestiona tus cuentas arrastrando y soltando entre estados del funnel." },
-                    { icon: Zap, title: "Icebreakers personalizados", desc: "Mensajes de apertura basados en senales, noticias y tu propia documentacion." },
+                    { icon: Target, title: "Estrategia con IA", desc: "Genera angulos de venta usando las senales detectadas, tus documentos de propuesta de valor, y el contexto de noticias e implementaciones de la cuenta." },
+                    { icon: FileText, title: "Documentacion conectada", desc: "Tus casos de exito y propuestas de valor se vinculan automaticamente a cada cuenta segun las senales. La IA entiende tu fit con cada prospecto." },
+                    { icon: Zap, title: "Icebreakers & Brief", desc: "Mensajes de apertura personalizados y briefs ejecutivos que combinan senales, noticias, implementaciones y tu propia documentacion comercial." },
                   ].map((f) => (
                     <div key={f.title} className="flex items-start gap-4">
                       <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl" style={{ backgroundColor: `${LIME}12`, color: LIME }}>
@@ -578,7 +548,7 @@ export default function HomePage() {
                     <span className="rounded-lg px-3 py-1 text-xs font-medium" style={{ backgroundColor: `${LIME}15`, color: LIME }}>Alta Prioridad</span>
                   </div>
                   <div className="flex gap-1 px-6 py-3" style={{ borderBottom: `1px solid ${BORDER}` }}>
-                    {["Overview", "Senales", "Estrategia", "Noticias"].map((tab, i) => (
+                    {["Resumen", "Estrategia", "Noticias", "Icebreakers"].map((tab, i) => (
                       <span
                         key={tab}
                         className="rounded-lg px-3.5 py-1.5 text-xs font-medium"
@@ -598,7 +568,7 @@ export default function HomePage() {
                         <span className="text-sm font-medium" style={{ color: OFF_WHITE }}>Estrategia Generada por IA</span>
                       </div>
                       <p className="text-sm" style={{ color: GRAY }}>
-                        Enfocar pitch en modernizacion de core bancario. Senales indican migracion a AWS y adopcion de metodologias agiles...
+                        Basado en 12 senales tech y tu caso de exito en banca digital: enfocar pitch en modernizacion de core bancario. Migracion a AWS y adopcion de metodologias agiles...
                       </p>
                     </div>
                     <div className="grid grid-cols-3 gap-3">
@@ -621,45 +591,6 @@ export default function HomePage() {
                   </div>
                 </div>
               </div>
-            </div>
-          </div>
-        </Section>
-
-        {/* ═══════════════════════════════════════
-            TESTIMONIALS
-            ═══════════════════════════════════════ */}
-        <Section id="testimonials" className="py-24 md:py-32" style={{ borderTop: `1px solid ${BORDER}` }}>
-          <div className="mx-auto max-w-5xl px-6">
-            <div className="mx-auto mb-16 max-w-2xl text-center">
-              <p className="mb-4 text-xs font-semibold uppercase tracking-widest" style={{ color: LIME }}>
-                Testimonios
-              </p>
-              <h2 className="mb-5 text-balance text-3xl font-bold md:text-4xl" style={{ color: OFF_WHITE }}>
-                Equipos de ventas que ya lo usan
-              </h2>
-            </div>
-            <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
-              <TestimonialCard
-                index={0}
-                quote="ASCI nos permitio identificar 3x mas cuentas calificadas en el primer mes. Las senales de tecnologia son increiblemente precisas."
-                name="Martin Gonzalez"
-                role="Head of Sales"
-                company="TechCorp LATAM"
-              />
-              <TestimonialCard
-                index={1}
-                quote="Los icebreakers que genera la IA con contexto real de cada cuenta cambiaron completamente nuestra tasa de respuesta en outbound."
-                name="Carolina Mendez"
-                role="SDR Manager"
-                company="DataFlow Solutions"
-              />
-              <TestimonialCard
-                index={2}
-                quote="Antes tardabamos 2 horas investigando cada cuenta. Con ASCI tenemos el brief ejecutivo en 30 segundos. Es un game changer."
-                name="Federico Lopez"
-                role="VP of Business Dev"
-                company="CloudBridge"
-              />
             </div>
           </div>
         </Section>
