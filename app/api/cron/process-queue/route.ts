@@ -4,6 +4,12 @@ import { NextResponse } from "next/server"
 export const dynamic = "force-dynamic"
 export const maxDuration = 60
 
+// ── Configuration ──
+const CHUNK_SIZE = 5           // rows per RPC call
+const MAX_ITERATIONS = 1       // iterations inside RPC (1 = commit after each 5 rows)
+const TIME_BUDGET_MS = 50_000  // stop calling RPCs after 50s (leave 10s buffer)
+const MAX_CONSECUTIVE_FAILURES = 5 // skip batch after N consecutive failures
+
 export async function GET(request: Request) {
   const authHeader = request.headers.get("authorization")
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}` && process.env.NODE_ENV === "production") {
@@ -45,31 +51,43 @@ export async function GET(request: Request) {
 
   const executionId = execution?.id
   const startTime = Date.now()
-  const MAX_TIME = 50_000
   let totalProcessed = 0
   let calls = 0
   let lastBatchId = ""
-  let debugLogs: string[] = []
+  const debugLogs: string[] = []
+  const skippedBatches: string[] = []
 
   try {
-    while (Date.now() - startTime < MAX_TIME) {
-      // Get the NEWEST pending/processing batch
+    while (Date.now() - startTime < TIME_BUDGET_MS) {
+      // ── PHASE 3: FIFO order (oldest first) + skip failing batches ──
       const { data: batch, error: fetchErr } = await supabase
         .from("import_batches")
-        .select("id, batch_type, filename, status")
+        .select("id, batch_type, filename, status, consecutive_failures")
         .in("status", ["pending", "processing"])
-        .order("created_at", { ascending: false })
+        .lt("consecutive_failures", MAX_CONSECUTIVE_FAILURES)
+        .order("created_at", { ascending: true })  // FIFO: oldest batch first
         .limit(1)
         .single()
 
       if (fetchErr || !batch) {
-        debugLogs.push(`No batches found: ${fetchErr?.message || "empty"}`)
+        // Check if there are skipped batches (all exceeded failure limit)
+        const { count: stuckCount } = await supabase
+          .from("import_batches")
+          .select("*", { count: "exact", head: true })
+          .in("status", ["pending", "processing"])
+          .gte("consecutive_failures", MAX_CONSECUTIVE_FAILURES)
+
+        if (stuckCount && stuckCount > 0) {
+          debugLogs.push(`No processable batches. ${stuckCount} batch(es) skipped (>${MAX_CONSECUTIVE_FAILURES} consecutive failures)`)
+        } else {
+          debugLogs.push(`No pending batches found`)
+        }
         break
       }
 
       lastBatchId = batch.id
 
-      // If batch is "pending", set it to "processing" first
+      // If batch is "pending", set it to "processing"
       if (batch.status === "pending") {
         await supabase
           .from("import_batches")
@@ -77,71 +95,108 @@ export async function GET(request: Request) {
           .eq("id", batch.id)
       }
 
-      // Count pending rows BEFORE the RPC call
+      // Count pending rows
       const { count: pendingBefore } = await supabase
         .from("import_rows")
         .select("*", { count: "exact", head: true })
         .eq("batch_id", batch.id)
         .eq("status", "pending")
 
-      debugLogs.push(`Batch ${batch.id.slice(0,8)} (${batch.filename}): ${pendingBefore} pending`)
-
       if (!pendingBefore || pendingBefore === 0) {
-        // No pending rows -- mark batch completed and try next
         await supabase
           .from("import_batches")
           .update({ status: "completed", updated_at: new Date().toISOString() })
           .eq("id", batch.id)
-        debugLogs.push(`Batch ${batch.id.slice(0,8)} marked completed (0 pending)`)
+        debugLogs.push(`Batch ${batch.id.slice(0, 8)} completed (0 pending)`)
         continue
       }
 
-      // Call RPC: chunk_size=5 => 50 rows per call (5 per iteration x 10 internal iterations)
-      // statement_timeout=55s is SET on the SQL function to override PostgREST's 8s default
-      const { data: rpcResult, error: rpcError } = await supabase.rpc("process_import_batch", {
-        p_batch_id: batch.id,
-        p_chunk_size: 5,
-      })
+      debugLogs.push(`Batch ${batch.id.slice(0, 8)} (${batch.filename}): ${pendingBefore} pending, failures=${batch.consecutive_failures || 0}`)
 
-      calls++
+      // ── PHASE 1: Small RPC calls with p_max_iterations=1 ──
+      // Each call = 1 iteration x 5 rows = separate transaction = committed independently
+      // Loop multiple small calls within our time budget
+      let batchCallsThisRound = 0
+      let batchProcessedThisRound = 0
 
-      if (rpcError) {
-        debugLogs.push(`RPC error: ${rpcError.message}`)
-        break
+      while (Date.now() - startTime < TIME_BUDGET_MS) {
+        const callStart = Date.now()
+
+        const { data: rpcResult, error: rpcError } = await supabase.rpc("process_import_batch", {
+          p_batch_id: batch.id,
+          p_chunk_size: CHUNK_SIZE,
+          p_max_iterations: MAX_ITERATIONS,
+        })
+
+        calls++
+        batchCallsThisRound++
+        const callMs = Date.now() - callStart
+
+        if (rpcError) {
+          // ── PHASE 3: Track consecutive failures ──
+          debugLogs.push(`RPC error (${callMs}ms): ${rpcError.message}`)
+          await supabase
+            .from("import_batches")
+            .update({
+              consecutive_failures: (batch.consecutive_failures || 0) + 1,
+              last_error: rpcError.message,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", batch.id)
+          break // Move to next batch
+        }
+
+        // Parse RPC result
+        const result = typeof rpcResult === "string" ? JSON.parse(rpcResult) : rpcResult
+        const processedThisCall = result?.processed_this_call ?? result?.total_processed ?? 0
+        const pendingRemaining = result?.pending_remaining ?? -1
+
+        batchProcessedThisRound += processedThisCall
+        totalProcessed += processedThisCall
+
+        // ── PHASE 3: Reset failure counter on success ──
+        if (processedThisCall > 0 && (batch.consecutive_failures || 0) > 0) {
+          await supabase
+            .from("import_batches")
+            .update({ consecutive_failures: 0, last_error: null })
+            .eq("id", batch.id)
+        }
+
+        // No progress = something wrong with this batch, increment failures and move on
+        if (processedThisCall <= 0) {
+          debugLogs.push(`No progress on call ${batchCallsThisRound} (${callMs}ms)`)
+          await supabase
+            .from("import_batches")
+            .update({
+              consecutive_failures: (batch.consecutive_failures || 0) + 1,
+              last_error: "No progress on RPC call",
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", batch.id)
+          break
+        }
+
+        // Batch completed?
+        if (result?.status === "completed" || pendingRemaining === 0) {
+          await supabase
+            .from("import_batches")
+            .update({ status: "completed", consecutive_failures: 0, updated_at: new Date().toISOString() })
+            .eq("id", batch.id)
+          debugLogs.push(`Batch ${batch.id.slice(0, 8)} completed! (${batchProcessedThisRound} rows in ${batchCallsThisRound} calls)`)
+          break
+        }
+
+        debugLogs.push(`Call ${calls}: +${processedThisCall} rows (${callMs}ms), ~${pendingRemaining} remaining`)
       }
 
-      // Debug: log the raw RPC result type and value
-      debugLogs.push(`RPC raw type=${typeof rpcResult}, val=${JSON.stringify(rpcResult).slice(0, 200)}`)
-
-      // Count pending rows AFTER the RPC call to know how many were actually processed
-      const { count: pendingAfter } = await supabase
-        .from("import_rows")
-        .select("*", { count: "exact", head: true })
-        .eq("batch_id", batch.id)
-        .eq("status", "pending")
-
-      const processed = (pendingBefore || 0) - (pendingAfter || 0)
-      totalProcessed += processed
-      debugLogs.push(`Call ${calls}: processed ${processed} rows, ${pendingAfter} remaining`)
-
-      // If no progress was made, something is wrong - break to avoid infinite loop
-      if (processed <= 0) {
-        debugLogs.push(`No progress, breaking`)
-        break
-      }
-
-      // If batch done, loop picks next one
-      if (pendingAfter === 0) {
-        await supabase
-          .from("import_batches")
-          .update({ status: "completed", updated_at: new Date().toISOString() })
-          .eq("id", batch.id)
-        debugLogs.push(`Batch completed`)
+      // Summary for this batch
+      if (batchProcessedThisRound > 0) {
+        debugLogs.push(`Batch ${batch.id.slice(0, 8)} round: ${batchProcessedThisRound} rows in ${batchCallsThisRound} calls`)
       }
     }
 
     const duration = Math.round((Date.now() - startTime) / 1000)
-    const details = { calls, totalProcessed, lastBatchId, duration, debugLogs }
+    const details = { calls, totalProcessed, lastBatchId, duration, skippedBatches, debugLogs }
 
     await finishExecution(supabase, executionId, "completed", totalProcessed, details)
     return NextResponse.json({ success: true, ...details })

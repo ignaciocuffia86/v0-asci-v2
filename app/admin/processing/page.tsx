@@ -220,7 +220,7 @@ export default function ProcessingPage() {
               <CardDescription>Ultimos 30 batches de ingesta — auto-refresh cada 30s</CardDescription>
             </CardHeader>
             <CardContent>
-              <BatchTable batches={batches} />
+              <BatchTable batches={batches} onRefresh={fetchAll} />
             </CardContent>
           </Card>
         </TabsContent>
@@ -444,9 +444,10 @@ function CronRow({ cron }: { cron: CronEntry }) {
   )
 }
 
-function BatchTable({ batches }: { batches: ImportBatch[] }) {
+function BatchTable({ batches, onRefresh }: { batches: ImportBatch[]; onRefresh: () => void }) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [errors, setErrors] = useState<{ message: string; count: number }[]>([])
+  const supabase = createClient()
 
   const handleExpand = async (id: string) => {
     if (expandedId === id) {
@@ -458,62 +459,122 @@ function BatchTable({ batches }: { batches: ImportBatch[] }) {
     setErrors(errs)
   }
 
-  return (
-    <div className="overflow-auto max-h-[500px]">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead className="w-8"></TableHead>
-            <TableHead>Archivo</TableHead>
-            <TableHead>Tipo</TableHead>
-            <TableHead>Estado</TableHead>
-            <TableHead className="text-right">Total</TableHead>
-            <TableHead className="text-right">Procesadas</TableHead>
-            <TableHead className="text-right">Fallidas</TableHead>
-            <TableHead>Progreso</TableHead>
-            <TableHead className="text-right">Fecha</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {batches.map((b) => {
-            const pct = b.total_rows > 0 ? Math.round(((b.processed_rows || 0) + (b.failed_rows || 0)) / b.total_rows * 100) : 0
-            const hasFailed = (b.failed_rows || 0) > 0
-            const isExpanded = expandedId === b.id
+  const handleResetFailures = async (batchId: string) => {
+    await supabase
+      .from("import_batches")
+      .update({ consecutive_failures: 0, last_error: null, updated_at: new Date().toISOString() })
+      .eq("id", batchId)
+    onRefresh()
+  }
 
-            return (
-              <TableRow key={b.id} className="group">
-                <TableCell>
-                  {hasFailed && (
-                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => handleExpand(b.id)}>
-                      {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                    </Button>
-                  )}
-                </TableCell>
-                <TableCell className="font-mono text-xs max-w-[200px] truncate" title={b.filename}>{b.filename}</TableCell>
-                <TableCell>
-                  <Badge variant="outline" className="text-xs capitalize">{b.batch_type}</Badge>
-                </TableCell>
-                <TableCell><StatusBadge status={b.status} /></TableCell>
-                <TableCell className="text-right text-sm">{formatNumber(b.total_rows)}</TableCell>
-                <TableCell className="text-right text-sm text-green-600">{formatNumber(b.processed_rows)}</TableCell>
-                <TableCell className="text-right text-sm text-red-600">{(b.failed_rows || 0) > 0 ? formatNumber(b.failed_rows) : "-"}</TableCell>
-                <TableCell className="w-32">
+  const handleResetAllFailures = async () => {
+    await supabase
+      .from("import_batches")
+      .update({ consecutive_failures: 0, last_error: null, updated_at: new Date().toISOString() })
+      .in("status", ["pending", "processing"])
+      .gte("consecutive_failures", 5)
+    onRefresh()
+  }
+
+  const skippedBatches = batches.filter((b) => (b.consecutive_failures || 0) >= 5 && (b.status === "processing" || b.status === "pending"))
+
+  return (
+    <div className="space-y-3">
+      {/* Alert for batches skipped due to consecutive failures */}
+      {skippedBatches.length > 0 && (
+        <Alert variant="destructive">
+          <ShieldAlert className="h-4 w-4" />
+          <AlertTitle>{skippedBatches.length} batch(es) detenidos por errores consecutivos</AlertTitle>
+          <AlertDescription className="mt-2">
+            <div className="space-y-1 mb-2">
+              {skippedBatches.map((b) => (
+                <div key={b.id} className="flex items-center justify-between text-xs">
+                  <span className="font-mono truncate max-w-xs">{b.filename}</span>
                   <div className="flex items-center gap-2">
-                    <Progress value={pct} className="h-2 flex-1" />
-                    <span className="text-xs text-muted-foreground w-8 text-right">{pct}%</span>
+                    <span className="text-muted-foreground">{b.consecutive_failures} fallos - {b.last_error?.slice(0, 60)}</span>
+                    <Button variant="outline" size="sm" className="h-6 text-xs" onClick={() => handleResetFailures(b.id)}>
+                      Reintentar
+                    </Button>
                   </div>
-                </TableCell>
-                <TableCell className="text-right text-xs text-muted-foreground whitespace-nowrap">{formatTimeAgo(b.created_at)}</TableCell>
-              </TableRow>
-            )
-          })}
-          {batches.length === 0 && (
+                </div>
+              ))}
+            </div>
+            <Button variant="outline" size="sm" onClick={handleResetAllFailures}>
+              <RefreshCw className="h-3 w-3 mr-1" />Reintentar todos
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <div className="overflow-auto max-h-[500px]">
+        <Table>
+          <TableHeader>
             <TableRow>
-              <TableCell colSpan={9} className="text-center text-muted-foreground py-8">No hay batches de importacion.</TableCell>
+              <TableHead className="w-8"></TableHead>
+              <TableHead>Archivo</TableHead>
+              <TableHead>Tipo</TableHead>
+              <TableHead>Estado</TableHead>
+              <TableHead className="text-right">Total</TableHead>
+              <TableHead className="text-right">Procesadas</TableHead>
+              <TableHead className="text-right">Fallidas</TableHead>
+              <TableHead>Progreso</TableHead>
+              <TableHead className="text-right">Fecha</TableHead>
             </TableRow>
-          )}
-        </TableBody>
-      </Table>
+          </TableHeader>
+          <TableBody>
+            {batches.map((b) => {
+              const pct = b.total_rows > 0 ? Math.round(((b.processed_rows || 0) + (b.failed_rows || 0)) / b.total_rows * 100) : 0
+              const hasFailed = (b.failed_rows || 0) > 0
+              const isExpanded = expandedId === b.id
+              const isSkipped = (b.consecutive_failures || 0) >= 5 && (b.status === "processing" || b.status === "pending")
+
+              return (
+                <TableRow key={b.id} className={`group ${isSkipped ? "bg-red-50/50 dark:bg-red-950/10" : ""}`}>
+                  <TableCell>
+                    {(hasFailed || isSkipped) && (
+                      <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => handleExpand(b.id)}>
+                        {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                      </Button>
+                    )}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs max-w-[200px] truncate" title={b.filename}>
+                    {b.filename}
+                    {isSkipped && (
+                      <span className="block text-[10px] text-red-600 dark:text-red-400">
+                        Detenido: {b.consecutive_failures} fallos consecutivos
+                      </span>
+                    )}
+                    {!isSkipped && (b.consecutive_failures || 0) > 0 && (b.status === "processing" || b.status === "pending") && (
+                      <span className="block text-[10px] text-amber-600 dark:text-amber-400">
+                        {b.consecutive_failures} fallo(s) recientes
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className="text-xs capitalize">{b.batch_type}</Badge>
+                  </TableCell>
+                  <TableCell><StatusBadge status={b.status} /></TableCell>
+                  <TableCell className="text-right text-sm">{formatNumber(b.total_rows)}</TableCell>
+                  <TableCell className="text-right text-sm text-green-600">{formatNumber(b.processed_rows)}</TableCell>
+                  <TableCell className="text-right text-sm text-red-600">{(b.failed_rows || 0) > 0 ? formatNumber(b.failed_rows) : "-"}</TableCell>
+                  <TableCell className="w-32">
+                    <div className="flex items-center gap-2">
+                      <Progress value={pct} className="h-2 flex-1" />
+                      <span className="text-xs text-muted-foreground w-8 text-right">{pct}%</span>
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-right text-xs text-muted-foreground whitespace-nowrap">{formatTimeAgo(b.created_at)}</TableCell>
+                </TableRow>
+              )
+            })}
+            {batches.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={9} className="text-center text-muted-foreground py-8">No hay batches de importacion.</TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </div>
 
       {/* Expanded error detail */}
       {expandedId && errors.length > 0 && (
