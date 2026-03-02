@@ -7,7 +7,7 @@ export const maxDuration = 60
 // ── Configuration ──
 const CHUNK_SIZE = 5           // rows per RPC call
 const MAX_ITERATIONS = 1       // iterations inside RPC (1 = commit after each 5 rows)
-const TIME_BUDGET_MS = 50_000  // stop calling RPCs after 50s (leave 10s buffer)
+const TIME_BUDGET_MS = 45_000  // stop calling RPCs after 45s (leave 15s buffer for slow calls)
 const MAX_CONSECUTIVE_FAILURES = 5 // skip batch after N consecutive failures
 
 export async function GET(request: Request) {
@@ -18,7 +18,14 @@ export async function GET(request: Request) {
 
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    {
+      // Default Supabase JS fetch timeout is 8s which causes RPC calls to be killed prematurely.
+      // Our RPC processes 5 rows in ~6-7s, some rows take up to 15s. Set to 25s per call.
+      global: {
+        fetch: (url, options) => fetch(url, { ...options, signal: AbortSignal.timeout(25_000) }),
+      },
+    }
   )
 
   // Clean up stuck "running" executions older than 2 minutes
