@@ -468,10 +468,10 @@ export default function HomePage() {
         <Section className="py-20" style={{ borderTop: `1px solid ${BORDER}`, borderBottom: `1px solid ${BORDER}` }}>
           <div className="mx-auto max-w-5xl px-6">
             <div className="grid grid-cols-2 gap-10 md:grid-cols-4">
-              <AnimatedStat value={42000} suffix="+" label="Contactos Analizados" />
-              <AnimatedStat value={58000} suffix="+" label="Empresas Indexadas" />
-              <AnimatedStat value={1100} suffix="+" label="Tecnologias y Procesos" />
-              <AnimatedStat value={235000} suffix="+" label="Senales Detectadas" />
+ <AnimatedStat value={217000} suffix="+" label="Contactos Analizados" />
+ <AnimatedStat value={239000} suffix="+" label="Empresas Indexadas" />
+ <AnimatedStat value={78} suffix="" label="Tecnologias y Procesos" />
+ <AnimatedStat value={598000} suffix="+" label="Senales Detectadas" />
             </div>
           </div>
         </Section>
