@@ -65,7 +65,7 @@ export default function SignUpPage() {
       <div className="w-full max-w-sm">
         <div className="flex flex-col gap-6">
           <div className="flex items-center justify-center mb-4">
-            <Image src="/logo.png" alt="ASCI Logo" width={40} height={40} className="rounded-lg" />
+            <Image src="/logo.png" alt="ASCI Logo" width={40} height={40} className="rounded-lg" style={{ width: "auto", height: "auto" }} />
             <span className="ml-2 text-2xl font-bold">ASCI v2</span>
           </div>
           <Card>

@@ -44,12 +44,18 @@ export function ProcessesTable() {
     fetchData()
   }, [])
 
-  const addProcess = async (name: string, keywords: string[]) => {
-    await supabase.from("dictionary_processes").insert({
+  const addProcess = async (name: string, keywords: string[]): Promise<boolean> => {
+    const { error } = await supabase.from("dictionary_processes").insert({
       name,
       keywords,
     })
+    if (error) {
+      console.error("[v0] Error inserting process:", error.message, error.details, error.hint)
+      alert(`Error al crear el proceso: ${error.message}`)
+      return false
+    }
     fetchData()
+    return true
   }
 
   const deleteProcess = async (id: string) => {
@@ -130,14 +136,16 @@ export function ProcessesTable() {
   )
 }
 
-function AddProcessDialog({ onAdd }: { onAdd: (name: string, kws: string[]) => void }) {
+function AddProcessDialog({ onAdd }: { onAdd: (name: string, kws: string[]) => Promise<boolean> }) {
   const [name, setName] = useState("")
   const [keywords, setKeywords] = useState("")
   const [open, setOpen] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (name.trim()) {
+      setIsSubmitting(true)
       const kwList = keywords
         .split(/[,;]/)
         .map((k) => k.trim())
@@ -145,10 +153,13 @@ function AddProcessDialog({ onAdd }: { onAdd: (name: string, kws: string[]) => v
       if (!kwList.includes(name.trim())) {
         kwList.unshift(name.trim())
       }
-      onAdd(name, kwList)
-      setName("")
-      setKeywords("")
-      setOpen(false)
+      const success = await onAdd(name, kwList)
+      setIsSubmitting(false)
+      if (success) {
+        setName("")
+        setKeywords("")
+        setOpen(false)
+      }
     }
   }
 
@@ -191,8 +202,8 @@ function AddProcessDialog({ onAdd }: { onAdd: (name: string, kws: string[]) => v
             </div>
           </div>
           <DialogFooter>
-            <Button type="submit" disabled={!name.trim()}>
-              Guardar
+            <Button type="submit" disabled={!name.trim() || isSubmitting}>
+              {isSubmitting ? "Guardando..." : "Guardar"}
             </Button>
           </DialogFooter>
         </form>
