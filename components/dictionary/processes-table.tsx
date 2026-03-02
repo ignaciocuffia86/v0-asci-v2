@@ -45,15 +45,29 @@ export function ProcessesTable() {
   }, [])
 
   const addProcess = async (name: string, keywords: string[]): Promise<boolean> => {
-    const { error } = await supabase.from("dictionary_processes").insert({
+    const { data, error } = await supabase.from("dictionary_processes").insert({
       name,
       keywords,
-    })
-    if (error) {
-      console.error("[v0] Error inserting process:", error.message, error.details, error.hint)
-      alert(`Error al crear el proceso: ${error.message}`)
+    }).select("id").single()
+    if (error || !data) {
+      console.error("[v0] Error inserting process:", error?.message, error?.details, error?.hint)
+      alert(`Error al crear el proceso: ${error?.message}`)
       return false
     }
+
+    // Generate dictionary_jobs for each keyword so the cron processes existing contacts/jobs
+    const jobs = keywords.map((kw) => ({
+      job_type: "add_keyword",
+      signal_id: data.id,
+      signal_type: "process",
+      keyword: kw,
+      status: "pending",
+    }))
+    const { error: jobsError } = await supabase.from("dictionary_jobs").insert(jobs)
+    if (jobsError) {
+      console.error("[v0] Error creating dictionary jobs:", jobsError.message)
+    }
+
     fetchData()
     return true
   }
