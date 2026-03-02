@@ -38,7 +38,7 @@ export async function getImportBatches(limit = 20) {
 
   const { data, error } = await supabase
     .from("import_batches")
-    .select("id, filename, batch_type, status, total_rows, processed_rows, failed_rows, created_at, updated_at")
+    .select("id, filename, batch_type, status, total_rows, processed_rows, failed_rows, created_at, updated_at, consecutive_failures, last_error")
     .order("created_at", { ascending: false })
     .limit(limit)
 
