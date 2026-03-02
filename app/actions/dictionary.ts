@@ -11,29 +11,29 @@ export async function processDictionaryJobs() {
   let totalSignalsAffected = 0
 
   try {
-    // Procesar jobs pendientes
+    // Process ONE job at a time until completed, then move to next.
+    // This avoids round-robin across many jobs and finishes each faster.
     while (Date.now() - startTime < MAX_EXECUTION_TIME) {
-      const { data: jobs, error: jobsError } = await supabase
+      // Pick the single oldest job, preferring ones already in progress
+      const { data: job, error: jobsError } = await supabase
         .from("dictionary_jobs")
         .select("*")
-        .in("status", ["pending", "processing"])
+        .in("status", ["processing", "pending"])
+        .order("status", { ascending: false }) // 'processing' first (alphabetically after 'pending')
         .order("created_at", { ascending: true })
-        .limit(10)
+        .limit(1)
+        .single()
 
-      if (jobsError) {
-        return { success: false, error: jobsError.message }
-      }
-
-      if (!jobs || jobs.length === 0) {
+      if (jobsError || !job) {
         break
       }
 
-      for (const job of jobs) {
-        if (Date.now() - startTime >= MAX_EXECUTION_TIME) break
-
+      // Pump this single job repeatedly until it completes or we run out of time
+      let jobDone = false
+      while (!jobDone && Date.now() - startTime < MAX_EXECUTION_TIME) {
         const { data: result, error: rpcError } = await supabase.rpc("process_dictionary_job", {
           p_job_id: job.id,
-          p_batch_size: 500,
+          p_batch_size: 1000,
         })
 
         if (rpcError) {
@@ -45,18 +45,23 @@ export async function processDictionaryJobs() {
               completed_at: new Date().toISOString(),
             })
             .eq("id", job.id)
+          jobDone = true
           continue
         }
 
         const jobResult = result as {
           success: boolean
+          has_more?: boolean
           signals_created?: number
           deleted_count?: number
         }
 
-        if (jobResult.success) {
+        totalSignalsAffected += jobResult.signals_created || jobResult.deleted_count || 0
+
+        if (!jobResult.has_more) {
+          // Job completed, move to next
           totalJobsProcessed++
-          totalSignalsAffected += jobResult.signals_created || jobResult.deleted_count || 0
+          jobDone = true
         }
       }
     }
