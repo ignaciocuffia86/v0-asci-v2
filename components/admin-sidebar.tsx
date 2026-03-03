@@ -91,7 +91,7 @@ export function AdminSidebar() {
     <aside className="w-64 bg-sidebar border-r border-sidebar-border flex flex-col h-screen sticky top-0">
       <div className="p-6 border-b border-sidebar-border">
         <div className="flex items-center gap-2">
-          <Image src="/logo.png" alt="ASCI Logo" width={32} height={32} className="rounded-md" />
+          <Image src="/logo.png" alt="ASCI Logo" width={32} height={32} className="rounded-md" style={{ width: "auto", height: "auto" }} />
           <span className="font-bold text-lg">ASCI Admin</span>
         </div>
       </div>

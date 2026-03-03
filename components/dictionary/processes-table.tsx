@@ -44,12 +44,32 @@ export function ProcessesTable() {
     fetchData()
   }, [])
 
-  const addProcess = async (name: string, keywords: string[]) => {
-    await supabase.from("dictionary_processes").insert({
+  const addProcess = async (name: string, keywords: string[]): Promise<boolean> => {
+    const { data, error } = await supabase.from("dictionary_processes").insert({
       name,
       keywords,
-    })
+    }).select("id").single()
+    if (error || !data) {
+      console.error("[v0] Error inserting process:", error?.message, error?.details, error?.hint)
+      alert(`Error al crear el proceso: ${error?.message}`)
+      return false
+    }
+
+    // Generate dictionary_jobs for each keyword so the cron processes existing contacts/jobs
+    const jobs = keywords.map((kw) => ({
+      job_type: "add_keyword",
+      signal_id: data.id,
+      signal_type: "process",
+      keyword: kw,
+      status: "pending",
+    }))
+    const { error: jobsError } = await supabase.from("dictionary_jobs").insert(jobs)
+    if (jobsError) {
+      console.error("[v0] Error creating dictionary jobs:", jobsError.message)
+    }
+
     fetchData()
+    return true
   }
 
   const deleteProcess = async (id: string) => {
@@ -130,14 +150,16 @@ export function ProcessesTable() {
   )
 }
 
-function AddProcessDialog({ onAdd }: { onAdd: (name: string, kws: string[]) => void }) {
+function AddProcessDialog({ onAdd }: { onAdd: (name: string, kws: string[]) => Promise<boolean> }) {
   const [name, setName] = useState("")
   const [keywords, setKeywords] = useState("")
   const [open, setOpen] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (name.trim()) {
+      setIsSubmitting(true)
       const kwList = keywords
         .split(/[,;]/)
         .map((k) => k.trim())
@@ -145,10 +167,13 @@ function AddProcessDialog({ onAdd }: { onAdd: (name: string, kws: string[]) => v
       if (!kwList.includes(name.trim())) {
         kwList.unshift(name.trim())
       }
-      onAdd(name, kwList)
-      setName("")
-      setKeywords("")
-      setOpen(false)
+      const success = await onAdd(name, kwList)
+      setIsSubmitting(false)
+      if (success) {
+        setName("")
+        setKeywords("")
+        setOpen(false)
+      }
     }
   }
 
@@ -191,8 +216,8 @@ function AddProcessDialog({ onAdd }: { onAdd: (name: string, kws: string[]) => v
             </div>
           </div>
           <DialogFooter>
-            <Button type="submit" disabled={!name.trim()}>
-              Guardar
+            <Button type="submit" disabled={!name.trim() || isSubmitting}>
+              {isSubmitting ? "Guardando..." : "Guardar"}
             </Button>
           </DialogFooter>
         </form>
