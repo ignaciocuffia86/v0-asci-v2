@@ -8,9 +8,9 @@ import { Workflow, Cpu, Building2 } from "lucide-react"
 
 export default function SearchPage() {
   return (
-    <div className="flex h-screen bg-background">
-      <div className="flex-1 p-8 overflow-y-auto">
-        <div className="max-w-5xl mx-auto space-y-8">
+    <div className="flex min-h-full bg-background">
+      <div className="flex-1 p-4 md:p-8 overflow-y-auto">
+        <div className="max-w-5xl mx-auto space-y-6 md:space-y-8">
           <div data-onboarding="search-header">
             <h1 className="text-3xl font-bold tracking-tight">Busqueda de Leads</h1>
             <p className="text-muted-foreground mt-2">
@@ -19,18 +19,18 @@ export default function SearchPage() {
           </div>
 
           <Tabs defaultValue="process" className="w-full">
-            <TabsList className="grid w-full grid-cols-3 h-12 mb-8">
-              <TabsTrigger value="process" className="flex items-center gap-2 text-base" data-onboarding="search-tab-proceso">
-                <Workflow className="h-4 w-4" />
-                Por Proceso
+            <TabsList className="grid w-full grid-cols-3 h-auto md:h-12 mb-6 md:mb-8">
+              <TabsTrigger value="process" className="flex items-center gap-1.5 md:gap-2 text-xs md:text-base py-2.5 md:py-1.5" data-onboarding="search-tab-proceso">
+                <Workflow className="h-4 w-4 shrink-0" />
+                <span className="hidden sm:inline">Por </span>Proceso
               </TabsTrigger>
-              <TabsTrigger value="technology" className="flex items-center gap-2 text-base" data-onboarding="search-tab-tecnologia">
-                <Cpu className="h-4 w-4" />
-                Por Tecnologia
+              <TabsTrigger value="technology" className="flex items-center gap-1.5 md:gap-2 text-xs md:text-base py-2.5 md:py-1.5" data-onboarding="search-tab-tecnologia">
+                <Cpu className="h-4 w-4 shrink-0" />
+                <span className="hidden sm:inline">Por </span>Tech
               </TabsTrigger>
-              <TabsTrigger value="company" className="flex items-center gap-2 text-base" data-onboarding="search-tab-company">
-                <Building2 className="h-4 w-4" />
-                Por Compania
+              <TabsTrigger value="company" className="flex items-center gap-1.5 md:gap-2 text-xs md:text-base py-2.5 md:py-1.5" data-onboarding="search-tab-company">
+                <Building2 className="h-4 w-4 shrink-0" />
+                <span className="hidden sm:inline">Por </span>Empresa
               </TabsTrigger>
             </TabsList>
 
