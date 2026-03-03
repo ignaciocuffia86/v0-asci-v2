@@ -64,7 +64,7 @@ export function MainSidebar() {
           <Menu className="h-5 w-5" />
         </Button>
         <div className="flex items-center gap-2">
-          <Image src="/logo.png" alt="ASCI Logo" width={28} height={28} className="rounded-md" style={{ width: "auto", height: "auto" }} />
+          <Image src="/logo.png" alt="ASCI Logo" width={28} height={28} className="rounded-md w-7 h-7" />
           <span className="font-bold text-base">ASCI v2</span>
         </div>
       </div>
@@ -151,7 +151,7 @@ function SidebarContent() {
       {/* Logo */}
       <div className="p-6 border-b border-sidebar-border">
         <div className="flex items-center gap-2">
-          <Image src="/logo.png" alt="ASCI Logo" width={32} height={32} className="rounded-md" style={{ width: "auto", height: "auto" }} />
+          <Image src="/logo.png" alt="ASCI Logo" width={32} height={32} className="rounded-md w-8 h-8" />
           <span className="font-bold text-lg">ASCI v2</span>
         </div>
       </div>
