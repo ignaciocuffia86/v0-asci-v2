@@ -241,18 +241,28 @@ La tab Estrategia hoy funciona asi:
 
 ### 3.2 Diseno Propuesto
 
-Agregar un selector explicito en la tab Estrategia:
+**Principio clave: solo ofrecer docs que tengan fit real con la cuenta.**
+
+El selector NO muestra todos los docs del usuario. Solo muestra docs que tengan
+al menos 1 `document_tag.tag_reference_id` que coincida con un `signal.signal_id`
+de la empresa del bookmark. Ejemplo: si la cuenta tiene senales de SAP y AWS,
+solo se muestran docs que tengan tags referenciando SAP o AWS.
 
 ```
 Tab Estrategia (mejorada):
   
   [1] Producto/Caso para esta cuenta (NUEVO)
       ----------------------------------------
-      Dropdown/Selector:
+      Dropdown/Selector (solo docs con fit):
       - "Automatico (ASCI elige los mas relevantes)" <- default actual
-      - Doc: "Caso Exito - Migracion Cloud Energia" [tags: AWS, Cloud, Energia]
-      - Doc: "Brochure Servicios BI" [tags: Power BI, Analytics]
-      - Doc: "Propuesta Automatizacion" [tags: RPA, UiPath, Facturacion]
+      - Doc: "Caso Exito - Migracion Cloud Energia" [match: AWS (3 senales)]
+      - Doc: "Brochure Servicios BI" [match: Power BI (1 senal)]
+      (Docs sin match con senales de la cuenta NO aparecen)
+      
+      Si no hay ningun doc con match:
+      - Mostrar mensaje: "Ningun documento tiene senales en comun con esta cuenta.
+        Subi casos de exito o propuestas en /docs para activar esta feature."
+      - Deshabilitar el selector, usar modo automatico como fallback
       
       Al seleccionar un doc especifico:
       - El indicador de relevancia/fit se recalcula mostrando solo las
@@ -262,7 +272,7 @@ Tab Estrategia (mejorada):
 
   [2] ASCI Docs (existente, pero contextualizado)
       - Si hay doc seleccionado: muestra solo ese doc como relevante
-      - Si es "automatico": muestra top 3 como hoy
+      - Si es "automatico": muestra top 3 como hoy (ya filtrados por match)
       - Boton "Generar con ASCI Docs" (existente)
 
   [3] Propuesta de Valor (existente)
@@ -285,17 +295,64 @@ ALTER TABLE user_company_strategies
   ADD COLUMN selected_document_id UUID REFERENCES user_documents(id) ON DELETE SET NULL;
 ```
 
+**Nueva query: docs elegibles para un bookmark (solo con signal match):**
+```sql
+-- Retorna docs del usuario que tienen al menos 1 tag matcheando con senales de la empresa
+SELECT 
+  ud.id,
+  ud.name,
+  ud.doc_type,
+  -- Tags que matchean con senales de la empresa
+  array_agg(DISTINCT dt.tag_name) as matched_tags,
+  -- Cantidad de senales que matchean
+  COUNT(DISTINCT s.id) as matched_signal_count
+FROM user_documents ud
+JOIN document_tags dt ON dt.document_id = ud.id
+JOIN signals s ON s.signal_id = dt.tag_reference_id::text 
+  AND s.company_id = :company_id
+WHERE ud.user_id = :user_id
+  AND dt.tag_reference_id IS NOT NULL
+GROUP BY ud.id, ud.name, ud.doc_type
+HAVING COUNT(DISTINCT s.id) >= 1
+ORDER BY COUNT(DISTINCT s.id) DESC;
+```
+
+Esta query es el filtro central: si un doc no tiene ningun tag cuyo
+`tag_reference_id` aparezca como `signal_id` en las senales de la empresa,
+ese doc NO se muestra en el selector. Esto evita ofrecer "SAP" a una
+empresa que no tiene senales de SAP.
+
 **Cambios en `GET /api/documents/context-for-bookmark`:**
+- Nuevo endpoint o query param `?eligible=true` que retorna solo docs elegibles (con signal match)
 - Aceptar query param `?documentId=uuid` opcional
 - Si viene documentId: retornar solo ese doc con todos sus tags (sin ranking)
-- Si no viene: comportamiento actual (ranking automatico top 3)
+- Si no viene: comportamiento actual (ranking automatico top 3, ya filtrados por match)
 
 **Cambios en `POST /api/documents/context-for-bookmark` (generar estrategia):**
 - Aceptar `documentId` en el body, opcional
-- Si viene: usar exclusivamente ese doc como fuente de experiencia en el prompt
+- Si viene: validar que el doc sea elegible (tiene match con senales de la empresa).
+  Si no lo es, retornar 400 con mensaje claro. Esto previene manipulacion manual
+  de requests con docs irrelevantes.
+- Si viene y es valido: usar exclusivamente ese doc como fuente de experiencia en el prompt
 - Si no viene: comportamiento actual (top 3 ranked)
 
 **Nueva funcion utilitaria:**
+```ts
+// lib/documents/get-eligible-documents-for-bookmark.ts
+export async function getEligibleDocumentsForBookmark(
+  userId: string,
+  companyId: string
+): Promise<{
+  id: string;
+  name: string;
+  docType: string;
+  matchedTags: string[];
+  matchedSignalCount: number;
+}[]>
+```
+Retorna solo los docs del usuario que tienen fit real con la empresa.
+Es la base tanto del dropdown como de la validacion del POST.
+
 ```ts
 // lib/documents/get-document-signal-match.ts
 export async function getDocumentSignalMatch(
@@ -305,6 +362,11 @@ export async function getDocumentSignalMatch(
 ): Promise<{ signal: Signal; matchedTag: DocumentTag }[]>
 ```
 Dado un doc especifico y una empresa, retorna que senales de la empresa matchean con los tags del doc. Esto alimenta el "Preview de Senales Relevantes".
+
+**Invalidacion:** Si el usuario agrega o elimina un documento en /docs, o si
+se procesan nuevas senales para una empresa, la lista de docs elegibles puede
+cambiar. No se necesita cache explicito: la query se ejecuta on-demand al abrir
+la tab Estrategia (es rapida, joins indexados).
 
 ---
 
@@ -328,11 +390,12 @@ Dado un doc especifico y una empresa, retorna que senales de la empresa matchean
 
 ### Fase 3: Seleccion de Doc en Estrategia - Prioridad Media
 1. Migration: agregar `selected_document_id` en `user_company_strategies`
-2. Crear componente `DocumentSelector` para la tab Estrategia
-3. Modificar `GET /api/documents/context-for-bookmark` para soportar `?documentId=`
-4. Modificar `POST /api/documents/context-for-bookmark` para soportar doc especifico
-5. Crear `getDocumentSignalMatch()` para preview de senales
-6. Agregar panel de "Senales Relevantes" en la tab
+2. Crear `getEligibleDocumentsForBookmark()` - query de docs con signal match
+3. Crear `getDocumentSignalMatch()` - detalle de senales por doc
+4. Crear componente `DocumentSelector` que solo muestra docs elegibles (con fit)
+5. Modificar `GET /api/documents/context-for-bookmark` para soportar `?eligible=true` y `?documentId=`
+6. Modificar `POST /api/documents/context-for-bookmark` con validacion de elegibilidad del doc
+7. Agregar panel de "Senales Relevantes" en la tab (filtrado por doc seleccionado)
 
 ---
 
