@@ -125,7 +125,7 @@ export default function DocsPage() {
   const readyDocs = documents.filter((d) => d.status === "ready")
 
   return (
-    <div className="p-8 space-y-6">
+    <div className="p-4 md:p-8 space-y-4 md:space-y-6">
       <Button variant="ghost" size="sm" asChild className="-ml-2">
         <Link href="/search">
           <ArrowLeft className="h-4 w-4 mr-2" />
@@ -134,9 +134,9 @@ export default function DocsPage() {
       </Button>
 
       {/* Header */}
-      <div className="flex items-center justify-between" data-onboarding="docs-header">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3" data-onboarding="docs-header">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Docs</h1>
+          <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Docs</h1>
           <p className="text-muted-foreground">
             Tu base de conocimiento. Subi documentos para que ASCI entienda tu propuesta de valor.
           </p>

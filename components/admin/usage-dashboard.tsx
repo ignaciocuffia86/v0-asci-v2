@@ -197,16 +197,22 @@ export function UsageDashboardClient({ userRows, onboardingRows, weeklyDataAll, 
 
       {/* Charts Row 1 */}
       <div className="grid gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2">
+        <div className="lg:col-span-2 min-w-0">
           <UserActivityChart data={activityChartData} />
         </div>
-        <OnboardingPieChart data={onboardingStatusData} />
+        <div className="min-w-0">
+          <OnboardingPieChart data={onboardingStatusData} />
+        </div>
       </div>
 
       {/* Charts Row 2 */}
       <div className="grid gap-6 lg:grid-cols-2">
-        <FeatureUsageChart data={featureUsageData} />
-        <WeeklyActivityChart data={hideAdmins ? weeklyDataFiltered : weeklyDataAll} />
+        <div className="min-w-0">
+          <FeatureUsageChart data={featureUsageData} />
+        </div>
+        <div className="min-w-0">
+          <WeeklyActivityChart data={hideAdmins ? weeklyDataFiltered : weeklyDataAll} />
+        </div>
       </div>
 
       {/* User Detail Table */}

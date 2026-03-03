@@ -247,12 +247,12 @@ export default function BookmarksPage() {
     return <div className="flex flex-wrap gap-1">{items}</div>
   }
 
-  return (
-    <div className="p-8 space-y-6">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4" data-onboarding="bookmarks-header">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Mis Cuentas</h1>
+ return (
+  <div className="p-4 md:p-8 space-y-4 md:space-y-6">
+  {/* Header */}
+  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4" data-onboarding="bookmarks-header">
+  <div>
+  <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Mis Cuentas</h1>
           <p className="text-muted-foreground">
             Gestiona tu pipeline de prospeccion. {stats?.total || 0} cuentas guardadas.
           </p>
@@ -294,9 +294,9 @@ export default function BookmarksPage() {
                 )}
                 onClick={() => toggleStatusFilter(status)}
               >
-                <CardContent className="p-3 text-center">
-                  <div className="text-2xl font-bold">{count}</div>
-                  <Badge className={cn("text-xs", config.color)}>{config.label}</Badge>
+                <CardContent className="p-2 md:p-3 text-center">
+                  <div className="text-xl md:text-2xl font-bold">{count}</div>
+                  <Badge className={cn("text-[10px] md:text-xs", config.color)}>{config.label}</Badge>
                 </CardContent>
               </Card>
             )

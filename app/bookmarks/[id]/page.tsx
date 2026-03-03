@@ -148,7 +148,7 @@ export default function BookmarkWorkspacePage() {
   return (
     <div className="flex flex-col h-full bg-background">
       {/* Header */}
-      <header className="border-b bg-card px-6 py-4">
+      <header className="border-b bg-card px-4 md:px-6 py-4">
         <div className="flex items-center gap-4 mb-4">
           <Button
             variant="ghost"
@@ -289,46 +289,51 @@ export default function BookmarkWorkspacePage() {
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 p-6 overflow-auto">
-        <Tabs defaultValue="overview" className="space-y-6">
+      <main className="flex-1 p-4 md:p-6 overflow-auto">
+        <Tabs defaultValue="overview" className="space-y-4 md:space-y-6">
           <TabsList className="bg-muted/50 p-1 flex-wrap h-auto gap-1" data-onboarding="workspace-tabs">
-            <TabsTrigger value="overview" className="gap-2">
-              <Building2 className="h-4 w-4" />
-              Resumen
+            <TabsTrigger value="overview" className="gap-1.5 text-xs md:text-sm">
+              <Building2 className="h-3.5 w-3.5 md:h-4 md:w-4" />
+              <span className="hidden sm:inline">Resumen</span>
+              <span className="sm:hidden">Info</span>
             </TabsTrigger>
-            <TabsTrigger value="jobpostings" className="gap-2">
-              <Flame className="h-4 w-4 text-orange-500" />
-              Posiciones
+            <TabsTrigger value="jobpostings" className="gap-1.5 text-xs md:text-sm">
+              <Flame className="h-3.5 w-3.5 md:h-4 md:w-4 text-orange-500" />
+              <span className="hidden sm:inline">Posiciones</span>
+              <span className="sm:hidden">Jobs</span>
             </TabsTrigger>
-            <TabsTrigger value="news" className="gap-2" data-onboarding="workspace-tab-news">
-              <Newspaper className="h-4 w-4 text-blue-500" />
+            <TabsTrigger value="news" className="gap-1.5 text-xs md:text-sm" data-onboarding="workspace-tab-news">
+              <Newspaper className="h-3.5 w-3.5 md:h-4 md:w-4 text-blue-500" />
               Noticias
             </TabsTrigger>
-            <TabsTrigger value="implementations" className="gap-2" data-onboarding="workspace-tab-implementations">
-              <Briefcase className="h-4 w-4 text-purple-500" />
-              Implementaciones
+            <TabsTrigger value="implementations" className="gap-1.5 text-xs md:text-sm" data-onboarding="workspace-tab-implementations">
+              <Briefcase className="h-3.5 w-3.5 md:h-4 md:w-4 text-purple-500" />
+              <span className="hidden sm:inline">Implementaciones</span>
+              <span className="sm:hidden">Impl.</span>
             </TabsTrigger>
-            <TabsTrigger value="strategy" className="gap-2" data-onboarding="workspace-tab-strategy">
-              <BrainCircuit className="h-4 w-4" />
+            <TabsTrigger value="strategy" className="gap-1.5 text-xs md:text-sm" data-onboarding="workspace-tab-strategy">
+              <BrainCircuit className="h-3.5 w-3.5 md:h-4 md:w-4" />
               Estrategia
             </TabsTrigger>
-            <TabsTrigger value="prospects" className="gap-2" data-onboarding="workspace-tab-prospects">
-              <Target className="h-4 w-4 text-green-500" />
+            <TabsTrigger value="prospects" className="gap-1.5 text-xs md:text-sm" data-onboarding="workspace-tab-prospects">
+              <Target className="h-3.5 w-3.5 md:h-4 md:w-4 text-green-500" />
               Prospectos
-              <Badge variant="secondary" className="ml-1 text-[10px] px-1 h-4">
+              <Badge variant="secondary" className="ml-1 text-[10px] px-1 h-4 hidden md:inline-flex">
                 Apollo
               </Badge>
             </TabsTrigger>
-            <TabsTrigger value="icebreakers" className="gap-2" data-onboarding="workspace-tab-icebreakers">
-              <Sparkles className="h-4 w-4 text-amber-500" />
-              Icebreakers
-              <Badge variant="secondary" className="ml-1 text-[10px] px-1 h-4">
+            <TabsTrigger value="icebreakers" className="gap-1.5 text-xs md:text-sm" data-onboarding="workspace-tab-icebreakers">
+              <Sparkles className="h-3.5 w-3.5 md:h-4 md:w-4 text-amber-500" />
+              <span className="hidden sm:inline">Icebreakers</span>
+              <span className="sm:hidden">Ice.</span>
+              <Badge variant="secondary" className="ml-1 text-[10px] px-1 h-4 hidden md:inline-flex">
                 AI
               </Badge>
             </TabsTrigger>
-            <TabsTrigger value="summary" className="gap-2" data-onboarding="workspace-tab-brief">
-              <FileText className="h-4 w-4 text-primary" />
-              Brief Ejecutivo
+            <TabsTrigger value="summary" className="gap-1.5 text-xs md:text-sm" data-onboarding="workspace-tab-brief">
+              <FileText className="h-3.5 w-3.5 md:h-4 md:w-4 text-primary" />
+              <span className="hidden sm:inline">Brief Ejecutivo</span>
+              <span className="sm:hidden">Brief</span>
             </TabsTrigger>
           </TabsList>
 

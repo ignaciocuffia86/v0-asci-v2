@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server"
 import { redirect } from "next/navigation"
 import { AppShell } from "@/components/app-shell"
 
-export default async function SearchLayout({
+export default async function BookmarksLayout({
   children,
 }: {
   children: React.ReactNode
