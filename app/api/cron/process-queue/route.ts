@@ -5,8 +5,8 @@ export const dynamic = "force-dynamic"
 export const maxDuration = 60
 
 // ── Configuration ──
-const CHUNK_SIZE = 5           // rows per RPC call
-const MAX_ITERATIONS = 1       // iterations inside RPC (1 = commit after each 5 rows)
+const CHUNK_SIZE = 3           // rows per RPC call (kept small so each call finishes well within timeout)
+const MAX_ITERATIONS = 3       // iterations inside RPC (3 x 3 rows = up to 9 rows per call)
 const TIME_BUDGET_MS = 45_000  // stop calling RPCs after 45s (leave 15s buffer for slow calls)
 const MAX_CONSECUTIVE_FAILURES = 5 // skip batch after N consecutive failures
 
@@ -20,10 +20,10 @@ export async function GET(request: Request) {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
     {
-      // Default Supabase JS fetch timeout is 8s which causes RPC calls to be killed prematurely.
-      // Our RPC processes 5 rows in ~6-7s, some rows take up to 15s. Set to 25s per call.
+      // RPCs now have SET statement_timeout = '120s' (SECURITY DEFINER override).
+      // Fetch timeout must exceed that to avoid client-side abort before Postgres finishes.
       global: {
-        fetch: (url, options) => fetch(url, { ...options, signal: AbortSignal.timeout(25_000) }),
+        fetch: (url, options) => fetch(url, { ...options, signal: AbortSignal.timeout(45_000) }),
       },
     }
   )
@@ -140,16 +140,12 @@ export async function GET(request: Request) {
         const callMs = Date.now() - callStart
 
         if (rpcError) {
-          // ── PHASE 3: Track consecutive failures ──
+          // Atomic increment - prevents stale-read race condition
           debugLogs.push(`RPC error (${callMs}ms): ${rpcError.message}`)
-          await supabase
-            .from("import_batches")
-            .update({
-              consecutive_failures: (batch.consecutive_failures || 0) + 1,
-              last_error: rpcError.message,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", batch.id)
+          await supabase.rpc("increment_batch_failures", {
+            p_batch_id: batch.id,
+            p_error: rpcError.message,
+          })
           break // Move to next batch
         }
 
@@ -161,25 +157,18 @@ export async function GET(request: Request) {
         batchProcessedThisRound += processedThisCall
         totalProcessed += processedThisCall
 
-        // ── PHASE 3: Reset failure counter on success ──
-        if (processedThisCall > 0 && (batch.consecutive_failures || 0) > 0) {
-          await supabase
-            .from("import_batches")
-            .update({ consecutive_failures: 0, last_error: null })
-            .eq("id", batch.id)
+        // Atomic reset - only updates if consecutive_failures > 0
+        if (processedThisCall > 0) {
+          await supabase.rpc("reset_batch_failures", { p_batch_id: batch.id })
         }
 
-        // No progress = something wrong with this batch, increment failures and move on
+        // No progress = something wrong with this batch, atomic increment and move on
         if (processedThisCall <= 0) {
           debugLogs.push(`No progress on call ${batchCallsThisRound} (${callMs}ms)`)
-          await supabase
-            .from("import_batches")
-            .update({
-              consecutive_failures: (batch.consecutive_failures || 0) + 1,
-              last_error: "No progress on RPC call",
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", batch.id)
+          await supabase.rpc("increment_batch_failures", {
+            p_batch_id: batch.id,
+            p_error: "No progress on RPC call",
+          })
           break
         }
 
