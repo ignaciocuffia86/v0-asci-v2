@@ -18,7 +18,7 @@ export default function SearchPage() {
             </p>
           </div>
 
-          <Tabs defaultValue="process" className="w-full">
+          <Tabs defaultValue="process" className="w-full" id="search-tabs">
             <TabsList className="grid w-full grid-cols-3 h-auto md:h-12 mb-6 md:mb-8">
               <TabsTrigger value="process" className="flex items-center gap-1.5 md:gap-2 text-xs md:text-base py-2.5 md:py-1.5" data-onboarding="search-tab-proceso">
                 <Workflow className="h-4 w-4 shrink-0" />
