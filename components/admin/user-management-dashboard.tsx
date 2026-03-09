@@ -316,13 +316,20 @@ export function UserManagementDashboard() {
   }
 
   const handleDeleteUser = async () => {
-    if (!selectedUser) return
+    console.log("[v0] handleDeleteUser called, selectedUser:", selectedUser?.id, selectedUser?.email)
+    if (!selectedUser) {
+      console.log("[v0] No selectedUser, returning early")
+      return
+    }
     setActionLoading(true)
     try {
+      console.log("[v0] Calling DELETE /api/admin/users/" + selectedUser.id)
       const res = await fetch(`/api/admin/users/${selectedUser.id}`, {
         method: "DELETE",
       })
+      console.log("[v0] DELETE response status:", res.status)
       const data = await res.json()
+      console.log("[v0] DELETE response data:", data)
       if (res.ok) {
         toast.success("Usuario eliminado (30 dias de retencion)")
         closeDialog()
@@ -330,7 +337,8 @@ export function UserManagementDashboard() {
       } else {
         toast.error(data.error || "Error al eliminar")
       }
-    } catch {
+    } catch (err) {
+      console.log("[v0] DELETE error:", err)
       toast.error("Error de conexion")
     } finally {
       setActionLoading(false)
