@@ -149,7 +149,7 @@ export async function PATCH(
   return NextResponse.json({ success: true, changes })
 }
 
-// DELETE: Soft delete user (ban + schedule deletion in 30 days)
+// DELETE: Soft delete user (ban + schedule deletion in 30 days) - v2
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
