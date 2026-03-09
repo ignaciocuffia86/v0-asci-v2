@@ -155,7 +155,7 @@ export async function DELETE(
   const { data: targetUser } = await adminClient.auth.admin.getUserById(id)
 
   // Soft delete with 30 day retention
-  const { error: deleteError } = await adminClient.auth.admin.deleteUser(id, true)
+  const { error: deleteError } = await adminClient.auth.admin.deleteUser(id, { shouldSoftDelete: true })
   
   if (deleteError) {
     return NextResponse.json({ error: deleteError.message }, { status: 400 })
