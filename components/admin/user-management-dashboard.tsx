@@ -327,7 +327,6 @@ export function UserManagementDashboard() {
       const data = await res.json()
       if (res.ok) {
         toast.success("Usuario baneado y programado para eliminacion en 30 dias")
-        closeDialog()
         fetchUsers()
       } else {
         toast.error(data.error || "Error al eliminar")
@@ -336,6 +335,7 @@ export function UserManagementDashboard() {
       toast.error("Error de conexion")
     } finally {
       setActionLoading(false)
+      closeDialog()
     }
   }
 
