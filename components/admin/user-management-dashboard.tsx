@@ -292,9 +292,12 @@ export function UserManagementDashboard() {
         fetchUsers()
       } else {
         toast.error(data.error || "Error al bloquear")
+        closeDialog()
       }
-    } catch {
+    } catch (error) {
+      console.error("[v0] Error en handleBanUser:", error)
       toast.error("Error de conexion")
+      closeDialog()
     } finally {
       setActionLoading(false)
     }
@@ -328,15 +331,17 @@ export function UserManagementDashboard() {
       const data = await res.json()
       if (res.ok) {
         toast.success("Usuario baneado y programado para eliminacion en 30 dias")
+        closeDialog()
         fetchUsers()
       } else {
         toast.error(data.error || "Error al eliminar")
+        closeDialog()
       }
     } catch {
       toast.error("Error de conexion")
+      closeDialog()
     } finally {
       setActionLoading(false)
-      closeDialog()
     }
   }
 
