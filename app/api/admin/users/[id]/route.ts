@@ -140,7 +140,7 @@ export async function PATCH(
   return NextResponse.json({ success: true, changes })
 }
 
-// DELETE: Soft delete user (30 day retention)
+// DELETE: Delete user (ban first, then hard delete)
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -153,12 +153,29 @@ export async function DELETE(
 
   // Get user email for audit log before deletion
   const { data: targetUser } = await adminClient.auth.admin.getUserById(id)
+  
+  if (!targetUser?.user) {
+    return NextResponse.json({ error: "Usuario no encontrado" }, { status: 404 })
+  }
 
-  // Soft delete with 30 day retention
-  const { error: deleteError } = await adminClient.auth.admin.deleteUser(id, { shouldSoftDelete: true })
+  // First ban the user to immediately revoke access
+  const { error: banError } = await adminClient.auth.admin.updateUserById(id, {
+    ban_duration: "876000h", // ~100 years = permanent ban
+  })
+  
+  if (banError) {
+    return NextResponse.json({ error: banError.message }, { status: 400 })
+  }
+
+  // Then delete the user (hard delete since soft delete has SDK issues)
+  const { error: deleteError } = await adminClient.auth.admin.deleteUser(id)
   
   if (deleteError) {
-    return NextResponse.json({ error: deleteError.message }, { status: 400 })
+    // If delete fails, at least user is banned
+    return NextResponse.json({ 
+      error: `Usuario baneado pero no eliminado: ${deleteError.message}`,
+      partial: true 
+    }, { status: 400 })
   }
 
   // Audit log
@@ -166,8 +183,8 @@ export async function DELETE(
     admin_id: adminUser!.id,
     action: "delete_user",
     target_user_id: id,
-    target_email: targetUser?.user?.email,
-    details: { soft_delete: true, retention_days: 30 },
+    target_email: targetUser.user.email,
+    details: { method: "ban_then_delete" },
   })
 
   return NextResponse.json({ success: true })
