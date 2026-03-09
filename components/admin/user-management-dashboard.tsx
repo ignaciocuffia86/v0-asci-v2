@@ -52,6 +52,7 @@ import {
   Copy,
   Loader2,
   RefreshCw,
+  Undo2,
 } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 import { es } from "date-fns/locale"
@@ -64,6 +65,7 @@ interface User {
   created_at: string
   last_sign_in_at: string | null
   banned_until: string | null
+  scheduled_deletion_at: string | null
   full_name: string | null
   company: string | null
   role: string
@@ -324,11 +326,33 @@ export function UserManagementDashboard() {
       })
       const data = await res.json()
       if (res.ok) {
-        toast.success("Usuario eliminado correctamente")
+        toast.success("Usuario baneado y programado para eliminacion en 30 dias")
         closeDialog()
         fetchUsers()
       } else {
         toast.error(data.error || "Error al eliminar")
+      }
+    } catch {
+      toast.error("Error de conexion")
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  const handleRestoreUser = async (user: User) => {
+    setActionLoading(true)
+    try {
+      const res = await fetch(`/api/admin/users/${user.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ unban: true }),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        toast.success("Usuario restaurado correctamente")
+        fetchUsers()
+      } else {
+        toast.error(data.error || "Error al restaurar")
       }
     } catch {
       toast.error("Error de conexion")
@@ -378,6 +402,15 @@ export function UserManagementDashboard() {
   }
 
   const getUserStatus = (user: User) => {
+    if (user.scheduled_deletion_at) {
+      const deletionDate = new Date(user.scheduled_deletion_at)
+      const daysLeft = Math.ceil((deletionDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+      return { 
+        label: `Eliminacion en ${daysLeft}d`, 
+        variant: "destructive" as const, 
+        icon: Trash2 
+      }
+    }
     if (user.banned_until) {
       return { label: "Bloqueado", variant: "destructive" as const, icon: Ban }
     }
@@ -601,14 +634,24 @@ export function UserManagementDashboard() {
                                   <Ban className="h-4 w-4 mr-2" />
                                   Bloquear
                                 </DropdownMenuItem>
-                              )}
-                              <DropdownMenuItem 
-                                onClick={() => openDialog("delete", user)}
-                                className="text-destructive"
-                              >
-                                <Trash2 className="h-4 w-4 mr-2" />
-                                Eliminar
-                              </DropdownMenuItem>
+  )}
+  {user.scheduled_deletion_at && (
+  <DropdownMenuItem
+    onClick={() => handleRestoreUser(user)}
+    className="text-green-600"
+    disabled={actionLoading}
+  >
+    <Undo2 className="h-4 w-4 mr-2" />
+    Restaurar usuario
+  </DropdownMenuItem>
+  )}
+  <DropdownMenuItem
+    onClick={() => openDialog("delete", user)}
+    className="text-destructive"
+  >
+    <Trash2 className="h-4 w-4 mr-2" />
+    {user.scheduled_deletion_at ? "Eliminar ahora" : "Eliminar"}
+  </DropdownMenuItem>
                             </DropdownMenuContent>
                           </DropdownMenu>
                         </TableCell>

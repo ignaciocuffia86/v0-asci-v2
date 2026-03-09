@@ -54,6 +54,7 @@ export async function GET(request: NextRequest) {
       role: profile?.role || "user",
       onboarding_status: profile?.onboarding_status,
       avatar_url: profile?.avatar_url,
+      scheduled_deletion_at: profile?.scheduled_deletion_at,
     }
   })
 

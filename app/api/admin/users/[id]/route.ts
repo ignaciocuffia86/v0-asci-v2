@@ -100,7 +100,7 @@ export async function PATCH(
     })
   }
 
-  // Unban user
+  // Unban user (also cancels scheduled deletion if any)
   if (unban) {
     const { error: unbanError } = await adminClient.auth.admin.updateUserById(id, {
       ban_duration: "none",
@@ -108,12 +108,21 @@ export async function PATCH(
     if (unbanError) {
       return NextResponse.json({ error: unbanError.message }, { status: 400 })
     }
+    
+    // Cancel scheduled deletion
+    await adminClient
+      .from("profiles")
+      .update({ scheduled_deletion_at: null })
+      .eq("id", id)
+    
     changes.unbanned = true
+    changes.scheduled_deletion_cancelled = true
 
     await adminClient.from("admin_audit_log").insert({
       admin_id: adminUser!.id,
-      action: "unban_user",
+      action: "restore_user",
       target_user_id: id,
+      details: { cancelled_scheduled_deletion: true },
     })
   }
 
@@ -140,7 +149,7 @@ export async function PATCH(
   return NextResponse.json({ success: true, changes })
 }
 
-// DELETE: Delete user (ban first, then hard delete)
+// DELETE: Soft delete user (ban + schedule deletion in 30 days)
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -151,14 +160,14 @@ export async function DELETE(
   const { id } = await params
   const adminClient = createAdminClient()
 
-  // Get user email for audit log before deletion
+  // Get user email for audit log
   const { data: targetUser } = await adminClient.auth.admin.getUserById(id)
   
   if (!targetUser?.user) {
     return NextResponse.json({ error: "Usuario no encontrado" }, { status: 404 })
   }
 
-  // First ban the user to immediately revoke access
+  // Ban the user permanently to immediately revoke access
   const { error: banError } = await adminClient.auth.admin.updateUserById(id, {
     ban_duration: "876000h", // ~100 years = permanent ban
   })
@@ -167,13 +176,17 @@ export async function DELETE(
     return NextResponse.json({ error: banError.message }, { status: 400 })
   }
 
-  // Then delete the user (hard delete since soft delete has SDK issues)
-  const { error: deleteError } = await adminClient.auth.admin.deleteUser(id)
+  // Schedule deletion in 30 days (soft delete)
+  const scheduledDeletionAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
   
-  if (deleteError) {
-    // If delete fails, at least user is banned
+  const { error: profileError } = await adminClient
+    .from("profiles")
+    .update({ scheduled_deletion_at: scheduledDeletionAt })
+    .eq("id", id)
+  
+  if (profileError) {
     return NextResponse.json({ 
-      error: `Usuario baneado pero no eliminado: ${deleteError.message}`,
+      error: `Usuario baneado pero error al programar eliminacion: ${profileError.message}`,
       partial: true 
     }, { status: 400 })
   }
@@ -184,10 +197,18 @@ export async function DELETE(
     action: "delete_user",
     target_user_id: id,
     target_email: targetUser.user.email,
-    details: { method: "ban_then_delete" },
+    details: { 
+      method: "soft_delete",
+      scheduled_deletion_at: scheduledDeletionAt,
+      grace_period_days: 30
+    },
   })
 
-  return NextResponse.json({ success: true })
+  return NextResponse.json({ 
+    success: true,
+    scheduled_deletion_at: scheduledDeletionAt,
+    message: "Usuario baneado y programado para eliminacion en 30 dias"
+  })
 }
 
 function parseDuration(duration: string): number {
