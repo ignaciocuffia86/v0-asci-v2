@@ -292,9 +292,11 @@ export function UserManagementDashboard() {
         fetchUsers()
       } else {
         toast.error(data.error || "Error al bloquear")
+        closeDialog()
       }
     } catch {
       toast.error("Error de conexion")
+      closeDialog()
     } finally {
       setActionLoading(false)
     }
@@ -328,15 +330,17 @@ export function UserManagementDashboard() {
       const data = await res.json()
       if (res.ok) {
         toast.success("Usuario baneado y programado para eliminacion en 30 dias")
+        closeDialog()
         fetchUsers()
       } else {
         toast.error(data.error || "Error al eliminar")
+        closeDialog()
       }
     } catch {
       toast.error("Error de conexion")
+      closeDialog()
     } finally {
       setActionLoading(false)
-      closeDialog()
     }
   }
 
@@ -604,7 +608,7 @@ export function UserManagementDashboard() {
                           {formatDistanceToNow(new Date(user.created_at), { addSuffix: true, locale: es })}
                         </TableCell>
                         <TableCell className="text-right">
-                          <DropdownMenu>
+                          <DropdownMenu modal={false}>
                             <DropdownMenuTrigger asChild>
                               <Button variant="ghost" size="icon">
                                 <MoreHorizontal className="h-4 w-4" />

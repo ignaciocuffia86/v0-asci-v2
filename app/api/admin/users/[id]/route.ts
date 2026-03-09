@@ -80,12 +80,17 @@ export async function PATCH(
 
   // Ban user
   if (ban_duration) {
+    // Convertir duración a horas para Supabase Admin API
+    const durationInHours = ban_duration === "permanent" 
+      ? "876000h" 
+      : convertToHours(ban_duration)
+    
     const banUntil = ban_duration === "permanent" 
       ? new Date("2099-12-31").toISOString()
       : new Date(Date.now() + parseDuration(ban_duration)).toISOString()
     
     const { error: banError } = await adminClient.auth.admin.updateUserById(id, {
-      ban_duration: ban_duration === "permanent" ? "876000h" : ban_duration,
+      ban_duration: durationInHours,
     })
     if (banError) {
       return NextResponse.json({ error: banError.message }, { status: 400 })
@@ -223,4 +228,19 @@ function parseDuration(duration: string): number {
     m: 30 * 24 * 60 * 60 * 1000,
   }
   return value * (multipliers[unit] || 0)
+}
+
+// Convierte duración a formato de horas para Supabase Admin API
+function convertToHours(duration: string): string {
+  const match = duration.match(/^(\d+)([hdwm])$/)
+  if (!match) return "24h" // Default a 24 horas
+  const value = parseInt(match[1])
+  const unit = match[2]
+  const hoursMultipliers: Record<string, number> = {
+    h: 1,
+    d: 24,
+    w: 7 * 24,
+    m: 30 * 24,
+  }
+  return `${value * (hoursMultipliers[unit] || 1)}h`
 }
