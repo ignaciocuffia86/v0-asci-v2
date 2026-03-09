@@ -14,6 +14,7 @@ import {
   Building2,
   MessageSquare,
   Users,
+  UserCog,
   Sparkles,
   Download,
   ChevronDown,
@@ -64,6 +65,11 @@ const sidebarItems = [
     title: "Uso por Usuario",
     href: "/admin/usage",
     icon: Users,
+  },
+  {
+    title: "Gestion de Usuarios",
+    href: "/admin/users",
+    icon: UserCog,
   },
   {
     title: "Exportaciones",
