@@ -58,10 +58,28 @@ export default async function AdminUsagePage() {
     adminClient.from("bookmark_summaries").select("id, bookmark_id, created_at, user_email"),
     adminClient.from("user_documents").select("id, user_id, created_at, status"),
     adminClient.from("user_onboarding").select("user_id, status, progress_percentage, current_track, completed_tracks"),
-    adminClient.from("profiles").select("id, role"),
+    adminClient.from("profiles").select("id, role, scheduled_deletion_at"),
   ])
 
-  const users = authUsers || []
+  // Build a map of profiles with scheduled_deletion_at
+  const profilesWithDeletion = new Map(
+    (profiles || []).map((p) => [p.id, p])
+  )
+  
+  // Filter out banned users and users scheduled for deletion
+  const activeUsers = (authUsers || []).filter((u) => {
+    // Exclude banned users
+    if (u.banned_until) {
+      const bannedUntil = new Date(u.banned_until)
+      if (bannedUntil > new Date()) return false
+    }
+    // Exclude users scheduled for deletion
+    const profile = profilesWithDeletion.get(u.id) as { id: string; role: string; scheduled_deletion_at?: string | null } | undefined
+    if (profile?.scheduled_deletion_at) return false
+    return true
+  })
+  
+  const users = activeUsers
   const adminUserIds = new Set((profiles || []).filter((p) => p.role === "superadmin").map((p) => p.id))
 
   // Calculate week boundaries for WoW comparison
