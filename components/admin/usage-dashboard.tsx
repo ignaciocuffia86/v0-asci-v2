@@ -6,6 +6,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
+import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Button } from "@/components/ui/button"
 import {
   Users,
   Bookmark,
@@ -22,6 +25,12 @@ import {
   Minus,
   ShieldAlert,
   Upload,
+  Search,
+  X,
+  TrendingUp,
+  TrendingDown,
+  Clock,
+  Filter,
 } from "lucide-react"
 import {
   UserActivityChart,
@@ -49,7 +58,13 @@ export interface UserRow {
   documents: number
   userId: string
   createdAt: string
+  createdAtTimestamp: number
   lastActivity: string
+  lastSignIn: string | null
+  daysSinceLastActivity: number
+  weekOverWeekGrowth: number | null
+  thisWeekActions: number
+  lastWeekActions: number
   onboardingStatus: string
   onboardingProgress: number
 }
@@ -74,11 +89,116 @@ function getEngagement(total: number) {
   return { label: "Alto", variant: "default" as const, icon: ArrowUpRight }
 }
 
+// Helper to format relative time
+function formatRelativeTime(dateStr: string | null): string {
+  if (!dateStr) return "Nunca"
+  const date = new Date(dateStr)
+  const now = new Date()
+  const diffMs = now.getTime() - date.getTime()
+  const diffMins = Math.floor(diffMs / (1000 * 60))
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+  
+  if (diffMins < 60) return `Hace ${diffMins} min`
+  if (diffHours < 24) return `Hace ${diffHours}h`
+  if (diffDays === 1) return "Ayer"
+  if (diffDays < 7) return `Hace ${diffDays} dias`
+  if (diffDays < 30) return `Hace ${Math.floor(diffDays / 7)} sem`
+  return `Hace ${Math.floor(diffDays / 30)} mes${Math.floor(diffDays / 30) > 1 ? "es" : ""}`
+}
+
+// Inactivity badge helper
+function getInactivityBadge(days: number) {
+  if (days === -1) return { label: "Sin actividad", variant: "outline" as const, className: "text-muted-foreground" }
+  if (days > 30) return { label: `${days}d`, variant: "destructive" as const, className: "" }
+  if (days > 14) return { label: `${days}d`, variant: "secondary" as const, className: "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200" }
+  if (days > 7) return { label: `${days}d`, variant: "secondary" as const, className: "" }
+  return { label: `${days}d`, variant: "outline" as const, className: "text-green-600 dark:text-green-400" }
+}
+
 export function UsageDashboardClient({ userRows, onboardingRows, weeklyDataAll, weeklyDataFiltered }: DashboardProps) {
   const [hideAdmins, setHideAdmins] = useState(true)
+  
+  // Filter states
+  const [searchEmail, setSearchEmail] = useState("")
+  const [engagementFilter, setEngagementFilter] = useState<string>("all")
+  const [onboardingFilter, setOnboardingFilter] = useState<string>("all")
+  const [registrationFilter, setRegistrationFilter] = useState<string>("all")
+  const [inactivityFilter, setInactivityFilter] = useState<string>("all")
 
-  const filtered = useMemo(() => hideAdmins ? userRows.filter((u) => !u.isAdmin) : userRows, [userRows, hideAdmins])
+  // Apply all filters
+  const filtered = useMemo(() => {
+    let result = hideAdmins ? userRows.filter((u) => !u.isAdmin) : userRows
+    
+    // Search by email
+    if (searchEmail.trim()) {
+      const search = searchEmail.toLowerCase().trim()
+      result = result.filter((u) => u.email.toLowerCase().includes(search))
+    }
+    
+    // Engagement filter
+    if (engagementFilter !== "all") {
+      result = result.filter((u) => {
+        const total = u.bookmarks + u.contacts + u.news + u.implementations + u.strategies + u.icebreakers + u.briefs + u.documents
+        if (engagementFilter === "inactive") return total === 0
+        if (engagementFilter === "low") return total > 0 && total <= 5
+        if (engagementFilter === "medium") return total > 5 && total <= 20
+        if (engagementFilter === "high") return total > 20
+        return true
+      })
+    }
+    
+    // Onboarding filter
+    if (onboardingFilter !== "all") {
+      result = result.filter((u) => {
+        if (onboardingFilter === "completed") return u.onboardingStatus === "completed"
+        if (onboardingFilter === "in_progress") return u.onboardingStatus === "in_progress"
+        if (onboardingFilter === "skipped") return u.onboardingStatus === "skipped"
+        if (onboardingFilter === "pending") return u.onboardingStatus === "pending" || u.onboardingStatus === "sin registro"
+        return true
+      })
+    }
+    
+    // Registration date filter
+    if (registrationFilter !== "all") {
+      const now = new Date()
+      result = result.filter((u) => {
+        if (!u.createdAtTimestamp) return false
+        const daysSinceRegistration = Math.floor((now.getTime() - u.createdAtTimestamp) / (1000 * 60 * 60 * 24))
+        if (registrationFilter === "last7days") return daysSinceRegistration <= 7
+        if (registrationFilter === "last30days") return daysSinceRegistration <= 30
+        if (registrationFilter === "last90days") return daysSinceRegistration <= 90
+        if (registrationFilter === "thisYear") return new Date(u.createdAtTimestamp).getFullYear() === now.getFullYear()
+        return true
+      })
+    }
+    
+    // Inactivity filter
+    if (inactivityFilter !== "all") {
+      result = result.filter((u) => {
+        if (inactivityFilter === "7days") return u.daysSinceLastActivity > 7 || u.daysSinceLastActivity === -1
+        if (inactivityFilter === "14days") return u.daysSinceLastActivity > 14 || u.daysSinceLastActivity === -1
+        if (inactivityFilter === "30days") return u.daysSinceLastActivity > 30 || u.daysSinceLastActivity === -1
+        if (inactivityFilter === "never") return u.daysSinceLastActivity === -1
+        return true
+      })
+    }
+    
+    return result
+  }, [userRows, hideAdmins, searchEmail, engagementFilter, onboardingFilter, registrationFilter, inactivityFilter])
+  
   const filteredOnboarding = useMemo(() => hideAdmins ? onboardingRows.filter((o) => !o.isAdmin) : onboardingRows, [onboardingRows, hideAdmins])
+  
+  // Check if any filter is active
+  const hasActiveFilters = searchEmail || engagementFilter !== "all" || onboardingFilter !== "all" || registrationFilter !== "all" || inactivityFilter !== "all"
+  
+  const clearFilters = () => {
+    setSearchEmail("")
+    setEngagementFilter("all")
+    setOnboardingFilter("all")
+    setRegistrationFilter("all")
+    setInactivityFilter("all")
+  }
 
   // KPIs
   const totalUsers = filtered.length
@@ -218,16 +338,116 @@ export function UsageDashboardClient({ userRows, onboardingRows, weeklyDataAll, 
       {/* User Detail Table */}
       <Card>
         <CardHeader>
-          <CardTitle>Detalle por Usuario</CardTitle>
-          <CardDescription>Metricas detalladas de cada usuario ordenadas por actividad total</CardDescription>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+              <CardTitle>Detalle por Usuario</CardTitle>
+              <CardDescription>
+                {hasActiveFilters 
+                  ? `Mostrando ${filtered.length} de ${userRows.filter(u => hideAdmins ? !u.isAdmin : true).length} usuarios`
+                  : `Metricas detalladas de ${filtered.length} usuarios ordenadas por actividad`
+                }
+              </CardDescription>
+            </div>
+            {hasActiveFilters && (
+              <Button variant="ghost" size="sm" onClick={clearFilters} className="gap-1.5">
+                <X className="h-4 w-4" />
+                Limpiar filtros
+              </Button>
+            )}
+          </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
+          {/* Filter Bar */}
+          <div className="flex flex-wrap items-center gap-3 p-4 rounded-lg border border-border bg-muted/30">
+            <Filter className="h-4 w-4 text-muted-foreground shrink-0" />
+            
+            {/* Search */}
+            <div className="relative flex-1 min-w-[200px] max-w-[300px]">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Buscar por email..."
+                value={searchEmail}
+                onChange={(e) => setSearchEmail(e.target.value)}
+                className="pl-9 h-9"
+              />
+            </div>
+            
+            {/* Engagement */}
+            <Select value={engagementFilter} onValueChange={setEngagementFilter}>
+              <SelectTrigger className="w-[140px] h-9">
+                <SelectValue placeholder="Engagement" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todo engagement</SelectItem>
+                <SelectItem value="high">Alto (20+)</SelectItem>
+                <SelectItem value="medium">Medio (6-20)</SelectItem>
+                <SelectItem value="low">Bajo (1-5)</SelectItem>
+                <SelectItem value="inactive">Inactivo (0)</SelectItem>
+              </SelectContent>
+            </Select>
+            
+            {/* Onboarding */}
+            <Select value={onboardingFilter} onValueChange={setOnboardingFilter}>
+              <SelectTrigger className="w-[140px] h-9">
+                <SelectValue placeholder="Onboarding" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todo onboarding</SelectItem>
+                <SelectItem value="completed">Completado</SelectItem>
+                <SelectItem value="in_progress">En progreso</SelectItem>
+                <SelectItem value="skipped">Saltado</SelectItem>
+                <SelectItem value="pending">Pendiente</SelectItem>
+              </SelectContent>
+            </Select>
+            
+            {/* Registration */}
+            <Select value={registrationFilter} onValueChange={setRegistrationFilter}>
+              <SelectTrigger className="w-[150px] h-9">
+                <SelectValue placeholder="Registro" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todo registro</SelectItem>
+                <SelectItem value="last7days">Ultimos 7 dias</SelectItem>
+                <SelectItem value="last30days">Ultimos 30 dias</SelectItem>
+                <SelectItem value="last90days">Ultimos 90 dias</SelectItem>
+                <SelectItem value="thisYear">Este anio</SelectItem>
+              </SelectContent>
+            </Select>
+            
+            {/* Inactivity */}
+            <Select value={inactivityFilter} onValueChange={setInactivityFilter}>
+              <SelectTrigger className="w-[150px] h-9">
+                <SelectValue placeholder="Inactividad" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Toda actividad</SelectItem>
+                <SelectItem value="7days">Inactivo 7+ dias</SelectItem>
+                <SelectItem value="14days">Inactivo 14+ dias</SelectItem>
+                <SelectItem value="30days">Inactivo 30+ dias</SelectItem>
+                <SelectItem value="never">Nunca activo</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          
           <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead className="min-w-[200px]">Usuario</TableHead>
                   <TableHead className="text-center">Engagement</TableHead>
+                  <TableHead className="text-center">
+                    <span title="Cambio semana a semana" className="inline-flex items-center justify-center cursor-help gap-1">
+                      <TrendingUp className="h-3.5 w-3.5" />
+                      WoW
+                    </span>
+                  </TableHead>
+                  <TableHead className="text-center">
+                    <span title="Ultimo login" className="inline-flex items-center justify-center cursor-help gap-1">
+                      <Clock className="h-3.5 w-3.5" />
+                      Login
+                    </span>
+                  </TableHead>
+                  <TableHead className="text-center">Inactividad</TableHead>
                   <TableHead className="text-center">Onboarding</TableHead>
                   <TableHead className="text-center">
                     <span title="Bookmarks - Cuentas guardadas" className="inline-flex items-center justify-center cursor-help"><Bookmark className="h-3.5 w-3.5" /></span>
@@ -260,6 +480,7 @@ export function UsageDashboardClient({ userRows, onboardingRows, weeklyDataAll, 
                 {sortedDetails.map((u) => {
                   const engagement = getEngagement(u.totalActions)
                   const EngIcon = engagement.icon
+                  const inactivityBadge = getInactivityBadge(u.daysSinceLastActivity)
                   return (
                     <TableRow key={u.userId}>
                       <TableCell>
@@ -272,6 +493,41 @@ export function UsageDashboardClient({ userRows, onboardingRows, weeklyDataAll, 
                         <Badge variant={engagement.variant} className="gap-1 text-xs">
                           <EngIcon className="h-3 w-3" />
                           {engagement.label}
+                        </Badge>
+                      </TableCell>
+                      {/* WoW Column */}
+                      <TableCell className="text-center">
+                        {u.weekOverWeekGrowth !== null ? (
+                          <div className="flex items-center justify-center gap-1">
+                            {u.weekOverWeekGrowth > 0 ? (
+                              <TrendingUp className="h-3.5 w-3.5 text-green-600" />
+                            ) : u.weekOverWeekGrowth < 0 ? (
+                              <TrendingDown className="h-3.5 w-3.5 text-red-500" />
+                            ) : (
+                              <Minus className="h-3.5 w-3.5 text-muted-foreground" />
+                            )}
+                            <span className={`text-xs font-medium ${
+                              u.weekOverWeekGrowth > 0 ? "text-green-600" : 
+                              u.weekOverWeekGrowth < 0 ? "text-red-500" : "text-muted-foreground"
+                            }`}>
+                              {u.weekOverWeekGrowth > 0 ? "+" : ""}{u.weekOverWeekGrowth}%
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">-</span>
+                        )}
+                        <p className="text-[10px] text-muted-foreground">{u.thisWeekActions} vs {u.lastWeekActions}</p>
+                      </TableCell>
+                      {/* Last Login Column */}
+                      <TableCell className="text-center">
+                        <span className="text-xs text-muted-foreground whitespace-nowrap">
+                          {formatRelativeTime(u.lastSignIn)}
+                        </span>
+                      </TableCell>
+                      {/* Inactivity Column */}
+                      <TableCell className="text-center">
+                        <Badge variant={inactivityBadge.variant} className={`text-[10px] px-1.5 ${inactivityBadge.className}`}>
+                          {inactivityBadge.label}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-center">
@@ -304,8 +560,8 @@ export function UsageDashboardClient({ userRows, onboardingRows, weeklyDataAll, 
                 })}
                 {sortedDetails.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={12} className="text-center text-muted-foreground py-8">
-                      No hay usuarios registrados
+                    <TableCell colSpan={15} className="text-center text-muted-foreground py-8">
+                      {hasActiveFilters ? "No hay usuarios que coincidan con los filtros" : "No hay usuarios registrados"}
                     </TableCell>
                   </TableRow>
                 )}
@@ -319,6 +575,18 @@ export function UsageDashboardClient({ userRows, onboardingRows, weeklyDataAll, 
       <Card className="bg-muted/30">
         <CardContent className="pt-6">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 text-sm text-muted-foreground">
+            <div className="flex items-start gap-2">
+              <TrendingUp className="h-4 w-4 mt-0.5 shrink-0" />
+              <span><strong className="text-foreground">WoW</strong> - Cambio % de acciones vs semana anterior</span>
+            </div>
+            <div className="flex items-start gap-2">
+              <Clock className="h-4 w-4 mt-0.5 shrink-0" />
+              <span><strong className="text-foreground">Login</strong> - Ultimo inicio de sesion</span>
+            </div>
+            <div className="flex items-start gap-2">
+              <GraduationCap className="h-4 w-4 mt-0.5 shrink-0" />
+              <span><strong className="text-foreground">Inactividad</strong> - Rojo 30+d, Amarillo 14+d, Verde 7d</span>
+            </div>
             <div className="flex items-start gap-2">
               <Bookmark className="h-4 w-4 mt-0.5 shrink-0" />
               <span><strong className="text-foreground">Bookmarks</strong> - Cuentas guardadas</span>
@@ -352,7 +620,7 @@ export function UsageDashboardClient({ userRows, onboardingRows, weeklyDataAll, 
               <span><strong className="text-foreground">Documentos</strong> - Docs subidos</span>
             </div>
             <div className="flex items-start gap-2">
-              <GraduationCap className="h-4 w-4 mt-0.5 shrink-0" />
+              <Users className="h-4 w-4 mt-0.5 shrink-0" />
               <span><strong className="text-foreground">Engagement</strong> - Inactivo (0), Bajo (1-5), Medio (6-20), Alto (20+)</span>
             </div>
           </div>
