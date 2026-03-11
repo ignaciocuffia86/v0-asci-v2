@@ -358,7 +358,7 @@ export function UsageDashboardClient({ userRows, onboardingRows, weeklyDataAll, 
         </CardHeader>
         <CardContent className="space-y-4">
           {/* Filter Bar */}
-          <div className="flex flex-wrap items-center gap-3 p-4 rounded-lg border border-border bg-muted/30">
+          <div className="relative flex flex-wrap items-center gap-3 p-4 rounded-lg border border-border bg-muted/30">
             <Filter className="h-4 w-4 text-muted-foreground shrink-0" />
             
             {/* Search */}
