@@ -406,7 +406,10 @@ export function IndustryManagementDashboard() {
                                 <SelectContent>
                                   {masterIndustries.map(mi => (
                                     <SelectItem key={mi.id} value={mi.id}>
-                                      {mi.icon} {mi.name_es}
+                                      <span className="flex items-center gap-2">
+                                        <IndustryIcon name={mi.icon} className="h-4 w-4" />
+                                        {mi.name_es}
+                                      </span>
                                     </SelectItem>
                                   ))}
                                 </SelectContent>
@@ -514,7 +517,10 @@ export function IndustryManagementDashboard() {
                                 <SelectContent>
                                   {masterIndustries.map(mi => (
                                     <SelectItem key={mi.id} value={mi.id}>
-                                      {mi.icon} {mi.name_es}
+                                      <span className="flex items-center gap-2">
+                                        <IndustryIcon name={mi.icon} className="h-4 w-4" />
+                                        {mi.name_es}
+                                      </span>
                                     </SelectItem>
                                   ))}
                                 </SelectContent>
