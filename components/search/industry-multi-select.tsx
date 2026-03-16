@@ -1,16 +1,9 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { Check, ChevronDown, Factory, X, Loader2 } from "lucide-react"
+import { useState, useMemo } from "react"
+import { Check, ChevronDown, Factory, X, Loader2, Search } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command"
+import { Input } from "@/components/ui/input"
 import {
   Popover,
   PopoverContent,
@@ -42,6 +35,7 @@ import {
   Scale,
   Users,
   MoreHorizontal,
+  Layers,
   type LucideIcon,
 } from "lucide-react"
 
@@ -74,7 +68,7 @@ const iconMap: Record<string, LucideIcon> = {
 }
 
 function IndustryIcon({ name, className }: { name: string; className?: string }) {
-  const IconComponent = iconMap[name] || Factory
+  const IconComponent = iconMap[name] || Layers
   return <IconComponent className={className} />
 }
 
@@ -104,8 +98,21 @@ export function IndustryMultiSelect({
   placeholder = "Filtrar por industria...",
 }: IndustryMultiSelectProps) {
   const [open, setOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState("")
 
-  const selectedIndustries = industries.filter((i) => selectedIds.includes(i.id))
+  const selectedIndustries = useMemo(() => {
+    return industries.filter((i) => selectedIds.includes(i.id))
+  }, [industries, selectedIds])
+
+  const filteredIndustries = useMemo(() => {
+    if (!searchQuery) return industries
+    const query = searchQuery.toLowerCase()
+    return industries.filter(
+      (ind) =>
+        ind.name_es.toLowerCase().includes(query) ||
+        ind.name_en.toLowerCase().includes(query)
+    )
+  }, [industries, searchQuery])
 
   const handleSelect = (industryId: string) => {
     if (selectedIds.includes(industryId)) {
@@ -198,42 +205,84 @@ export function IndustryMultiSelect({
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-[350px] p-0" align="start">
-        <Command>
-          <CommandInput placeholder="Buscar industria..." />
-          <CommandList>
-            <CommandEmpty>No se encontraron industrias.</CommandEmpty>
-            <CommandGroup>
-              {industries.map((industry) => (
-                <CommandItem
+        {/* Search input */}
+        <div className="flex items-center border-b px-3 py-2">
+          <Search className="mr-2 h-4 w-4 shrink-0 opacity-50" />
+          <Input
+            placeholder="Buscar industria..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="border-0 p-0 h-8 focus-visible:ring-0 focus-visible:ring-offset-0"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery("")}
+              className="ml-2 text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+
+        {/* Industries list */}
+        <div className="max-h-[300px] overflow-y-auto p-1">
+          {filteredIndustries.length === 0 ? (
+            <div className="py-6 text-center text-sm text-muted-foreground">
+              No se encontraron industrias
+            </div>
+          ) : (
+            filteredIndustries.map((industry) => {
+              const isSelected = selectedIds.includes(industry.id)
+              return (
+                <button
                   key={industry.id}
-                  value={`${industry.name_es} ${industry.name_en}`}
-                  onSelect={() => handleSelect(industry.id)}
-                  className="flex items-center justify-between"
+                  onClick={() => handleSelect(industry.id)}
+                  className={cn(
+                    "w-full flex items-center gap-2 px-3 py-2 text-sm rounded-sm",
+                    "hover:bg-accent hover:text-accent-foreground",
+                    "cursor-pointer transition-colors",
+                    isSelected && "bg-accent/50"
+                  )}
                 >
-                  <div className="flex items-center gap-2">
-                    <div
-                      className={cn(
-                        "flex h-4 w-4 items-center justify-center rounded-sm border",
-                        selectedIds.includes(industry.id)
-                          ? "bg-primary border-primary"
-                          : "border-muted-foreground"
-                      )}
-                    >
-                      {selectedIds.includes(industry.id) && (
-                        <Check className="h-3 w-3 text-primary-foreground" />
-                      )}
-                    </div>
-                    <IndustryIcon name={industry.icon} className="h-4 w-4 text-muted-foreground" />
-                    <span>{industry.name_es}</span>
+                  <div
+                    className={cn(
+                      "flex h-4 w-4 items-center justify-center rounded-sm border shrink-0",
+                      isSelected
+                        ? "bg-primary border-primary"
+                        : "border-muted-foreground/30"
+                    )}
+                  >
+                    {isSelected && (
+                      <Check className="h-3 w-3 text-primary-foreground" />
+                    )}
                   </div>
-                  <Badge variant="outline" className="ml-2 text-xs">
+                  <div className="flex items-center justify-center w-6 h-6 rounded bg-muted shrink-0">
+                    <IndustryIcon name={industry.icon} className="h-3.5 w-3.5 text-muted-foreground" />
+                  </div>
+                  <span className="flex-1 text-left truncate">{industry.name_es}</span>
+                  <Badge variant="outline" className="ml-2 text-xs shrink-0">
                     {industry.company_count.toLocaleString()}
                   </Badge>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </CommandList>
-        </Command>
+                </button>
+              )
+            })
+          )}
+        </div>
+
+        {/* Footer */}
+        {selectedIds.length > 0 && (
+          <div className="border-t px-3 py-2 flex items-center justify-between">
+            <span className="text-xs text-muted-foreground">
+              {selectedIds.length} {selectedIds.length === 1 ? "seleccionada" : "seleccionadas"}
+            </span>
+            <button
+              onClick={() => onSelectionChange([])}
+              className="text-xs text-muted-foreground hover:text-foreground"
+            >
+              Limpiar
+            </button>
+          </div>
+        )}
       </PopoverContent>
     </Popover>
   )
