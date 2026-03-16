@@ -33,6 +33,7 @@ export function TechnologySearch() {
   const [excludeProviders, setExcludeProviders] = useState(false)
   const [sortBy, setSortBy] = useState<SortOption>("relevance")
   const [selectedIndustries, setSelectedIndustries] = useState<string[]>([])
+  const [displayLimit, setDisplayLimit] = useState(50)
   const supabase = createClient()
 
   const getTechName = (id: string) => technologies.find((t) => t.id === id)?.display_name || id
@@ -63,6 +64,7 @@ export function TechnologySearch() {
     setIsSearching(true)
     setSelectedCompanyIds(new Set())
     setSelectedIndustries([]) // Reset industry filter on new search
+    setDisplayLimit(50) // Reset pagination on new search
     try {
       const data = await searchByTechnology(selectedTech, selectedCountries, excludeProviders)
       setResults(data)
@@ -142,6 +144,13 @@ export function TechnologySearch() {
     })
     return Array.from(industryMap.values()).sort((a, b) => b.count - a.count)
   }, [results])
+
+  // Paginated results for better performance
+  const paginatedResults = useMemo(() => {
+    return sortedResults.slice(0, displayLimit)
+  }, [sortedResults, displayLimit])
+
+  const hasMoreResults = sortedResults.length > displayLimit
 
   const selectedTechData = selectedTech ? technologies.find((t) => t.id === selectedTech) : null
 
@@ -258,7 +267,7 @@ export function TechnologySearch() {
           </div>
 
           <div className="grid gap-4">
-            {sortedResults.map((company) => (
+            {paginatedResults.map((company) => (
               <ResultItem
                 key={company.company_id}
                 company={company}
@@ -268,6 +277,19 @@ export function TechnologySearch() {
               />
             ))}
           </div>
+
+          {/* Load More Button */}
+          {hasMoreResults && (
+            <div className="flex justify-center pt-4">
+              <Button
+                variant="outline"
+                onClick={() => setDisplayLimit(prev => prev + 50)}
+                className="w-full max-w-xs"
+              >
+                Cargar más ({sortedResults.length - displayLimit} restantes)
+              </Button>
+            </div>
+          )}
         </div>
       )}
 

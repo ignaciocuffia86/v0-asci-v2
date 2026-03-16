@@ -27,6 +27,7 @@ export function ProcessSearch() {
   const [excludeProviders, setExcludeProviders] = useState(false)
   const [sortBy, setSortBy] = useState<SortOption>("relevance")
   const [selectedIndustries, setSelectedIndustries] = useState<string[]>([])
+  const [displayLimit, setDisplayLimit] = useState(50)
   const supabase = createClient()
 
   useEffect(() => {
@@ -43,6 +44,7 @@ export function ProcessSearch() {
     setIsSearching(true)
     setSelectedCompanyIds(new Set())
     setSelectedIndustries([]) // Reset industry filter on new search
+    setDisplayLimit(50) // Reset pagination on new search
     try {
       const data = await searchByProcess(selectedProcesses, selectedCountries, excludeProviders)
       setResults(data)
@@ -132,6 +134,13 @@ export function ProcessSearch() {
     })
     return Array.from(industryMap.values()).sort((a, b) => b.count - a.count)
   }, [results])
+
+  // Paginated results for better performance
+  const paginatedResults = useMemo(() => {
+    return sortedResults.slice(0, displayLimit)
+  }, [sortedResults, displayLimit])
+
+  const hasMoreResults = sortedResults.length > displayLimit
 
   return (
     <div className="space-y-6">
@@ -255,7 +264,7 @@ export function ProcessSearch() {
           </div>
 
           <div className="grid gap-4" data-onboarding="search-results">
-            {sortedResults.map((company) => (
+            {paginatedResults.map((company) => (
               <ResultItem
                 key={company.company_id}
                 company={company}
@@ -265,6 +274,19 @@ export function ProcessSearch() {
               />
             ))}
           </div>
+
+          {/* Load More Button */}
+          {hasMoreResults && (
+            <div className="flex justify-center pt-4">
+              <Button
+                variant="outline"
+                onClick={() => setDisplayLimit(prev => prev + 50)}
+                className="w-full max-w-xs"
+              >
+                Cargar más ({sortedResults.length - displayLimit} restantes)
+              </Button>
+            </div>
+          )}
         </div>
       )}
 

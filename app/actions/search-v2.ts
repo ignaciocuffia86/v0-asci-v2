@@ -103,7 +103,7 @@ export async function searchByProcess(
   return (data || []).map((r: any) => ({
     company_id: r.company_id,
     company_name: r.company_name,
-    company_logo_url: null,
+    company_logo_url: r.company_logo_url || null,
     company_website: r.company_website,
     company_linkedin_url: null,
     company_country: r.company_country,
@@ -168,7 +168,7 @@ export async function searchByTechnology(
   return (data || []).map((r: any) => ({
     company_id: r.company_id,
     company_name: r.company_name,
-    company_logo_url: null,
+    company_logo_url: r.company_logo_url || null,
     company_website: r.company_website,
     company_linkedin_url: null,
     company_country: r.company_country,
