@@ -114,8 +114,27 @@ export function DocumentDetailDialog({ documentId, open, onOpenChange, onUpdated
     }
   }
 
+  // Group tags by type and deduplicate industry tags by master_industry_id
   const groupedTags = (doc?.tags || []).reduce((acc, tag) => {
     if (!acc[tag.tag_type]) acc[tag.tag_type] = []
+    
+    // For industry tags, deduplicate by master_industry_id
+    if (tag.tag_type === "industry" && tag.master_industry_id) {
+      const existing = acc[tag.tag_type].find(
+        (t) => t.master_industry_id === tag.master_industry_id
+      )
+      if (existing) {
+        // Keep the one with highest confidence
+        if (tag.confidence > existing.confidence) {
+          acc[tag.tag_type] = acc[tag.tag_type].filter(
+            (t) => t.master_industry_id !== tag.master_industry_id
+          )
+          acc[tag.tag_type].push(tag)
+        }
+        return acc
+      }
+    }
+    
     acc[tag.tag_type].push(tag)
     return acc
   }, {} as Record<string, DocumentTag[]>)
