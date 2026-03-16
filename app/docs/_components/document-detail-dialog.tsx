@@ -188,29 +188,37 @@ export function DocumentDetailDialog({ documentId, open, onOpenChange, onUpdated
                               {config.label}
                             </div>
                             <div className="flex flex-wrap gap-1.5">
-                              {tags.map((tag) => (
-                                <Badge
-                                  key={tag.id}
-                                  variant="outline"
-                                  className={`text-xs gap-1 pr-1 ${config.color}`}
-                                >
-                                  {tag.tag_value}
-                                  <span className="text-[9px] opacity-60">
-                                    {Math.round(tag.confidence * 100)}%
-                                  </span>
-                                  <button
-                                    onClick={() => handleRemoveTag(tag.id)}
-                                    className="ml-0.5 hover:bg-background/50 rounded p-0.5"
-                                    disabled={removingTagId === tag.id}
+                              {tags.map((tag) => {
+                                // For industry tags, show master industry name if available
+                                const displayValue = tag.tag_type === "industry" && tag.master_industry?.name_es
+                                  ? tag.master_industry.name_es
+                                  : tag.tag_value
+                                
+                                return (
+                                  <Badge
+                                    key={tag.id}
+                                    variant="outline"
+                                    className={`text-xs gap-1 pr-1 ${config.color}`}
+                                    title={tag.tag_type === "industry" && tag.master_industry?.name_es ? `Original: ${tag.tag_value}` : undefined}
                                   >
-                                    {removingTagId === tag.id ? (
-                                      <Loader2 className="h-3 w-3 animate-spin" />
-                                    ) : (
-                                      <X className="h-3 w-3" />
-                                    )}
-                                  </button>
-                                </Badge>
-                              ))}
+                                    {displayValue}
+                                    <span className="text-[9px] opacity-60">
+                                      {Math.round(tag.confidence * 100)}%
+                                    </span>
+                                    <button
+                                      onClick={() => handleRemoveTag(tag.id)}
+                                      className="ml-0.5 hover:bg-background/50 rounded p-0.5"
+                                      disabled={removingTagId === tag.id}
+                                    >
+                                      {removingTagId === tag.id ? (
+                                        <Loader2 className="h-3 w-3 animate-spin" />
+                                      ) : (
+                                        <X className="h-3 w-3" />
+                                      )}
+                                    </button>
+                                  </Badge>
+                                )
+                              })}
                             </div>
                           </div>
                         )
