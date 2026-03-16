@@ -17,7 +17,64 @@ import {
   CheckCircle2,
   Loader2,
   RefreshCw,
+  Monitor,
+  Landmark,
+  Shield,
+  Heart,
+  GraduationCap,
+  ShoppingCart,
+  Factory,
+  Zap,
+  Radio,
+  Building,
+  Truck,
+  Briefcase,
+  Tv,
+  Hotel,
+  UtensilsCrossed,
+  Wheat,
+  Mountain,
+  Car,
+  Plane,
+  HeartHandshake,
+  Scale,
+  Users,
+  MoreHorizontal,
+  type LucideIcon,
 } from "lucide-react"
+
+// Map icon names to components
+const iconMap: Record<string, LucideIcon> = {
+  Monitor,
+  Landmark,
+  Building2,
+  Shield,
+  Heart,
+  GraduationCap,
+  ShoppingCart,
+  Factory,
+  Zap,
+  Radio,
+  Building,
+  Truck,
+  Briefcase,
+  Tv,
+  Hotel,
+  UtensilsCrossed,
+  Wheat,
+  Mountain,
+  Car,
+  Plane,
+  HeartHandshake,
+  Scale,
+  Users,
+  MoreHorizontal,
+}
+
+function IndustryIcon({ name, className }: { name: string; className?: string }) {
+  const IconComponent = iconMap[name] || Layers
+  return <IconComponent className={className} />
+}
 
 interface Stats {
   masterIndustries: number
@@ -294,7 +351,10 @@ export function IndustryManagementDashboard() {
                         <SelectContent>
                           {masterIndustries.map(mi => (
                             <SelectItem key={mi.id} value={mi.id}>
-                              {mi.icon} {mi.name_es}
+                              <span className="flex items-center gap-2">
+                                <IndustryIcon name={mi.icon} className="h-4 w-4" />
+                                {mi.name_es}
+                              </span>
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -399,7 +459,10 @@ export function IndustryManagementDashboard() {
                         <SelectContent>
                           {masterIndustries.map(mi => (
                             <SelectItem key={mi.id} value={mi.id}>
-                              {mi.icon} {mi.name_es}
+                              <span className="flex items-center gap-2">
+                                <IndustryIcon name={mi.icon} className="h-4 w-4" />
+                                {mi.name_es}
+                              </span>
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -507,8 +570,10 @@ export function IndustryManagementDashboard() {
                     <TableRow key={mi.id}>
                       <TableCell className="text-muted-foreground">{idx + 1}</TableCell>
                       <TableCell>
-                        <div className="flex items-center gap-2">
-                          <span className="text-lg">{mi.icon}</span>
+                        <div className="flex items-center gap-3">
+                          <div className="flex items-center justify-center w-8 h-8 rounded-md bg-muted">
+                            <IndustryIcon name={mi.icon} className="h-4 w-4 text-muted-foreground" />
+                          </div>
                           <div>
                             <p className="font-medium">{mi.name_es}</p>
                             <p className="text-xs text-muted-foreground">{mi.name_en}</p>

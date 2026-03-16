@@ -9,9 +9,9 @@
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS master_industries (
   id TEXT PRIMARY KEY,                      -- 'technology', 'banking', etc.
-  name TEXT NOT NULL,                       -- 'Tecnología y Software' (español)
-  name_en TEXT NOT NULL,                    -- 'Technology & Software' (inglés)
-  icon TEXT NOT NULL,                       -- Nombre del ícono Lucide
+  name_es TEXT NOT NULL,                    -- 'Tecnología y Software' (español - principal)
+  name_en TEXT NOT NULL,                    -- 'Technology & Software' (inglés - secundario)
+  icon TEXT NOT NULL,                       -- Nombre del ícono Lucide (Monitor, Building2, etc.)
   display_order INT NOT NULL DEFAULT 0,     -- Orden de visualización
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -180,7 +180,7 @@ EXECUTE FUNCTION on_industry_mapping_change();
 
 -- 8. INSERTAR 25 INDUSTRIAS MAESTRAS
 -- ============================================================================
-INSERT INTO master_industries (id, name, name_en, icon, display_order) VALUES
+INSERT INTO master_industries (id, name_es, name_en, icon, display_order) VALUES
   ('technology', 'Tecnología y Software', 'Technology & Software', 'Monitor', 1),
   ('financial_services', 'Servicios Financieros', 'Financial Services', 'Landmark', 2),
   ('banking', 'Banca', 'Banking', 'Building2', 3),
@@ -207,7 +207,7 @@ INSERT INTO master_industries (id, name, name_en, icon, display_order) VALUES
   ('hr_staffing', 'Recursos Humanos y Staffing', 'Human Resources & Staffing', 'Users', 24),
   ('other', 'Otras Industrias', 'Other Industries', 'MoreHorizontal', 25)
 ON CONFLICT (id) DO UPDATE SET
-  name = EXCLUDED.name,
+  name_es = EXCLUDED.name_es,
   name_en = EXCLUDED.name_en,
   icon = EXCLUDED.icon,
   display_order = EXCLUDED.display_order;
