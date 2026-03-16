@@ -15,6 +15,7 @@ export interface RankedDocument {
 
 interface BookmarkContext {
   companyIndustry: string | null
+  companyMasterIndustryId: string | null
   filterSignalIds: string[]
 }
 
@@ -41,11 +42,11 @@ export async function rankDocumentsForBookmark(
 
   if (!documents || documents.length === 0) return []
 
-  // 2. Get all tags for these documents
+  // 2. Get all tags for these documents (including master_industry_id for improved matching)
   const docIds = documents.map((d) => d.id)
   const { data: allTags } = await supabase
     .from("document_tags")
-    .select("document_id, tag_type, tag_value, tag_reference_id, confidence")
+    .select("document_id, tag_type, tag_value, tag_reference_id, confidence, master_industry_id")
     .in("document_id", docIds)
 
   if (!allTags) return []
@@ -78,8 +79,19 @@ export async function rankDocumentsForBookmark(
       const tagConfidence = tag.confidence || 0.7
 
       if (tag.tag_type === "industry") {
-        // Match against company industry
+        // Primary: Match by master_industry_id (normalized matching)
+        // This allows "Banking" doc tag to match "Financial Services" company if both map to same master
         if (
+          tag.master_industry_id &&
+          bookmarkContext.companyMasterIndustryId &&
+          tag.master_industry_id === bookmarkContext.companyMasterIndustryId
+        ) {
+          score += 3 * tagConfidence
+          matchedTags.push({ type: "industry", value: tag.tag_value })
+        }
+        // Fallback: String matching if master_industry_id is not available
+        else if (
+          !tag.master_industry_id &&
           bookmarkContext.companyIndustry &&
           tagValueLower.includes(bookmarkContext.companyIndustry.toLowerCase())
         ) {

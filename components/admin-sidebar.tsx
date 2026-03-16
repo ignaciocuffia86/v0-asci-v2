@@ -19,6 +19,7 @@ import {
   Download,
   ChevronDown,
   ChevronRight,
+  Factory,
 } from "lucide-react"
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
@@ -35,6 +36,11 @@ const sidebarItems = [
     title: "Diccionario",
     href: "/admin/dictionary",
     icon: BookOpen,
+  },
+  {
+    title: "Industrias",
+    href: "/admin/industries",
+    icon: Factory,
   },
   {
     title: "Compañías",
