@@ -1139,13 +1139,31 @@ INSTRUCCIONES DE TONO Y ENFOQUE
 ${templateInstructions}
 
 ═══════════════════════════════════════════════════════════════
-FORMATO DE RESPUESTA
+FORMATO DE RESPUESTA - IMPORTANTE LEER
 ═══════════════════════════════════════════════════════════════
+
+CADA CANAL TIENE CARACTERÍSTICAS DIFERENTES:
+
 ---LINKEDIN---
-(mensaje de LinkedIn aqui)
+RESTRICCIÓN CRÍTICA: MÁXIMO 300 CARACTERES (contando espacios y puntuación)
+- Este es un mensaje de invitación de conexión en LinkedIn
+- Sé muy conciso e impactante
+- Haz que despierte curiosidad o muestre valor inmediato
+- Evita llamadas a acción explícitas, solo busca que acepte la conexión
+- Menciona algo específico de su rol o contexto
+- NO incluyas links ni números de teléfono
+Ejemplo tono: "Vi que en ${companyName} usan ${filterContextName || signalTypeLabel}. Me interesa cómo lo están abordando - ¿charlamos?"
 
 ---EMAIL---
-(email de seguimiento aqui)
+SIN LÍMITE DE CARACTERES
+- Este es un email de seguimiento posterior a la conexión
+- Puede ser más largo y detallado
+- Explica tu propuesta de valor con más contexto
+- Incluye por qué específicamente a esta persona y empresa
+- Puedes ser un poco más directo que en LinkedIn
+- Ofrece ayuda o valor sin presionar
+
+Ambos mensajes deben sonar naturales, como escritos por una persona real.
 
 IMPORTANTE: Los mensajes deben sonar como si los escribiera una persona real, no una IA. Evita estructuras rigidas. Se conversacional.`
 
@@ -1224,7 +1242,15 @@ IMPORTANTE: Los mensajes deben sonar como si los escribiera una persona real, no
     emailMessage = `Hola ${firstName}, te escribi por LinkedIn hace unos dias. Queria retomar la conversacion - vi que en ${companyName} trabajan con ${filterContextName || signalTypeLabel} y me parecio relevante compartirte nuestra experiencia en el tema. Si te sirve, feliz de charlarlo sin compromiso.`
   }
 
-  console.log("[v0] Final LinkedIn message:", linkedinMessage)
+  // VALIDACIÓN Y TRUNCADO PARA LINKEDIN - Máximo 300 caracteres
+  let linkedinTruncated = false
+  if (linkedinMessage.length > 300) {
+    console.log("[v0] LinkedIn message exceeds 300 chars (actual: ${linkedinMessage.length}), truncating...")
+    linkedinMessage = linkedinMessage.substring(0, 297) + "..."
+    linkedinTruncated = true
+  }
+
+  console.log("[v0] Final LinkedIn message:", linkedinMessage, `(${linkedinMessage.length} chars, truncated: ${linkedinTruncated})`)
   console.log("[v0] Final Email message:", emailMessage)
 
   // Guardar resultados con contexto expandido
