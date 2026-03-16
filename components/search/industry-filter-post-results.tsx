@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+// Industry filter component for post-search filtering
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
