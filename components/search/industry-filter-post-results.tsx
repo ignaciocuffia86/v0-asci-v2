@@ -53,7 +53,7 @@ export function IndustryFilterPostResults({
     .map(i => i.name_es)
 
   return (
-    <Card className="p-4">
+    <Card className="p-4 relative">
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
         <div className="flex items-center justify-between">
           <CollapsibleTrigger asChild>
