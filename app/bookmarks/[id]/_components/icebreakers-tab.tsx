@@ -564,9 +564,39 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
                   <div className="bg-slate-50 dark:bg-slate-900 p-3 rounded-md text-sm whitespace-pre-wrap">
                     {generatedResult.linkedin}
                   </div>
-                  <p className="text-xs text-muted-foreground mt-2">
-                    {generatedResult.linkedin.length} / 300 caracteres
-                  </p>
+                  <div className="mt-3 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <p className={`text-xs font-medium ${
+                        generatedResult.linkedin.length <= 300 
+                          ? "text-green-600 dark:text-green-400" 
+                          : "text-red-600 dark:text-red-400"
+                      }`}>
+                        {generatedResult.linkedin.length} / 300 caracteres
+                      </p>
+                      {generatedResult.linkedin.length > 300 && (
+                        <span className="text-xs text-red-600 dark:text-red-400 font-medium">
+                          ⚠️ Excede límite
+                        </span>
+                      )}
+                    </div>
+                    <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2 overflow-hidden">
+                      <div
+                        className={`h-full transition-all ${
+                          generatedResult.linkedin.length <= 300
+                            ? "bg-green-500"
+                            : "bg-red-500"
+                        }`}
+                        style={{
+                          width: `${Math.min((generatedResult.linkedin.length / 300) * 100, 100)}%`
+                        }}
+                      />
+                    </div>
+                    {generatedResult.linkedin.length > 300 && (
+                      <p className="text-xs text-red-600 dark:text-red-400">
+                        El mensaje ha sido truncado a 300 caracteres para cumplir con los límites de LinkedIn.
+                      </p>
+                    )}
+                  </div>
                 </CardContent>
               </Card>
 
@@ -602,6 +632,9 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
                   <div className="bg-slate-50 dark:bg-slate-900 p-3 rounded-md text-sm whitespace-pre-wrap">
                     {generatedResult.email}
                   </div>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    {generatedResult.email.length} caracteres
+                  </p>
                 </CardContent>
               </Card>
 
@@ -775,6 +808,32 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
                         <div className="bg-muted/30 p-3 rounded-md text-sm whitespace-pre-wrap">
                           {group.linkedin.generated_text}
                         </div>
+                        <div className="mt-2 space-y-1">
+                          <div className="flex items-center justify-between">
+                            <p className={`text-xs font-medium ${
+                              group.linkedin.generated_text.length <= 300 
+                                ? "text-green-600 dark:text-green-400" 
+                                : "text-red-600 dark:text-red-400"
+                            }`}>
+                              {group.linkedin.generated_text.length} / 300 caracteres
+                            </p>
+                            {group.linkedin.generated_text.length > 300 && (
+                              <span className="text-xs text-red-600 dark:text-red-400">⚠️ Excede</span>
+                            )}
+                          </div>
+                          <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-1.5 overflow-hidden">
+                            <div
+                              className={`h-full transition-all ${
+                                group.linkedin.generated_text.length <= 300
+                                  ? "bg-green-500"
+                                  : "bg-red-500"
+                              }`}
+                              style={{
+                                width: `${Math.min((group.linkedin.generated_text.length / 300) * 100, 100)}%`
+                              }}
+                            />
+                          </div>
+                        </div>
                       </div>
                     )}
 
@@ -802,6 +861,9 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
                         <div className="bg-muted/30 p-3 rounded-md text-sm whitespace-pre-wrap">
                           {group.email.generated_text}
                         </div>
+                        <p className="text-xs text-muted-foreground mt-2">
+                          {group.email.generated_text.length} caracteres
+                        </p>
                       </div>
                     )}
                   </CardContent>
