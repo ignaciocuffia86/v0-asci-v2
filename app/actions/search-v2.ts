@@ -11,6 +11,8 @@ export type ProcessSearchResult = {
   company_linkedin_url: string | null
   company_country: string | null
   company_industry: string | null
+  master_industry_id: string | null
+  master_industry_name: string | null
   signal_count: number
   current_count: number
   alumni_count: number
@@ -29,6 +31,8 @@ export type TechnologySearchResult = {
   company_linkedin_url: string | null
   company_country: string | null
   company_industry: string | null
+  master_industry_id: string | null
+  master_industry_name: string | null
   total_count: number
   current_count: number
   alumni_count: number
@@ -153,64 +157,6 @@ export async function getCompanySignalSummary(companyId: string): Promise<Compan
   }
 
   return data && data.length > 0 ? data[0] : null
-}
-
-export type IndustryWithCount = {
-  id: string
-  name_es: string
-  name_en: string
-  icon: string
-  company_count: number
-}
-
-export async function getIndustriesForTechnologySearch(
-  productId: string,
-  countries: string[],
-  excludeProviders = false,
-): Promise<IndustryWithCount[]> {
-  const supabase = await createClient()
-
-  const normalizedCountries = countries.length > 0 
-    ? normalizeCountriesForSearch(countries) 
-    : null
-
-  const { data, error } = await supabase.rpc("get_industries_for_technology_search", {
-    p_product_id: productId,
-    p_countries: normalizedCountries,
-    p_exclude_providers: excludeProviders,
-  })
-
-  if (error) {
-    console.error("Error getting industries for technology search:", error)
-    return []
-  }
-
-  return data || []
-}
-
-export async function getIndustriesForProcessSearch(
-  processIds: string[],
-  countries: string[],
-  excludeProviders = false,
-): Promise<IndustryWithCount[]> {
-  const supabase = await createClient()
-
-  const normalizedCountries = countries.length > 0 
-    ? normalizeCountriesForSearch(countries) 
-    : null
-
-  const { data, error } = await supabase.rpc("get_industries_for_process_search", {
-    p_process_ids: processIds,
-    p_countries: normalizedCountries,
-    p_exclude_providers: excludeProviders,
-  })
-
-  if (error) {
-    console.error("Error getting industries for process search:", error)
-    return []
-  }
-
-  return data || []
 }
 
 export async function searchCompaniesByName(query: string) {

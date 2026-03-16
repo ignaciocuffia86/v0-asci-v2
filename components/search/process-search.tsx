@@ -8,8 +8,8 @@ import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Search, X, Loader2, ArrowUpDown } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { searchByProcess, getIndustriesForProcessSearch, type ProcessSearchResult, type SortOption, type IndustryWithCount } from "@/app/actions/search-v2"
-import { IndustryMultiSelect } from "@/components/search/industry-multi-select"
+import { searchByProcess, type ProcessSearchResult, type SortOption } from "@/app/actions/search-v2"
+import { IndustryFilterPostResults } from "@/components/search/industry-filter-post-results"
 import { CompanyDrawer } from "@/components/company-drawer"
 import { ScoringExplanation, ProvidersFilterTooltip } from "@/components/search/score-tooltip"
 import { CountryMultiSelect } from "@/components/search/country-multi-select"
@@ -26,9 +26,7 @@ export function ProcessSearch() {
   const [selectedCompanyIds, setSelectedCompanyIds] = useState<Set<string>>(new Set())
   const [excludeProviders, setExcludeProviders] = useState(false)
   const [sortBy, setSortBy] = useState<SortOption>("relevance")
-  const [availableIndustries, setAvailableIndustries] = useState<IndustryWithCount[]>([])
   const [selectedIndustries, setSelectedIndustries] = useState<string[]>([])
-  const [isLoadingIndustries, setIsLoadingIndustries] = useState(false)
   const supabase = createClient()
 
   useEffect(() => {
@@ -39,42 +37,14 @@ export function ProcessSearch() {
     fetchProcesses()
   }, [])
 
-  // Fetch industries when processes and country are selected
-  useEffect(() => {
-    const fetchIndustries = async () => {
-      if (selectedProcesses.length === 0 || selectedCountries.length === 0) {
-        setAvailableIndustries([])
-        setSelectedIndustries([])
-        return
-      }
-
-      setIsLoadingIndustries(true)
-      try {
-        const industries = await getIndustriesForProcessSearch(
-          selectedProcesses,
-          selectedCountries,
-          excludeProviders
-        )
-        setAvailableIndustries(industries)
-        setSelectedIndustries([])
-      } catch (error) {
-        console.error("Error fetching industries:", error)
-        setAvailableIndustries([])
-      } finally {
-        setIsLoadingIndustries(false)
-      }
-    }
-
-    fetchIndustries()
-  }, [selectedProcesses, selectedCountries, excludeProviders])
-
   const handleSearch = async () => {
     if (selectedProcesses.length === 0 || selectedCountries.length === 0) return
 
     setIsSearching(true)
     setSelectedCompanyIds(new Set())
+    setSelectedIndustries([]) // Reset industry filter on new search
     try {
-      const data = await searchByProcess(selectedProcesses, selectedCountries, excludeProviders, selectedIndustries)
+      const data = await searchByProcess(selectedProcesses, selectedCountries, excludeProviders)
       setResults(data)
     } catch (error) {
       console.error(error)
@@ -118,8 +88,14 @@ export function ProcessSearch() {
     },
   }
 
+  // Filter by selected industries (client-side)
+  const filteredResults = useMemo(() => {
+    if (selectedIndustries.length === 0) return results
+    return results.filter(r => r.master_industry_id && selectedIndustries.includes(r.master_industry_id))
+  }, [results, selectedIndustries])
+
   const sortedResults = useMemo(() => {
-    const sorted = [...results]
+    const sorted = [...filteredResults]
     switch (sortBy) {
       case "relevance":
         sorted.sort((a, b) => b.relevance_score - a.relevance_score)
@@ -135,7 +111,27 @@ export function ProcessSearch() {
         break
     }
     return sorted
-  }, [results, sortBy])
+  }, [filteredResults, sortBy])
+
+  // Extract unique industries from results for the filter
+  const availableIndustries = useMemo(() => {
+    const industryMap = new Map<string, { id: string; name_es: string; count: number }>()
+    results.forEach(r => {
+      if (r.master_industry_id && r.master_industry_name) {
+        const existing = industryMap.get(r.master_industry_id)
+        if (existing) {
+          existing.count++
+        } else {
+          industryMap.set(r.master_industry_id, {
+            id: r.master_industry_id,
+            name_es: r.master_industry_name,
+            count: 1
+          })
+        }
+      }
+    })
+    return Array.from(industryMap.values()).sort((a, b) => b.count - a.count)
+  }, [results])
 
   return (
     <div className="space-y-6">
@@ -182,25 +178,6 @@ export function ProcessSearch() {
           </div>
         </div>
 
-        {/* Industry Filter - appears after processes and country are selected */}
-        {selectedProcesses.length > 0 && selectedCountries.length > 0 && (
-          <div className="space-y-2">
-            <Label>Filtrar por Industria (Opcional)</Label>
-            <IndustryMultiSelect
-              industries={availableIndustries}
-              selectedIds={selectedIndustries}
-              onSelectionChange={setSelectedIndustries}
-              isLoading={isLoadingIndustries}
-              placeholder="Todas las industrias..."
-            />
-            {availableIndustries.length > 0 && selectedIndustries.length === 0 && (
-              <p className="text-xs text-muted-foreground">
-                {availableIndustries.length} industrias disponibles. Selecciona para filtrar resultados.
-              </p>
-            )}
-          </div>
-        )}
-
         <div className="flex items-center gap-2 pt-2 border-t">
           <Checkbox
             id="exclude-providers-process"
@@ -236,9 +213,25 @@ export function ProcessSearch() {
       {/* Results */}
       {results.length > 0 && (
         <div className="space-y-4">
+          {/* Industry Filter - Post Results */}
+          {availableIndustries.length > 1 && (
+            <IndustryFilterPostResults
+              industries={availableIndustries}
+              selectedIds={selectedIndustries}
+              onSelectionChange={setSelectedIndustries}
+              totalResults={results.length}
+              filteredResults={sortedResults.length}
+            />
+          )}
+
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <h2 className="text-xl font-semibold">
               {sortedResults.length} {sortedResults.length === 1 ? "Empresa encontrada" : "Empresas encontradas"}
+              {selectedIndustries.length > 0 && (
+                <span className="text-sm font-normal text-muted-foreground ml-2">
+                  (de {results.length} totales)
+                </span>
+              )}
             </h2>
 
             <div className="flex items-center gap-4">
