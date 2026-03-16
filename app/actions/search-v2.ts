@@ -54,6 +54,7 @@ export async function searchByProcess(
   processIds: string[],
   countries: string[],
   excludeProviders = false,
+  masterIndustryIds: string[] = [],
 ): Promise<ProcessSearchResult[]> {
   const supabase = await createClient()
 
@@ -66,6 +67,7 @@ export async function searchByProcess(
     p_process_ids: processIds,
     p_countries: normalizedCountries,
     p_exclude_providers: excludeProviders,
+    p_master_industry_ids: masterIndustryIds.length > 0 ? masterIndustryIds : null,
   })
 
   if (error) {
@@ -98,6 +100,7 @@ export async function searchByTechnology(
   productId: string,
   countries: string[],
   excludeProviders = false,
+  masterIndustryIds: string[] = [],
 ): Promise<TechnologySearchResult[]> {
   const supabase = await createClient()
 
@@ -110,6 +113,7 @@ export async function searchByTechnology(
     p_product_id: productId,
     p_countries: normalizedCountries,
     p_exclude_providers: excludeProviders,
+    p_master_industry_ids: masterIndustryIds.length > 0 ? masterIndustryIds : null,
   })
 
   if (error) {
@@ -149,6 +153,64 @@ export async function getCompanySignalSummary(companyId: string): Promise<Compan
   }
 
   return data && data.length > 0 ? data[0] : null
+}
+
+export type IndustryWithCount = {
+  id: string
+  name_es: string
+  name_en: string
+  icon: string
+  company_count: number
+}
+
+export async function getIndustriesForTechnologySearch(
+  productId: string,
+  countries: string[],
+  excludeProviders = false,
+): Promise<IndustryWithCount[]> {
+  const supabase = await createClient()
+
+  const normalizedCountries = countries.length > 0 
+    ? normalizeCountriesForSearch(countries) 
+    : null
+
+  const { data, error } = await supabase.rpc("get_industries_for_technology_search", {
+    p_product_id: productId,
+    p_countries: normalizedCountries,
+    p_exclude_providers: excludeProviders,
+  })
+
+  if (error) {
+    console.error("Error getting industries for technology search:", error)
+    return []
+  }
+
+  return data || []
+}
+
+export async function getIndustriesForProcessSearch(
+  processIds: string[],
+  countries: string[],
+  excludeProviders = false,
+): Promise<IndustryWithCount[]> {
+  const supabase = await createClient()
+
+  const normalizedCountries = countries.length > 0 
+    ? normalizeCountriesForSearch(countries) 
+    : null
+
+  const { data, error } = await supabase.rpc("get_industries_for_process_search", {
+    p_process_ids: processIds,
+    p_countries: normalizedCountries,
+    p_exclude_providers: excludeProviders,
+  })
+
+  if (error) {
+    console.error("Error getting industries for process search:", error)
+    return []
+  }
+
+  return data || []
 }
 
 export async function searchCompaniesByName(query: string) {

@@ -8,7 +8,8 @@ import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Search, X, Loader2, ArrowUpDown } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { searchByProcess, type ProcessSearchResult, type SortOption } from "@/app/actions/search-v2"
+import { searchByProcess, getIndustriesForProcessSearch, type ProcessSearchResult, type SortOption, type IndustryWithCount } from "@/app/actions/search-v2"
+import { IndustryMultiSelect } from "@/components/search/industry-multi-select"
 import { CompanyDrawer } from "@/components/company-drawer"
 import { ScoringExplanation, ProvidersFilterTooltip } from "@/components/search/score-tooltip"
 import { CountryMultiSelect } from "@/components/search/country-multi-select"
@@ -25,6 +26,9 @@ export function ProcessSearch() {
   const [selectedCompanyIds, setSelectedCompanyIds] = useState<Set<string>>(new Set())
   const [excludeProviders, setExcludeProviders] = useState(false)
   const [sortBy, setSortBy] = useState<SortOption>("relevance")
+  const [availableIndustries, setAvailableIndustries] = useState<IndustryWithCount[]>([])
+  const [selectedIndustries, setSelectedIndustries] = useState<string[]>([])
+  const [isLoadingIndustries, setIsLoadingIndustries] = useState(false)
   const supabase = createClient()
 
   useEffect(() => {
@@ -35,13 +39,42 @@ export function ProcessSearch() {
     fetchProcesses()
   }, [])
 
+  // Fetch industries when processes and country are selected
+  useEffect(() => {
+    const fetchIndustries = async () => {
+      if (selectedProcesses.length === 0 || selectedCountries.length === 0) {
+        setAvailableIndustries([])
+        setSelectedIndustries([])
+        return
+      }
+
+      setIsLoadingIndustries(true)
+      try {
+        const industries = await getIndustriesForProcessSearch(
+          selectedProcesses,
+          selectedCountries,
+          excludeProviders
+        )
+        setAvailableIndustries(industries)
+        setSelectedIndustries([])
+      } catch (error) {
+        console.error("Error fetching industries:", error)
+        setAvailableIndustries([])
+      } finally {
+        setIsLoadingIndustries(false)
+      }
+    }
+
+    fetchIndustries()
+  }, [selectedProcesses, selectedCountries, excludeProviders])
+
   const handleSearch = async () => {
     if (selectedProcesses.length === 0 || selectedCountries.length === 0) return
 
     setIsSearching(true)
     setSelectedCompanyIds(new Set())
     try {
-      const data = await searchByProcess(selectedProcesses, selectedCountries, excludeProviders)
+      const data = await searchByProcess(selectedProcesses, selectedCountries, excludeProviders, selectedIndustries)
       setResults(data)
     } catch (error) {
       console.error(error)
@@ -148,6 +181,25 @@ export function ProcessSearch() {
             />
           </div>
         </div>
+
+        {/* Industry Filter - appears after processes and country are selected */}
+        {selectedProcesses.length > 0 && selectedCountries.length > 0 && (
+          <div className="space-y-2">
+            <Label>Filtrar por Industria (Opcional)</Label>
+            <IndustryMultiSelect
+              industries={availableIndustries}
+              selectedIds={selectedIndustries}
+              onSelectionChange={setSelectedIndustries}
+              isLoading={isLoadingIndustries}
+              placeholder="Todas las industrias..."
+            />
+            {availableIndustries.length > 0 && selectedIndustries.length === 0 && (
+              <p className="text-xs text-muted-foreground">
+                {availableIndustries.length} industrias disponibles. Selecciona para filtrar resultados.
+              </p>
+            )}
+          </div>
+        )}
 
         <div className="flex items-center gap-2 pt-2 border-t">
           <Checkbox

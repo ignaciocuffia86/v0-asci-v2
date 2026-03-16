@@ -7,7 +7,8 @@ import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Search, Loader2, ArrowUpDown } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { searchByTechnology, type TechnologySearchResult, type SortOption } from "@/app/actions/search-v2"
+import { searchByTechnology, getIndustriesForTechnologySearch, type TechnologySearchResult, type SortOption, type IndustryWithCount } from "@/app/actions/search-v2"
+import { IndustryMultiSelect } from "@/components/search/industry-multi-select"
 import { CompanyDrawer } from "@/components/company-drawer"
 import { ScoringExplanation, ProvidersFilterTooltip } from "@/components/search/score-tooltip"
 import { CountryMultiSelect } from "@/components/search/country-multi-select"
@@ -31,6 +32,9 @@ export function TechnologySearch() {
   const [selectedCompanyIds, setSelectedCompanyIds] = useState<Set<string>>(new Set())
   const [excludeProviders, setExcludeProviders] = useState(false)
   const [sortBy, setSortBy] = useState<SortOption>("relevance")
+  const [availableIndustries, setAvailableIndustries] = useState<IndustryWithCount[]>([])
+  const [selectedIndustries, setSelectedIndustries] = useState<string[]>([])
+  const [isLoadingIndustries, setIsLoadingIndustries] = useState(false)
   const supabase = createClient()
 
   const getTechName = (id: string) => technologies.find((t) => t.id === id)?.display_name || id
@@ -55,13 +59,43 @@ export function TechnologySearch() {
     fetchTechnologies()
   }, [])
 
+  // Fetch industries when tech and country are selected
+  useEffect(() => {
+    const fetchIndustries = async () => {
+      if (!selectedTech || selectedCountries.length === 0) {
+        setAvailableIndustries([])
+        setSelectedIndustries([])
+        return
+      }
+
+      setIsLoadingIndustries(true)
+      try {
+        const industries = await getIndustriesForTechnologySearch(
+          selectedTech,
+          selectedCountries,
+          excludeProviders
+        )
+        setAvailableIndustries(industries)
+        // Clear industry selection when filters change
+        setSelectedIndustries([])
+      } catch (error) {
+        console.error("Error fetching industries:", error)
+        setAvailableIndustries([])
+      } finally {
+        setIsLoadingIndustries(false)
+      }
+    }
+
+    fetchIndustries()
+  }, [selectedTech, selectedCountries, excludeProviders])
+
   const handleSearch = async () => {
     if (!selectedTech || selectedCountries.length === 0) return
 
     setIsSearching(true)
     setSelectedCompanyIds(new Set())
     try {
-      const data = await searchByTechnology(selectedTech, selectedCountries, excludeProviders)
+      const data = await searchByTechnology(selectedTech, selectedCountries, excludeProviders, selectedIndustries)
       setResults(data)
     } catch (error) {
       console.error(error)
@@ -151,6 +185,25 @@ export function TechnologySearch() {
             />
           </div>
         </div>
+
+        {/* Industry Filter - appears after tech and country are selected */}
+        {selectedTech && selectedCountries.length > 0 && (
+          <div className="space-y-2">
+            <Label>Filtrar por Industria (Opcional)</Label>
+            <IndustryMultiSelect
+              industries={availableIndustries}
+              selectedIds={selectedIndustries}
+              onSelectionChange={setSelectedIndustries}
+              isLoading={isLoadingIndustries}
+              placeholder="Todas las industrias..."
+            />
+            {availableIndustries.length > 0 && selectedIndustries.length === 0 && (
+              <p className="text-xs text-muted-foreground">
+                {availableIndustries.length} industrias disponibles. Selecciona para filtrar resultados.
+              </p>
+            )}
+          </div>
+        )}
 
         <div className="flex items-center gap-2 pt-2 border-t">
           <Checkbox
