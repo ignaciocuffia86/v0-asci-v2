@@ -156,8 +156,30 @@ export async function POST(request: NextRequest) {
       })
       .eq("id", document.id)
 
-    // Step 4: Insert tags
+    // Step 4: Insert tags with master_industry_id mapping for industry tags
     if (analysis.tags.length > 0) {
+      // Get industry mappings for industry tags
+      const industryTagValues = analysis.tags
+        .filter((t) => t.type === "industry")
+        .map((t) => t.value.toLowerCase().trim())
+
+      let industryMappings: Record<string, string> = {}
+      
+      if (industryTagValues.length > 0) {
+        const { data: mappings } = await supabase
+          .from("industry_mappings")
+          .select("original_value, master_industry_id")
+          .eq("source_type", "document")
+          .in("original_value", industryTagValues.map(v => v.toLowerCase()))
+
+        if (mappings) {
+          industryMappings = mappings.reduce((acc, m) => {
+            acc[m.original_value.toLowerCase()] = m.master_industry_id
+            return acc
+          }, {} as Record<string, string>)
+        }
+      }
+
       const tagRows = analysis.tags.map((tag) => ({
         document_id: document.id,
         user_id: user.id,
@@ -165,6 +187,10 @@ export async function POST(request: NextRequest) {
         tag_value: tag.value,
         tag_reference_id: tag.reference_id,
         confidence: tag.confidence,
+        // Add master_industry_id for industry tags if mapping exists
+        master_industry_id: tag.type === "industry" 
+          ? industryMappings[tag.value.toLowerCase().trim()] || null
+          : null,
       }))
 
       const { error: tagsError } = await supabase

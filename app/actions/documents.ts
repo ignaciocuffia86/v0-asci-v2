@@ -28,6 +28,12 @@ export type DocumentTag = {
   tag_reference_id: string | null
   confidence: number
   created_at: string
+  master_industry_id: string | null
+  master_industry?: {
+    id: string
+    name_es: string
+    name_en: string
+  } | null
 }
 
 export type UserValueProfile = {
@@ -77,15 +83,20 @@ export async function getUserDocumentsWithTags(): Promise<{ data: UserDocument[]
 
   if (docsError) return { data: null, error: docsError.message }
 
-  // Fetch all tags at once
+  // Fetch all tags at once with master_industry info
   const { data: allTags } = await supabase
     .from("document_tags")
-    .select("*")
+    .select("*, master_industries:master_industry_id(id, name_es, name_en)")
     .eq("user_id", user.id)
     .order("confidence", { ascending: false })
 
-  // Group tags by document_id
-  const tagsByDoc = (allTags || []).reduce((acc, tag) => {
+  // Map and group tags by document_id
+  const mappedTags = (allTags || []).map((tag: any) => ({
+    ...tag,
+    master_industry: tag.master_industries || null,
+  }))
+
+  const tagsByDoc = mappedTags.reduce((acc, tag) => {
     if (!acc[tag.document_id]) acc[tag.document_id] = []
     acc[tag.document_id].push(tag)
     return acc
@@ -118,12 +129,18 @@ export async function getDocumentWithTags(documentId: string): Promise<{ data: U
 
   const { data: tags } = await supabase
     .from("document_tags")
-    .select("*")
+    .select("*, master_industries:master_industry_id(id, name_es, name_en)")
     .eq("document_id", documentId)
     .eq("user_id", user.id)
     .order("confidence", { ascending: false })
 
-  return { data: { ...doc, tags: tags || [] } as UserDocument, error: null }
+  // Map the response to include master_industry properly
+  const mappedTags = (tags || []).map((tag: any) => ({
+    ...tag,
+    master_industry: tag.master_industries || null,
+  }))
+
+  return { data: { ...doc, tags: mappedTags } as UserDocument, error: null }
 }
 
 /**

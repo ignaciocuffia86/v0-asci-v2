@@ -9,6 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Search, X, Loader2, ArrowUpDown } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { searchByProcess, type ProcessSearchResult, type SortOption } from "@/app/actions/search-v2"
+import { IndustryFilterPostResults } from "@/components/search/industry-filter-post-results"
 import { CompanyDrawer } from "@/components/company-drawer"
 import { ScoringExplanation, ProvidersFilterTooltip } from "@/components/search/score-tooltip"
 import { CountryMultiSelect } from "@/components/search/country-multi-select"
@@ -25,6 +26,8 @@ export function ProcessSearch() {
   const [selectedCompanyIds, setSelectedCompanyIds] = useState<Set<string>>(new Set())
   const [excludeProviders, setExcludeProviders] = useState(false)
   const [sortBy, setSortBy] = useState<SortOption>("relevance")
+  const [selectedIndustries, setSelectedIndustries] = useState<string[]>([])
+  const [displayLimit, setDisplayLimit] = useState(50)
   const supabase = createClient()
 
   useEffect(() => {
@@ -40,6 +43,8 @@ export function ProcessSearch() {
 
     setIsSearching(true)
     setSelectedCompanyIds(new Set())
+    setSelectedIndustries([]) // Reset industry filter on new search
+    setDisplayLimit(50) // Reset pagination on new search
     try {
       const data = await searchByProcess(selectedProcesses, selectedCountries, excludeProviders)
       setResults(data)
@@ -85,8 +90,14 @@ export function ProcessSearch() {
     },
   }
 
+  // Filter by selected industries (client-side)
+  const filteredResults = useMemo(() => {
+    if (selectedIndustries.length === 0) return results
+    return results.filter(r => r.master_industry_id && selectedIndustries.includes(r.master_industry_id))
+  }, [results, selectedIndustries])
+
   const sortedResults = useMemo(() => {
-    const sorted = [...results]
+    const sorted = [...filteredResults]
     switch (sortBy) {
       case "relevance":
         sorted.sort((a, b) => b.relevance_score - a.relevance_score)
@@ -102,7 +113,34 @@ export function ProcessSearch() {
         break
     }
     return sorted
-  }, [results, sortBy])
+  }, [filteredResults, sortBy])
+
+  // Extract unique industries from results for the filter
+  const availableIndustries = useMemo(() => {
+    const industryMap = new Map<string, { id: string; name_es: string; count: number }>()
+    results.forEach(r => {
+      if (r.master_industry_id && r.master_industry_name) {
+        const existing = industryMap.get(r.master_industry_id)
+        if (existing) {
+          existing.count++
+        } else {
+          industryMap.set(r.master_industry_id, {
+            id: r.master_industry_id,
+            name_es: r.master_industry_name,
+            count: 1
+          })
+        }
+      }
+    })
+    return Array.from(industryMap.values()).sort((a, b) => b.count - a.count)
+  }, [results])
+
+  // Paginated results for better performance
+  const paginatedResults = useMemo(() => {
+    return sortedResults.slice(0, displayLimit)
+  }, [sortedResults, displayLimit])
+
+  const hasMoreResults = sortedResults.length > displayLimit
 
   return (
     <div className="space-y-6">
@@ -184,9 +222,25 @@ export function ProcessSearch() {
       {/* Results */}
       {results.length > 0 && (
         <div className="space-y-4">
+          {/* Industry Filter - Post Results */}
+          {availableIndustries.length > 1 && (
+            <IndustryFilterPostResults
+              industries={availableIndustries}
+              selectedIds={selectedIndustries}
+              onSelectionChange={setSelectedIndustries}
+              totalResults={results.length}
+              filteredResults={sortedResults.length}
+            />
+          )}
+
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <h2 className="text-xl font-semibold">
               {sortedResults.length} {sortedResults.length === 1 ? "Empresa encontrada" : "Empresas encontradas"}
+              {selectedIndustries.length > 0 && (
+                <span className="text-sm font-normal text-muted-foreground ml-2">
+                  (de {results.length} totales)
+                </span>
+              )}
             </h2>
 
             <div className="flex items-center gap-4">
@@ -210,7 +264,7 @@ export function ProcessSearch() {
           </div>
 
           <div className="grid gap-4" data-onboarding="search-results">
-            {sortedResults.map((company) => (
+            {paginatedResults.map((company) => (
               <ResultItem
                 key={company.company_id}
                 company={company}
@@ -220,6 +274,19 @@ export function ProcessSearch() {
               />
             ))}
           </div>
+
+          {/* Load More Button */}
+          {hasMoreResults && (
+            <div className="flex justify-center pt-4">
+              <Button
+                variant="outline"
+                onClick={() => setDisplayLimit(prev => prev + 50)}
+                className="w-full max-w-xs"
+              >
+                Cargar más ({sortedResults.length - displayLimit} restantes)
+              </Button>
+            </div>
+          )}
         </div>
       )}
 
