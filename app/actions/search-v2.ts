@@ -88,6 +88,8 @@ export async function searchByProcess(
     return (fallbackData || []).map((r: any) => ({
       ...r,
       company_industry: null,
+      master_industry_id: null,
+      master_industry_name: null,
       current_count: r.signal_count || 0,
       alumni_count: 0,
       relevance_score: 0,
@@ -97,7 +99,26 @@ export async function searchByProcess(
     }))
   }
 
-  return data || []
+  // Map RPC response to expected format
+  return (data || []).map((r: any) => ({
+    company_id: r.company_id,
+    company_name: r.company_name,
+    company_logo_url: null,
+    company_website: r.company_website,
+    company_linkedin_url: null,
+    company_country: r.company_country,
+    company_industry: r.company_industry,
+    master_industry_id: r.master_industry_id,
+    master_industry_name: r.master_industry_name,
+    signal_count: r.signal_count || 0,
+    current_count: r.employee_count || 0,
+    alumni_count: 0,
+    job_postings_count: r.job_count || 0,
+    relevance_score: r.signal_count || 0,
+    current_score: r.employee_count || 0,
+    alumni_score: 0,
+    job_postings_score: r.job_count || 0,
+  }))
 }
 
 export async function searchByTechnology(
@@ -134,6 +155,8 @@ export async function searchByTechnology(
     return (fallbackData || []).map((r: any) => ({
       ...r,
       company_industry: null,
+      master_industry_id: null,
+      master_industry_name: null,
       relevance_score: 0,
       current_score: 0,
       alumni_score: 0,
@@ -141,7 +164,26 @@ export async function searchByTechnology(
     }))
   }
 
-  return data || []
+  // Map RPC response to expected format
+  return (data || []).map((r: any) => ({
+    company_id: r.company_id,
+    company_name: r.company_name,
+    company_logo_url: null,
+    company_website: r.company_website,
+    company_linkedin_url: null,
+    company_country: r.company_country,
+    company_industry: r.company_industry,
+    master_industry_id: r.master_industry_id,
+    master_industry_name: r.master_industry_name,
+    total_count: r.signal_count || 0,
+    current_count: r.employee_count || 0,
+    alumni_count: 0,
+    job_postings_count: r.job_count || 0,
+    relevance_score: r.signal_count || 0,
+    current_score: r.employee_count || 0,
+    alumni_score: 0,
+    job_postings_score: r.job_count || 0,
+  }))
 }
 
 export async function getCompanySignalSummary(companyId: string): Promise<CompanySignalSummary | null> {
