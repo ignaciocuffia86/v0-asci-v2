@@ -42,10 +42,10 @@ export async function prepareBriefContext(options: PrepareContextOptions): Promi
     throw new Error("Bookmark no encontrado")
   }
 
-  // 2. Fetch company data
+  // 2. Fetch company data (including master_industry_id for document matching)
   const { data: company, error: companyError } = await supabase
     .from("companies")
-    .select("*")
+    .select("*, master_industry_id")
     .eq("id", bookmark.company_id)
     .single()
 
@@ -180,6 +180,7 @@ export async function prepareBriefContext(options: PrepareContextOptions): Promi
       .maybeSingle(),
     rankDocumentsForBookmark(userId, {
       companyIndustry: company.industry,
+      companyMasterIndustryId: company.master_industry_id,
       filterSignalIds,
     }),
   ])

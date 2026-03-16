@@ -47,10 +47,10 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Bookmark not found" }, { status: 404 })
     }
 
-    // Get company industry
+    // Get company industry and master_industry_id
     const { data: company } = await supabase
       .from("companies")
-      .select("industry")
+      .select("industry, master_industry_id")
       .eq("id", bookmark.company_id)
       .single()
 
@@ -61,6 +61,7 @@ export async function GET(req: NextRequest) {
     const rankedDocs = hasDocuments
       ? await rankDocumentsForBookmark(user.id, {
           companyIndustry: company?.industry || null,
+          companyMasterIndustryId: company?.master_industry_id || null,
           filterSignalIds,
         })
       : []
@@ -125,7 +126,7 @@ export async function POST(req: NextRequest) {
     // Get company details + signals
     const { data: company } = await supabase
       .from("companies")
-      .select("name, industry, country, website, description")
+      .select("name, industry, master_industry_id, country, website, description")
       .eq("id", bookmark.company_id)
       .single()
 
@@ -152,6 +153,7 @@ export async function POST(req: NextRequest) {
     // Get ranked documents with content
     const rankedDocs = await rankDocumentsForBookmark(user.id, {
       companyIndustry: company.industry,
+      companyMasterIndustryId: company.master_industry_id,
       filterSignalIds,
     })
 
