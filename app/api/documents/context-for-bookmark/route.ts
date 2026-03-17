@@ -3,8 +3,8 @@ import { type NextRequest, NextResponse } from "next/server"
 import { rankDocumentsForBookmark } from "@/lib/documents/rank-documents-for-bookmark"
 import { generateGeminiContent } from "@/lib/ai-service"
 
-// How many top company signals to infer when bookmark is general (no filterSignalIds)
-const MAX_INFERRED_SIGNALS = 10
+// Max distinct signal_ids to consider when building the company signal count map
+const MAX_SIGNAL_IDS = 50
 
 export async function GET(req: NextRequest) {
   const bookmarkId = req.nextUrl.searchParams.get("bookmarkId")
@@ -60,28 +60,28 @@ export async function GET(req: NextRequest) {
     const searchContext = (bookmark.search_context as any) || {}
     const filterSignalIds: string[] = searchContext.filterSignalIds || []
 
-    // When bookmark is general, infer signals from the company's own signal profile
-    let inferredSignalIds: string[] = []
+    // When bookmark is general, build a signal_id → count map for the company
+    // so the ranker can weight documents proportionally by signal volume
+    let companySignalCounts: Record<string, number> | undefined
     if (filterSignalIds.length === 0 && hasDocuments) {
       const { data: companySignals } = await supabase
         .from("signals")
-        .select("signal_id, signal_type")
+        .select("signal_id")
         .eq("company_id", bookmark.company_id)
         .in("signal_type", ["technology", "process"])
         .not("signal_id", "is", null)
-        .limit(200)
 
       if (companySignals && companySignals.length > 0) {
-        // Count frequency of each signal_id
         const freq: Record<string, number> = {}
         for (const s of companySignals) {
           freq[s.signal_id] = (freq[s.signal_id] || 0) + 1
         }
-        // Take top N by frequency
-        inferredSignalIds = Object.entries(freq)
-          .sort((a, b) => b[1] - a[1])
-          .slice(0, MAX_INFERRED_SIGNALS)
-          .map(([id]) => id)
+        // Keep top N signal IDs by frequency (covers most relevant products)
+        companySignalCounts = Object.fromEntries(
+          Object.entries(freq)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, MAX_SIGNAL_IDS)
+        )
       }
     }
 
@@ -91,7 +91,7 @@ export async function GET(req: NextRequest) {
           companyIndustry: company?.industry || null,
           companyMasterIndustryId: company?.master_industry_id || null,
           filterSignalIds,
-          inferredSignalIds,
+          companySignalCounts,
         })
       : []
 
@@ -190,32 +190,37 @@ export async function POST(req: NextRequest) {
     const searchContext = (bookmark.search_context as any) || {}
     const filterSignalIds: string[] = searchContext.filterSignalIds || []
 
-    // Infer signals if general bookmark
-    let inferredSignalIds: string[] = []
+    // Build signal count map for general bookmarks
+    let companySignalCounts: Record<string, number> | undefined
     if (filterSignalIds.length === 0) {
       const { data: companySignals } = await supabase
         .from("signals")
-        .select("signal_id, signal_type")
+        .select("signal_id")
         .eq("company_id", bookmark.company_id)
         .in("signal_type", ["technology", "process"])
         .not("signal_id", "is", null)
-        .limit(200)
 
       if (companySignals && companySignals.length > 0) {
         const freq: Record<string, number> = {}
         for (const s of companySignals) {
           freq[s.signal_id] = (freq[s.signal_id] || 0) + 1
         }
-        inferredSignalIds = Object.entries(freq)
-          .sort((a, b) => b[1] - a[1])
-          .slice(0, MAX_INFERRED_SIGNALS)
-          .map(([id]) => id)
+        companySignalCounts = Object.fromEntries(
+          Object.entries(freq)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, MAX_SIGNAL_IDS)
+        )
       }
     }
 
     // Get signal names for the prompt
     let signalNames: string[] = []
-    const allSignalIds = [...new Set([...filterSignalIds, ...inferredSignalIds])]
+    const allSignalIds = [
+      ...new Set([
+        ...filterSignalIds,
+        ...Object.keys(companySignalCounts ?? {}).slice(0, 10),
+      ]),
+    ]
     if (allSignalIds.length > 0) {
       const filterType = searchContext.filterType || "general"
       const [{ data: techData }, { data: procData }] = await Promise.all([
@@ -231,23 +236,18 @@ export async function POST(req: NextRequest) {
     // If selectedDocIds provided, only use those documents; otherwise rank automatically
     let docsForPrompt: Awaited<ReturnType<typeof rankDocumentsForBookmark>> = []
 
+    const allRanked = await rankDocumentsForBookmark(user.id, {
+      companyIndustry: company.industry,
+      companyMasterIndustryId: company.master_industry_id,
+      filterSignalIds,
+      companySignalCounts,
+    })
+
     if (selectedDocIds && selectedDocIds.length > 0) {
-      // Fetch only the selected documents
-      const allRanked = await rankDocumentsForBookmark(user.id, {
-        companyIndustry: company.industry,
-        companyMasterIndustryId: company.master_industry_id,
-        filterSignalIds,
-        inferredSignalIds,
-      })
+      // Use exactly the docs the user selected
       docsForPrompt = allRanked.filter((d) => selectedDocIds.includes(d.id))
     } else {
-      // Fallback: auto-select top ranked docs (backward compat)
-      const allRanked = await rankDocumentsForBookmark(user.id, {
-        companyIndustry: company.industry,
-        companyMasterIndustryId: company.master_industry_id,
-        filterSignalIds,
-        inferredSignalIds,
-      })
+      // Fallback: auto-select top recommended docs (backward compat)
       docsForPrompt = allRanked.filter((d) => d.isRecommended).slice(0, 3)
     }
 
