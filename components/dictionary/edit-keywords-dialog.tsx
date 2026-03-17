@@ -125,7 +125,19 @@ export function EditKeywordsDialog({
       const tableName = itemType === "product" ? "dictionary_products" : "dictionary_processes"
       const signalType = itemType === "product" ? "technology" : "process"
 
-      // 1. Update the dictionary entry (name and keywords)
+      // 1. Delete signals immediately for removed keywords (don't wait for background job)
+      const removals = pendingChanges.filter((c) => c.type === "remove")
+      if (removals.length > 0) {
+        for (const change of removals) {
+          await supabase
+            .from("signals")
+            .delete()
+            .eq("signal_id", itemId)
+            .ilike("keyword_matched", change.keyword)
+        }
+      }
+
+      // 2. Update the dictionary entry (name and keywords)
       await supabase
         .from(tableName)
         .update({
@@ -134,10 +146,11 @@ export function EditKeywordsDialog({
         })
         .eq("id", itemId)
 
-      // 2. Create jobs for keyword changes
-      for (const change of pendingChanges) {
+      // 3. Create jobs only for additions (removals were already handled above)
+      const additions = pendingChanges.filter((c) => c.type === "add")
+      for (const change of additions) {
         await supabase.from("dictionary_jobs").insert({
-          job_type: change.type === "add" ? "add_keyword" : "remove_keyword",
+          job_type: "add_keyword",
           signal_id: itemId,
           signal_type: signalType,
           keyword: change.keyword,
