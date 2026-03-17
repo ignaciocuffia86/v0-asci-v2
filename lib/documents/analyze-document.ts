@@ -96,31 +96,44 @@ SI ES BROCHURE/PROPUESTA, el summary debe describir en 2-4 oraciones:
 
 === REGLAS CRITICAS PARA TAGS ===
 
+CONTEXTO CRITICO - TODOS LOS USUARIOS SON EMPRESAS DE TECNOLOGIA:
+Los documentos son materiales de venta/marketing de empresas de software, IT o consultoria tecnologica.
+Por definicion, TODOS sus documentos involucran tecnologia, innovacion y eficiencia operativa.
+Estos conceptos son universales y NO aportan valor diferencial como tags.
+
+TAGS COMPLETAMENTE PROHIBIDOS - NUNCA los incluyas aunque aparezcan explicitamente en el texto:
+  "Innovacion Tecnologica", "Transformacion Digital", "Innovacion y Transformacion",
+  "Eficiencia Operativa", "Mejora Continua", "Gestion del Cambio", "Estrategia Digital",
+  "Liderazgo IT", "Adopcion Tecnologica", "Calidad y Procesos", "Sostenibilidad",
+  "Sustentabilidad", "Continuidad Operativa", "Optimizacion de Procesos"
+  RAZON: aplican a absolutamente cualquier solucion tecnologica, no describen la propuesta de valor especifica.
+
+EN CAMBIO, busca tags que respondan: "¿para QUE CASO DE NEGOCIO o INDUSTRIA ESPECIFICA sirve este documento?"
+  - ¿Que problema de negocio concreto resuelve? → Ej: "Prediccion de Demanda", "Deteccion de Fraude", "Gestion de Riesgo Crediticio", "Cierre Financiero"
+  - ¿En que industria especifica tiene impacto? → Ej: "Retail", "Banking", "Manufacturing", "Insurance"
+  - ¿Que tecnologia puntual implementa? → Ej: SAP ERP, Salesforce, AWS (nunca "tecnologia en general")
+  - ¿Que proceso de negocio especifico automatiza? → Ej: "Planificacion de Inventario", "Conciliacion Bancaria", "Onboarding de Clientes"
+
 REGLA PRINCIPAL - TEMA DIRECTO VS BENEFICIO LATERAL:
 Un tag SOLO debe incluirse si describe el TEMA CENTRAL o CAPACIDAD PRINCIPAL del documento.
-NO incluyas un tag si el concepto aparece como:
-  - Un beneficio secundario o consecuencia indirecta (ej: "la migracion reduce costos energeticos" NO convierte al doc en uno de "Sostenibilidad")
-  - Un resultado generico aplicable a cualquier proyecto de TI (ej: "mejora la continuidad operativa")
-  - Una mencion de una sola oracion en una lista de beneficios
-  - Un objetivo de negocio generico sin ser el foco del documento
+PREGUNTA CLAVE: "¿Todos los documentos tecnologicos serian igualmente relevantes para este tag?" Si la respuesta es SI, el tag es demasiado generico, NO lo incluyas.
 
-PREGUNTA CLAVE antes de agregar un tag: "¿Si alguien busca documentos sobre [TAG], este documento seria una respuesta directa y util?" Si la respuesta es NO, no incluyas el tag.
+EJEMPLOS CORRECTOS:
+  - Migracion a AWS → SI: AWS, "Infraestructura y Bases de Datos", "Seguridad IT". NO: "Transformacion Digital", "Innovacion Tecnologica"
+  - SAP en retail → SI: SAP ERP, Retail, "Gestion de Inventario". NO: "Gestion del Cambio", "Eficiencia Operativa"
+  - Prediccion de demanda con ML → SI: "Prediccion de Demanda", Retail, Python. NO: "Innovacion Tecnologica"
+  - RPA para banca → SI: "Automatizacion de Procesos", RPA, Banking. NO: "Mejora Continua"
 
-EJEMPLOS:
-  - Documento de migracion a la nube → SI: "Infraestructura y Bases de Datos", "Transformacion Digital", AWS, Azure. NO: "Sostenibilidad", "Calidad y Procesos", "Liderazgo IT"
-  - Documento de implementacion SAP para una empresa de retail → SI: SAP ERP, "Gestion de Proyectos". NO: "Transformacion Digital" (demasiado generico)
-  - Caso de exito de RPA en un banco → SI: "Automatizacion de Procesos", RPA, Banking. NO: "Innovacion Tecnologica" (es consecuencia, no el tema)
-
-LIMITE DE TAGS: maximo 3 technologies y maximo 5 processes. Prioriza los mas especificos y centrales.
+LIMITE DE TAGS: maximo 3 technologies y maximo 4 processes. Prioriza los mas especificos y diferenciales. Menos tags de alta calidad > muchos tags genericos.
 
 REGLAS ADICIONALES:
 - Para technologies: SOLO incluye nombres que existan TEXTUALMENTE en el DICCIONARIO DE TECNOLOGIAS. Busca cuidadosamente.
-  - Si el documento menciona un servicio de una plataforma (ej: "EC2", "Lambda", "Bedrock") busca si la plataforma madre existe (ej: "AWS").
+  - Si el documento menciona un servicio de una plataforma (ej: "EC2", "Lambda") busca si la plataforma madre existe (ej: "AWS").
   - Si el documento menciona "SAP S/4HANA" y en el diccionario existe "SAP ERP", incluye "SAP ERP".
   - Si una tecnologia mencionada NO tiene ningun equivalente en el diccionario, NO la incluyas.
-- Para processes: misma logica, SOLO nombres del diccionario de procesos. Excluye procesos que sean consecuencias genericas (sostenibilidad, calidad generica, liderazgo).
+- Para processes: misma logica, SOLO nombres del diccionario. Omite los prohibidos aunque esten en el diccionario.
 - Para industries: SOLO nombres de la lista de industrias. SI ES CASO DE EXITO, usa la industria del CLIENTE, no del vendor.
-- Confidence: 0.9-1.0 = tema central del documento. 0.7-0.89 = tema relevante pero secundario. 0.5-0.69 = mencionado pero no es el foco. Si la confidence seria menor a 0.6, no incluyas el tag.
+- Confidence: 0.9-1.0 = tema central del documento. 0.7-0.89 = tema relevante secundario. Menos de 0.7 = no incluyas el tag.
 - El summary debe ser en espanol.`
 
   const responseText = await generateGeminiContent(prompt, "gemini-2.5-flash", 0.2)

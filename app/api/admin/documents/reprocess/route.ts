@@ -181,14 +181,13 @@ export async function GET(request: NextRequest) {
     .select("id, title, type, status, ai_summary, created_at, user_id, processing_error")
     .order("created_at", { ascending: false })
 
-  // Get tag counts per document
+  // Get tag counts per document using a raw aggregate to avoid Supabase's 1000-row default limit
   const { data: tagCounts } = await adminClient
-    .from("document_tags")
-    .select("document_id, tag_type")
+    .rpc("get_document_tag_counts")
 
   const countMap: Record<string, number> = {}
   for (const t of tagCounts || []) {
-    countMap[t.document_id] = (countMap[t.document_id] || 0) + 1
+    countMap[t.document_id] = t.tag_count
   }
 
   const result = (docs || []).map((d) => ({
