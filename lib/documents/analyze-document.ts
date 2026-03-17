@@ -95,15 +95,33 @@ SI ES BROCHURE/PROPUESTA, el summary debe describir en 2-4 oraciones:
 3. Que tecnologias o capacidades principales tiene
 
 === REGLAS CRITICAS PARA TAGS ===
+
+REGLA PRINCIPAL - TEMA DIRECTO VS BENEFICIO LATERAL:
+Un tag SOLO debe incluirse si describe el TEMA CENTRAL o CAPACIDAD PRINCIPAL del documento.
+NO incluyas un tag si el concepto aparece como:
+  - Un beneficio secundario o consecuencia indirecta (ej: "la migracion reduce costos energeticos" NO convierte al doc en uno de "Sostenibilidad")
+  - Un resultado generico aplicable a cualquier proyecto de TI (ej: "mejora la continuidad operativa")
+  - Una mencion de una sola oracion en una lista de beneficios
+  - Un objetivo de negocio generico sin ser el foco del documento
+
+PREGUNTA CLAVE antes de agregar un tag: "¿Si alguien busca documentos sobre [TAG], este documento seria una respuesta directa y util?" Si la respuesta es NO, no incluyas el tag.
+
+EJEMPLOS:
+  - Documento de migracion a la nube → SI: "Infraestructura y Bases de Datos", "Transformacion Digital", AWS, Azure. NO: "Sostenibilidad", "Calidad y Procesos", "Liderazgo IT"
+  - Documento de implementacion SAP para una empresa de retail → SI: SAP ERP, "Gestion de Proyectos". NO: "Transformacion Digital" (demasiado generico)
+  - Caso de exito de RPA en un banco → SI: "Automatizacion de Procesos", RPA, Banking. NO: "Innovacion Tecnologica" (es consecuencia, no el tema)
+
+LIMITE DE TAGS: maximo 3 technologies y maximo 5 processes. Prioriza los mas especificos y centrales.
+
+REGLAS ADICIONALES:
 - Para technologies: SOLO incluye nombres que existan TEXTUALMENTE en el DICCIONARIO DE TECNOLOGIAS. Busca cuidadosamente.
   - Si el documento menciona un servicio de una plataforma (ej: "EC2", "Lambda", "Bedrock") busca si la plataforma madre existe (ej: "AWS").
   - Si el documento menciona "SAP S/4HANA" y en el diccionario existe "SAP ERP", incluye "SAP ERP".
   - Si una tecnologia mencionada NO tiene ningun equivalente en el diccionario, NO la incluyas.
-- Para processes: misma logica, SOLO nombres del diccionario de procesos.
+- Para processes: misma logica, SOLO nombres del diccionario de procesos. Excluye procesos que sean consecuencias genericas (sostenibilidad, calidad generica, liderazgo).
 - Para industries: SOLO nombres de la lista de industrias. SI ES CASO DE EXITO, usa la industria del CLIENTE, no del vendor.
-- Confidence: 0.9-1.0 mencion explicita, 0.7-0.89 inferida, 0.5-0.69 indirecta.
-- El summary debe ser en espanol.
-- Se exhaustivo: lee cada tecnologia/proceso mencionado y buscalo cuidadosamente en los diccionarios.`
+- Confidence: 0.9-1.0 = tema central del documento. 0.7-0.89 = tema relevante pero secundario. 0.5-0.69 = mencionado pero no es el foco. Si la confidence seria menor a 0.6, no incluyas el tag.
+- El summary debe ser en espanol.`
 
   const responseText = await generateGeminiContent(prompt, "gemini-2.5-flash", 0.2)
 
