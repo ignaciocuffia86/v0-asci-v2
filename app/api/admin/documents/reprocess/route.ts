@@ -9,7 +9,7 @@ import {
 } from "@/lib/documents/extract-text"
 import { analyzeDocument } from "@/lib/documents/analyze-document"
 
-const ADMIN_EMAILS = ["ignacio@asciv.io", "admin@asciv.io"]
+const ADMIN_EMAILS = ["ignacio@asciv.io", "admin@asciv.io", "ignacio@bigua.lat"]
 
 /**
  * POST /api/admin/documents/reprocess
@@ -163,20 +163,16 @@ export async function GET(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
-  console.log("[v0] Admin docs GET - user:", user?.email, "authorized:", ADMIN_EMAILS.includes(user?.email || ""))
-
   if (!user || !ADMIN_EMAILS.includes(user.email || "")) {
     return NextResponse.json({ error: "No autorizado" }, { status: 403 })
   }
 
   const adminClient = createAdminClient()
 
-  const { data: docs, error: docsError } = await adminClient
+  const { data: docs } = await adminClient
     .from("user_documents")
     .select("id, title, type, status, ai_summary, created_at, user_id, processing_error")
     .order("created_at", { ascending: false })
-
-  console.log("[v0] Admin docs GET - docs count:", docs?.length, "error:", docsError?.message)
 
   // Get tag counts per document
   const { data: tagCounts } = await adminClient
