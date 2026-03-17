@@ -9,7 +9,14 @@ import {
 } from "@/lib/documents/extract-text"
 import { analyzeDocument } from "@/lib/documents/analyze-document"
 
-const ADMIN_EMAILS = ["ignacio@asciv.io", "admin@asciv.io", "ignacio@bigua.lat"]
+async function isAdmin(supabase: Awaited<ReturnType<typeof createClient>>, userId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", userId)
+    .single()
+  return data?.role === "admin" || data?.role === "superadmin"
+}
 
 /**
  * POST /api/admin/documents/reprocess
@@ -22,7 +29,7 @@ export async function POST(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
-  if (!user || !ADMIN_EMAILS.includes(user.email || "")) {
+  if (!user || !(await isAdmin(supabase, user.id))) {
     return NextResponse.json({ error: "No autorizado" }, { status: 403 })
   }
 
@@ -163,7 +170,7 @@ export async function GET(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
-  if (!user || !ADMIN_EMAILS.includes(user.email || "")) {
+  if (!user || !(await isAdmin(supabase, user.id))) {
     return NextResponse.json({ error: "No autorizado" }, { status: 403 })
   }
 
