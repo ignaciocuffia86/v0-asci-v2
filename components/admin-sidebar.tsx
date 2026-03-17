@@ -58,6 +58,11 @@ const sidebarItems = [
     icon: Sparkles,
   },
   {
+    title: "Documentos",
+    href: "/admin/documents",
+    icon: FileText,
+  },
+  {
     title: "Procesamiento",
     href: "/admin/processing",
     icon: Activity,
