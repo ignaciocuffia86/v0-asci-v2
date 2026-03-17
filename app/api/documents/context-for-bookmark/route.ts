@@ -300,6 +300,21 @@ REGLAS:
 
     const strategy = await generateGeminiContent(prompt, "gemini-2.5-flash", 0.5, 0)
 
+    // Persist the selected doc IDs so the icebreaker can use the same docs
+    if (selectedDocIds && selectedDocIds.length > 0) {
+      await supabase
+        .from("user_company_strategies")
+        .upsert(
+          {
+            user_id: user.id,
+            bookmark_id: bookmarkId,
+            company_id: bookmark.company_id,
+            selected_doc_ids: selectedDocIds,
+          },
+          { onConflict: "user_id,bookmark_id" }
+        )
+    }
+
     return NextResponse.json({ strategy: strategy.trim() })
   } catch (error: any) {
     console.error("[context-for-bookmark POST] Error:", error)

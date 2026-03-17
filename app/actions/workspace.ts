@@ -962,7 +962,7 @@ export async function generateSimplifiedIcebreaker(bookmarkId: string, contactId
   const [strategyResult, profileResult] = await Promise.all([
     supabase
       .from("user_company_strategies")
-      .select("sender_context_override, recommended_pitch")
+      .select("sender_context_override, recommended_pitch, selected_doc_ids")
       .eq("bookmark_id", bookmarkId)
       .eq("user_id", user.id)
       .maybeSingle(),
@@ -1003,33 +1003,50 @@ export async function generateSimplifiedIcebreaker(bookmarkId: string, contactId
     }
   }
 
-  // Load relevant DOCs (user_documents with ai_summary) for context injection
-  // Select up to 3 most relevant based on keyword matching with company/industry/signals
-  const searchKeywords = [
-    filterContextName,
-    company?.name,
-    contactData.role,
-    ...signalInfo.map((s: any) => s.signal_name).filter(Boolean),
-  ].filter(Boolean).join(" ").toLowerCase()
-
+  // Load documents for context injection.
+  // Priority: use the docs the user explicitly selected in the Strategy tab (selected_doc_ids).
+  // Fallback: keyword-based scoring against all user docs.
   let relevantDocs = ""
-  const { data: allDocs } = await supabase
-    .from("user_documents")
-    .select("title, ai_summary")
-    .eq("user_id", user.id)
-    .not("ai_summary", "is", null)
+  const strategySelectedDocIds: string[] = (strategyResult.data?.selected_doc_ids as string[]) || []
 
-  if (allDocs && allDocs.length > 0) {
-    // Score each doc by keyword overlap
-    const scored = allDocs.map((doc) => {
-      const text = `${doc.title} ${doc.ai_summary}`.toLowerCase()
-      const words = searchKeywords.split(/\s+/)
-      const score = words.filter((w) => w.length > 3 && text.includes(w)).length
-      return { ...doc, score }
-    })
-    const topDocs = scored.sort((a, b) => b.score - a.score).slice(0, 3).filter((d) => d.score > 0)
-    if (topDocs.length > 0) {
-      relevantDocs = topDocs.map((d) => `- ${d.title}: ${d.ai_summary}`).join("\n")
+  if (strategySelectedDocIds.length > 0) {
+    // Use exactly the docs the user selected in the Strategy tab
+    const { data: selectedDocs } = await supabase
+      .from("user_documents")
+      .select("title, ai_summary")
+      .eq("user_id", user.id)
+      .in("id", strategySelectedDocIds)
+      .not("ai_summary", "is", null)
+
+    if (selectedDocs && selectedDocs.length > 0) {
+      relevantDocs = selectedDocs.map((d) => `- ${d.title}: ${d.ai_summary}`).join("\n")
+    }
+  } else {
+    // Fallback: keyword-based scoring when no selection exists
+    const searchKeywords = [
+      filterContextName,
+      company?.name,
+      contactData.role,
+      ...signalInfo.map((s: any) => s.signal_name).filter(Boolean),
+    ].filter(Boolean).join(" ").toLowerCase()
+
+    const { data: allDocs } = await supabase
+      .from("user_documents")
+      .select("title, ai_summary")
+      .eq("user_id", user.id)
+      .not("ai_summary", "is", null)
+
+    if (allDocs && allDocs.length > 0) {
+      const scored = allDocs.map((doc) => {
+        const text = `${doc.title} ${doc.ai_summary}`.toLowerCase()
+        const words = searchKeywords.split(/\s+/)
+        const score = words.filter((w) => w.length > 3 && text.includes(w)).length
+        return { ...doc, score }
+      })
+      const topDocs = scored.sort((a, b) => b.score - a.score).slice(0, 3).filter((d) => d.score > 0)
+      if (topDocs.length > 0) {
+        relevantDocs = topDocs.map((d) => `- ${d.title}: ${d.ai_summary}`).join("\n")
+      }
     }
   }
 
