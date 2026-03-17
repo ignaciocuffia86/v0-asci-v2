@@ -3,6 +3,9 @@ import { type NextRequest, NextResponse } from "next/server"
 import { rankDocumentsForBookmark } from "@/lib/documents/rank-documents-for-bookmark"
 import { generateGeminiContent } from "@/lib/ai-service"
 
+// How many top company signals to infer when bookmark is general (no filterSignalIds)
+const MAX_INFERRED_SIGNALS = 10
+
 export async function GET(req: NextRequest) {
   const bookmarkId = req.nextUrl.searchParams.get("bookmarkId")
   if (!bookmarkId) {
@@ -47,7 +50,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Bookmark not found" }, { status: 404 })
     }
 
-    // Get company industry and master_industry_id
+    // Get company
     const { data: company } = await supabase
       .from("companies")
       .select("industry, master_industry_id")
@@ -57,36 +60,89 @@ export async function GET(req: NextRequest) {
     const searchContext = (bookmark.search_context as any) || {}
     const filterSignalIds: string[] = searchContext.filterSignalIds || []
 
+    // When bookmark is general, infer signals from the company's own signal profile
+    let inferredSignalIds: string[] = []
+    if (filterSignalIds.length === 0 && hasDocuments) {
+      const { data: companySignals } = await supabase
+        .from("signals")
+        .select("signal_id, signal_type")
+        .eq("company_id", bookmark.company_id)
+        .in("signal_type", ["technology", "process"])
+        .not("signal_id", "is", null)
+        .limit(200)
+
+      if (companySignals && companySignals.length > 0) {
+        // Count frequency of each signal_id
+        const freq: Record<string, number> = {}
+        for (const s of companySignals) {
+          freq[s.signal_id] = (freq[s.signal_id] || 0) + 1
+        }
+        // Take top N by frequency
+        inferredSignalIds = Object.entries(freq)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, MAX_INFERRED_SIGNALS)
+          .map(([id]) => id)
+      }
+    }
+
     // Rank documents
-    const rankedDocs = hasDocuments
+    const allRankedDocs = hasDocuments
       ? await rankDocumentsForBookmark(user.id, {
           companyIndustry: company?.industry || null,
           companyMasterIndustryId: company?.master_industry_id || null,
           filterSignalIds,
+          inferredSignalIds,
         })
       : []
+
+    // Split into recommended (pre-selected, up to 3) and others
+    const recommended = allRankedDocs.filter((d) => d.isRecommended).slice(0, 3)
+    const others = allRankedDocs.filter((d) => !d.isRecommended || allRankedDocs.indexOf(d) >= 3)
 
     return NextResponse.json({
       hasDocuments,
       valueProfile: valueProfile || null,
-      relevantDocs: rankedDocs.map((d) => ({
+      // Legacy field kept for backward compat
+      relevantDocs: recommended.map((d) => ({
+        id: d.id,
         title: d.title,
         type: d.type,
         summary: d.ai_summary,
         matchedTags: d.matchedTags,
+        score: d.score,
+        isRecommended: true,
+      })),
+      // New fields for document selector UI
+      recommended: recommended.map((d) => ({
+        id: d.id,
+        title: d.title,
+        type: d.type,
+        summary: d.ai_summary,
+        matchedTags: d.matchedTags,
+        score: d.score,
+        isRecommended: true,
+      })),
+      others: others.map((d) => ({
+        id: d.id,
+        title: d.title,
+        type: d.type,
+        summary: d.ai_summary,
+        matchedTags: d.matchedTags,
+        score: d.score,
+        isRecommended: false,
       })),
     })
   } catch (error: any) {
-    console.error("[v0] Error fetching docs context:", error)
+    console.error("[context-for-bookmark GET] Error:", error)
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }
 
-// POST: Generate strategy with Gemini using docs + signals + value profile
+// POST: Generate strategy with Gemini using selected docs + signals + value profile
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { bookmarkId } = body
+    const { bookmarkId, selectedDocIds } = body
 
     if (!bookmarkId) {
       return NextResponse.json({ error: "bookmarkId required" }, { status: 400 })
@@ -102,10 +158,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Fetch all context in parallel
-    const [
-      { data: valueProfile },
-      { data: bookmark },
-    ] = await Promise.all([
+    const [{ data: valueProfile }, { data: bookmark }] = await Promise.all([
       supabase
         .from("user_value_profiles")
         .select("profile_summary, target_industries, target_technologies, target_processes")
@@ -123,7 +176,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Bookmark not found" }, { status: 404 })
     }
 
-    // Get company details + signals
+    // Get company details
     const { data: company } = await supabase
       .from("companies")
       .select("name, industry, master_industry_id, country, website, description")
@@ -137,28 +190,69 @@ export async function POST(req: NextRequest) {
     const searchContext = (bookmark.search_context as any) || {}
     const filterSignalIds: string[] = searchContext.filterSignalIds || []
 
-    // Get signal names
-    let signalNames: string[] = []
-    if (filterSignalIds.length > 0) {
-      const filterType = searchContext.filterType || "general"
-      if (filterType === "technology") {
-        const { data } = await supabase.from("dictionary_products").select("name").in("id", filterSignalIds)
-        signalNames = data?.map((p) => p.name) || []
-      } else if (filterType === "process") {
-        const { data } = await supabase.from("dictionary_processes").select("name").in("id", filterSignalIds)
-        signalNames = data?.map((p) => p.name) || []
+    // Infer signals if general bookmark
+    let inferredSignalIds: string[] = []
+    if (filterSignalIds.length === 0) {
+      const { data: companySignals } = await supabase
+        .from("signals")
+        .select("signal_id, signal_type")
+        .eq("company_id", bookmark.company_id)
+        .in("signal_type", ["technology", "process"])
+        .not("signal_id", "is", null)
+        .limit(200)
+
+      if (companySignals && companySignals.length > 0) {
+        const freq: Record<string, number> = {}
+        for (const s of companySignals) {
+          freq[s.signal_id] = (freq[s.signal_id] || 0) + 1
+        }
+        inferredSignalIds = Object.entries(freq)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, MAX_INFERRED_SIGNALS)
+          .map(([id]) => id)
       }
     }
 
-    // Get ranked documents with content
-    const rankedDocs = await rankDocumentsForBookmark(user.id, {
-      companyIndustry: company.industry,
-      companyMasterIndustryId: company.master_industry_id,
-      filterSignalIds,
-    })
+    // Get signal names for the prompt
+    let signalNames: string[] = []
+    const allSignalIds = [...new Set([...filterSignalIds, ...inferredSignalIds])]
+    if (allSignalIds.length > 0) {
+      const filterType = searchContext.filterType || "general"
+      const [{ data: techData }, { data: procData }] = await Promise.all([
+        supabase.from("dictionary_products").select("name").in("id", allSignalIds),
+        supabase.from("dictionary_processes").select("name").in("id", allSignalIds),
+      ])
+      signalNames = [
+        ...(techData?.map((p) => p.name) || []),
+        ...(procData?.map((p) => p.name) || []),
+      ]
+    }
 
-    // Build the prompt - anonymize doc titles so Gemini doesn't cite internal docs
-    const docSections = rankedDocs.map((doc, i) => {
+    // If selectedDocIds provided, only use those documents; otherwise rank automatically
+    let docsForPrompt: Awaited<ReturnType<typeof rankDocumentsForBookmark>> = []
+
+    if (selectedDocIds && selectedDocIds.length > 0) {
+      // Fetch only the selected documents
+      const allRanked = await rankDocumentsForBookmark(user.id, {
+        companyIndustry: company.industry,
+        companyMasterIndustryId: company.master_industry_id,
+        filterSignalIds,
+        inferredSignalIds,
+      })
+      docsForPrompt = allRanked.filter((d) => selectedDocIds.includes(d.id))
+    } else {
+      // Fallback: auto-select top ranked docs (backward compat)
+      const allRanked = await rankDocumentsForBookmark(user.id, {
+        companyIndustry: company.industry,
+        companyMasterIndustryId: company.master_industry_id,
+        filterSignalIds,
+        inferredSignalIds,
+      })
+      docsForPrompt = allRanked.filter((d) => d.isRecommended).slice(0, 3)
+    }
+
+    // Build the prompt
+    const docSections = docsForPrompt.map((doc, i) => {
       const tagLabels = doc.matchedTags
         .map((t) => `${t.type === "industry" ? "Industria" : t.type === "technology" ? "Tecnologia" : "Proceso"}: ${t.value}`)
         .join(", ")
@@ -208,7 +302,7 @@ REGLAS:
 
     return NextResponse.json({ strategy: strategy.trim() })
   } catch (error: any) {
-    console.error("[v0] Error generating strategy:", error)
+    console.error("[context-for-bookmark POST] Error:", error)
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }

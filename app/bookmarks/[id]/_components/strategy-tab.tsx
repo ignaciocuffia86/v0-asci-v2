@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
-import { BrainCircuit, Save, Sparkles, FileText, Loader2, AlertCircle } from "lucide-react"
+import { BrainCircuit, Save, Sparkles, FileText, Loader2, AlertCircle, ChevronDown, ChevronUp } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { getStrategy, saveSenderContext } from "@/app/actions/workspace"
 import { toast } from "sonner"
@@ -24,11 +24,17 @@ interface ValueProfile {
   target_processes: string[]
 }
 
-interface RelevantDoc {
+interface DocItem {
+  id: string
   title: string
   type: string
+  summary: string | null
   matchedTags: { type: string; value: string }[]
+  score: number
+  isRecommended: boolean
 }
+
+const MAX_SELECTED = 5
 
 export function BookmarkStrategy({ bookmarkId, companyName }: BookmarkStrategyProps) {
   const [isLoading, setIsLoading] = useState(true)
@@ -41,8 +47,11 @@ export function BookmarkStrategy({ bookmarkId, companyName }: BookmarkStrategyPr
 
   // Docs state
   const [valueProfile, setValueProfile] = useState<ValueProfile | null>(null)
-  const [relevantDocs, setRelevantDocs] = useState<RelevantDoc[]>([])
+  const [recommended, setRecommended] = useState<DocItem[]>([])
+  const [others, setOthers] = useState<DocItem[]>([])
   const [hasDocuments, setHasDocuments] = useState(false)
+  const [selectedDocIds, setSelectedDocIds] = useState<Set<string>>(new Set())
+  const [showOthers, setShowOthers] = useState(false)
 
   useEffect(() => {
     loadStrategy()
@@ -53,11 +62,9 @@ export function BookmarkStrategy({ bookmarkId, companyName }: BookmarkStrategyPr
     setIsLoading(true)
     try {
       const result = await getStrategy(bookmarkId)
-
       if (result) {
         const strategyData = result.strategy
         const defaultContext = result.defaultContext || ""
-
         if (strategyData?.sender_context_override) {
           setSenderContext(strategyData.sender_context_override)
         } else if (defaultContext) {
@@ -77,24 +84,39 @@ export function BookmarkStrategy({ bookmarkId, companyName }: BookmarkStrategyPr
       if (res.ok) {
         const data = await res.json()
         setValueProfile(data.valueProfile || null)
-        setRelevantDocs(data.relevantDocs || [])
         setHasDocuments(data.hasDocuments || false)
+
+        const rec: DocItem[] = data.recommended || []
+        const oth: DocItem[] = data.others || []
+        setRecommended(rec)
+        setOthers(oth)
+
+        // Pre-select recommended docs
+        setSelectedDocIds(new Set(rec.map((d) => d.id)))
       }
     } catch (error) {
       console.error("Error loading docs context:", error)
     }
   }
 
+  const toggleDoc = (id: string) => {
+    setSelectedDocIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        if (next.size >= MAX_SELECTED) return prev
+        next.add(id)
+      }
+      return next
+    })
+  }
+
   const handleSaveContext = async () => {
     setIsSaving(true)
     try {
       await saveSenderContext(bookmarkId, senderContext, saveAsDefault)
-
-      let successMsg = "Propuesta de valor guardada"
-      if (saveAsDefault) {
-        successMsg += " y establecida como predeterminada"
-      }
-      toast.success(successMsg)
+      toast.success(saveAsDefault ? "Propuesta de valor guardada y establecida como predeterminada" : "Propuesta de valor guardada")
     } catch (error) {
       toast.error("Error al guardar")
     } finally {
@@ -108,7 +130,10 @@ export function BookmarkStrategy({ bookmarkId, companyName }: BookmarkStrategyPr
       const res = await fetch("/api/documents/context-for-bookmark", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bookmarkId }),
+        body: JSON.stringify({
+          bookmarkId,
+          selectedDocIds: Array.from(selectedDocIds),
+        }),
       })
 
       if (!res.ok) {
@@ -130,10 +155,14 @@ export function BookmarkStrategy({ bookmarkId, companyName }: BookmarkStrategyPr
     return <div className="p-8 text-center text-muted-foreground">Cargando...</div>
   }
 
+  const totalDocs = recommended.length + others.length
+  const selectedCount = selectedDocIds.size
+  const atLimit = selectedCount >= MAX_SELECTED
+
   return (
     <div className="max-w-2xl mx-auto space-y-4">
       {/* ASCI Docs Context Card */}
-      {hasDocuments && (valueProfile || relevantDocs.length > 0) ? (
+      {hasDocuments ? (
         <Card className="border-primary/30 bg-primary/5">
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
@@ -141,53 +170,108 @@ export function BookmarkStrategy({ bookmarkId, companyName }: BookmarkStrategyPr
                 <Sparkles className="h-5 w-5 text-primary" />
                 <CardTitle className="text-base">ASCI Docs</CardTitle>
               </div>
-              {relevantDocs.length > 0 && (
-                <Badge variant="secondary" className="text-xs">
-                  {relevantDocs.length} doc{relevantDocs.length !== 1 ? "s" : ""} relevante{relevantDocs.length !== 1 ? "s" : ""}
+              {totalDocs > 0 && (
+                <Badge variant="secondary" className="text-xs tabular-nums">
+                  {selectedCount}/{MAX_SELECTED} seleccionados
                 </Badge>
               )}
             </div>
             <CardDescription>
-              ASCI aprendio de tus documentos. Usa esta informacion para generar una propuesta contextualizada para {companyName}.
+              ASCI aprendio de tus documentos. Selecciona cuales usar para generar la propuesta para {companyName}.
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3">
-            {/* Relevant docs for this bookmark */}
-            {relevantDocs.length > 0 && (
-              <div className="space-y-2">
-                <p className="text-xs font-medium text-muted-foreground">Documentos con FIT para esta cuenta:</p>
-                {relevantDocs.map((doc, i) => (
-                  <div key={i} className="flex items-center gap-2 text-sm">
-                    <FileText className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                    <span className="truncate">{doc.title}</span>
-                    <div className="flex gap-1 flex-shrink-0">
-                      {doc.matchedTags.map((tag, j) => (
-                        <Badge key={j} variant="outline" className="text-[10px] px-1.5 py-0">
-                          {tag.value}
-                        </Badge>
+
+          {totalDocs > 0 && (
+            <CardContent className="space-y-4 pt-0">
+              {/* Recommended docs */}
+              {recommended.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                    Recomendados para esta cuenta
+                  </p>
+                  <div className="space-y-1.5">
+                    {recommended.map((doc) => (
+                      <DocRow
+                        key={doc.id}
+                        doc={doc}
+                        checked={selectedDocIds.has(doc.id)}
+                        disabled={atLimit && !selectedDocIds.has(doc.id)}
+                        onToggle={() => toggleDoc(doc.id)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Other docs — collapsed by default */}
+              {others.length > 0 && (
+                <div className="space-y-2">
+                  <button
+                    onClick={() => setShowOthers((v) => !v)}
+                    className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide hover:text-foreground transition-colors"
+                  >
+                    {showOthers ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                    Otros documentos ({others.length})
+                  </button>
+                  {showOthers && (
+                    <div className="space-y-1.5">
+                      {others.map((doc) => (
+                        <DocRow
+                          key={doc.id}
+                          doc={doc}
+                          checked={selectedDocIds.has(doc.id)}
+                          disabled={atLimit && !selectedDocIds.has(doc.id)}
+                          onToggle={() => toggleDoc(doc.id)}
+                        />
                       ))}
                     </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <Button
-              onClick={handleGenerateFromDocs}
-              disabled={isGenerating}
-              className="w-full"
-              variant="default"
-            >
-              {isGenerating ? (
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              ) : (
-                <Sparkles className="h-4 w-4 mr-2" />
+                  )}
+                </div>
               )}
-              Generar Propuesta con ASCI Docs
-            </Button>
-          </CardContent>
+
+              {atLimit && (
+                <p className="text-xs text-muted-foreground">
+                  Maximo {MAX_SELECTED} documentos seleccionados. Deselecciona uno para agregar otro.
+                </p>
+              )}
+
+              <Button
+                onClick={handleGenerateFromDocs}
+                disabled={isGenerating}
+                className="w-full"
+                variant="default"
+              >
+                {isGenerating ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Sparkles className="h-4 w-4 mr-2" />
+                )}
+                {selectedCount > 0
+                  ? `Generar Propuesta con ${selectedCount} documento${selectedCount !== 1 ? "s" : ""}`
+                  : "Generar Propuesta sin documentos"}
+              </Button>
+            </CardContent>
+          )}
+
+          {totalDocs === 0 && valueProfile && (
+            <CardContent className="pt-0">
+              <Button
+                onClick={handleGenerateFromDocs}
+                disabled={isGenerating}
+                className="w-full"
+                variant="default"
+              >
+                {isGenerating ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Sparkles className="h-4 w-4 mr-2" />
+                )}
+                Generar Propuesta con ASCI Docs
+              </Button>
+            </CardContent>
+          )}
         </Card>
-      ) : !hasDocuments ? (
+      ) : (
         <Card className="border-dashed">
           <CardContent className="py-4">
             <div className="flex items-center gap-3">
@@ -204,7 +288,7 @@ export function BookmarkStrategy({ bookmarkId, companyName }: BookmarkStrategyPr
             </div>
           </CardContent>
         </Card>
-      ) : null}
+      )}
 
       {/* Manual strategy card */}
       <Card>
@@ -254,5 +338,53 @@ Ejemplo: Soy especialista en automatizacion de procesos financieros con 10 anos 
         </CardFooter>
       </Card>
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// DocRow — individual document row with checkbox
+// ---------------------------------------------------------------------------
+function DocRow({
+  doc,
+  checked,
+  disabled,
+  onToggle,
+}: {
+  doc: DocItem
+  checked: boolean
+  disabled: boolean
+  onToggle: () => void
+}) {
+  return (
+    <label
+      className={`flex items-start gap-3 rounded-md border px-3 py-2 cursor-pointer transition-colors
+        ${checked ? "border-primary/40 bg-primary/5" : "border-border bg-background"}
+        ${disabled ? "opacity-50 cursor-not-allowed" : "hover:bg-muted/50"}`}
+    >
+      <Checkbox
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={onToggle}
+        className="mt-0.5 flex-shrink-0"
+      />
+      <div className="flex-1 min-w-0 space-y-1">
+        <div className="flex items-center gap-2">
+          <FileText className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+          <span className="text-sm font-medium truncate">{doc.title}</span>
+        </div>
+        {doc.matchedTags.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {doc.matchedTags.slice(0, 3).map((tag, j) => (
+              <Badge key={j} variant="outline" className="text-[10px] px-1.5 py-0 h-4">
+                {tag.value}
+              </Badge>
+            ))}
+            {doc.matchedTags.length > 3 && (
+              <span className="text-[10px] text-muted-foreground">+{doc.matchedTags.length - 3}</span>
+            )}
+          </div>
+        )}
+      </div>
+    </label>
   )
 }
