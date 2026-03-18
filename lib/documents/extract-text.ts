@@ -189,52 +189,80 @@ export async function extractTextFromDocx(buffer: Buffer): Promise<string> {
 }
 
 /**
- * Extract text from a PPTX by sending the binary to Gemini
- * (Gemini supports multimodal inputs including documents)
- * Falls back to a basic text extraction approach
+ * Extract text from a PPTX file.
+ * PPTX is a ZIP archive containing XML files. We extract text from:
+ * - slide*.xml files (main slide content)
+ * - notesSlide*.xml files (speaker notes)
  */
 export async function extractTextFromPptx(buffer: Buffer): Promise<string> {
-  // Use Gemini to extract text from PPTX
-  const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY
-  if (!apiKey) throw new Error("Google API Key is missing for PPTX processing")
+  const JSZip = (await import("jszip")).default
+  const zip = await JSZip.loadAsync(buffer)
 
-  const base64Data = buffer.toString("base64")
+  const textParts: string[] = []
 
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                inlineData: {
-                  mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                  data: base64Data,
-                },
-              },
-              {
-                text: "Extrae todo el texto de esta presentacion PowerPoint. Incluye titulos, cuerpo de texto, notas y cualquier texto visible en las diapositivas. Devuelve solo el texto extraido, sin comentarios adicionales.",
-              },
-            ],
-          },
-        ],
-        generationConfig: { temperature: 0.1 },
-      }),
-    },
-  )
+  // Get all slide and notes files, sorted by number
+  const slideFiles = Object.keys(zip.files)
+    .filter((name) => name.match(/ppt\/slides\/slide\d+\.xml$/))
+    .sort((a, b) => {
+      const numA = parseInt(a.match(/slide(\d+)\.xml$/)?.[1] || "0")
+      const numB = parseInt(b.match(/slide(\d+)\.xml$/)?.[1] || "0")
+      return numA - numB
+    })
 
-  if (!response.ok) {
-    const errorText = await response.text()
-    throw new Error(`Gemini PPTX extraction failed: ${response.status} - ${errorText}`)
+  const notesFiles = Object.keys(zip.files)
+    .filter((name) => name.match(/ppt\/notesSlides\/notesSlide\d+\.xml$/))
+    .sort((a, b) => {
+      const numA = parseInt(a.match(/notesSlide(\d+)\.xml$/)?.[1] || "0")
+      const numB = parseInt(b.match(/notesSlide(\d+)\.xml$/)?.[1] || "0")
+      return numA - numB
+    })
+
+  // Extract text from slides
+  for (let i = 0; i < slideFiles.length; i++) {
+    const slideFile = slideFiles[i]
+    const slideXml = await zip.files[slideFile].async("text")
+    const slideText = extractTextFromPptxXml(slideXml)
+
+    if (slideText.trim()) {
+      textParts.push(`--- Slide ${i + 1} ---`)
+      textParts.push(slideText)
+    }
+
+    // Check for corresponding notes
+    const notesFile = notesFiles.find((n) => n.includes(`notesSlide${i + 1}.xml`))
+    if (notesFile) {
+      const notesXml = await zip.files[notesFile].async("text")
+      const notesText = extractTextFromPptxXml(notesXml)
+      if (notesText.trim()) {
+        textParts.push(`[Notas: ${notesText}]`)
+      }
+    }
   }
 
-  const data = await response.json()
-  if (!data.candidates?.[0]?.content?.parts?.[0]?.text) {
-    throw new Error("Gemini returned empty response for PPTX extraction")
+  const extractedText = textParts.join("\n").trim()
+
+  if (!extractedText || extractedText.length < 50) {
+    throw new Error("No se pudo extraer texto significativo del PPTX")
   }
 
-  return data.candidates[0].content.parts[0].text.trim().slice(0, 50000)
+  return extractedText.slice(0, 50000)
+}
+
+/**
+ * Helper to extract text from PPTX XML content.
+ * Looks for <a:t> tags which contain the actual text in Office Open XML.
+ */
+function extractTextFromPptxXml(xml: string): string {
+  // Match all <a:t>...</a:t> tags (text content in OOXML)
+  const textMatches = xml.match(/<a:t[^>]*>([^<]*)<\/a:t>/g) || []
+  
+  const texts = textMatches
+    .map((match) => {
+      const inner = match.replace(/<a:t[^>]*>/, "").replace(/<\/a:t>/, "")
+      return inner.trim()
+    })
+    .filter((t) => t.length > 0)
+
+  // Join with spaces, collapse multiple spaces
+  return texts.join(" ").replace(/\s+/g, " ").trim()
 }
