@@ -100,7 +100,10 @@ export default function IngestPage() {
 
     try {
       // Step 1: Upload CSV directly to Vercel Blob from browser (bypasses serverless 4.5MB limit)
-      const blob = await upload(file.name, file, {
+      // Prefix with a UUID to avoid "blob already exists" errors when uploading the same filename twice.
+      // The original file.name is still passed to the server as `filename` for batch deduplication.
+      const uniquePath = `${crypto.randomUUID()}-${file.name}`
+      const blob = await upload(uniquePath, file, {
         access: "public",
         handleUploadUrl: "/api/ingest/blob-upload",
       })

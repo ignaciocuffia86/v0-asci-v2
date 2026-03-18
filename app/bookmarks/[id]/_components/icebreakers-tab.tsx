@@ -491,15 +491,20 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
                   <Label>Tono del mensaje</Label>
                   <Select value={selectedTemplate} onValueChange={setSelectedTemplate}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Selecciona un tono..." />
+                      {/* Show only the name in the trigger to avoid overflow */}
+                      <span className="truncate">
+                        {templates.find((t) => t.id === selectedTemplate)?.name ?? "Selecciona un tono..."}
+                      </span>
                     </SelectTrigger>
                     <SelectContent>
                       {templates.map((t) => (
                         <SelectItem key={t.id} value={t.id}>
-                          <div className="flex flex-col">
-                            <span>{t.name}</span>
+                          <div className="flex flex-col gap-0.5 py-0.5">
+                            <span className="font-medium">{t.name}</span>
                             {t.description && (
-                              <span className="text-muted-foreground text-xs">{t.description}</span>
+                              <span className="text-muted-foreground text-xs leading-snug max-w-[260px] whitespace-normal">
+                                {t.description}
+                              </span>
                             )}
                           </div>
                         </SelectItem>

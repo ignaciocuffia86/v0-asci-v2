@@ -29,10 +29,7 @@ export async function POST(request: NextRequest) {
           tokenPayload: JSON.stringify({ userId: user.id }),
         }
       },
-      onUploadCompleted: async () => {
-        // Nothing needed here -- the frontend will call /api/ingest/upload
-        // with the blob URL to trigger processing
-      },
+
     })
 
     return NextResponse.json(jsonResponse)

@@ -111,12 +111,12 @@ export async function searchByProcess(
     master_industry_id: r.master_industry_id,
     master_industry_name: r.master_industry_name,
     signal_count: r.signal_count || 0,
-    current_count: r.employee_count || 0,
-    alumni_count: 0,
+    current_count: r.current_count || 0,
+    alumni_count: r.alumni_count || 0,
     job_postings_count: r.job_count || 0,
     relevance_score: r.signal_count || 0,
-    current_score: r.employee_count || 0,
-    alumni_score: 0,
+    current_score: r.current_count || 0,
+    alumni_score: r.alumni_count || 0,
     job_postings_score: r.job_count || 0,
   }))
 }
@@ -176,12 +176,12 @@ export async function searchByTechnology(
     master_industry_id: r.master_industry_id,
     master_industry_name: r.master_industry_name,
     total_count: r.signal_count || 0,
-    current_count: r.employee_count || 0,
-    alumni_count: 0,
+    current_count: r.current_count || 0,
+    alumni_count: r.alumni_count || 0,
     job_postings_count: r.job_count || 0,
     relevance_score: r.signal_count || 0,
-    current_score: r.employee_count || 0,
-    alumni_score: 0,
+    current_score: r.current_count || 0,
+    alumni_score: r.alumni_count || 0,
     job_postings_score: r.job_count || 0,
   }))
 }

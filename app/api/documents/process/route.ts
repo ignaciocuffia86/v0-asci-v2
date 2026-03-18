@@ -145,11 +145,12 @@ export async function POST(request: NextRequest) {
 
     console.log(`[v0] Analysis complete: ${analysis.tags.length} tags found`)
 
-    // Step 3: Save summary
+    // Step 3: Save summary and key_results
     await supabase
       .from("user_documents")
       .update({
         ai_summary: analysis.summary,
+        key_results: analysis.key_results,
         status: "ready",
         processing_error: null,
         updated_at: new Date().toISOString(),
