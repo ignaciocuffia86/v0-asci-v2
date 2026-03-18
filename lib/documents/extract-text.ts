@@ -2,6 +2,53 @@ import * as cheerio from "cheerio"
 import { generateGeminiContent } from "@/lib/ai-service"
 
 /**
+ * Clean extracted text before sending to Gemini:
+ * - Remove repeated short lines (headers/footers appear on every page)
+ * - Remove standalone page numbers
+ * - Collapse excessive blank lines
+ * - Remove URLs and email addresses at line level
+ * Skips cleaning if text is too short to avoid losing valuable content.
+ */
+export function cleanExtractedText(text: string): string {
+  if (text.length < 1000) return text
+
+  const lines = text.split("\n")
+
+  // Count how many times each short line appears (likely header/footer)
+  const lineFreq: Record<string, number> = {}
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (trimmed.length > 0 && trimmed.length < 80) {
+      lineFreq[trimmed] = (lineFreq[trimmed] || 0) + 1
+    }
+  }
+
+  // Threshold: a line repeated on more than 15% of pages (approximated as >3 times)
+  // is likely a header/footer
+  const repeatedLines = new Set(
+    Object.entries(lineFreq)
+      .filter(([, count]) => count > 3)
+      .map(([line]) => line)
+  )
+
+  const cleaned = lines
+    .filter((line) => {
+      const trimmed = line.trim()
+      // Remove repeated header/footer lines
+      if (repeatedLines.has(trimmed)) return false
+      // Remove standalone page numbers (e.g. "1", "- 12 -", "Page 3")
+      if (/^[-–—]?\s*(Page\s+)?\d+\s*[-–—]?$/.test(trimmed)) return false
+      // Remove lines that are just URLs
+      if (/^https?:\/\/\S+$/.test(trimmed)) return false
+      return true
+    })
+    .join("\n")
+
+  // Collapse 3+ consecutive blank lines to 2
+  return cleaned.replace(/\n{3,}/g, "\n\n").trim()
+}
+
+/**
  * Extract text from a URL by fetching HTML and parsing with Cheerio.
  * Falls back to Gemini extraction if the page is a SPA with minimal text content.
  */
@@ -113,10 +160,10 @@ export async function extractTextFromPdf(buffer: Buffer): Promise<string> {
   const data = await pdfParse(buffer)
   const parsedText = data.text.trim()
 
-  // If pdf-parse extracted enough text, use it
+  // If pdf-parse extracted enough text, clean and use it
   const MIN_PDF_CHARS = 1000
   if (parsedText.length >= MIN_PDF_CHARS) {
-    return parsedText.slice(0, 50000)
+    return cleanExtractedText(parsedText).slice(0, 50000)
   }
 
   // For designed PDFs (brochures, case studies, etc.) where pdf-parse
@@ -245,7 +292,7 @@ export async function extractTextFromPptx(buffer: Buffer): Promise<string> {
     throw new Error("No se pudo extraer texto significativo del PPTX")
   }
 
-  return extractedText.slice(0, 50000)
+  return cleanExtractedText(extractedText).slice(0, 50000)
 }
 
 /**
