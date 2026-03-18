@@ -256,10 +256,13 @@ export async function POST(req: NextRequest) {
       const tagLabels = doc.matchedTags
         .map((t) => `${t.type === "industry" ? "Industria" : t.type === "technology" ? "Tecnologia" : "Proceso"}: ${t.value}`)
         .join(", ")
+      const keyResultsSection = doc.key_results && doc.key_results.length > 0
+        ? `\n  Resultados concretos: ${doc.key_results.join(" | ")}`
+        : ""
       return `- Experiencia #${i + 1} (${doc.type === "url" ? "Referencia web" : "Documento interno"}):
-  Lo que hicimos/ofrecemos: ${doc.ai_summary || "Sin resumen"}
+  Lo que hicimos/ofrecemos: ${doc.ai_summary || "Sin resumen"}${keyResultsSection}
   Relacion con la cuenta: ${tagLabels || "Sin match directo"}
-  ${doc.extracted_text ? `Detalle: ${doc.extracted_text.slice(0, 2000)}` : ""}`
+  ${doc.extracted_text ? `Detalle: ${doc.extracted_text.slice(0, 6000)}` : ""}`
     }).join("\n\n")
 
     const prompt = `Eres un consultor de estrategia de ventas B2B. Tu tarea es redactar una ESTRATEGIA DE CUENTA breve e interna (no un mensaje para enviar al cliente).

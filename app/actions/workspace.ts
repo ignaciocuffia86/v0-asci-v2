@@ -1013,13 +1013,19 @@ export async function generateSimplifiedIcebreaker(bookmarkId: string, contactId
     // Use exactly the docs the user selected in the Strategy tab
     const { data: selectedDocs } = await supabase
       .from("user_documents")
-      .select("title, ai_summary")
+      .select("title, ai_summary, key_results")
       .eq("user_id", user.id)
       .in("id", strategySelectedDocIds)
       .not("ai_summary", "is", null)
 
     if (selectedDocs && selectedDocs.length > 0) {
-      relevantDocs = selectedDocs.map((d) => `- ${d.title}: ${d.ai_summary}`).join("\n")
+      relevantDocs = selectedDocs.map((d) => {
+        const keyResultsLine =
+          d.key_results && d.key_results.length > 0
+            ? `\n  Resultados concretos: ${d.key_results.join(" | ")}`
+            : ""
+        return `- ${d.title}: ${d.ai_summary}${keyResultsLine}`
+      }).join("\n")
     }
   } else {
     // Fallback: keyword-based scoring when no selection exists
@@ -1032,7 +1038,7 @@ export async function generateSimplifiedIcebreaker(bookmarkId: string, contactId
 
     const { data: allDocs } = await supabase
       .from("user_documents")
-      .select("title, ai_summary")
+      .select("title, ai_summary, key_results")
       .eq("user_id", user.id)
       .not("ai_summary", "is", null)
 
@@ -1045,7 +1051,13 @@ export async function generateSimplifiedIcebreaker(bookmarkId: string, contactId
       })
       const topDocs = scored.sort((a, b) => b.score - a.score).slice(0, 3).filter((d) => d.score > 0)
       if (topDocs.length > 0) {
-        relevantDocs = topDocs.map((d) => `- ${d.title}: ${d.ai_summary}`).join("\n")
+        relevantDocs = topDocs.map((d) => {
+          const keyResultsLine =
+            d.key_results && d.key_results.length > 0
+              ? `\n  Resultados concretos: ${d.key_results.join(" | ")}`
+              : ""
+          return `- ${d.title}: ${d.ai_summary}${keyResultsLine}`
+        }).join("\n")
       }
     }
   }

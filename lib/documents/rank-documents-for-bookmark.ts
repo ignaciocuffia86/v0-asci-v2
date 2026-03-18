@@ -5,6 +5,7 @@ export interface RankedDocument {
   title: string
   type: string
   ai_summary: string | null
+  key_results: string[] | null
   extracted_text: string | null
   score: number
   isRecommended: boolean
@@ -59,7 +60,7 @@ export async function rankDocumentsForBookmark(
   // 1. Get all user documents that are ready
   const { data: documents } = await supabase
     .from("user_documents")
-    .select("id, title, type, ai_summary, extracted_text")
+    .select("id, title, type, ai_summary, key_results, extracted_text")
     .eq("user_id", userId)
     .eq("status", "ready")
 
@@ -161,6 +162,7 @@ export async function rankDocumentsForBookmark(
       title: doc.title,
       type: doc.type,
       ai_summary: doc.ai_summary,
+      key_results: doc.key_results ?? null,
       extracted_text: doc.extracted_text,
       score,
       isRecommended: score >= threshold,

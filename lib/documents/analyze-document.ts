@@ -3,6 +3,7 @@ import { createClient as createServerClient } from "@/lib/supabase/server"
 
 export interface DocumentAnalysis {
   summary: string
+  key_results: string[]
   tags: {
     type: "industry" | "technology" | "process"
     value: string
@@ -68,6 +69,7 @@ Responde en formato JSON estricto (sin markdown, sin backticks):
 {
   "document_type": "CASO_DE_EXITO" | "BROCHURE" | "OTRO",
   "summary": "Ver instrucciones segun tipo de documento abajo",
+  "key_results": ["Resultado concreto 1", "Resultado concreto 2"],
   "industries": [
     {"name": "nombre EXACTO de la lista de industrias", "confidence": 0.9}
   ],
@@ -78,6 +80,14 @@ Responde en formato JSON estricto (sin markdown, sin backticks):
     {"name": "nombre EXACTO del diccionario de procesos", "confidence": 0.8}
   ]
 }
+
+=== INSTRUCCIONES PARA KEY_RESULTS ===
+Extrae entre 0 y 5 resultados CONCRETOS y CUANTIFICABLES del documento.
+SOLO incluye datos que sean medibles: porcentajes, tiempos, cantidades, montos, ratios.
+NO incluyas beneficios genericos como "mayor eficiencia" o "mejor rendimiento".
+Si el documento no tiene datos cuantificables (ej: brochure generico), devuelve array vacio [].
+Ejemplos validos: "Reduccion del 60% en tiempo de gestion", "Migracion de 100+ activos", "Ahorro de $2M anuales", "Tiempo de cierre reducido de 5 dias a 8 horas"
+Ejemplos INVALIDOS: "Mayor eficiencia operativa", "Mejor experiencia de usuario", "Reduccion de costos"
 
 === INSTRUCCIONES PARA EL SUMMARY SEGUN TIPO ===
 
@@ -147,7 +157,7 @@ REGLAS ADICIONALES:
     parsed = JSON.parse(jsonMatch[0])
   } catch (err) {
     console.error("[v0] Failed to parse Gemini analysis response:", responseText.slice(0, 500))
-    return { summary: "", tags: [] }
+    return { summary: "", key_results: [], tags: [] }
   }
 
   // Build tag array with reference IDs
@@ -214,6 +224,7 @@ REGLAS ADICIONALES:
 
   return {
     summary: parsed.summary || "",
+    key_results: Array.isArray(parsed.key_results) ? parsed.key_results.filter((r: any) => typeof r === "string" && r.trim().length > 0).slice(0, 5) : [],
     tags,
   }
 }
