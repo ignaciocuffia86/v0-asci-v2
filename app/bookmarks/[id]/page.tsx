@@ -19,7 +19,10 @@ import {
   Target,
   Sparkles,
   MapPin,
+  Download,
+  Loader2,
 } from "lucide-react"
+import { toast } from "sonner"
 import { Input } from "@/components/ui/input"
 import Link from "next/link"
 import { 
@@ -54,7 +57,33 @@ export default function BookmarkWorkspacePage() {
   const [isLoading, setIsLoading] = useState(true)
   const [countryFilter, setCountryFilter] = useState<string>("")
   const [availableCountries, setAvailableCountries] = useState<string[]>([])
+  const [isExporting, setIsExporting] = useState(false)
   const supabase = createClient()
+
+  const handleExportExcel = async () => {
+    setIsExporting(true)
+    try {
+      const response = await fetch(`/api/bookmarks/${bookmarkId}/export`)
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || "Error al exportar")
+      }
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = response.headers.get("Content-Disposition")?.split("filename=")[1]?.replace(/"/g, "") || "export.xlsx"
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      a.remove()
+      toast.success("Excel exportado correctamente")
+    } catch (err: any) {
+      toast.error(err.message || "Error al exportar")
+    } finally {
+      setIsExporting(false)
+    }
+  }
 
   useEffect(() => {
     const fetchBookmarkAndCompany = async () => {
@@ -203,6 +232,20 @@ export default function BookmarkWorkspacePage() {
                     </Link>
                   </Button>
                 )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs px-3 bg-transparent"
+                  onClick={handleExportExcel}
+                  disabled={isExporting}
+                >
+                  {isExporting ? (
+                    <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                  ) : (
+                    <Download className="h-3 w-3 mr-1.5" />
+                  )}
+                  Exportar
+                </Button>
               </div>
             </div>
           </div>

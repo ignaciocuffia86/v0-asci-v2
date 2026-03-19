@@ -7,7 +7,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Trash2, Edit2, Building2, Search, LayoutGrid, List, Filter, X, Eye } from "lucide-react"
+import { Trash2, Edit2, Building2, Search, LayoutGrid, List, Filter, X, Eye, Download, Loader2 } from "lucide-react"
+import { Checkbox } from "@/components/ui/checkbox"
+import { toast } from "sonner"
 import { Input } from "@/components/ui/input"
 import {
   Dialog,
@@ -69,6 +71,10 @@ export default function BookmarksPage() {
   // Filters
   const [selectedPriorities, setSelectedPriorities] = useState<string[]>([])
   const [selectedStatuses, setSelectedStatuses] = useState<BookmarkStatus[]>([])
+  
+  // Bulk selection for list view
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [isExporting, setIsExporting] = useState(false)
   
   // Stats - calculated from bookmarks with useMemo for auto-refresh
   const stats = useMemo(() => {
@@ -220,6 +226,57 @@ export default function BookmarksPage() {
   }
 
   const hasActiveFilters = selectedPriorities.length > 0 || selectedStatuses.length > 0 || searchQuery.trim()
+
+  const handleSelectToggle = (bookmarkId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(bookmarkId)) {
+        next.delete(bookmarkId)
+      } else {
+        next.add(bookmarkId)
+      }
+      return next
+    })
+  }
+
+  const handleSelectAll = () => {
+    if (selectedIds.size === filteredBookmarks.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(filteredBookmarks.map((b) => b.id)))
+    }
+  }
+
+  const handleBulkExport = async () => {
+    if (selectedIds.size === 0) return
+    setIsExporting(true)
+    try {
+      const response = await fetch("/api/bookmarks/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bookmark_ids: Array.from(selectedIds) }),
+      })
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || "Error al exportar")
+      }
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = response.headers.get("Content-Disposition")?.split("filename=")[1]?.replace(/"/g, "") || "export.xlsx"
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      a.remove()
+      toast.success(`${selectedIds.size} bookmarks exportados`)
+      setSelectedIds(new Set())
+    } catch (err: any) {
+      toast.error(err.message || "Error al exportar")
+    } finally {
+      setIsExporting(false)
+    }
+  }
 
   const renderContext = (context: any) => {
     if (!context || !context.filtersUsed) return <span className="text-muted-foreground text-xs">-</span>
@@ -388,6 +445,12 @@ export default function BookmarksPage() {
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-10">
+                  <Checkbox
+                    checked={selectedIds.size === filteredBookmarks.length && filteredBookmarks.length > 0}
+                    onCheckedChange={handleSelectAll}
+                  />
+                </TableHead>
                 <TableHead>Empresa</TableHead>
                 <TableHead>Estado</TableHead>
                 <TableHead>Contexto</TableHead>
@@ -400,6 +463,12 @@ export default function BookmarksPage() {
             <TableBody>
               {filteredBookmarks.map((bookmark) => (
                 <TableRow key={bookmark.id} data-bookmark-id={bookmark.id}>
+                  <TableCell>
+                    <Checkbox
+                      checked={selectedIds.has(bookmark.id)}
+                      onCheckedChange={() => handleSelectToggle(bookmark.id)}
+                    />
+                  </TableCell>
                   <TableCell 
                     className="cursor-pointer hover:bg-muted/50 transition-colors"
                     onClick={() => router.push(`/bookmarks/${bookmark.id}`)}
@@ -502,7 +571,7 @@ export default function BookmarksPage() {
               ))}
               {filteredBookmarks.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center h-32 text-muted-foreground">
+                  <TableCell colSpan={8} className="text-center h-32 text-muted-foreground">
                     {bookmarks.length === 0
                       ? "No tienes cuentas guardadas."
                       : "No se encontraron resultados para los filtros aplicados."}
@@ -511,6 +580,37 @@ export default function BookmarksPage() {
               )}
             </TableBody>
           </Table>
+        </div>
+      )}
+
+      {/* Floating action bar for bulk actions in list view */}
+      {viewMode === "list" && selectedIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-card border shadow-lg rounded-lg px-4 py-3 flex items-center gap-4">
+          <span className="text-sm font-medium">
+            {selectedIds.size} seleccionado{selectedIds.size > 1 ? "s" : ""}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setSelectedIds(new Set())}
+            className="gap-1"
+          >
+            <X className="h-3 w-3" />
+            Limpiar
+          </Button>
+          <Button
+            size="sm"
+            onClick={handleBulkExport}
+            disabled={isExporting}
+            className="gap-1"
+          >
+            {isExporting ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Download className="h-3 w-3" />
+            )}
+            Exportar Excel
+          </Button>
         </div>
       )}
     </div>
