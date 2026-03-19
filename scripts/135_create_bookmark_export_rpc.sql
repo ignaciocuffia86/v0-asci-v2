@@ -1,7 +1,9 @@
 -- RPC para exportar datos consolidados de un bookmark
 -- Devuelve JSON con: company info, bookmark info, employees with signals, job postings, prospects
 
-CREATE OR REPLACE FUNCTION public.get_bookmark_export_data(
+DROP FUNCTION IF EXISTS public.get_bookmark_export_data(UUID, UUID) CASCADE;
+
+CREATE FUNCTION public.get_bookmark_export_data(
   p_bookmark_id UUID,
   p_user_id UUID
 )
@@ -30,8 +32,7 @@ BEGIN
         'country', c.country_normalized,
         'industry', c.industry,
         'website', c.website,
-        'linkedin_url', c.linkedin_url,
-        'employee_count', c.employee_count
+        'linkedin_url', c.linkedin_url
       )
       FROM companies c
       WHERE c.id = v_company_id
