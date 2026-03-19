@@ -7,66 +7,55 @@ export interface BookmarkExportData {
     industry: string | null
     website: string | null
     linkedin_url: string | null
-    employee_count: number | null
   }
   bookmark: {
     status: string
     priority: string | null
     notes: string | null
-    search_context: string | null
+    search_context: any | null // JSONB
     created_at: string
   }
   strategy: {
     recommended_pitch: string | null
     sender_context_override: string | null
   } | null
-  employees_with_signals: Array<{
-    first_name: string
-    last_name: string
-    position: string | null
-    email: string | null
-    linkedin_url: string | null
-    signal_count: number
-    signals: Array<{
-      signal_type: string
-      signal_name: string
-      source: string | null
-      snippet: string | null
-    }> | null
-  }>
+  contacts_with_signals: {
+    total_count: number
+    exported_count: number
+    truncated: boolean
+    warning: string | null
+    data: Array<{
+      first_name: string
+      last_name: string
+      role: string | null // DB column is 'role', not 'position'
+      email: string | null
+      linkedin_url: string | null
+      seniority: string | null
+      signal_count: number
+      signals: Array<{
+        signal_type: string
+        signal_name: string
+        snippet: string | null
+      }> | null
+    }>
+  }
   job_postings: Array<{
     title: string
-    url: string | null
+    posting_url: string | null // DB column is 'posting_url', not 'url'
     location: string | null
     posted_at: string | null
     is_active: boolean
-    signals: Array<{
-      signal_type: string
-      signal_name: string
-    }> | null
-  }>
-  prospects: Array<{
-    first_name: string
-    last_name: string
-    headline: string | null
-    email: string | null
-    email_status: string | null
-    linkedin_url: string | null
-    phone: string | null
-    seniority: string | null
-    is_decision_maker: boolean | null
-    departments: string[] | null
   }>
   news: Array<{
     title: string
-    url: string | null
+    source_url: string | null // DB column is 'source_url', not 'url'
     published_at: string | null
-    source: string | null
+    source_name: string | null // DB column is 'source_name', not 'source'
   }>
   implementations: Array<{
-    product_name: string
-    vendor_name: string | null
-    category: string | null
+    technology: string | null // DB column is 'technology', not 'product_name'
+    provider_name: string | null // DB column is 'provider_name', not 'vendor_name'
+    area: string | null // DB column is 'area', not 'category'
     source_url: string | null
   }>
 }
@@ -109,17 +98,20 @@ export async function generateBookmarkExcel(
   addHeaderRow(infoSheet, ["Campo", "Valor"])
   setColumnWidths(infoSheet, [25, 60])
 
+  // Extract search context name if available
+  const searchContextName = data.bookmark.search_context?.name || 
+    (typeof data.bookmark.search_context === 'string' ? data.bookmark.search_context : "General")
+  
   const infoRows = [
     ["Empresa", data.company.name],
     ["País", data.company.country || ""],
     ["Industria", data.company.industry || ""],
     ["Website", data.company.website || ""],
     ["LinkedIn", data.company.linkedin_url || ""],
-    ["Empleados", data.company.employee_count?.toString() || ""],
     ["", ""],
     ["Estado Bookmark", data.bookmark.status],
     ["Prioridad", data.bookmark.priority || ""],
-    ["Contexto de Búsqueda", data.bookmark.search_context || ""],
+    ["Contexto de Búsqueda", searchContextName],
     ["Notas", truncate(data.bookmark.notes, 500)],
     ["Fecha Guardado", new Date(data.bookmark.created_at).toLocaleDateString("es-ES")],
     ["", ""],
@@ -127,105 +119,82 @@ export async function generateBookmarkExcel(
   ]
   infoRows.forEach((row) => infoSheet.addRow(row))
 
-  // Sheet 2: Empleados con Señales
-  const empSheet = workbook.addWorksheet("Empleados y Señales")
-  addHeaderRow(empSheet, [
+  // Sheet 2: Contactos con Señales
+  const contactsSheet = workbook.addWorksheet("Contactos y Señales")
+  addHeaderRow(contactsSheet, [
     "Nombre",
     "Apellido",
-    "Cargo",
+    "Rol",
     "Email",
     "LinkedIn",
+    "Seniority",
     "# Señales",
     "Señales (tipo: nombre)",
   ])
-  setColumnWidths(empSheet, [15, 15, 30, 30, 40, 12, 60])
+  setColumnWidths(contactsSheet, [15, 15, 30, 30, 40, 15, 12, 60])
 
-  data.employees_with_signals.forEach((emp) => {
-    const signalsSummary = emp.signals
+  // Add warning if truncated
+  if (data.contacts_with_signals.truncated) {
+    const warningRow = contactsSheet.addRow([data.contacts_with_signals.warning || "Datos truncados"])
+    warningRow.getCell(1).style = { font: { italic: true, color: { argb: "FFFF6600" } } }
+    contactsSheet.mergeCells(warningRow.number, 1, warningRow.number, 8)
+  }
+
+  data.contacts_with_signals.data.forEach((contact) => {
+    const signalsSummary = contact.signals
       ?.map((s) => `${s.signal_type}: ${s.signal_name}`)
       .join("; ") || ""
-    empSheet.addRow([
-      emp.first_name,
-      emp.last_name,
-      emp.position || "",
-      emp.email || "",
-      emp.linkedin_url || "",
-      emp.signal_count || 0,
+    contactsSheet.addRow([
+      contact.first_name,
+      contact.last_name,
+      contact.role || "",
+      contact.email || "",
+      contact.linkedin_url || "",
+      contact.seniority || "",
+      contact.signal_count || 0,
       truncate(signalsSummary, 500),
     ])
   })
 
   // Sheet 3: Job Postings
   const jobSheet = workbook.addWorksheet("Job Postings")
-  addHeaderRow(jobSheet, ["Título", "URL", "Ubicación", "Fecha", "Señales"])
-  setColumnWidths(jobSheet, [40, 50, 25, 15, 50])
+  addHeaderRow(jobSheet, ["Título", "URL", "Ubicación", "Fecha", "Activo"])
+  setColumnWidths(jobSheet, [40, 50, 25, 15, 12])
 
   data.job_postings.forEach((jp) => {
-    const signalsSummary = jp.signals?.map((s) => s.signal_name).join(", ") || ""
     jobSheet.addRow([
       jp.title,
-      jp.url || "",
+      jp.posting_url || "",
       jp.location || "",
       jp.posted_at ? new Date(jp.posted_at).toLocaleDateString("es-ES") : "",
-      signalsSummary,
+      jp.is_active ? "Sí" : "No",
     ])
   })
 
-  // Sheet 4: Prospectos
-  const prospSheet = workbook.addWorksheet("Prospectos Apollo")
-  addHeaderRow(prospSheet, [
-    "Nombre",
-    "Apellido",
-    "Cargo",
-    "Email",
-    "Estado Email",
-    "LinkedIn",
-    "Teléfono",
-    "Seniority",
-    "Decision Maker",
-    "Departamentos",
-  ])
-  setColumnWidths(prospSheet, [15, 15, 35, 30, 15, 40, 18, 15, 15, 30])
-
-  data.prospects.forEach((p) => {
-    prospSheet.addRow([
-      p.first_name,
-      p.last_name,
-      p.headline || "",
-      p.email || "",
-      p.email_status || "",
-      p.linkedin_url || "",
-      p.phone || "",
-      p.seniority || "",
-      p.is_decision_maker ? "Sí" : "No",
-      p.departments?.join(", ") || "",
-    ])
-  })
-
-  // Sheet 5: Noticias
+  // Sheet 4: Noticias
   const newsSheet = workbook.addWorksheet("Noticias")
   addHeaderRow(newsSheet, ["Título", "URL", "Fecha", "Fuente"])
-  setColumnWidths(newsSheet, [50, 60, 15, 20])
+  setColumnWidths(newsSheet, [50, 60, 15, 25])
 
   data.news.forEach((n) => {
     newsSheet.addRow([
       n.title,
-      n.url || "",
+      n.source_url || "",
       n.published_at ? new Date(n.published_at).toLocaleDateString("es-ES") : "",
-      n.source || "",
+      n.source_name || "",
     ])
   })
 
-  // Sheet 6: Implementaciones
+  // Sheet 5: Implementaciones
   const implSheet = workbook.addWorksheet("Implementaciones")
-  addHeaderRow(implSheet, ["Producto", "Vendor", "Categoría", "URL Fuente"])
+  addHeaderRow(implSheet, ["Tecnología", "Proveedor", "Área", "URL Fuente"])
   setColumnWidths(implSheet, [30, 25, 25, 50])
 
   data.implementations.forEach((impl) => {
     implSheet.addRow([
-      impl.product_name,
-      impl.vendor_name || "",
-      impl.category || "",
+      impl.technology || "",
+      impl.provider_name || "",
+      impl.area || "",
       impl.source_url || "",
     ])
   })
@@ -250,12 +219,11 @@ export async function generateBulkBookmarksExcel(
     "Industria",
     "Estado",
     "Prioridad",
-    "# Empleados c/ Señales",
+    "# Contactos",
     "# Job Postings",
-    "# Prospectos",
     "Playbook",
   ])
-  setColumnWidths(summarySheet, [30, 15, 20, 15, 12, 20, 15, 15, 60])
+  setColumnWidths(summarySheet, [30, 15, 20, 15, 12, 15, 15, 60])
 
   bookmarks.forEach(({ data }) => {
     summarySheet.addRow([
@@ -264,36 +232,37 @@ export async function generateBulkBookmarksExcel(
       data.company.industry || "",
       data.bookmark.status,
       data.bookmark.priority || "",
-      data.employees_with_signals.length,
+      data.contacts_with_signals.total_count,
       data.job_postings.length,
-      data.prospects.length,
       truncate(data.strategy?.recommended_pitch, 200) || "",
     ])
   })
 
-  // All Prospects sheet (consolidated)
-  const allProspectsSheet = workbook.addWorksheet("Todos los Prospectos")
-  addHeaderRow(allProspectsSheet, [
+  // All Contacts sheet (consolidated)
+  const allContactsSheet = workbook.addWorksheet("Todos los Contactos")
+  addHeaderRow(allContactsSheet, [
     "Empresa",
     "Nombre",
     "Apellido",
-    "Cargo",
+    "Rol",
     "Email",
     "LinkedIn",
-    "Decision Maker",
+    "Seniority",
+    "# Señales",
   ])
-  setColumnWidths(allProspectsSheet, [25, 15, 15, 35, 30, 40, 15])
+  setColumnWidths(allContactsSheet, [25, 15, 15, 30, 30, 40, 15, 12])
 
   bookmarks.forEach(({ data }) => {
-    data.prospects.forEach((p) => {
-      allProspectsSheet.addRow([
+    data.contacts_with_signals.data.forEach((c) => {
+      allContactsSheet.addRow([
         data.company.name,
-        p.first_name,
-        p.last_name,
-        p.headline || "",
-        p.email || "",
-        p.linkedin_url || "",
-        p.is_decision_maker ? "Sí" : "No",
+        c.first_name,
+        c.last_name,
+        c.role || "",
+        c.email || "",
+        c.linkedin_url || "",
+        c.seniority || "",
+        c.signal_count || 0,
       ])
     })
   })
