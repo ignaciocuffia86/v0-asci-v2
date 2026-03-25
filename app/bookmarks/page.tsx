@@ -470,6 +470,7 @@ export default function BookmarksPage() {
           bookmarks={filteredBookmarks as any} 
           userId={userId || ""} 
           onStatusChange={handleStatusChange}
+          onScopeUpdated={handleScopeUpdated}
         />
       ) : (
         <div className="rounded-md border bg-card">
