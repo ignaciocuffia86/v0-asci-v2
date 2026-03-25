@@ -20,6 +20,7 @@ import {
   type OnboardingStep,
 } from "./steps"
 import { OnboardingOverlay, OnboardingActionHint } from "./onboarding-overlay"
+import { WhatsNewModal } from "@/components/whats-new-modal"
 
 interface OnboardingContextType {
   isActive: boolean
@@ -244,6 +245,9 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       value={{ isActive, currentStep, state, start, next, skip, resume, isLoading }}
     >
       {children}
+
+      {/* Novedades — shown once per version key */}
+      <WhatsNewModal />
 
       {/* Welcome modal for pending onboarding */}
       {showWelcome && <WelcomeModal onStart={start} onSkip={skip} />}
