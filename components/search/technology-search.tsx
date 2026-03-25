@@ -3,9 +3,12 @@
 import { useState, useEffect, useMemo, useCallback } from "react"
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Search, Loader2, ArrowUpDown } from "lucide-react"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Search, Loader2, ArrowUpDown, X, ChevronDown, Cpu } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { searchByTechnology, type TechnologySearchResult, type SortOption } from "@/app/actions/search-v2"
 import { IndustryFilterPostResults } from "@/components/search/industry-filter-post-results"
@@ -13,7 +16,8 @@ import { CompanyDrawer } from "@/components/company-drawer"
 import { ScoringExplanation, ProvidersFilterTooltip } from "@/components/search/score-tooltip"
 import { CountryMultiSelect } from "@/components/search/country-multi-select"
 import BulkBookmarkButton from "./bulk-bookmark-button"
-import ResultItem from "./result-item" // Import the ResultItem component
+import ResultItem from "./result-item"
+import { cn } from "@/lib/utils"
 
 type TechnologyWithVendor = {
   id: string
@@ -24,7 +28,9 @@ type TechnologyWithVendor = {
 
 export function TechnologySearch() {
   const [technologies, setTechnologies] = useState<TechnologyWithVendor[]>([])
-  const [selectedTech, setSelectedTech] = useState<string | null>(null)
+  const [selectedTechs, setSelectedTechs] = useState<string[]>([])
+  const [techSearchQuery, setTechSearchQuery] = useState("")
+  const [techPopoverOpen, setTechPopoverOpen] = useState(false)
   const [selectedCountries, setSelectedCountries] = useState<string[]>([])
   const [results, setResults] = useState<TechnologySearchResult[]>([])
   const [isSearching, setIsSearching] = useState(false)
@@ -37,6 +43,23 @@ export function TechnologySearch() {
   const supabase = createClient()
 
   const getTechName = (id: string) => technologies.find((t) => t.id === id)?.display_name || id
+
+  const availableTechs = useMemo(() => {
+    return technologies.filter((t) => {
+      const notSelected = !selectedTechs.includes(t.id)
+      const matchesSearch = t.display_name.toLowerCase().includes(techSearchQuery.toLowerCase())
+      return notSelected && matchesSearch
+    })
+  }, [technologies, selectedTechs, techSearchQuery])
+
+  const toggleTech = (id: string) => {
+    if (selectedTechs.includes(id)) {
+      setSelectedTechs(selectedTechs.filter((t) => t !== id))
+    } else {
+      setSelectedTechs([...selectedTechs, id])
+    }
+    setTechSearchQuery("")
+  }
 
   useEffect(() => {
     const fetchTechnologies = async () => {
@@ -59,14 +82,14 @@ export function TechnologySearch() {
   }, [])
 
   const handleSearch = async () => {
-    if (!selectedTech || selectedCountries.length === 0) return
+    if (selectedTechs.length === 0 || selectedCountries.length === 0) return
 
     setIsSearching(true)
     setSelectedCompanyIds(new Set())
-    setSelectedIndustries([]) // Reset industry filter on new search
-    setDisplayLimit(50) // Reset pagination on new search
+    setSelectedIndustries([])
+    setDisplayLimit(50)
     try {
-      const data = await searchByTechnology(selectedTech, selectedCountries, excludeProviders)
+      const data = await searchByTechnology(selectedTechs, selectedCountries, excludeProviders)
       setResults(data)
     } catch (error) {
       console.error(error)
@@ -92,10 +115,10 @@ export function TechnologySearch() {
   }, [])
 
   const searchContext = {
-    filterSignalIds: selectedTech ? [selectedTech] : [],
+    filterSignalIds: selectedTechs,
     filterType: "technology",
     filtersUsed: {
-      technology: selectedTech ? [getTechName(selectedTech)] : [],
+      technology: selectedTechs.map((id) => getTechName(id)),
       countries: selectedCountries,
     },
   }
@@ -152,31 +175,82 @@ export function TechnologySearch() {
 
   const hasMoreResults = sortedResults.length > displayLimit
 
-  const selectedTechData = selectedTech ? technologies.find((t) => t.id === selectedTech) : null
-
   return (
     <div className="space-y-6">
       <div className="bg-card border rounded-lg p-6 space-y-6">
         <div className="grid gap-6 md:grid-cols-2">
-          {/* Technology Selection (Single) */}
+          {/* Technology Multi-Select */}
           <div className="space-y-2">
-            <Label>Tecnología (Única)</Label>
-            <Select onValueChange={(value) => setSelectedTech(value)} value={selectedTech || ""}>
-              <SelectTrigger>
-                {selectedTechData ? (
-                  <span>{selectedTechData.display_name}</span>
-                ) : (
-                  <SelectValue placeholder="Selecciona tecnología..." />
+            <Label>Tecnologías</Label>
+            <Popover open={techPopoverOpen} onOpenChange={setTechPopoverOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  role="combobox"
+                  aria-expanded={techPopoverOpen}
+                  className="w-full justify-between font-normal bg-transparent"
+                >
+                  <span className="text-muted-foreground">Agregar tecnología...</span>
+                  <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+                <div className="flex items-center border-b px-3 py-2">
+                  <Search className="mr-2 h-4 w-4 shrink-0 opacity-50" />
+                  <Input
+                    placeholder="Buscar tecnología..."
+                    value={techSearchQuery}
+                    onChange={(e) => setTechSearchQuery(e.target.value)}
+                    className="border-0 p-0 h-8 focus-visible:ring-0 focus-visible:ring-offset-0"
+                  />
+                  {techSearchQuery && (
+                    <button onClick={() => setTechSearchQuery("")} className="ml-2 text-muted-foreground hover:text-foreground">
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+                <div className="max-h-[250px] overflow-y-auto p-1">
+                  {availableTechs.length === 0 ? (
+                    <div className="py-6 text-center text-sm text-muted-foreground">
+                      {techSearchQuery ? "No se encontraron tecnologías" : "Todas las tecnologías están seleccionadas"}
+                    </div>
+                  ) : (
+                    availableTechs.map((tech) => (
+                      <button
+                        key={tech.id}
+                        onClick={() => toggleTech(tech.id)}
+                        className={cn(
+                          "w-full flex items-center gap-2 px-3 py-2 text-sm rounded-sm text-left",
+                          "hover:bg-accent hover:text-accent-foreground",
+                          "cursor-pointer transition-colors",
+                        )}
+                      >
+                        <Cpu className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                        {tech.display_name}
+                      </button>
+                    ))
+                  )}
+                </div>
+                {selectedTechs.length > 0 && (
+                  <div className="border-t px-3 py-2 text-xs text-muted-foreground">
+                    {selectedTechs.length} {selectedTechs.length === 1 ? "tecnología seleccionada" : "tecnologías seleccionadas"}
+                  </div>
                 )}
-              </SelectTrigger>
-              <SelectContent className="bg-white dark:bg-gray-950 border-border max-h-[300px]">
-                {technologies.map((tech) => (
-                  <SelectItem key={tech.id} value={tech.id}>
-                    {tech.display_name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              </PopoverContent>
+            </Popover>
+            <div className="flex flex-wrap gap-2 min-h-[2.5rem]">
+              {selectedTechs.map((id) => (
+                <Badge key={id} variant="outline" className="pl-2 pr-1 py-1">
+                  {getTechName(id)}
+                  <button onClick={() => toggleTech(id)} className="ml-2 hover:text-destructive transition-colors">
+                    <X className="h-3 w-3" />
+                  </button>
+                </Badge>
+              ))}
+              {selectedTechs.length === 0 && (
+                <span className="text-sm text-muted-foreground italic py-1">Selecciona al menos una tecnología</span>
+              )}
+            </div>
           </div>
 
           {/* Country Selection */}
@@ -204,7 +278,7 @@ export function TechnologySearch() {
 
         <Button
           onClick={handleSearch}
-          disabled={isSearching || !selectedTech || selectedCountries.length === 0}
+          disabled={isSearching || selectedTechs.length === 0 || selectedCountries.length === 0}
           className="w-full"
           size="lg"
         >
@@ -303,7 +377,7 @@ export function TechnologySearch() {
         companyId={selectedCompanyId || ""}
         isOpen={!!selectedCompanyId}
         onClose={() => setSelectedCompanyId(null)}
-        filterSignalIds={selectedTech ? [selectedTech] : undefined}
+        filterSignalIds={selectedTechs.length > 0 ? selectedTechs : undefined}
         filterType="technology"
       />
     </div>

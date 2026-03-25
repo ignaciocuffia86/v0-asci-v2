@@ -122,18 +122,78 @@ export async function searchByProcess(
 }
 
 export async function searchByTechnology(
-  productId: string,
+  productIds: string | string[], // acepta tanto un ID como un array
   countries: string[],
   excludeProviders = false,
   masterIndustryIds: string[] = [],
 ): Promise<TechnologySearchResult[]> {
   const supabase = await createClient()
 
+  // Normalizar: siempre trabajar con array
+  const idsArray = Array.isArray(productIds) ? productIds : [productIds]
+  if (idsArray.length === 0) return []
+
   // Normalizar países para incluir variantes sin acentos
   const normalizedCountries = countries.length > 0 
     ? normalizeCountriesForSearch(countries) 
     : null
 
+  // Si hay múltiples tecnologías, buscar cada una y consolidar por empresa (OR logic)
+  if (idsArray.length > 1) {
+    const allResults = await Promise.all(
+      idsArray.map((productId) =>
+        supabase.rpc("search_companies_by_technology_v2", {
+          p_product_id: productId,
+          p_countries: normalizedCountries,
+          p_exclude_providers: excludeProviders,
+          p_master_industry_ids: masterIndustryIds.length > 0 ? masterIndustryIds : null,
+        })
+      )
+    )
+
+    // Consolidar resultados: agregar scores por empresa
+    const companyMap = new Map<string, TechnologySearchResult>()
+    for (const { data, error } of allResults) {
+      if (error) continue
+      for (const r of data || []) {
+        const existing = companyMap.get(r.company_id)
+        if (existing) {
+          existing.total_count += r.signal_count || 0
+          existing.current_count += r.current_count || 0
+          existing.alumni_count += r.alumni_count || 0
+          existing.job_postings_count += r.job_count || 0
+          existing.relevance_score += r.signal_count || 0
+          existing.current_score += r.current_count || 0
+          existing.alumni_score += r.alumni_count || 0
+          existing.job_postings_score += r.job_count || 0
+        } else {
+          companyMap.set(r.company_id, {
+            company_id: r.company_id,
+            company_name: r.company_name,
+            company_logo_url: r.company_logo_url || null,
+            company_website: r.company_website,
+            company_linkedin_url: null,
+            company_country: r.company_country,
+            company_industry: r.company_industry,
+            master_industry_id: r.master_industry_id,
+            master_industry_name: r.master_industry_name,
+            total_count: r.signal_count || 0,
+            current_count: r.current_count || 0,
+            alumni_count: r.alumni_count || 0,
+            job_postings_count: r.job_count || 0,
+            relevance_score: r.signal_count || 0,
+            current_score: r.current_count || 0,
+            alumni_score: r.alumni_count || 0,
+            job_postings_score: r.job_count || 0,
+          })
+        }
+      }
+    }
+    return Array.from(companyMap.values())
+  }
+
+  // Single product ID — lógica original
+  const productId = idsArray[0]
   const { data, error } = await supabase.rpc("search_companies_by_technology_v2", {
     p_product_id: productId,
     p_countries: normalizedCountries,
@@ -143,7 +203,6 @@ export async function searchByTechnology(
 
   if (error) {
     console.error("Error searching by technology:", error)
-    // Fallback a la versión anterior si la nueva RPC no existe
     const { data: fallbackData, error: fallbackError } = await supabase.rpc("search_companies_by_technology", {
       p_product_id: productId,
       p_countries: countries.length > 0 ? countries : null,
@@ -151,7 +210,6 @@ export async function searchByTechnology(
     if (fallbackError) {
       throw new Error("Failed to search companies by technology")
     }
-    // Agregar campos de score con valores por defecto
     return (fallbackData || []).map((r: any) => ({
       ...r,
       company_industry: null,
@@ -164,7 +222,6 @@ export async function searchByTechnology(
     }))
   }
 
-  // Map RPC response to expected format
   return (data || []).map((r: any) => ({
     company_id: r.company_id,
     company_name: r.company_name,
