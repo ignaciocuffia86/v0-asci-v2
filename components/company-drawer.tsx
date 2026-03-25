@@ -22,8 +22,10 @@ import {
   Loader2,
   FolderOpen,
   BookmarkCheck,
+  X,
 } from "lucide-react"
 import { bookmarkCompany, unbookmarkCompany, checkBookmarkWithContext } from "@/app/actions/bookmarks"
+import { BookmarkScopeEditor, type SignalTag } from "@/components/bookmarks/bookmark-scope-editor"
 import { useToast } from "@/hooks/use-toast"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useRouter } from "next/navigation"
@@ -133,6 +135,9 @@ type CompanyDrawerProps = {
 
 export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, filterType }: CompanyDrawerProps) {
   const [isBookmarked, setIsBookmarked] = useState(false)
+  const [activeTagFilter, setActiveTagFilter] = useState<string | null>(null)
+  const [bookmarkScope, setBookmarkScope] = useState<any>(null)
+  const [drawerUserId, setDrawerUserId] = useState<string>("")
   const [bookmarkState, setBookmarkState] = useState<{
     hasExactMatch: boolean
     exactMatchId?: string
@@ -224,6 +229,7 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
   useEffect(() => {
     if (isOpen && companyId) {
       checkBookmarkStatus()
+      setActiveTagFilter(null)
     }
   }, [companyId, isOpen, filterSignalIds, filterType])
 
@@ -235,6 +241,7 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
     } = await supabase.auth.getUser()
 
     if (user) {
+      setDrawerUserId(user.id)
       const result = await checkBookmarkWithContext(user.id, companyId, filterSignalIds, filterType)
 
       setBookmarkState({
@@ -244,6 +251,18 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
         isLoading: false,
         isSaving: false,
       })
+
+      // Load current scope from the matched bookmark
+      if (result.hasExactMatch && result.exactMatchId) {
+        const { data } = await supabase
+          .from("bookmarks")
+          .select("search_context")
+          .eq("id", result.exactMatchId)
+          .single()
+        setBookmarkScope(data?.search_context || null)
+      } else {
+        setBookmarkScope(null)
+      }
     } else {
       setBookmarkState((prev) => ({ ...prev, isLoading: false, isSaving: false }))
     }
@@ -361,6 +380,77 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
       .slice(0, 5)
   }
 
+  // ALL derived values and memos must be before any early return to respect Rules of Hooks
+  const uniqueSignals = useMemo(() =>
+    signals.filter(
+      (signal, index, self) =>
+        index ===
+        self.findIndex(
+          (t) =>
+            t.contact?.id === signal.contact?.id &&
+            t.keyword_matched.toLowerCase() === signal.keyword_matched.toLowerCase(),
+        ),
+    ),
+    [signals],
+  )
+
+  const currentEmployeeSignals = useMemo(() =>
+    uniqueSignals.filter(
+      (s) =>
+        s.is_current_employee &&
+        s.contact_id &&
+        (!activeTagFilter || s.keyword_matched.toLowerCase() === activeTagFilter.toLowerCase()),
+    ),
+    [uniqueSignals, activeTagFilter],
+  )
+
+  const uniqueAlumniSignals = useMemo(() =>
+    alumniSignalsData
+      .filter(
+        (signal, index, self) =>
+          index ===
+          self.findIndex(
+            (t) =>
+              t.contact?.id === signal.contact?.id &&
+              t.keyword_matched.toLowerCase() === signal.keyword_matched.toLowerCase(),
+          ),
+      )
+      .filter(
+        (s) => !activeTagFilter || s.keyword_matched.toLowerCase() === activeTagFilter.toLowerCase(),
+      ),
+    [alumniSignalsData, activeTagFilter],
+  )
+
+  const filteredJobPostings = useMemo(() =>
+    activeTagFilter
+      ? jobPostings.filter((jp) =>
+          jp.detected_keywords?.some(
+            (kw: any) => (kw.signal_name || kw.keyword)?.toLowerCase() === activeTagFilter.toLowerCase(),
+          ),
+        )
+      : jobPostings,
+    [jobPostings, activeTagFilter],
+  )
+
+  // Build availableTags from signals — each unique signal_id becomes a tag
+  const availableTags: SignalTag[] = useMemo(() => {
+    const tagMap = new Map<string, SignalTag>()
+    signals.forEach((s) => {
+      if (!s.signal_id || !s.keyword_matched) return
+      if (tagMap.has(s.signal_id)) {
+        tagMap.get(s.signal_id)!.count++
+      } else {
+        tagMap.set(s.signal_id, {
+          id: s.signal_id,
+          name: s.keyword_matched,
+          type: s.signal_type === "process" ? "process" : "technology",
+          count: 1,
+        })
+      }
+    })
+    return Array.from(tagMap.values()).sort((a, b) => b.count - a.count)
+  }, [signals])
+
   if (isLoading && !drawerData) {
     return (
       <Sheet open={isOpen} onOpenChange={onClose}>
@@ -374,28 +464,6 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
   }
 
   if (!company) return null
-
-  const uniqueSignals = signals.filter(
-    (signal, index, self) =>
-      index ===
-      self.findIndex(
-        (t) =>
-          t.contact?.id === signal.contact?.id &&
-          t.keyword_matched.toLowerCase() === signal.keyword_matched.toLowerCase(),
-      ),
-  )
-
-  const currentEmployeeSignals = uniqueSignals.filter((s) => s.is_current_employee && s.contact_id)
-
-  const uniqueAlumniSignals = alumniSignalsData.filter(
-    (signal, index, self) =>
-      index ===
-      self.findIndex(
-        (t) =>
-          t.contact?.id === signal.contact?.id &&
-          t.keyword_matched.toLowerCase() === signal.keyword_matched.toLowerCase(),
-      ),
-  )
 
   return (
     <Sheet open={isOpen} onOpenChange={onClose}>
@@ -524,20 +592,41 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
                 </div>
 
                 <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800">
-                  <h4 className="text-xs font-medium text-muted-foreground mb-3 uppercase tracking-wider">
-                    Tecnologías y Procesos Principales
-                  </h4>
-                  <div className="flex flex-wrap gap-2">
-                    {getTagCloud().map(([keyword, count]) => (
-                      <Badge
-                        key={keyword}
-                        variant="secondary"
-                        className="bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border-0 px-2.5 py-1 text-xs"
+                  <div className="flex items-center justify-between mb-3" data-onboarding="drawer-tag-cloud">
+                    <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                      Tecnologías y Procesos Principales
+                    </h4>
+                    {activeTagFilter && (
+                      <button
+                        onClick={() => setActiveTagFilter(null)}
+                        className="text-xs text-primary hover:text-primary/80 flex items-center gap-1 transition-colors"
                       >
-                        {keyword}
-                        <span className="ml-1.5 text-slate-400 font-normal">{count}</span>
-                      </Badge>
-                    ))}
+                        <X className="h-3 w-3" />
+                        Limpiar filtro
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {getTagCloud().map(([keyword, count]) => {
+                      const isActive = activeTagFilter === keyword
+                      return (
+                        <Badge
+                          key={keyword}
+                          variant="secondary"
+                          onClick={() => setActiveTagFilter(isActive ? null : keyword)}
+                          className={`cursor-pointer px-2.5 py-1 text-xs transition-all select-none ${
+                            isActive
+                              ? "bg-primary text-primary-foreground hover:bg-primary/90 ring-2 ring-primary/30"
+                              : "bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border-0"
+                          }`}
+                        >
+                          {keyword}
+                          <span className={`ml-1.5 font-normal ${isActive ? "text-primary-foreground/70" : "text-slate-400"}`}>
+                            {count}
+                          </span>
+                        </Badge>
+                      )
+                    })}
                   </div>
 
                   {jobPostings.length > 0 && getJobPostingTags().length > 0 && (
@@ -547,17 +636,27 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
                         Ahora Buscando
                       </h4>
                       <div className="flex flex-wrap gap-2">
-                        {getJobPostingTags().map(([keyword, count]) => (
-                          <Badge
-                            key={keyword}
-                            variant="secondary"
-                            className="bg-orange-50 hover:bg-orange-100 text-orange-700 dark:bg-orange-950/30 dark:text-orange-400 border border-orange-200 dark:border-orange-900/50 px-2.5 py-1 text-xs"
-                          >
-                            <Flame className="h-3 w-3 mr-1" />
-                            {keyword}
-                            <span className="ml-1.5 text-orange-400 dark:text-orange-600 font-normal">{count}</span>
-                          </Badge>
-                        ))}
+                        {getJobPostingTags().map(([keyword, count]) => {
+                          const isActive = activeTagFilter === keyword
+                          return (
+                            <Badge
+                              key={keyword}
+                              variant="secondary"
+                              onClick={() => setActiveTagFilter(isActive ? null : keyword)}
+                              className={`cursor-pointer px-2.5 py-1 text-xs transition-all select-none ${
+                                isActive
+                                  ? "bg-orange-600 text-white hover:bg-orange-700 ring-2 ring-orange-300"
+                                  : "bg-orange-50 hover:bg-orange-100 text-orange-700 dark:bg-orange-950/30 dark:text-orange-400 border border-orange-200 dark:border-orange-900/50"
+                              }`}
+                            >
+                              <Flame className="h-3 w-3 mr-1" />
+                              {keyword}
+                              <span className={`ml-1.5 font-normal ${isActive ? "text-white/70" : "text-orange-400 dark:text-orange-600"}`}>
+                                {count}
+                              </span>
+                            </Badge>
+                          )
+                        })}
                       </div>
                     </div>
                   )}
@@ -588,7 +687,7 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
                 Empleados Actuales
                 <Badge
                   variant="secondary"
-                  className="ml-2 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 text-xs hover:bg-blue-200"
+                  className={`ml-2 text-xs ${activeTagFilter ? "bg-primary/10 text-primary" : "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"}`}
                 >
                   {currentEmployeeSignals.length}
                 </Badge>
@@ -600,7 +699,7 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
                 Alumni (Ex-empleados)
                 <Badge
                   variant="secondary"
-                  className="ml-2 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 text-xs hover:bg-blue-200"
+                  className={`ml-2 text-xs ${activeTagFilter ? "bg-primary/10 text-primary" : "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"}`}
                 >
                   {uniqueAlumniSignals.length}
                 </Badge>
@@ -614,9 +713,9 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
                   Búsquedas Laborales
                   <Badge
                     variant="secondary"
-                    className="ml-2 bg-orange-100 text-orange-700 dark:bg-orange-950/30 dark:text-orange-300 text-xs hover:bg-orange-200"
+                    className={`ml-2 text-xs ${activeTagFilter ? "bg-primary/10 text-primary" : "bg-orange-100 text-orange-700 dark:bg-orange-950/30 dark:text-orange-300"}`}
                   >
-                    {jobPostings.length}
+                    {filteredJobPostings.length}
                   </Badge>
                 </TabsTrigger>
               )}
@@ -650,9 +749,15 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
 
             {jobPostings.length > 0 && (
               <TabsContent value="jobpostings" className="p-6 space-y-4 m-0">
-                {jobPostings.map((jp) => (
-                  <JobPostingCard key={jp.id} jobPosting={jp} />
-                ))}
+                {filteredJobPostings.length > 0 ? (
+                  filteredJobPostings.map((jp) => (
+                    <JobPostingCard key={jp.id} jobPosting={jp} />
+                  ))
+                ) : (
+                  <div className="text-center py-12 text-muted-foreground bg-white dark:bg-slate-900 rounded-xl border border-dashed">
+                    No hay búsquedas laborales para <span className="font-medium">{activeTagFilter}</span>.
+                  </div>
+                )}
               </TabsContent>
             )}
           </div>

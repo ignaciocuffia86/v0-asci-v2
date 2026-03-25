@@ -116,10 +116,18 @@ export async function checkBookmarkWithContext(
         // Generar descripción del contexto
         let contextDesc = "General"
         if (ctx.filtersUsed) {
-          const techs = ctx.filtersUsed.technology || []
-          const procs = ctx.filtersUsed.process || []
-          if (techs.length > 0) contextDesc = techs.slice(0, 2).join(", ")
-          else if (procs.length > 0) contextDesc = procs.slice(0, 2).join(", ")
+          const techs: string[] = ctx.filtersUsed.technology || []
+          const procs: string[] = ctx.filtersUsed.process || []
+          if (techs.length > 0) {
+            // Mostrar primeras 2 y "+N más" si hay más
+            const shown = techs.slice(0, 2)
+            const rest = techs.length - 2
+            contextDesc = rest > 0 ? `${shown.join(", ")} +${rest} más` : shown.join(", ")
+          } else if (procs.length > 0) {
+            const shown = procs.slice(0, 2)
+            const rest = procs.length - 2
+            contextDesc = rest > 0 ? `${shown.join(", ")} +${rest} más` : shown.join(", ")
+          }
         }
 
         otherBookmarks.push({
@@ -138,6 +146,70 @@ export async function checkBookmarkWithContext(
   } catch (error) {
     console.error("Error checking bookmark context:", error)
     return { hasExactMatch: false, otherBookmarks: [] }
+  }
+}
+
+export async function updateBookmarkScope(
+  bookmarkId: string,
+  userId: string,
+  newScope: {
+    filterSignalIds: string[]
+    filterType: string | null
+    filtersUsed: { technology?: string[]; process?: string[] }
+  },
+) {
+  const supabase = await createClient()
+
+  try {
+    // Check for collision: does another bookmark for the same company already have this exact scope?
+    const { data: current, error: fetchError } = await supabase
+      .from("bookmarks")
+      .select("id, company_id")
+      .eq("id", bookmarkId)
+      .eq("user_id", userId)
+      .single()
+
+    if (fetchError || !current) throw fetchError || new Error("Bookmark not found")
+
+    const currentSignalIds = newScope.filterSignalIds.sort().join(",")
+    const currentFilterType = newScope.filterType || "generic"
+
+    const { data: siblings } = await supabase
+      .from("bookmarks")
+      .select("id, search_context")
+      .eq("user_id", userId)
+      .eq("company_id", current.company_id)
+      .neq("id", bookmarkId)
+
+    for (const sibling of siblings || []) {
+      const ctx = sibling.search_context || {}
+      const siblingIds = (ctx.filterSignalIds || []).sort().join(",")
+      const siblingType = ctx.filterType || "generic"
+      if (siblingIds === currentSignalIds && siblingType === currentFilterType) {
+        return { success: false, collision: true, collidingId: sibling.id }
+      }
+    }
+
+    const newSearchContext = {
+      filterSignalIds: newScope.filterSignalIds,
+      filterType: newScope.filterType,
+      filtersUsed: newScope.filtersUsed,
+      scope_modified_at: new Date().toISOString(),
+      scope_modified_by_user: true,
+    }
+
+    const { error } = await supabase
+      .from("bookmarks")
+      .update({ search_context: newSearchContext, updated_at: new Date().toISOString() })
+      .eq("id", bookmarkId)
+      .eq("user_id", userId)
+
+    if (error) throw error
+
+    return { success: true, collision: false }
+  } catch (error) {
+    console.error("Error updating bookmark scope:", error)
+    return { success: false, collision: false, error }
   }
 }
 

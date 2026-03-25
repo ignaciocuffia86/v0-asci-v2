@@ -5,9 +5,12 @@ import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Search, X, Loader2, ArrowUpDown } from "lucide-react"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Search, X, Loader2, ArrowUpDown, ChevronDown, Workflow, Info } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { cn } from "@/lib/utils"
 import { searchByProcess, type ProcessSearchResult, type SortOption } from "@/app/actions/search-v2"
 import { IndustryFilterPostResults } from "@/components/search/industry-filter-post-results"
 import { CompanyDrawer } from "@/components/company-drawer"
@@ -19,6 +22,8 @@ import ResultItem from "./result-item" // use correct import path
 export function ProcessSearch() {
   const [processes, setProcesses] = useState<any[]>([])
   const [selectedProcesses, setSelectedProcesses] = useState<string[]>([])
+  const [processSearchQuery, setProcessSearchQuery] = useState("")
+  const [processPopoverOpen, setProcessPopoverOpen] = useState(false)
   const [selectedCountries, setSelectedCountries] = useState<string[]>([])
   const [results, setResults] = useState<ProcessSearchResult[]>([])
   const [isSearching, setIsSearching] = useState(false)
@@ -29,6 +34,14 @@ export function ProcessSearch() {
   const [selectedIndustries, setSelectedIndustries] = useState<string[]>([])
   const [displayLimit, setDisplayLimit] = useState(50)
   const supabase = createClient()
+
+  const availableProcesses = useMemo(() => {
+    return processes.filter((p) => {
+      const notSelected = !selectedProcesses.includes(p.id)
+      const matchesSearch = p.name.toLowerCase().includes(processSearchQuery.toLowerCase())
+      return notSelected && matchesSearch
+    })
+  }, [processes, selectedProcesses, processSearchQuery])
 
   useEffect(() => {
     const fetchProcesses = async () => {
@@ -61,6 +74,7 @@ export function ProcessSearch() {
     } else {
       setSelectedProcesses([...selectedProcesses, id])
     }
+    setProcessSearchQuery("")
   }
 
   const toggleCompanySelection = useCallback((companyId: string) => {
@@ -148,24 +162,76 @@ export function ProcessSearch() {
         <div className="grid gap-6 md:grid-cols-2" data-onboarding="search-filters">
           {/* Process Selection */}
           <div className="space-y-2">
-            <Label>Procesos (Tags)</Label>
-            <Select onValueChange={toggleProcess}>
-              <SelectTrigger>
-                <SelectValue placeholder="Agregar proceso..." />
-              </SelectTrigger>
-              <SelectContent className="bg-white dark:bg-gray-950 border-border">
-                {processes.map((proc) => (
-                  <SelectItem key={proc.id} value={proc.id}>
-                    {proc.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <div className="flex flex-wrap gap-2 mt-2 min-h-[2.5rem]">
+            <div className="flex items-center gap-1.5">
+              <Label>Procesos</Label>
+              <div className="group relative">
+                <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+                <div className="absolute left-0 top-5 z-50 hidden group-hover:block w-72 rounded-md border bg-popover p-3 text-xs text-muted-foreground shadow-md">
+                  La búsqueda considera <strong>empleados actuales</strong> y <strong>búsquedas laborales activas</strong> que mencionan el proceso. Los alumni no son contemplados en los resultados ni en la ponderación.
+                </div>
+              </div>
+            </div>
+            <Popover open={processPopoverOpen} onOpenChange={setProcessPopoverOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  role="combobox"
+                  aria-expanded={processPopoverOpen}
+                  className="w-full justify-between font-normal bg-transparent"
+                >
+                  <span className="text-muted-foreground">Agregar proceso...</span>
+                  <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+                <div className="flex items-center border-b px-3 py-2">
+                  <Search className="mr-2 h-4 w-4 shrink-0 opacity-50" />
+                  <Input
+                    placeholder="Buscar proceso..."
+                    value={processSearchQuery}
+                    onChange={(e) => setProcessSearchQuery(e.target.value)}
+                    className="border-0 p-0 h-8 focus-visible:ring-0 focus-visible:ring-offset-0"
+                  />
+                  {processSearchQuery && (
+                    <button onClick={() => setProcessSearchQuery("")} className="ml-2 text-muted-foreground hover:text-foreground">
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+                <div className="max-h-[250px] overflow-y-auto p-1">
+                  {availableProcesses.length === 0 ? (
+                    <div className="py-6 text-center text-sm text-muted-foreground">
+                      {processSearchQuery ? "No se encontraron procesos" : "Todos los procesos están seleccionados"}
+                    </div>
+                  ) : (
+                    availableProcesses.map((proc) => (
+                      <button
+                        key={proc.id}
+                        onClick={() => toggleProcess(proc.id)}
+                        className={cn(
+                          "w-full flex items-center gap-2 px-3 py-2 text-sm rounded-sm text-left",
+                          "hover:bg-accent hover:text-accent-foreground",
+                          "cursor-pointer transition-colors",
+                        )}
+                      >
+                        <Workflow className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                        {proc.name}
+                      </button>
+                    ))
+                  )}
+                </div>
+                {selectedProcesses.length > 0 && (
+                  <div className="border-t px-3 py-2 text-xs text-muted-foreground">
+                    {selectedProcesses.length} {selectedProcesses.length === 1 ? "proceso seleccionado" : "procesos seleccionados"}
+                  </div>
+                )}
+              </PopoverContent>
+            </Popover>
+            <div className="flex flex-wrap gap-2 min-h-[2.5rem]">
               {selectedProcesses.map((id) => (
-                <Badge key={id} variant="secondary" className="pl-2 pr-1 py-1">
+                <Badge key={id} variant="outline" className="pl-2 pr-1 py-1">
                   {getProcessName(id)}
-                  <button onClick={() => toggleProcess(id)} className="ml-2 hover:text-destructive">
+                  <button onClick={() => toggleProcess(id)} className="ml-2 hover:text-destructive transition-colors">
                     <X className="h-3 w-3" />
                   </button>
                 </Badge>

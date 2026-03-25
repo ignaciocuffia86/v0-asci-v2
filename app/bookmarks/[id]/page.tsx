@@ -19,7 +19,11 @@ import {
   Target,
   Sparkles,
   MapPin,
+  Download,
+  Loader2,
+  SlidersHorizontal,
 } from "lucide-react"
+import { toast } from "sonner"
 import { Input } from "@/components/ui/input"
 import Link from "next/link"
 import { 
@@ -35,6 +39,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
+import { BookmarkScopeEditor, type SignalTag } from "@/components/bookmarks/bookmark-scope-editor"
 
 import { BookmarkOverview } from "./_components/overview-tab"
 import { BookmarkJobPostings } from "./_components/job-postings-tab"
@@ -54,11 +59,67 @@ export default function BookmarkWorkspacePage() {
   const [isLoading, setIsLoading] = useState(true)
   const [countryFilter, setCountryFilter] = useState<string>("")
   const [availableCountries, setAvailableCountries] = useState<string[]>([])
+  const [isExporting, setIsExporting] = useState(false)
+  const [userId, setUserId] = useState<string>("")
   const supabase = createClient()
+
+  const fetchTagsForBookmark = async (): Promise<SignalTag[]> => {
+    if (!bookmark?.company_id) return []
+    const { data, error } = await supabase
+      .from("signals")
+      .select("signal_id, keyword_matched, signal_type")
+      .eq("company_id", bookmark.company_id)
+      .not("signal_id", "is", null)
+    if (error || !data) return []
+    const tagMap = new Map<string, SignalTag>()
+    data.forEach((s: any) => {
+      if (!s.signal_id || !s.keyword_matched) return
+      if (tagMap.has(s.signal_id)) {
+        tagMap.get(s.signal_id)!.count++
+      } else {
+        tagMap.set(s.signal_id, {
+          id: s.signal_id,
+          name: s.keyword_matched,
+          type: s.signal_type === "process" ? "process" : "technology",
+          count: 1,
+        })
+      }
+    })
+    return Array.from(tagMap.values()).sort((a, b) => b.count - a.count)
+  }
+
+  const handleExportExcel = async () => {
+    setIsExporting(true)
+    try {
+      const response = await fetch(`/api/bookmarks/${bookmarkId}/export`)
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || "Error al exportar")
+      }
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = response.headers.get("Content-Disposition")?.split("filename=")[1]?.replace(/"/g, "") || "export.xlsx"
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      a.remove()
+      toast.success("Excel exportado correctamente")
+    } catch (err: any) {
+      toast.error(err.message || "Error al exportar")
+    } finally {
+      setIsExporting(false)
+    }
+  }
 
   useEffect(() => {
     const fetchBookmarkAndCompany = async () => {
       setIsLoading(true)
+
+      // 0. Get current user
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) setUserId(user.id)
 
       // 1. Fetch Bookmark to get company_id
       const { data: bookmarkData, error: bookmarkError } = await supabase
@@ -203,6 +264,45 @@ export default function BookmarkWorkspacePage() {
                     </Link>
                   </Button>
                 )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs px-3 bg-transparent"
+                  onClick={handleExportExcel}
+                  disabled={isExporting}
+                  data-onboarding="workspace-export-button"
+                >
+                  {isExporting ? (
+                    <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                  ) : (
+                    <Download className="h-3 w-3 mr-1.5" />
+                  )}
+                  Exportar
+                </Button>
+                <BookmarkScopeEditor
+                  bookmarkId={bookmarkId}
+                  userId={userId}
+                  companyName={company.name}
+                  currentScope={bookmark.search_context}
+                  fetchAvailableTags={fetchTagsForBookmark}
+                  onScopeUpdated={(newScope) => setBookmark((prev: any) => ({ ...prev, search_context: newScope }))}
+                  trigger={
+                    <Button variant="outline" size="sm" className="h-7 text-xs px-3 bg-transparent gap-1.5" data-onboarding="bookmark-scope-button">
+                      <SlidersHorizontal className="h-3 w-3" />
+                      {bookmark.search_context?.filterSignalIds?.length > 0
+                        ? (() => {
+                            const all = [
+                              ...(bookmark.search_context.filtersUsed?.technology || []),
+                              ...(bookmark.search_context.filtersUsed?.process || []),
+                            ]
+                            const shown = all.slice(0, 1).join(", ")
+                            const rest = all.length - 1
+                            return rest > 0 ? `${shown} +${rest}` : shown || "Scope"
+                          })()
+                        : "Scope: General"}
+                    </Button>
+                  }
+                />
               </div>
             </div>
           </div>
@@ -292,7 +392,7 @@ export default function BookmarkWorkspacePage() {
       <main className="flex-1 p-4 md:p-6 overflow-auto">
         <Tabs defaultValue="overview" className="space-y-4 md:space-y-6">
           <TabsList className="bg-muted/50 p-1 flex-wrap h-auto gap-1" data-onboarding="workspace-tabs">
-            <TabsTrigger value="overview" className="gap-1.5 text-xs md:text-sm">
+              <TabsTrigger value="overview" className="gap-1.5 text-xs md:text-sm" data-onboarding="workspace-tab-overview">
               <Building2 className="h-3.5 w-3.5 md:h-4 md:w-4" />
               <span className="hidden sm:inline">Resumen</span>
               <span className="sm:hidden">Info</span>
@@ -338,7 +438,13 @@ export default function BookmarkWorkspacePage() {
           </TabsList>
 
           <TabsContent value="overview" className="m-0 focus-visible:ring-0">
-            <BookmarkOverview bookmarkId={bookmarkId} company={company} countryFilter={countryFilter || null} />
+            <BookmarkOverview
+              bookmarkId={bookmarkId}
+              company={company}
+              countryFilter={countryFilter || null}
+              bookmarkScope={bookmark.search_context}
+              onScopeUpdated={(newScope) => setBookmark((prev: any) => ({ ...prev, search_context: newScope }))}
+            />
           </TabsContent>
 
           <TabsContent value="jobpostings" className="m-0 focus-visible:ring-0">
