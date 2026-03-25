@@ -257,38 +257,40 @@ export function TechnologySearch() {
             {selectedTechs.length >= 2 && (
               <div
                 data-onboarding="search-tech-match-mode"
-                className="flex items-center gap-3 pt-1"
+                className="flex items-start gap-3 pt-1"
               >
-                <span className="text-xs text-muted-foreground">Empresas con:</span>
-                <div className="flex items-center rounded-md border bg-muted/40 p-0.5 gap-0.5">
-                  <button
-                    onClick={() => setMatchMode("cualquiera")}
-                    className={cn(
-                      "px-3 py-1 text-xs rounded-sm font-medium transition-all",
-                      matchMode === "cualquiera"
-                        ? "bg-background shadow-sm text-foreground"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    Al menos una
-                  </button>
-                  <button
-                    onClick={() => setMatchMode("todas")}
-                    className={cn(
-                      "px-3 py-1 text-xs rounded-sm font-medium transition-all",
-                      matchMode === "todas"
-                        ? "bg-background shadow-sm text-foreground"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    Todas a la vez
-                  </button>
+                <span className="text-xs text-muted-foreground mt-1.5 shrink-0">Buscar empresas con:</span>
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center rounded-md border bg-muted/40 p-0.5 gap-0.5 w-fit">
+                    <button
+                      onClick={() => setMatchMode("cualquiera")}
+                      className={cn(
+                        "whitespace-nowrap px-3 py-1 text-xs rounded-sm font-medium transition-all",
+                        matchMode === "cualquiera"
+                          ? "bg-background shadow-sm text-foreground"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      Al menos una
+                    </button>
+                    <button
+                      onClick={() => setMatchMode("todas")}
+                      className={cn(
+                        "whitespace-nowrap px-3 py-1 text-xs rounded-sm font-medium transition-all",
+                        matchMode === "todas"
+                          ? "bg-background shadow-sm text-foreground"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      Todas a la vez
+                    </button>
+                  </div>
+                  <span className="text-xs text-muted-foreground">
+                    {matchMode === "cualquiera"
+                      ? "Amplía la cobertura con cualquier tecnologia seleccionada"
+                      : "Solo empresas que usan todas las tecnologias a la vez"}
+                  </span>
                 </div>
-                <span className="text-xs text-muted-foreground">
-                  {matchMode === "cualquiera"
-                    ? "— amplía la cobertura"
-                    : "— busca convivencia de stack"}
-                </span>
               </div>
             )}
           </div>
