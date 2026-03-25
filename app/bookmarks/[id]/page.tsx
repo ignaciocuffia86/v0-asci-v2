@@ -21,6 +21,7 @@ import {
   MapPin,
   Download,
   Loader2,
+  SlidersHorizontal,
 } from "lucide-react"
 import { toast } from "sonner"
 import { Input } from "@/components/ui/input"
@@ -38,6 +39,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
+import { BookmarkScopeEditor, type SignalTag } from "@/components/bookmarks/bookmark-scope-editor"
 
 import { BookmarkOverview } from "./_components/overview-tab"
 import { BookmarkJobPostings } from "./_components/job-postings-tab"
@@ -58,7 +60,33 @@ export default function BookmarkWorkspacePage() {
   const [countryFilter, setCountryFilter] = useState<string>("")
   const [availableCountries, setAvailableCountries] = useState<string[]>([])
   const [isExporting, setIsExporting] = useState(false)
+  const [userId, setUserId] = useState<string>("")
   const supabase = createClient()
+
+  const fetchTagsForBookmark = async (): Promise<SignalTag[]> => {
+    if (!bookmark?.company_id) return []
+    const { data, error } = await supabase
+      .from("signals")
+      .select("signal_id, keyword_matched, signal_type")
+      .eq("company_id", bookmark.company_id)
+      .not("signal_id", "is", null)
+    if (error || !data) return []
+    const tagMap = new Map<string, SignalTag>()
+    data.forEach((s: any) => {
+      if (!s.signal_id || !s.keyword_matched) return
+      if (tagMap.has(s.signal_id)) {
+        tagMap.get(s.signal_id)!.count++
+      } else {
+        tagMap.set(s.signal_id, {
+          id: s.signal_id,
+          name: s.keyword_matched,
+          type: s.signal_type === "process" ? "process" : "technology",
+          count: 1,
+        })
+      }
+    })
+    return Array.from(tagMap.values()).sort((a, b) => b.count - a.count)
+  }
 
   const handleExportExcel = async () => {
     setIsExporting(true)
@@ -88,6 +116,10 @@ export default function BookmarkWorkspacePage() {
   useEffect(() => {
     const fetchBookmarkAndCompany = async () => {
       setIsLoading(true)
+
+      // 0. Get current user
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) setUserId(user.id)
 
       // 1. Fetch Bookmark to get company_id
       const { data: bookmarkData, error: bookmarkError } = await supabase
@@ -246,6 +278,30 @@ export default function BookmarkWorkspacePage() {
                   )}
                   Exportar
                 </Button>
+                <BookmarkScopeEditor
+                  bookmarkId={bookmarkId}
+                  userId={userId}
+                  companyName={company.name}
+                  currentScope={bookmark.search_context}
+                  fetchAvailableTags={fetchTagsForBookmark}
+                  onScopeUpdated={(newScope) => setBookmark((prev: any) => ({ ...prev, search_context: newScope }))}
+                  trigger={
+                    <Button variant="outline" size="sm" className="h-7 text-xs px-3 bg-transparent gap-1.5">
+                      <SlidersHorizontal className="h-3 w-3" />
+                      {bookmark.search_context?.filterSignalIds?.length > 0
+                        ? (() => {
+                            const all = [
+                              ...(bookmark.search_context.filtersUsed?.technology || []),
+                              ...(bookmark.search_context.filtersUsed?.process || []),
+                            ]
+                            const shown = all.slice(0, 1).join(", ")
+                            const rest = all.length - 1
+                            return rest > 0 ? `${shown} +${rest}` : shown || "Scope"
+                          })()
+                        : "Scope: General"}
+                    </Button>
+                  }
+                />
               </div>
             </div>
           </div>
@@ -381,7 +437,13 @@ export default function BookmarkWorkspacePage() {
           </TabsList>
 
           <TabsContent value="overview" className="m-0 focus-visible:ring-0">
-            <BookmarkOverview bookmarkId={bookmarkId} company={company} countryFilter={countryFilter || null} />
+            <BookmarkOverview
+              bookmarkId={bookmarkId}
+              company={company}
+              countryFilter={countryFilter || null}
+              bookmarkScope={bookmark.search_context}
+              onScopeUpdated={(newScope) => setBookmark((prev: any) => ({ ...prev, search_context: newScope }))}
+            />
           </TabsContent>
 
           <TabsContent value="jobpostings" className="m-0 focus-visible:ring-0">

@@ -14,12 +14,15 @@ import {
   Phone,
   CheckCircle2,
   AlertCircle,
+  SlidersHorizontal,
 } from "lucide-react"
 import { getBookmarkSmartContext } from "@/app/actions/workspace"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { toast } from "sonner"
+import { BookmarkScopeEditor, type SignalTag } from "@/components/bookmarks/bookmark-scope-editor"
+import { createClient } from "@/lib/supabase/client"
 
 type GroupedContact = {
   contactId: string
@@ -44,9 +47,29 @@ type SmartContext = {
   logicUsed: string
 }
 
-export function BookmarkOverview({ bookmarkId, company, countryFilter }: { bookmarkId: string; company: any; countryFilter?: string | null }) {
+export function BookmarkOverview({
+  bookmarkId,
+  company,
+  countryFilter,
+  bookmarkScope,
+  onScopeUpdated,
+}: {
+  bookmarkId: string
+  company: any
+  countryFilter?: string | null
+  bookmarkScope?: any
+  onScopeUpdated?: (newScope: any) => void
+}) {
   const [smartContext, setSmartContext] = useState<SmartContext | null>(null)
   const [loading, setLoading] = useState(true)
+  const [userId, setUserId] = useState("")
+  const supabase = createClient()
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user) setUserId(user.id)
+    })
+  }, [])
 
   useEffect(() => {
     const fetchContext = async () => {
@@ -64,7 +87,7 @@ export function BookmarkOverview({ bookmarkId, company, countryFilter }: { bookm
     if (bookmarkId) {
       fetchContext()
     }
-  }, [bookmarkId, countryFilter])
+  }, [bookmarkId, countryFilter, bookmarkScope])
 
   if (loading) {
     return <div className="p-4 text-center text-muted-foreground">Cargando contexto...</div>
@@ -81,6 +104,31 @@ export function BookmarkOverview({ bookmarkId, company, countryFilter }: { bookm
       default:
         return "General"
     }
+  }
+
+  const fetchTagsForCompany = async (): Promise<SignalTag[]> => {
+    if (!company?.id) return []
+    const { data, error } = await supabase
+      .from("signals")
+      .select("signal_id, keyword_matched, signal_type")
+      .eq("company_id", company.id)
+      .not("signal_id", "is", null)
+    if (error || !data) return []
+    const tagMap = new Map<string, SignalTag>()
+    data.forEach((s: any) => {
+      if (!s.signal_id || !s.keyword_matched) return
+      if (tagMap.has(s.signal_id)) {
+        tagMap.get(s.signal_id)!.count++
+      } else {
+        tagMap.set(s.signal_id, {
+          id: s.signal_id,
+          name: s.keyword_matched,
+          type: s.signal_type === "process" ? "process" : "technology",
+          count: 1,
+        })
+      }
+    })
+    return Array.from(tagMap.values()).sort((a, b) => b.count - a.count)
   }
 
   const copyToClipboard = (text: string, label: string) => {
@@ -220,13 +268,24 @@ export function BookmarkOverview({ bookmarkId, company, countryFilter }: { bookm
               <Bookmark className="h-4 w-4" />
               Contexto del Bookmark
             </CardTitle>
-            <Button
-              variant="outline"
-              size="sm"
-              className="text-xs uppercase bg-white text-blue-700 border-blue-200 hover:bg-blue-50 h-7"
-            >
-              Búsqueda {getFilterTypeLabel(smartContext.filterType)}
-            </Button>
+            <BookmarkScopeEditor
+              bookmarkId={bookmarkId}
+              userId={userId}
+              companyName={company?.name || ""}
+              currentScope={bookmarkScope}
+              fetchAvailableTags={fetchTagsForCompany}
+              onScopeUpdated={onScopeUpdated}
+              trigger={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-xs bg-white text-blue-700 border-blue-200 hover:bg-blue-50 h-7 gap-1.5"
+                >
+                  <SlidersHorizontal className="h-3 w-3" />
+                  Búsqueda {getFilterTypeLabel(smartContext.filterType)}
+                </Button>
+              }
+            />
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
