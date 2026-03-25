@@ -380,39 +380,9 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
       .slice(0, 5)
   }
 
-  if (isLoading && !drawerData) {
-    return (
-      <Sheet open={isOpen} onOpenChange={onClose}>
-        <SheetContent className="w-full sm:max-w-3xl overflow-y-auto bg-white dark:bg-slate-950 p-0 flex flex-col h-full items-center justify-center">
-          <SheetTitle className="sr-only">Cargando empresa</SheetTitle>
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          <p className="mt-4 text-muted-foreground">Cargando información...</p>
-        </SheetContent>
-      </Sheet>
-    )
-  }
-
-  if (!company) return null
-
-  const uniqueSignals = signals.filter(
-    (signal, index, self) =>
-      index ===
-      self.findIndex(
-        (t) =>
-          t.contact?.id === signal.contact?.id &&
-          t.keyword_matched.toLowerCase() === signal.keyword_matched.toLowerCase(),
-      ),
-  )
-
-  const currentEmployeeSignals = uniqueSignals.filter(
-    (s) =>
-      s.is_current_employee &&
-      s.contact_id &&
-      (!activeTagFilter || s.keyword_matched.toLowerCase() === activeTagFilter.toLowerCase()),
-  )
-
-  const uniqueAlumniSignals = alumniSignalsData
-    .filter(
+  // ALL derived values and memos must be before any early return to respect Rules of Hooks
+  const uniqueSignals = useMemo(() =>
+    signals.filter(
       (signal, index, self) =>
         index ===
         self.findIndex(
@@ -420,18 +390,47 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
             t.contact?.id === signal.contact?.id &&
             t.keyword_matched.toLowerCase() === signal.keyword_matched.toLowerCase(),
         ),
-    )
-    .filter(
-      (s) => !activeTagFilter || s.keyword_matched.toLowerCase() === activeTagFilter.toLowerCase(),
-    )
+    ),
+    [signals],
+  )
 
-  const filteredJobPostings = activeTagFilter
-    ? jobPostings.filter((jp) =>
-        jp.detected_keywords?.some(
-          (kw: any) => (kw.signal_name || kw.keyword)?.toLowerCase() === activeTagFilter.toLowerCase(),
-        ),
+  const currentEmployeeSignals = useMemo(() =>
+    uniqueSignals.filter(
+      (s) =>
+        s.is_current_employee &&
+        s.contact_id &&
+        (!activeTagFilter || s.keyword_matched.toLowerCase() === activeTagFilter.toLowerCase()),
+    ),
+    [uniqueSignals, activeTagFilter],
+  )
+
+  const uniqueAlumniSignals = useMemo(() =>
+    alumniSignalsData
+      .filter(
+        (signal, index, self) =>
+          index ===
+          self.findIndex(
+            (t) =>
+              t.contact?.id === signal.contact?.id &&
+              t.keyword_matched.toLowerCase() === signal.keyword_matched.toLowerCase(),
+          ),
       )
-    : jobPostings
+      .filter(
+        (s) => !activeTagFilter || s.keyword_matched.toLowerCase() === activeTagFilter.toLowerCase(),
+      ),
+    [alumniSignalsData, activeTagFilter],
+  )
+
+  const filteredJobPostings = useMemo(() =>
+    activeTagFilter
+      ? jobPostings.filter((jp) =>
+          jp.detected_keywords?.some(
+            (kw: any) => (kw.signal_name || kw.keyword)?.toLowerCase() === activeTagFilter.toLowerCase(),
+          ),
+        )
+      : jobPostings,
+    [jobPostings, activeTagFilter],
+  )
 
   // Build availableTags from signals — each unique signal_id becomes a tag
   const availableTags: SignalTag[] = useMemo(() => {
@@ -451,6 +450,20 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
     })
     return Array.from(tagMap.values()).sort((a, b) => b.count - a.count)
   }, [signals])
+
+  if (isLoading && !drawerData) {
+    return (
+      <Sheet open={isOpen} onOpenChange={onClose}>
+        <SheetContent className="w-full sm:max-w-3xl overflow-y-auto bg-white dark:bg-slate-950 p-0 flex flex-col h-full items-center justify-center">
+          <SheetTitle className="sr-only">Cargando empresa</SheetTitle>
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          <p className="mt-4 text-muted-foreground">Cargando información...</p>
+        </SheetContent>
+      </Sheet>
+    )
+  }
+
+  if (!company) return null
 
   return (
     <Sheet open={isOpen} onOpenChange={onClose}>

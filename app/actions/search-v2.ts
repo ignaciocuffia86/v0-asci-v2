@@ -151,42 +151,51 @@ export async function searchByTechnology(
     )
 
     // Mapa: company_id -> resultado acumulado + set de IDs encontrados
+    // Para scores y contadores usamos MAX (no suma) para evitar duplicar personas
+    // que pueden aparecer en señales de múltiples tecnologías.
+    // El score final es el máximo observado entre todas las tecnologías buscadas.
     const companyMap = new Map<string, TechnologySearchResult & { _foundIds: Set<string> }>()
 
     idsArray.forEach((productId, idx) => {
       const { data, error } = allResults[idx]
       if (error) return
       for (const r of data || []) {
+        const signalCount  = r.signal_count  || 0
+        const currentCount = r.current_count || 0
+        const alumniCount  = r.alumni_count  || 0
+        const jobCount     = r.job_count     || 0
+
         const existing = companyMap.get(r.company_id)
         if (existing) {
           existing._foundIds.add(productId)
-          existing.total_count += r.signal_count || 0
-          existing.current_count += r.current_count || 0
-          existing.alumni_count += r.alumni_count || 0
-          existing.job_postings_count += r.job_count || 0
-          existing.relevance_score += r.signal_count || 0
-          existing.current_score += r.current_count || 0
-          existing.alumni_score += r.alumni_count || 0
-          existing.job_postings_score += r.job_count || 0
+          // MAX: reflejar la señal más fuerte, sin inflar por duplicados cross-tech
+          existing.total_count        = Math.max(existing.total_count,        signalCount)
+          existing.current_count      = Math.max(existing.current_count,      currentCount)
+          existing.alumni_count       = Math.max(existing.alumni_count,       alumniCount)
+          existing.job_postings_count = Math.max(existing.job_postings_count, jobCount)
+          existing.relevance_score    = Math.max(existing.relevance_score,    signalCount)
+          existing.current_score      = Math.max(existing.current_score,      currentCount)
+          existing.alumni_score       = Math.max(existing.alumni_score,       alumniCount)
+          existing.job_postings_score = Math.max(existing.job_postings_score, jobCount)
         } else {
           companyMap.set(r.company_id, {
-            company_id: r.company_id,
-            company_name: r.company_name,
-            company_logo_url: r.company_logo_url || null,
-            company_website: r.company_website,
+            company_id:           r.company_id,
+            company_name:         r.company_name,
+            company_logo_url:     r.company_logo_url || null,
+            company_website:      r.company_website,
             company_linkedin_url: null,
-            company_country: r.company_country,
-            company_industry: r.company_industry,
-            master_industry_id: r.master_industry_id,
+            company_country:      r.company_country,
+            company_industry:     r.company_industry,
+            master_industry_id:   r.master_industry_id,
             master_industry_name: r.master_industry_name,
-            total_count: r.signal_count || 0,
-            current_count: r.current_count || 0,
-            alumni_count: r.alumni_count || 0,
-            job_postings_count: r.job_count || 0,
-            relevance_score: r.signal_count || 0,
-            current_score: r.current_count || 0,
-            alumni_score: r.alumni_count || 0,
-            job_postings_score: r.job_count || 0,
+            total_count:          signalCount,
+            current_count:        currentCount,
+            alumni_count:         alumniCount,
+            job_postings_count:   jobCount,
+            relevance_score:      signalCount,
+            current_score:        currentCount,
+            alumni_score:         alumniCount,
+            job_postings_score:   jobCount,
             _foundIds: new Set([productId]),
           })
         }
