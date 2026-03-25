@@ -578,14 +578,6 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
                           <ExternalLink className="h-4 w-4" />
                           Ir al Workspace
                         </Button>
-                        <BookmarkScopeEditor
-                          bookmarkId={bookmarkState.exactMatchId}
-                          userId={drawerUserId}
-                          companyName={company.name}
-                          currentScope={bookmarkScope}
-                          availableTags={availableTags}
-                          onScopeUpdated={(newScope) => setBookmarkScope(newScope)}
-                        />
                         <Button variant="outline" size="sm" onClick={handleBookmark}>
                           <BookmarkCheck className="h-4 w-4" />
                         </Button>
