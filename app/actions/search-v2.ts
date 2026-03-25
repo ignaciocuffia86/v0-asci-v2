@@ -158,6 +158,7 @@ export async function searchByTechnology(
 
     idsArray.forEach((productId, idx) => {
       const { data, error } = allResults[idx]
+      console.log("[v0] multi-tech result", { productId, count: data?.length, error: error?.message })
       if (error) return
       for (const r of data || []) {
         const signalCount  = r.signal_count  || 0
@@ -203,12 +204,15 @@ export async function searchByTechnology(
     })
 
     const entries = Array.from(companyMap.values())
+    console.log("[v0] companyMap size:", entries.length, "| matchMode:", matchMode, "| idsArray.length:", idsArray.length)
+    console.log("[v0] foundIds distribution:", entries.map(e => e._foundIds.size).reduce((acc, s) => { acc[s] = (acc[s]||0)+1; return acc }, {} as Record<number,number>))
 
     // Modo "todas" (AND): solo empresas con señales de TODAS las tecnologías
     const filtered = matchMode === "todas"
       ? entries.filter((e) => e._foundIds.size === idsArray.length)
       : entries
 
+    console.log("[v0] filtered after AND:", filtered.length)
     return filtered.map(({ _foundIds, ...rest }) => rest)
   }
 
