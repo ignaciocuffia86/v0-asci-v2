@@ -7,7 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Trash2, Edit2, Building2, Search, LayoutGrid, List, Filter, X, Eye, Download, Loader2 } from "lucide-react"
+import { Trash2, Edit2, Building2, Search, LayoutGrid, List, Filter, X, Eye, Download, Loader2, SlidersHorizontal } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { toast } from "sonner"
 import { Input } from "@/components/ui/input"
@@ -26,6 +26,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
 import { KanbanBoard } from "@/components/bookmarks/kanban-board"
+import { BookmarkScopeEditor, type SignalTag } from "@/components/bookmarks/bookmark-scope-editor"
 import { 
   BOOKMARK_STATUS_CONFIG, 
   PRIORITY_CONFIG,
@@ -205,6 +206,36 @@ export default function BookmarksPage() {
       await supabase.from("bookmarks").delete().eq("id", id)
       fetchBookmarks()
     }
+  }
+
+  const fetchTagsForCompany = async (companyId: string): Promise<SignalTag[]> => {
+    const { data, error } = await supabase
+      .from("signals")
+      .select("signal_id, keyword_matched, signal_type")
+      .eq("company_id", companyId)
+      .not("signal_id", "is", null)
+    if (error || !data) return []
+    const tagMap = new Map<string, SignalTag>()
+    data.forEach((s: any) => {
+      if (!s.signal_id || !s.keyword_matched) return
+      if (tagMap.has(s.signal_id)) {
+        tagMap.get(s.signal_id)!.count++
+      } else {
+        tagMap.set(s.signal_id, {
+          id: s.signal_id,
+          name: s.keyword_matched,
+          type: s.signal_type === "process" ? "process" : "technology",
+          count: 1,
+        })
+      }
+    })
+    return Array.from(tagMap.values()).sort((a, b) => b.count - a.count)
+  }
+
+  const handleScopeUpdated = (bookmarkId: string, newScope: any) => {
+    setBookmarks((prev) =>
+      prev.map((b) => (b.id === bookmarkId ? { ...b, search_context: newScope } : b)),
+    )
   }
 
   const togglePriorityFilter = (priority: string) => {
@@ -555,7 +586,15 @@ export default function BookmarksPage() {
                   <TableCell className="max-w-xs truncate text-muted-foreground">{bookmark.notes || "-"}</TableCell>
                   <TableCell>{new Date(bookmark.created_at).toLocaleDateString()}</TableCell>
                   <TableCell className="text-right">
-                    <div className="flex justify-end gap-2">
+                    <div className="flex justify-end gap-1">
+                      <BookmarkScopeEditor
+                        bookmarkId={bookmark.id}
+                        userId={userId || ""}
+                        companyName={bookmark.company?.name || ""}
+                        currentScope={bookmark.search_context}
+                        fetchAvailableTags={() => fetchTagsForCompany(bookmark.company.id)}
+                        onScopeUpdated={(newScope) => handleScopeUpdated(bookmark.id, newScope)}
+                      />
                       <EditBookmarkDialog bookmark={bookmark} onUpdate={updateBookmark} />
                       <Button
                         variant="ghost"

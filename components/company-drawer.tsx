@@ -25,6 +25,7 @@ import {
   X,
 } from "lucide-react"
 import { bookmarkCompany, unbookmarkCompany, checkBookmarkWithContext } from "@/app/actions/bookmarks"
+import { BookmarkScopeEditor, type SignalTag } from "@/components/bookmarks/bookmark-scope-editor"
 import { useToast } from "@/hooks/use-toast"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useRouter } from "next/navigation"
@@ -135,6 +136,8 @@ type CompanyDrawerProps = {
 export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, filterType }: CompanyDrawerProps) {
   const [isBookmarked, setIsBookmarked] = useState(false)
   const [activeTagFilter, setActiveTagFilter] = useState<string | null>(null)
+  const [bookmarkScope, setBookmarkScope] = useState<any>(null)
+  const [drawerUserId, setDrawerUserId] = useState<string>("")
   const [bookmarkState, setBookmarkState] = useState<{
     hasExactMatch: boolean
     exactMatchId?: string
@@ -238,6 +241,7 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
     } = await supabase.auth.getUser()
 
     if (user) {
+      setDrawerUserId(user.id)
       const result = await checkBookmarkWithContext(user.id, companyId, filterSignalIds, filterType)
 
       setBookmarkState({
@@ -247,6 +251,18 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
         isLoading: false,
         isSaving: false,
       })
+
+      // Load current scope from the matched bookmark
+      if (result.hasExactMatch && result.exactMatchId) {
+        const { data } = await supabase
+          .from("bookmarks")
+          .select("search_context")
+          .eq("id", result.exactMatchId)
+          .single()
+        setBookmarkScope(data?.search_context || null)
+      } else {
+        setBookmarkScope(null)
+      }
     } else {
       setBookmarkState((prev) => ({ ...prev, isLoading: false, isSaving: false }))
     }
@@ -417,6 +433,25 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
       )
     : jobPostings
 
+  // Build availableTags from signals — each unique signal_id becomes a tag
+  const availableTags: SignalTag[] = useMemo(() => {
+    const tagMap = new Map<string, SignalTag>()
+    signals.forEach((s) => {
+      if (!s.signal_id || !s.keyword_matched) return
+      if (tagMap.has(s.signal_id)) {
+        tagMap.get(s.signal_id)!.count++
+      } else {
+        tagMap.set(s.signal_id, {
+          id: s.signal_id,
+          name: s.keyword_matched,
+          type: s.signal_type === "process" ? "process" : "technology",
+          count: 1,
+        })
+      }
+    })
+    return Array.from(tagMap.values()).sort((a, b) => b.count - a.count)
+  }, [signals])
+
   return (
     <Sheet open={isOpen} onOpenChange={onClose}>
       <SheetContent className="w-full sm:max-w-3xl overflow-y-auto bg-white dark:bg-slate-900 p-0 flex flex-col h-full" data-onboarding="company-drawer">
@@ -530,6 +565,14 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
                           <ExternalLink className="h-4 w-4" />
                           Ir al Workspace
                         </Button>
+                        <BookmarkScopeEditor
+                          bookmarkId={bookmarkState.exactMatchId}
+                          userId={drawerUserId}
+                          companyName={company.name}
+                          currentScope={bookmarkScope}
+                          availableTags={availableTags}
+                          onScopeUpdated={(newScope) => setBookmarkScope(newScope)}
+                        />
                         <Button variant="outline" size="sm" onClick={handleBookmark}>
                           <BookmarkCheck className="h-4 w-4" />
                         </Button>
