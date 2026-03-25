@@ -137,7 +137,24 @@ export async function searchByTechnology(
     ? normalizeCountriesForSearch(countries)
     : null
 
-  // Con una sola tecnología el modo no importa — lógica directa
+  // Normaliza los scores de 0-100 relativos al máximo del conjunto.
+  // Esto evita que conteos brutos de señales (ej: 90) se muestren como scores inflados.
+  // El resultado con más señales recibe 100; el resto es proporcional.
+  function normalizeToScores(results: TechnologySearchResult[]): TechnologySearchResult[] {
+    if (results.length === 0) return results
+    const maxSignal  = Math.max(...results.map((r) => r.total_count))        || 1
+    const maxCurrent = Math.max(...results.map((r) => r.current_count))      || 1
+    const maxAlumni  = Math.max(...results.map((r) => r.alumni_count))       || 1
+    const maxJobs    = Math.max(...results.map((r) => r.job_postings_count)) || 1
+    return results.map((r) => ({
+      ...r,
+      relevance_score:    Math.round((r.total_count        / maxSignal)  * 100),
+      current_score:      Math.round((r.current_count      / maxCurrent) * 100),
+      alumni_score:       Math.round((r.alumni_count       / maxAlumni)  * 100),
+      job_postings_score: Math.round((r.job_postings_count / maxJobs)    * 100),
+    }))
+  }
+
   if (idsArray.length > 1) {
     const allResults = await Promise.all(
       idsArray.map((productId) =>
@@ -150,15 +167,12 @@ export async function searchByTechnology(
       )
     )
 
-    // Mapa: company_id -> resultado acumulado + set de IDs encontrados
-    // Para scores y contadores usamos MAX (no suma) para evitar duplicar personas
-    // que pueden aparecer en señales de múltiples tecnologías.
-    // El score final es el máximo observado entre todas las tecnologías buscadas.
+    // Consolida por empresa tomando MAX de contadores (personas únicas, sin duplicar
+    // contactos que aparecen en señales de múltiples tecnologías).
     const companyMap = new Map<string, TechnologySearchResult & { _foundIds: Set<string> }>()
 
     idsArray.forEach((productId, idx) => {
       const { data, error } = allResults[idx]
-      console.log("[v0] multi-tech result", { productId, count: data?.length, error: error?.message })
       if (error) return
       for (const r of data || []) {
         const signalCount  = r.signal_count  || 0
@@ -169,15 +183,10 @@ export async function searchByTechnology(
         const existing = companyMap.get(r.company_id)
         if (existing) {
           existing._foundIds.add(productId)
-          // MAX: reflejar la señal más fuerte, sin inflar por duplicados cross-tech
           existing.total_count        = Math.max(existing.total_count,        signalCount)
           existing.current_count      = Math.max(existing.current_count,      currentCount)
           existing.alumni_count       = Math.max(existing.alumni_count,       alumniCount)
           existing.job_postings_count = Math.max(existing.job_postings_count, jobCount)
-          existing.relevance_score    = Math.max(existing.relevance_score,    signalCount)
-          existing.current_score      = Math.max(existing.current_score,      currentCount)
-          existing.alumni_score       = Math.max(existing.alumni_score,       alumniCount)
-          existing.job_postings_score = Math.max(existing.job_postings_score, jobCount)
         } else {
           companyMap.set(r.company_id, {
             company_id:           r.company_id,
@@ -193,6 +202,7 @@ export async function searchByTechnology(
             current_count:        currentCount,
             alumni_count:         alumniCount,
             job_postings_count:   jobCount,
+            // scores se calculan después de normalizar
             relevance_score:      signalCount,
             current_score:        currentCount,
             alumni_score:         alumniCount,
@@ -204,19 +214,16 @@ export async function searchByTechnology(
     })
 
     const entries = Array.from(companyMap.values())
-    console.log("[v0] companyMap size:", entries.length, "| matchMode:", matchMode, "| idsArray.length:", idsArray.length)
-    console.log("[v0] foundIds distribution:", entries.map(e => e._foundIds.size).reduce((acc, s) => { acc[s] = (acc[s]||0)+1; return acc }, {} as Record<number,number>))
 
-    // Modo "todas" (AND): solo empresas con señales de TODAS las tecnologías
     const filtered = matchMode === "todas"
       ? entries.filter((e) => e._foundIds.size === idsArray.length)
       : entries
 
-    console.log("[v0] filtered after AND:", filtered.length)
-    return filtered.map(({ _foundIds, ...rest }) => rest)
+    const raw = filtered.map(({ _foundIds, ...rest }) => rest)
+    return normalizeToScores(raw)
   }
 
-  // Single product ID — lógica original
+  // Single product ID
   const productId = idsArray[0]
   const { data, error } = await supabase.rpc("search_companies_by_technology_v2", {
     p_product_id: productId,
@@ -246,25 +253,27 @@ export async function searchByTechnology(
     }))
   }
 
-  return (data || []).map((r: any) => ({
-    company_id: r.company_id,
-    company_name: r.company_name,
-    company_logo_url: r.company_logo_url || null,
-    company_website: r.company_website,
+  const raw = (data || []).map((r: any) => ({
+    company_id:           r.company_id,
+    company_name:         r.company_name,
+    company_logo_url:     r.company_logo_url || null,
+    company_website:      r.company_website,
     company_linkedin_url: null,
-    company_country: r.company_country,
-    company_industry: r.company_industry,
-    master_industry_id: r.master_industry_id,
+    company_country:      r.company_country,
+    company_industry:     r.company_industry,
+    master_industry_id:   r.master_industry_id,
     master_industry_name: r.master_industry_name,
-    total_count: r.signal_count || 0,
-    current_count: r.current_count || 0,
-    alumni_count: r.alumni_count || 0,
-    job_postings_count: r.job_count || 0,
-    relevance_score: r.signal_count || 0,
-    current_score: r.current_count || 0,
-    alumni_score: r.alumni_count || 0,
-    job_postings_score: r.job_count || 0,
+    total_count:          r.signal_count  || 0,
+    current_count:        r.current_count || 0,
+    alumni_count:         r.alumni_count  || 0,
+    job_postings_count:   r.job_count     || 0,
+    relevance_score:      r.signal_count  || 0,
+    current_score:        r.current_count || 0,
+    alumni_score:         r.alumni_count  || 0,
+    job_postings_score:   r.job_count     || 0,
   }))
+
+  return normalizeToScores(raw)
 }
 
 export async function getCompanySignalSummary(companyId: string): Promise<CompanySignalSummary | null> {

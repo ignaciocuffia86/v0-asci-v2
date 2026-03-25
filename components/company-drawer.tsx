@@ -162,13 +162,11 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
   }, [companyId, isOpen, filterSignalIds, filterType])
 
   const fetcher = useCallback(async () => {
-    console.log("[v0] drawer fetcher called with", { companyId, filterSignalIds, filterType })
     const { data, error } = await supabase.rpc("get_company_drawer_data", {
       p_company_id: companyId,
       p_filter_signal_ids: filterSignalIds || null,
       p_filter_type: filterType || null,
     })
-    console.log("[v0] drawer rpc result", { signalsCount: data?.signals?.length, error: error?.message })
 
     if (error) {
       console.error("Error fetching drawer data:", error)
