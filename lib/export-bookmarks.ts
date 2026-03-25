@@ -20,6 +20,7 @@ export interface BookmarkExportData {
     sender_context_override: string | null
   } | null
   contacts_with_signals: {
+    source?: "decision_makers" | "signals" // fallback cuando no hay DMs
     total_count: number
     exported_count: number
     truncated: boolean
@@ -27,15 +28,17 @@ export interface BookmarkExportData {
     data: Array<{
       first_name: string
       last_name: string
-      role: string | null // DB column is 'role', not 'position'
+      role: string | null
       email: string | null
       linkedin_url: string | null
       seniority: string | null
+      is_current_employee?: boolean | null
       signal_count: number
       signals: Array<{
         signal_type: string
         signal_name: string
         snippet: string | null
+        is_current_employee?: boolean | null
       }> | null
     }>
   }
@@ -128,16 +131,24 @@ export async function generateBookmarkExcel(
     "Email",
     "LinkedIn",
     "Seniority",
+    "Empleado Actual",
     "# Señales",
     "Señales (tipo: nombre)",
   ])
-  setColumnWidths(contactsSheet, [15, 15, 30, 30, 40, 15, 12, 60])
+  setColumnWidths(contactsSheet, [15, 15, 30, 30, 40, 15, 16, 12, 60])
+
+  // Add source note when contacts come from signals fallback
+  if (data.contacts_with_signals.source === "signals") {
+    const sourceRow = contactsSheet.addRow(["Fuente: señales detectadas (sin Decision Makers cargados)"])
+    sourceRow.getCell(1).style = { font: { italic: true, color: { argb: "FF0066CC" } } }
+    contactsSheet.mergeCells(sourceRow.number, 1, sourceRow.number, 9)
+  }
 
   // Add warning if truncated
   if (data.contacts_with_signals.truncated) {
     const warningRow = contactsSheet.addRow([data.contacts_with_signals.warning || "Datos truncados"])
     warningRow.getCell(1).style = { font: { italic: true, color: { argb: "FFFF6600" } } }
-    contactsSheet.mergeCells(warningRow.number, 1, warningRow.number, 8)
+    contactsSheet.mergeCells(warningRow.number, 1, warningRow.number, 9)
   }
 
   data.contacts_with_signals.data.forEach((contact) => {
@@ -151,6 +162,7 @@ export async function generateBookmarkExcel(
       contact.email || "",
       contact.linkedin_url || "",
       contact.seniority || "",
+      contact.is_current_employee === true ? "Sí" : contact.is_current_employee === false ? "No (Alumni)" : "",
       contact.signal_count || 0,
       truncate(signalsSummary, 500),
     ])
