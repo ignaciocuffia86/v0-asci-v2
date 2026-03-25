@@ -592,7 +592,7 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
                 </div>
 
                 <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800">
-                  <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center justify-between mb-3" data-onboarding="drawer-tag-cloud">
                     <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
                       Tecnologías y Procesos Principales
                     </h4>

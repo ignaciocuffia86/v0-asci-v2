@@ -83,19 +83,16 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
     waitForAction: true,
     actionHint: "Realiza una busqueda para continuar",
   },
-  // TODO: implementar data-onboarding="search-tech-match-mode" en technology-search.tsx (ya existe el atributo)
-  // Este paso aparece solo cuando hay 2+ tecnologias seleccionadas en la busqueda por tecnologia
   {
     id: "seg-5b-multitech-mode",
     track: "segmentacion",
     stepIndex: 5,
     targetSelector: "search-tech-match-mode",
     title: "Modo de coincidencia entre tecnologias",
-    content: "Cuando seleccionas mas de una tecnologia, podes elegir como se combinan los resultados. 'Al menos una' muestra empresas que usan cualquiera de ellas (OR) — ideal para ampliar la cobertura. 'Todas a la vez' muestra solo empresas que usan todas las tecnologias seleccionadas (AND) — ideal para detectar convivencia de stack especifica.",
+    content: "Cuando seleccionas mas de una tecnologia, podes elegir como se combinan los resultados. 'Al menos una' muestra empresas que usan cualquiera de ellas — ideal para ampliar la cobertura. 'Todas a la vez' muestra solo empresas que usan todas las tecnologias seleccionadas — ideal para detectar convivencia de stack especifica.",
     position: "bottom",
     route: "/search",
-    // TODO: activar cuando el paso anterior se complete con 2+ tecnologias seleccionadas
-    // Por ahora se puede dejar desactivado o con waitForAction en false
+    waitForAction: false,
   },
   {
     id: "seg-6-results",
@@ -119,7 +116,6 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
     position: "left",
     route: "/search",
   },
-  // TODO: implementar data-onboarding="drawer-tag-cloud" en company-drawer.tsx sobre el bloque de tags de senales
   {
     id: "seg-7b-tag-filter",
     track: "segmentacion",
@@ -245,7 +241,6 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
     route: "/bookmarks/[id]",
     highlightPadding: 8,
   },
-  // TODO: implementar data-onboarding="workspace-tab-overview" en el tab de Resumen del workspace
   {
     id: "pro-4b-signals-panel",
     track: "prospeccion",
@@ -256,7 +251,6 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
     position: "bottom",
     route: "/bookmarks/[id]",
   },
-  // TODO: implementar data-onboarding="bookmark-scope-button" en el boton de scope del workspace header
   {
     id: "pro-4c-scope-editor",
     track: "prospeccion",
@@ -267,7 +261,6 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
     position: "bottom",
     route: "/bookmarks/[id]",
   },
-  // TODO: implementar data-onboarding="workspace-export-button" en el boton de exportar del workspace header
   {
     id: "pro-4d-export",
     track: "prospeccion",
