@@ -57,7 +57,7 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
     stepIndex: 2,
     targetSelector: "search-tab-tecnologia",
     title: "Busqueda por Tecnologia",
-    content: "Similar a Proceso, pero enfocado en tecnologias. Descubri que companias estan adoptando, migrando o usando determinadas herramientas y plataformas tecnologicas.",
+    content: "Busca empresas por tecnologia usando una o varias tecnologias a la vez. Escribi en el buscador para filtrar opciones y agregalas como tags. Podes combinar varias para ampliar o afinar la cobertura.",
     position: "bottom",
     route: "/search",
   },
@@ -83,10 +83,24 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
     waitForAction: true,
     actionHint: "Realiza una busqueda para continuar",
   },
+  // TODO: implementar data-onboarding="search-tech-match-mode" en technology-search.tsx (ya existe el atributo)
+  // Este paso aparece solo cuando hay 2+ tecnologias seleccionadas en la busqueda por tecnologia
+  {
+    id: "seg-5b-multitech-mode",
+    track: "segmentacion",
+    stepIndex: 5,
+    targetSelector: "search-tech-match-mode",
+    title: "Modo de coincidencia entre tecnologias",
+    content: "Cuando seleccionas mas de una tecnologia, podes elegir como se combinan los resultados. 'Al menos una' muestra empresas que usan cualquiera de ellas (OR) — ideal para ampliar la cobertura. 'Todas a la vez' muestra solo empresas que usan todas las tecnologias seleccionadas (AND) — ideal para detectar convivencia de stack especifica.",
+    position: "bottom",
+    route: "/search",
+    // TODO: activar cuando el paso anterior se complete con 2+ tecnologias seleccionadas
+    // Por ahora se puede dejar desactivado o con waitForAction en false
+  },
   {
     id: "seg-6-results",
     track: "segmentacion",
-    stepIndex: 5,
+    stepIndex: 6,
     targetSelector: "search-results",
     title: "Resultados de Busqueda",
     content: "Estas son las companias que coinciden con tu busqueda. Cada card muestra senales detectadas, cantidad de empleados y busquedas laborales activas. Hace clic en una compania para ver su detalle.",
@@ -98,17 +112,28 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
   {
     id: "seg-7-drawer",
     track: "segmentacion",
-    stepIndex: 6,
+    stepIndex: 7,
     targetSelector: "company-drawer",
     title: "Panel de Detalle",
     content: "Este panel lateral muestra toda la informacion de la compania: resumen general, senales detectadas por personas y busquedas laborales, datos de la empresa y acciones rapidas.",
     position: "left",
     route: "/search",
   },
+  // TODO: implementar data-onboarding="drawer-tag-cloud" en company-drawer.tsx sobre el bloque de tags de senales
+  {
+    id: "seg-7b-tag-filter",
+    track: "segmentacion",
+    stepIndex: 8,
+    targetSelector: "drawer-tag-cloud",
+    title: "Filtrar senales por tag",
+    content: "Los tags de senales en el resumen son clickeables. Al hacer clic en uno filtras empleados actuales, alumni y busquedas laborales en las 3 tabs simultaneamente. Util cuando buscaste por multiples tecnologias y queres ver cada una por separado.",
+    position: "left",
+    route: "/search",
+  },
   {
     id: "seg-8-bookmark",
     track: "segmentacion",
-    stepIndex: 7,
+    stepIndex: 9,
     targetSelector: "bookmark-button",
     title: "Guardar en Bookmarks",
     content: "Desde aca podes guardar la compania como bookmark para trabajarla luego. Al bookmarkear, se crea un workspace con todo lo necesario para desarrollar la cuenta. Esto cierra el track de Segmentacion!",
@@ -220,10 +245,43 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
     route: "/bookmarks/[id]",
     highlightPadding: 8,
   },
+  // TODO: implementar data-onboarding="workspace-tab-overview" en el tab de Resumen del workspace
+  {
+    id: "pro-4b-signals-panel",
+    track: "prospeccion",
+    stepIndex: 4,
+    targetSelector: "workspace-tab-overview",
+    title: "Panel de Senales",
+    content: "La tab Resumen muestra el panel de senales de la empresa: empleados actuales, alumni, y sus keywords detectados. Hace clic en los tags de senales para filtrar y ver solo los contactos relevantes a esa tecnologia o proceso.",
+    position: "bottom",
+    route: "/bookmarks/[id]",
+  },
+  // TODO: implementar data-onboarding="bookmark-scope-button" en el boton de scope del workspace header
+  {
+    id: "pro-4c-scope-editor",
+    track: "prospeccion",
+    stepIndex: 5,
+    targetSelector: "bookmark-scope-button",
+    title: "Definir el Scope del Bookmark",
+    content: "Cada bookmark puede tener un scope especifico: en lugar de trabajar la empresa en general, podes definir que senales son las relevantes. Esto hace que la estrategia, los icebreakers y el brief sean mas enfocados al contexto real de tu producto.",
+    position: "bottom",
+    route: "/bookmarks/[id]",
+  },
+  // TODO: implementar data-onboarding="workspace-export-button" en el boton de exportar del workspace header
+  {
+    id: "pro-4d-export",
+    track: "prospeccion",
+    stepIndex: 6,
+    targetSelector: "workspace-export-button",
+    title: "Exportar Contactos",
+    content: "Desde el boton Exportar descargás un Excel con todos los contactos del bookmark filtrados por el scope activo. Incluye empleados actuales, alumni, datos de contacto y el contexto de las senales detectadas.",
+    position: "bottom",
+    route: "/bookmarks/[id]",
+  },
   {
     id: "pro-5-news",
     track: "prospeccion",
-    stepIndex: 4,
+    stepIndex: 7,
     targetSelector: "workspace-tab-news",
     title: "Tab de Noticias",
     content: "Aca se muestran las noticias recientes de la compania. Podes filtrar por relevancia y marcar las que te interesen. Las noticias seleccionadas alimentan directamente los Icebreakers y el Brief Ejecutivo, dandoles contexto actualizado.",
@@ -233,7 +291,7 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
   {
     id: "pro-6-implementations",
     track: "prospeccion",
-    stepIndex: 5,
+    stepIndex: 8,
     targetSelector: "workspace-tab-implementations",
     title: "Tab de Implementaciones",
     content: "A diferencia de las noticias, las implementaciones son proyectos concretos que la compania realizo o esta realizando. Son senales mas solidas de inversion y prioridad. Tambien impactan en los Icebreakers y el Brief.",
@@ -243,7 +301,7 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
   {
     id: "pro-7-strategy",
     track: "prospeccion",
-    stepIndex: 6,
+    stepIndex: 9,
     targetSelector: "workspace-tab-strategy",
     title: "Tab de Estrategia",
     content: "La estrategia se genera con IA usando tus documentos, las senales, noticias e implementaciones de la cuenta. Una cuenta bookmarkeada desde un proceso especifico ayuda a que la IA sea mas precisa y menos generalista.",
@@ -253,7 +311,7 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
   {
     id: "pro-8-prospects",
     track: "prospeccion",
-    stepIndex: 7,
+    stepIndex: 10,
     targetSelector: "workspace-tab-prospects",
     title: "Tab de Prospectos",
     content: "Busca prospectos en Apollo.io directamente desde aca. La IA sugiere job titles relevantes basandose en las senales. Podes filtrar por pais para apuntar mejor a las filiales locales de multinacionales.",
@@ -263,7 +321,7 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
   {
     id: "pro-9-icebreakers",
     track: "prospeccion",
-    stepIndex: 8,
+    stepIndex: 11,
     targetSelector: "workspace-tab-icebreakers",
     title: "Tab de Icebreakers",
     content: "Genera mensajes de apertura personalizados con IA. Usa el contexto de senales, noticias, implementaciones, documentos y la estrategia. Filtra por pais para multinacionales y genera distintos tipos de mensajes segun el contacto.",
@@ -273,7 +331,7 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
   {
     id: "pro-10-brief",
     track: "prospeccion",
-    stepIndex: 9,
+    stepIndex: 12,
     targetSelector: "workspace-tab-brief",
     title: "Tab de Brief Ejecutivo",
     content: "El brief consolida todo: senales, noticias, implementaciones, estrategia, prospectos e icebreakers en un documento ejecutivo. Recorda que bookmarkear desde un proceso ayuda a que el brief sea mas enfocado. Esto cierra el Onboarding!",

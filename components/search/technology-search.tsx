@@ -29,6 +29,7 @@ type TechnologyWithVendor = {
 export function TechnologySearch() {
   const [technologies, setTechnologies] = useState<TechnologyWithVendor[]>([])
   const [selectedTechs, setSelectedTechs] = useState<string[]>([])
+  const [matchMode, setMatchMode] = useState<"cualquiera" | "todas">("cualquiera")
   const [techSearchQuery, setTechSearchQuery] = useState("")
   const [techPopoverOpen, setTechPopoverOpen] = useState(false)
   const [selectedCountries, setSelectedCountries] = useState<string[]>([])
@@ -89,7 +90,7 @@ export function TechnologySearch() {
     setSelectedIndustries([])
     setDisplayLimit(50)
     try {
-      const data = await searchByTechnology(selectedTechs, selectedCountries, excludeProviders)
+      const data = await searchByTechnology(selectedTechs, selectedCountries, excludeProviders, [], matchMode)
       setResults(data)
     } catch (error) {
       console.error(error)
@@ -251,6 +252,45 @@ export function TechnologySearch() {
                 <span className="text-sm text-muted-foreground italic py-1">Selecciona al menos una tecnología</span>
               )}
             </div>
+
+            {/* Toggle OR / AND — visible solo con 2+ tecnologías */}
+            {selectedTechs.length >= 2 && (
+              <div
+                data-onboarding="search-tech-match-mode"
+                className="flex items-center gap-3 pt-1"
+              >
+                <span className="text-xs text-muted-foreground">Empresas con:</span>
+                <div className="flex items-center rounded-md border bg-muted/40 p-0.5 gap-0.5">
+                  <button
+                    onClick={() => setMatchMode("cualquiera")}
+                    className={cn(
+                      "px-3 py-1 text-xs rounded-sm font-medium transition-all",
+                      matchMode === "cualquiera"
+                        ? "bg-background shadow-sm text-foreground"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    Al menos una
+                  </button>
+                  <button
+                    onClick={() => setMatchMode("todas")}
+                    className={cn(
+                      "px-3 py-1 text-xs rounded-sm font-medium transition-all",
+                      matchMode === "todas"
+                        ? "bg-background shadow-sm text-foreground"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    Todas a la vez
+                  </button>
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  {matchMode === "cualquiera"
+                    ? "— amplía la cobertura"
+                    : "— busca convivencia de stack"}
+                </span>
+              </div>
+            )}
           </div>
 
           {/* Country Selection */}

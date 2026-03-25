@@ -122,23 +122,22 @@ export async function searchByProcess(
 }
 
 export async function searchByTechnology(
-  productIds: string | string[], // acepta tanto un ID como un array
+  productIds: string | string[],
   countries: string[],
   excludeProviders = false,
   masterIndustryIds: string[] = [],
+  matchMode: "cualquiera" | "todas" = "cualquiera",
 ): Promise<TechnologySearchResult[]> {
   const supabase = await createClient()
 
-  // Normalizar: siempre trabajar con array
   const idsArray = Array.isArray(productIds) ? productIds : [productIds]
   if (idsArray.length === 0) return []
 
-  // Normalizar países para incluir variantes sin acentos
-  const normalizedCountries = countries.length > 0 
-    ? normalizeCountriesForSearch(countries) 
+  const normalizedCountries = countries.length > 0
+    ? normalizeCountriesForSearch(countries)
     : null
 
-  // Si hay múltiples tecnologías, buscar cada una y consolidar por empresa (OR logic)
+  // Con una sola tecnología el modo no importa — lógica directa
   if (idsArray.length > 1) {
     const allResults = await Promise.all(
       idsArray.map((productId) =>
@@ -151,13 +150,16 @@ export async function searchByTechnology(
       )
     )
 
-    // Consolidar resultados: agregar scores por empresa
-    const companyMap = new Map<string, TechnologySearchResult>()
-    for (const { data, error } of allResults) {
-      if (error) continue
+    // Mapa: company_id -> resultado acumulado + set de IDs encontrados
+    const companyMap = new Map<string, TechnologySearchResult & { _foundIds: Set<string> }>()
+
+    idsArray.forEach((productId, idx) => {
+      const { data, error } = allResults[idx]
+      if (error) return
       for (const r of data || []) {
         const existing = companyMap.get(r.company_id)
         if (existing) {
+          existing._foundIds.add(productId)
           existing.total_count += r.signal_count || 0
           existing.current_count += r.current_count || 0
           existing.alumni_count += r.alumni_count || 0
@@ -185,11 +187,20 @@ export async function searchByTechnology(
             current_score: r.current_count || 0,
             alumni_score: r.alumni_count || 0,
             job_postings_score: r.job_count || 0,
+            _foundIds: new Set([productId]),
           })
         }
       }
-    }
-    return Array.from(companyMap.values())
+    })
+
+    const entries = Array.from(companyMap.values())
+
+    // Modo "todas" (AND): solo empresas con señales de TODAS las tecnologías
+    const filtered = matchMode === "todas"
+      ? entries.filter((e) => e._foundIds.size === idsArray.length)
+      : entries
+
+    return filtered.map(({ _foundIds, ...rest }) => rest)
   }
 
   // Single product ID — lógica original
