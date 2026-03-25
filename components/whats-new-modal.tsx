@@ -17,7 +17,7 @@ const FEATURES: Feature[] = [
   {
     icon: <Sliders className="h-4 w-4" />,
     category: "Prompts",
-    title: "Limites de caracteres y personalización de prompts",
+    title: "Limites y personalización de prompts",
     description:
       "Mejoras en la personalización de prompts con soporte de límites de caracteres para LinkedIn, para que los mensajes generados se ajusten siempre al canal.",
   },
@@ -45,7 +45,7 @@ const FEATURES: Feature[] = [
   {
     icon: <Search className="h-4 w-4" />,
     category: "Busqueda",
-    title: "Busqueda multi-tecnologia con AND / AL MENOS UNA",
+    title: "Busqueda multi-tecnologia",
     description:
       "Seleccioná varias tecnologías al mismo tiempo. Con \"Al menos una\" ampliás la cobertura; con \"Todas a la vez\" encontrás empresas que usan todo el stack simultáneamente.",
   },
