@@ -1,4 +1,5 @@
 import { MainSidebar } from "@/components/main-sidebar"
+import { WhatsNewModal } from "@/components/whats-new-modal"
 
 /**
  * Shared layout shell for all authenticated app pages.
@@ -12,6 +13,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <MainSidebar />
       {/* pt-14 on mobile for the fixed top bar, lg:pt-0 when sidebar is visible */}
       <main className="flex-1 min-w-0 overflow-y-auto pt-14 lg:pt-0">{children}</main>
+      {/* Novedades — solo aparece en rutas autenticadas, post-login */}
+      <WhatsNewModal />
     </div>
   )
 }
