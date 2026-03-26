@@ -82,7 +82,7 @@ type Signal = {
     id: string
     title: string
     posted_at: string
-    apply_url: string | null
+    job_url: string | null
   } | null
   signal_name: string
 }
@@ -111,7 +111,7 @@ type JobPosting = {
   id: string
   title: string
   posted_at: string
-  apply_url: string | null
+  job_url: string | null
   detected_keywords: any[]
   is_recent: boolean
 }
@@ -208,7 +208,7 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
           id: jp.id,
           title: jp.title,
           posted_at: jp.posted_at,
-          apply_url: jp.apply_url,
+          job_url: jp.job_url,
           detected_keywords: [],
           is_recent: postedDate >= oneMonthAgo,
         }
@@ -1110,14 +1110,14 @@ function JobPostingCard({ jobPosting }: { jobPosting: JobPosting }) {
         )}
 
         {/* Apply Button */}
-        {jobPosting.apply_url && (
+        {jobPosting.job_url && (
           <Button
             variant="outline"
             size="sm"
             className="w-full bg-orange-50 hover:bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-950/20 dark:hover:bg-orange-950/30"
             asChild
           >
-            <a href={jobPosting.apply_url} target="_blank" rel="noopener noreferrer">
+            <a href={jobPosting.job_url} target="_blank" rel="noopener noreferrer">
               <ExternalLink className="h-3.5 w-3.5 mr-2" />
               Ver Publicación Completa
             </a>

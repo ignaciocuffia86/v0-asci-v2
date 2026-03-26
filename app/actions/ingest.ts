@@ -60,10 +60,8 @@ export async function uploadBatchRows(
           title: row.title || row.job_title,
           description: row.description || row.job_description || row.html_job_description,
           location: row.location || `${row.city || ""}, ${row.state || ""}, ${row.country || ""}`.trim(),
-          applyUrl: row.applyUrl || row.apply_url || row.apply_link,
-
-          // Posting metadata
-          posting_url: row.jobUrl || row.url || row.uniq_id,
+          // Unified URL column — COALESCE across all scraper field variants
+          job_url: row.applyUrl || row.apply_url || row.apply_link || row.jobUrl || row.url || row.uniq_id || null,
           posted_at: row.postedTime || row.post_date || row.publishedAt,
           salary_from: row.inferred_salary_from,
           salary_to: row.inferred_salary_to,

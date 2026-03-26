@@ -140,7 +140,7 @@ export async function prepareBriefContext(options: PrepareContextOptions): Promi
     id: jp.id,
     title: jp.title,
     postedAt: jp.posted_at,
-    applyUrl: jp.apply_url,
+    applyUrl: jp.job_url,
     detectedKeywords: (jp.detected_keywords || []).map((kw: any) => kw.signal_name || kw.keyword),
     snippet: jp.description?.substring(0, 200) || null,
     isRecent: jp.is_recent || false,
