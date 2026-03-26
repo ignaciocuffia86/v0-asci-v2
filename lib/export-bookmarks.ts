@@ -44,7 +44,7 @@ export interface BookmarkExportData {
   }
   job_postings: Array<{
     title: string
-    posting_url: string | null // DB column is 'posting_url', not 'url'
+    job_url: string | null
     location: string | null
     posted_at: string | null
     is_active: boolean
@@ -176,7 +176,7 @@ export async function generateBookmarkExcel(
   data.job_postings.forEach((jp) => {
     jobSheet.addRow([
       jp.title,
-      jp.posting_url || "",
+      jp.job_url || "",
       jp.location || "",
       jp.posted_at ? new Date(jp.posted_at).toLocaleDateString("es-ES") : "",
       jp.is_active ? "Sí" : "No",

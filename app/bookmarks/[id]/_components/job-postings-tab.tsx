@@ -12,7 +12,7 @@ type JobPosting = {
   title: string
   location: string | null
   posted_at: string
-  apply_url: string | null
+  job_url: string | null
   detected_keywords: any[]
   is_recent: boolean
 }
@@ -169,14 +169,14 @@ export function BookmarkJobPostings({ bookmarkId, countryFilter }: { bookmarkId:
               )}
 
               {/* Apply Button */}
-              {jp.apply_url && (
+              {jp.job_url && (
                 <Button
                   variant="outline"
                   size="sm"
                   className="w-full h-8 text-xs bg-orange-50 hover:bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-950/20 dark:hover:bg-orange-950/30 group-hover:bg-orange-100"
                   asChild
                 >
-                  <a href={jp.apply_url} target="_blank" rel="noopener noreferrer">
+                  <a href={jp.job_url} target="_blank" rel="noopener noreferrer">
                     <ExternalLink className="h-3 w-3 mr-1.5" />
                     Ver Oferta Completa
                   </a>
