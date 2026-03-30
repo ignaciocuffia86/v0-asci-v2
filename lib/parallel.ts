@@ -101,7 +101,8 @@ export function buildNewsSearchParams(context: {
 }
 
 /**
- * Build search queries for company IMPLEMENTATIONS (technology projects, case studies, vendor relationships).
+ * Build search queries for company IMPLEMENTATIONS (business cases, success stories from vendors).
+ * IMPORTANT: Focuses on case studies published BY vendors/consultants about the company.
  * Returns both objective and search_queries optimized for Parallel best practices.
  */
 export function buildImplementationsSearchParams(context: {
@@ -123,23 +124,44 @@ export function buildImplementationsSearchParams(context: {
   // Build technology-specific queries if keywords are available
   const techQueries = (context.keywords ?? [])
     .slice(0, 2)
-    .map(kw => `"${context.company_name}" "${kw}" implementación proyecto caso de éxito`)
+    .map(kw => `"${context.company_name}" "${kw}" customer success case study`)
 
   return {
-    objective: `Busco implementaciones tecnológicas, casos de éxito y proyectos de IT realizados EN o PARA la empresa "${context.company_name}"${industryCtx}${countryCtx}.${keywordsCtx} ` +
-      `Necesito saber: qué tecnologías usan, qué vendors/consultoras les proveen servicios, proyectos de transformación digital en curso o completados, ` +
-      `migraciones cloud, implementaciones ERP/CRM/analytics, partnerships con empresas de tecnología. ` +
-      `Priorizar case studies oficiales de vendors (AWS, Microsoft, SAP, Salesforce, Oracle, Google Cloud, etc.), ` +
-      `artículos de consultoras (Accenture, Deloitte, Globant, etc.), y noticias de tecnología enterprise.`,
+    objective: `Busco CASOS DE ÉXITO y CUSTOMER SUCCESS STORIES publicados por vendors y consultoras SOBRE la empresa "${context.company_name}"${industryCtx}${countryCtx}.${keywordsCtx} ` +
+      `SOLO busco case studies oficiales publicados en sitios de vendors como: AWS (aws.amazon.com/solutions/case-studies), ` +
+      `Microsoft (customers.microsoft.com), SAP (sap.com/customers), Salesforce (salesforce.com/customer-success-stories), ` +
+      `Oracle, Google Cloud, Accenture, Deloitte, McKinsey, Globant, etc. ` +
+      `NO busco noticias de prensa general - esas van en la pestaña de Noticias. ` +
+      `Quiero saber: qué tecnología implementaron, qué problema resolvieron, qué resultados obtuvieron.`,
     search_queries: [
-      `"${context.company_name}" technology implementation case study digital transformation`,
-      `"${context.company_name}" implementación tecnología caso de éxito proyecto`,
-      `"${context.company_name}" cloud migration ERP CRM SAP Oracle Salesforce AWS Azure`,
-      `"${context.company_name}" vendor partner technology provider consultora`,
+      `"${context.company_name}" customer success story case study`,
+      `"${context.company_name}" cliente caso de éxito implementación`,
+      `"${context.company_name}" AWS Azure Google Cloud customer story`,
+      `"${context.company_name}" SAP Salesforce Oracle customer reference`,
       ...techQueries,
     ].slice(0, 5), // max 5 queries
     max_results: 10,
     source_policy: {
+      // Prioritize vendor/consultant domains
+      include_domains: [
+        "aws.amazon.com",
+        "customers.microsoft.com",
+        "azure.microsoft.com",
+        "cloud.google.com",
+        "sap.com",
+        "salesforce.com",
+        "oracle.com",
+        "accenture.com",
+        "deloitte.com",
+        "mckinsey.com",
+        "globant.com",
+        "ibm.com",
+        "servicenow.com",
+        "snowflake.com",
+        "databricks.com",
+        "tableau.com",
+      ],
+      // Exclude social and news media (news goes to news tab)
       exclude_domains: [
         "linkedin.com",
         "facebook.com",
@@ -147,9 +169,149 @@ export function buildImplementationsSearchParams(context: {
         "x.com",
         "instagram.com",
         "tiktok.com",
+        "youtube.com",
+        "reuters.com",
+        "bloomberg.com",
+        "cnbc.com",
+        "forbes.com",
+        "sec.gov", // SEC goes to public docs tab
       ],
       after_date: afterDate,
     },
     excerpts: { max_chars_per_result: 8000 },
+  }
+}
+
+/**
+ * Build search queries for PUBLIC DOCUMENTS (annual reports, sustainability reports, financial reports).
+ * NOTE: SEC filings are fetched directly via SEC EDGAR API, this is for non-SEC documents.
+ * Returns both objective and search_queries optimized for Parallel best practices.
+ */
+export function buildPublicDocsSearchParams(context: {
+  company_name: string
+  ticker?: string
+  country?: string
+  is_public?: boolean // If we know the company is public/private
+  sources: ("annual" | "earnings" | "sustainability" | "financial")[]
+}): ParallelSearchOptions {
+  const currentYear = new Date().getFullYear()
+  const year = currentYear
+  const prevYear = year - 1
+
+  // Calculate 2 years ago for date filter
+  const twoYearsAgo = new Date()
+  twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2)
+  const afterDate = twoYearsAgo.toISOString().split("T")[0]
+
+  // Detect if company might be from LATAM for bilingual search
+  const isLatam =
+    context.country &&
+    [
+      "México",
+      "Mexico",
+      "Argentina",
+      "Colombia",
+      "Chile",
+      "Perú",
+      "Peru",
+      "Brasil",
+      "Brazil",
+      "Ecuador",
+    ].some((c) => context.country?.toLowerCase().includes(c.toLowerCase()))
+
+  // Build search queries based on requested sources (bilingual)
+  const searchQueries: string[] = []
+  const sourceDescriptions: string[] = []
+
+  if (context.sources.includes("annual")) {
+    searchQueries.push(
+      `"${context.company_name}" annual report ${year} ${prevYear}`,
+      `"${context.company_name}" memoria anual informe anual ${year}`
+    )
+    sourceDescriptions.push(
+      "annual reports / memorias anuales / informes anuales"
+    )
+  }
+
+  if (context.sources.includes("earnings")) {
+    searchQueries.push(
+      `"${context.company_name}" earnings call transcript ${year}`,
+      `"${context.company_name}" conference call investors Q4 Q3 ${year}`
+    )
+    sourceDescriptions.push("earnings call transcripts")
+  }
+
+  if (context.sources.includes("sustainability")) {
+    searchQueries.push(
+      `"${context.company_name}" sustainability report ESG ${year}`,
+      `"${context.company_name}" reporte sostenibilidad sustentabilidad ${year}`,
+      `"${context.company_name}" environmental social governance report ${year}`
+    )
+    sourceDescriptions.push(
+      "sustainability reports / reportes de sostenibilidad / ESG reports"
+    )
+  }
+
+  if (context.sources.includes("financial")) {
+    searchQueries.push(
+      `"${context.company_name}" financial report annual results ${year}`,
+      `"${context.company_name}" reporte financiero resultados anuales ${year}`
+    )
+    sourceDescriptions.push(
+      "financial reports / reportes financieros anuales"
+    )
+  }
+
+  const tickerNote = context.ticker ? ` (ticker: ${context.ticker})` : ""
+  const languageNote = isLatam
+    ? " Buscar en español e inglés."
+    : " Search in English."
+
+  return {
+    objective:
+      `Busco DOCUMENTOS OFICIALES publicados directamente por la empresa "${context.company_name}"${tickerNote}: ` +
+      `${sourceDescriptions.join(", ")}.${languageNote} ` +
+      `SOLO documentos publicados por la empresa en su sitio de investor relations o comunicados oficiales. ` +
+      `NO busco artículos de prensa que HABLAN SOBRE reportes - busco los documentos ORIGINALES. ` +
+      `NO busco case studies de vendors - esos van en otra pestaña. ` +
+      `Años de interés: ${year} y ${prevYear}. ` +
+      `IMPORTANTE: Solo documentos publicados en los últimos 2 años (desde ${afterDate}).`,
+    search_queries: searchQueries.slice(0, 7), // Max 7 queries for bilingual coverage
+    max_results: 12,
+    source_policy: {
+      // Allow IR/corporate sites and financial data providers
+      include_domains: [
+        "seekingalpha.com", // Earnings transcripts
+        "fool.com", // Earnings transcripts
+        "annualreports.com",
+        // Note: Company IR sites are allowed by not being excluded
+      ],
+      // Exclude sources that belong to other tabs
+      exclude_domains: [
+        "linkedin.com",
+        "facebook.com",
+        "twitter.com",
+        "x.com",
+        "instagram.com",
+        "youtube.com",
+        // Exclude news media (goes to news tab)
+        "reuters.com",
+        "bloomberg.com",
+        "cnbc.com",
+        "forbes.com",
+        "wsj.com",
+        "ft.com",
+        // Exclude vendors (goes to implementations tab)
+        "aws.amazon.com",
+        "customers.microsoft.com",
+        "salesforce.com",
+        "sap.com",
+        "accenture.com",
+        "deloitte.com",
+      ],
+      // Only documents from last 2 years
+      after_date: afterDate,
+    },
+    excerpts: { max_chars_per_result: 10000 }, // Larger excerpts for documents
   }
 }

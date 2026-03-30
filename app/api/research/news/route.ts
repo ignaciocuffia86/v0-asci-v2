@@ -15,10 +15,17 @@ REGLAS:
 2. Resume con TUS PROPIAS PALABRAS, NO copies texto literal.
 3. Cada noticia debe tener relevancia para un vendedor B2B.
 4. Minimo 1, maximo 15 noticias. Prioriza calidad.
-5. Si no hay noticias relevantes, devuelve {"news":[]}
+5. Si no hay noticias relevantes, devuelve {"news":[], "digest": null}
 6. Las fechas deben ser YYYY-MM-DD. Si no hay fecha exacta, intenta inferirla del contexto. Si es imposible, usa null.
 
 CATEGORIAS validas: inversion | transformacion | crecimiento | ejecutivos | desafios | alianzas | regulatorio | ma | innovacion
+
+ADEMAS de las noticias, genera un "digest" de EXACTAMENTE 1 parrafo (2-4 oraciones) en ESPAÑOL que resuma:
+- Los hallazgos mas importantes para un vendedor B2B
+- Senales de compra o oportunidades detectadas
+- Tono: informativo y accionable
+
+El digest debe responder: "¿Por que deberia prestar atencion a esta empresa ahora?"
 
 FORMATO JSON:
 {
@@ -30,13 +37,19 @@ FORMATO JSON:
       "published_at": "YYYY-MM-DD o null",
       "category": "string (una de las categorias validas)"
     }
-  ]
+  ],
+  "digest": "string (parrafo resumen en ESPAÑOL) o null si no hay noticias relevantes"
 }`
+
+interface GeminiNewsResult {
+  news: any[]
+  digest: string | null
+}
 
 async function structureNewsWithGemini(
   excerpts: { url: string; title: string; publish_date: string | null; content: string }[],
   companyName: string,
-): Promise<any[]> {
+): Promise<GeminiNewsResult> {
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY
   if (!apiKey) throw new Error("GOOGLE_GENERATIVE_AI_API_KEY not configured")
 
@@ -70,7 +83,10 @@ async function structureNewsWithGemini(
 
   const text = result.response.text()
   const parsed = JSON.parse(text)
-  return parsed.news ?? parsed ?? []
+  return {
+    news: parsed.news ?? [],
+    digest: parsed.digest ?? null,
+  }
 }
 
 // ── Date helpers ────────────────────────────────────────────────────────
@@ -103,9 +119,34 @@ function categorizeNews(text: string): string {
 }
 
 // ── Cache helpers (public by company_id) ─────────────────────────────
-async function getRecentCache(supabase: any, companyId: string) {
+interface CacheResult {
+  news: any[] | null
+  lastSearchDate: string | null
+  canRefresh: boolean
+  daysUntilRefresh: number
+}
+
+async function getRecentCache(supabase: any, companyId: string, isSuperadmin: boolean): Promise<CacheResult> {
   const cacheDate = new Date()
   cacheDate.setDate(cacheDate.getDate() - NEWS_CACHE_DAYS)
+
+  // Get most recent news item to determine last search date
+  const { data: lastNews } = await supabase
+    .from("company_news")
+    .select("created_at")
+    .eq("company_id", companyId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single()
+
+  const lastSearchDate = lastNews?.created_at ?? null
+  const daysSinceLastSearch = lastSearchDate
+    ? (Date.now() - new Date(lastSearchDate).getTime()) / (1000 * 60 * 60 * 24)
+    : Infinity
+
+  // Superadmins can always refresh; regular users wait 30 days
+  const canRefresh = isSuperadmin || daysSinceLastSearch >= NEWS_CACHE_DAYS
+  const daysUntilRefresh = canRefresh ? 0 : Math.ceil(NEWS_CACHE_DAYS - daysSinceLastSearch)
 
   // Check if we have ANY news fetched within the cache window
   const { data: recentFetch } = await supabase
@@ -125,10 +166,10 @@ async function getRecentCache(supabase: any, companyId: string) {
       .order("created_at", { ascending: false })
       .limit(MAX_NEWS)
 
-    return data
+    return { news: data, lastSearchDate, canRefresh, daysUntilRefresh }
   }
 
-  return null // Cache expired, needs refresh
+  return { news: null, lastSearchDate, canRefresh, daysUntilRefresh } // Cache expired, needs refresh
 }
 
 async function getAnyCache(supabase: any, companyId: string) {
@@ -177,22 +218,29 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Missing required parameters" }, { status: 400 })
     }
 
+    // Check if user is superadmin
+    const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single()
+    const isSuperadmin = profile?.role === "superadmin"
+
     // Only superadmins can force refresh
-    if (forceRefresh) {
-      const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single()
-      if (profile?.role !== "superadmin") {
-        return NextResponse.json({ error: "Unauthorized: Only superadmins can force refresh" }, { status: 403 })
-      }
+    if (forceRefresh && !isSuperadmin) {
+      return NextResponse.json({ error: "Unauthorized: Only superadmins can force refresh" }, { status: 403 })
     }
 
     // ── 1. Check public cache (by company_id, visible to all users) ──
-    if (!forceRefresh) {
-      const cached = await getRecentCache(supabase, companyId)
-      if (cached && cached.length > 0) {
-        console.log("[v0] News: Public cache hit -", cached.length, "items")
-        await registerUserInteractions(supabase, user.id, companyId, cached.map((n: any) => n.id))
-        return NextResponse.json({ success: true, news: cached, source: "cache" })
-      }
+    const cacheResult = await getRecentCache(supabase, companyId, isSuperadmin)
+    
+    if (!forceRefresh && cacheResult.news && cacheResult.news.length > 0) {
+      console.log("[v0] News: Public cache hit -", cacheResult.news.length, "items")
+      await registerUserInteractions(supabase, user.id, companyId, cacheResult.news.map((n: any) => n.id))
+      return NextResponse.json({ 
+        success: true, 
+        news: cacheResult.news, 
+        source: "cache",
+        canRefresh: cacheResult.canRefresh,
+        lastSearchDate: cacheResult.lastSearchDate,
+        daysUntilRefresh: cacheResult.daysUntilRefresh,
+      })
     }
 
     // ── 2. Fetch company context for search ──────────────────────────
@@ -228,8 +276,8 @@ export async function POST(request: Request) {
 
         // Structure with Gemini
         console.log("[v0] News: Structuring with Gemini...")
-        const structured = await structureNewsWithGemini(excerpts, companyName)
-        console.log("[v0] News: Gemini structured", structured.length, "news items")
+        const { news: structured, digest } = await structureNewsWithGemini(excerpts, companyName)
+        console.log("[v0] News: Gemini structured", structured.length, "news items, digest:", digest ? "generated" : "none")
 
         // Map structured items back to source URLs from Parallel
         newsItems = structured.map((item: any, idx: number) => {
@@ -281,10 +329,11 @@ export async function POST(request: Request) {
 
     const existingUrls = new Set(existingNews?.map((n: any) => n.source_url) || [])
 
+    // We'll use the digest to update all items in this batch
     const newToInsert = uniqueItems
       .filter(item => !existingUrls.has(item.source_url))
       .filter(item => item.published_at !== null) // require valid date
-      .map(item => ({
+      .map((item, idx) => ({
         company_id: companyId,
         title: item.title,
         summary: item.summary,
@@ -293,6 +342,9 @@ export async function POST(request: Request) {
         published_at: item.published_at,
         category: item.category,
         ai_provider: "parallel",
+        // Only store digest on the first item as a flag that batch was processed
+        digest: idx === 0 ? digest : null,
+        digest_generated_at: idx === 0 && digest ? new Date().toISOString() : null,
       }))
 
     console.log(`[v0] News: Inserting ${newToInsert.length} new items (${uniqueItems.length - newToInsert.length} duplicates/invalid skipped)`)
@@ -321,10 +373,16 @@ export async function POST(request: Request) {
 
     await registerUserInteractions(supabase, user.id, companyId, finalNews.map((n: any) => n.id))
 
+    // Get fresh cache info for response
+    const freshCacheResult = await getRecentCache(supabase, companyId, isSuperadmin)
+
     return NextResponse.json({
       success: true,
       news: finalNews,
       source: "parallel",
+      canRefresh: freshCacheResult.canRefresh,
+      lastSearchDate: freshCacheResult.lastSearchDate,
+      daysUntilRefresh: freshCacheResult.daysUntilRefresh,
     })
   } catch (error) {
     console.error("[v0] News: Error in POST handler:", error)

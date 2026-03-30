@@ -15,7 +15,7 @@ REGLAS:
 1. Responde UNICAMENTE con JSON valido (sin markdown, sin texto extra).
 2. Resume con TUS PROPIAS PALABRAS, NO copies texto literal.
 3. Maximo 10 implementaciones. Prioriza calidad y evidencia fuerte.
-4. Si no hay implementaciones relevantes, devuelve {"implementations":[]}
+4. Si no hay implementaciones relevantes, devuelve {"implementations":[], "digest": null}
 5. Las fechas deben ser YYYY-MM-DD. Si no hay fecha exacta, intenta inferirla. Si es imposible, usa null.
 
 EVIDENCE LEVELS:
@@ -24,6 +24,13 @@ EVIDENCE LEVELS:
 - weak: Mencion indirecta, partnership announcement, inferencia de uso de tecnologia
 
 AREAS validas: finanzas | ventas | logistica | rrhh | it | ciberseguridad | ecommerce | operaciones
+
+ADEMAS de las implementaciones, genera un "digest" de EXACTAMENTE 1 parrafo (2-4 oraciones) en ESPAÑOL que resuma:
+- Que tecnologias/vendors usa la empresa
+- Que tipo de proyectos ha implementado recientemente
+- Como pueden usar esta info los vendedores para posicionarse
+
+El digest debe responder: "¿Con quien compito si quiero venderle a esta empresa?"
 
 FORMATO JSON:
 {
@@ -39,14 +46,20 @@ FORMATO JSON:
       "source_name": "string (nombre del medio/sitio)",
       "published_at": "YYYY-MM-DD o null"
     }
-  ]
+  ],
+  "digest": "string (parrafo resumen en ESPAÑOL) o null si no hay implementaciones relevantes"
 }`
+
+interface GeminiImplResult {
+  implementations: any[]
+  digest: string | null
+}
 
 async function structureImplementationsWithGemini(
   excerpts: { url: string; title: string; publish_date: string | null; content: string }[],
   companyName: string,
   keywords: string[],
-): Promise<any[]> {
+): Promise<GeminiImplResult> {
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY
   if (!apiKey) throw new Error("GOOGLE_GENERATIVE_AI_API_KEY not configured")
 
@@ -84,7 +97,10 @@ async function structureImplementationsWithGemini(
 
   const text = result.response.text()
   const parsed = JSON.parse(text)
-  return parsed.implementations ?? parsed ?? []
+  return {
+    implementations: parsed.implementations ?? [],
+    digest: parsed.digest ?? null,
+  }
 }
 
 // ── Date helpers ────────────────────────────────────────────────────────
@@ -111,9 +127,34 @@ function buildSearchContext(keywords: string[]): string {
   return keywords.sort().join("|").toLowerCase()
 }
 
-async function getRecentCache(supabase: any, companyId: string, searchContext: string) {
+interface CacheResult {
+  implementations: any[] | null
+  lastSearchDate: string | null
+  canRefresh: boolean
+  daysUntilRefresh: number
+}
+
+async function getRecentCache(supabase: any, companyId: string, searchContext: string, isSuperadmin: boolean): Promise<CacheResult> {
   const cacheDate = new Date()
   cacheDate.setDate(cacheDate.getDate() - IMPL_CACHE_DAYS)
+
+  // Get most recent implementation to determine last search date
+  const { data: lastImpl } = await supabase
+    .from("company_implementations")
+    .select("created_at")
+    .eq("company_id", companyId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single()
+
+  const lastSearchDate = lastImpl?.created_at ?? null
+  const daysSinceLastSearch = lastSearchDate
+    ? (Date.now() - new Date(lastSearchDate).getTime()) / (1000 * 60 * 60 * 24)
+    : Infinity
+
+  // Superadmins can always refresh; regular users wait 30 days
+  const canRefresh = isSuperadmin || daysSinceLastSearch >= IMPL_CACHE_DAYS
+  const daysUntilRefresh = canRefresh ? 0 : Math.ceil(IMPL_CACHE_DAYS - daysSinceLastSearch)
 
   // Check if we have implementations fetched within the cache window for this context
   let query = supabase
@@ -138,10 +179,10 @@ async function getRecentCache(supabase: any, companyId: string, searchContext: s
       .order("published_at", { ascending: false, nullsFirst: false })
       .limit(MAX_IMPLEMENTATIONS)
 
-    return data
+    return { implementations: data, lastSearchDate, canRefresh, daysUntilRefresh }
   }
 
-  return null // Cache expired for this context
+  return { implementations: null, lastSearchDate, canRefresh, daysUntilRefresh } // Cache expired for this context
 }
 
 async function getAnyCache(supabase: any, companyId: string) {
@@ -264,12 +305,13 @@ export async function POST(request: Request) {
     const companyId = company.id
     const companyName = company.name
 
+    // Check if user is superadmin
+    const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single()
+    const isSuperadmin = profile?.role === "superadmin"
+
     // Only superadmins can force refresh
-    if (forceRefresh) {
-      const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single()
-      if (profile?.role !== "superadmin") {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
-      }
+    if (forceRefresh && !isSuperadmin) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 403 })
     }
 
     // ── 1. Get signal keywords from bookmark context ───────────────────
@@ -278,13 +320,19 @@ export async function POST(request: Request) {
     console.log("[v0] Implementations: Keywords:", keywords, "| Context:", searchContext)
 
     // ── 2. Check public cache (by company_id + search_context) ───────
-    if (!forceRefresh) {
-      const cached = await getRecentCache(supabase, companyId, searchContext)
-      if (cached && cached.length > 0) {
-        console.log("[v0] Implementations: Public cache hit -", cached.length, "items")
-        await registerUserInteractions(supabase, user.id, companyId, cached.map((i: any) => i.id))
-        return NextResponse.json({ implementations: cached, cached: true, provider: "cache" })
-      }
+    const cacheResult = await getRecentCache(supabase, companyId, searchContext, isSuperadmin)
+    
+    if (!forceRefresh && cacheResult.implementations && cacheResult.implementations.length > 0) {
+      console.log("[v0] Implementations: Public cache hit -", cacheResult.implementations.length, "items")
+      await registerUserInteractions(supabase, user.id, companyId, cacheResult.implementations.map((i: any) => i.id))
+      return NextResponse.json({ 
+        implementations: cacheResult.implementations, 
+        cached: true, 
+        provider: "cache",
+        canRefresh: cacheResult.canRefresh,
+        lastSearchDate: cacheResult.lastSearchDate,
+        daysUntilRefresh: cacheResult.daysUntilRefresh,
+      })
     }
 
     // ── 3. Search with Parallel ──────────────────────────────────────
@@ -314,8 +362,8 @@ export async function POST(request: Request) {
 
         // Structure with Gemini
         console.log("[v0] Implementations: Structuring with Gemini...")
-        const structured = await structureImplementationsWithGemini(excerpts, companyName, keywords)
-        console.log("[v0] Implementations: Gemini structured", structured.length, "items")
+        const { implementations: structured, digest } = await structureImplementationsWithGemini(excerpts, companyName, keywords)
+        console.log("[v0] Implementations: Gemini structured", structured.length, "items, digest:", digest ? "generated" : "none")
 
         // Map structured items back to source URLs from Parallel
         implementations = structured.slice(0, MAX_IMPLEMENTATIONS).map((item: any, idx: number) => {
@@ -369,9 +417,10 @@ export async function POST(request: Request) {
 
     const existingUrls = new Set(existingImpls?.map((i: any) => i.source_url) || [])
 
+    // We'll use the digest to update all items in this batch
     const newToInsert = uniqueItems
       .filter(item => !existingUrls.has(item.source_url))
-      .map(item => ({
+      .map((item, idx) => ({
         company_id: companyId,
         title: item.title,
         summary: item.summary,
@@ -384,6 +433,9 @@ export async function POST(request: Request) {
         provider_name: item.provider_name,
         evidence_level: item.evidence_level,
         search_context: searchContext,
+        // Only store digest on the first item as a flag that batch was processed
+        digest: idx === 0 ? digest : null,
+        digest_generated_at: idx === 0 && digest ? new Date().toISOString() : null,
       }))
 
     console.log(`[v0] Implementations: Inserting ${newToInsert.length} new items`)
@@ -411,10 +463,16 @@ export async function POST(request: Request) {
 
     await registerUserInteractions(supabase, user.id, companyId, finalImpls.map((i: any) => i.id))
 
+    // Get fresh cache info for response
+    const freshCacheResult = await getRecentCache(supabase, companyId, searchContext, isSuperadmin)
+
     return NextResponse.json({
       implementations: finalImpls,
       cached: false,
       provider: "parallel",
+      canRefresh: freshCacheResult.canRefresh,
+      lastSearchDate: freshCacheResult.lastSearchDate,
+      daysUntilRefresh: freshCacheResult.daysUntilRefresh,
     })
   } catch (error) {
     console.error("[v0] Implementations: Error in POST handler:", error)
