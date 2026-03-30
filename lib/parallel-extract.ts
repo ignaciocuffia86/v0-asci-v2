@@ -4,6 +4,8 @@
  * Provides functions to extract and parse content from URLs (including PDFs)
  * using Parallel's Extract API, which converts documents to markdown
  * optimized for LLM processing.
+ * 
+ * API Reference: https://docs.parallel.ai/api-reference/extract-beta/extract
  */
 
 import Parallel from "parallel-web"
@@ -67,11 +69,16 @@ export async function extractDocumentContent(
 
   try {
     // Attempt 1: Direct extraction via Parallel (using urls array as required by API)
+    console.log("[v0] Parallel Extract: Calling with urls:", [url])
+    const extractParams = {
+      urls: [url], // API expects array of URLs - REQUIRED field
+      objective,
+      excerpts: true,
+    }
+    console.log("[v0] Parallel Extract: Params:", JSON.stringify(extractParams))
+    
     const result = await Promise.race([
-      client.beta.extract({
-        urls: [url], // API expects array of URLs
-        objective,
-      }),
+      client.beta.extract(extractParams),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error("Timeout")), timeout)
       ),

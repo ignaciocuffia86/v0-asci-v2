@@ -302,7 +302,7 @@ export async function POST(request: Request) {
     }
 
     // ── 3. Gather document sources ───────────────────────────────
-    const documentSources: { url: string; type: string; title: string; date?: string }[] = []
+    const documentSources: { url: string; type: string; title: string; date?: string; excerpts?: string[] }[] = []
 
     // 3a. If public company with CIK, get SEC filings
     if (isPublicCompany && cik) {
@@ -351,15 +351,16 @@ export async function POST(request: Request) {
           docType = "earnings_call"
         }
 
-        // Avoid duplicates
-        if (!documentSources.some((d) => d.url === result.url)) {
-          documentSources.push({
-            url: result.url,
-            type: docType,
-            title: result.title,
-            date: result.publish_date ?? undefined,
-          })
-        }
+                // Avoid duplicates
+                if (!documentSources.some((d) => d.url === result.url)) {
+                  documentSources.push({
+                    url: result.url,
+                    type: docType,
+                    title: result.title,
+                    date: result.publish_date ?? undefined,
+                    excerpts: result.excerpts ?? [], // Include search excerpts for fallback analysis
+                  })
+                }
       }
     } catch (parallelError) {
       console.error("[v0] Public Docs: Parallel search error:", parallelError)
@@ -448,9 +449,40 @@ export async function POST(request: Request) {
         digest = `Se encontraron ${documentSources.length} documentos públicos. Documentos analizados: ${docSummary.slice(0, 200)}...`
       }
     } else {
-      // No content extracted - use metadata only
-      const docSummary = documentSources.slice(0, 6).map(d => `${d.type}: ${d.title}`).join("; ")
-      digest = `Se encontraron ${documentSources.length} documentos públicos para ${companyName}. No se pudo extraer contenido para análisis de señales tech.`
+      // No content extracted via Parallel Extract - try using search excerpts as fallback
+      console.log("[v0] Public Docs: No extracted content, trying search excerpts as fallback...")
+      
+      // Build fallback excerpts from search results if available
+      const searchExcerpts = documentSources
+        .filter(d => d.excerpts && d.excerpts.length > 0)
+        .slice(0, 6)
+        .map(d => ({
+          url: d.url,
+          title: d.title,
+          content: d.excerpts?.join("\n") || "",
+          type: d.type,
+        }))
+      
+      if (searchExcerpts.length > 0 && searchExcerpts.some(e => e.content.length > 100)) {
+        console.log("[v0] Public Docs: Using", searchExcerpts.length, "search excerpts as fallback")
+        
+        try {
+          const geminiResult = await structureDocumentsWithGemini(searchExcerpts, companyName)
+          findings = geminiResult.findings
+          techSignals = geminiResult.tech_signals
+          digest = geminiResult.digest
+          
+          console.log("[v0] Public Docs: Fallback Gemini found", findings.length, "findings and", techSignals.length, "tech signals")
+        } catch (geminiError) {
+          console.error("[v0] Public Docs: Fallback Gemini analysis error:", geminiError)
+          const docSummary = documentSources.slice(0, 6).map(d => `${d.type}: ${d.title}`).join("; ")
+          digest = `Se encontraron ${documentSources.length} documentos públicos. No se pudo analizar el contenido.`
+        }
+      } else {
+        // No useful content available
+        const docSummary = documentSources.slice(0, 6).map(d => `${d.type}: ${d.title}`).join("; ")
+        digest = `Se encontraron ${documentSources.length} documentos públicos para ${companyName}. No se pudo extraer contenido para análisis de señales tech.`
+      }
     }
 
     // ── 7. Save documents to database ────────────────────────────
