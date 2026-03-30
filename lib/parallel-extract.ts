@@ -57,6 +57,8 @@ y menciona la sección/página donde se encontró.
 /**
  * Extract content from a URL using Parallel Extract API
  * With fallback strategies for failed extractions
+ * 
+ * NOTE: Parallel API expects `urls` (array) not `url` (singular)
  */
 export async function extractDocumentContent(
   options: ExtractOptions
@@ -64,10 +66,10 @@ export async function extractDocumentContent(
   const { url, objective = PUBLIC_DOCS_EXTRACTION_OBJECTIVE, timeout = 30000 } = options
 
   try {
-    // Attempt 1: Direct extraction via Parallel
+    // Attempt 1: Direct extraction via Parallel (using urls array as required by API)
     const result = await Promise.race([
       client.beta.extract({
-        url,
+        urls: [url], // API expects array of URLs
         objective,
       }),
       new Promise<never>((_, reject) =>
@@ -75,11 +77,14 @@ export async function extractDocumentContent(
       ),
     ])
 
+    // Result contains array of extracted documents
+    const extracted = result.results?.[0] ?? result
+
     return {
       url,
-      title: result.title ?? "Document",
-      content: result.content ?? "",
-      excerpts: result.excerpts ?? [],
+      title: extracted.title ?? "Document",
+      content: extracted.content ?? extracted.text ?? "",
+      excerpts: extracted.excerpts ?? [],
     }
   } catch (error) {
     console.warn(`[Parallel Extract] Failed for ${url}:`, error)
@@ -92,7 +97,7 @@ export async function extractDocumentContent(
 
         const htmlResult = await Promise.race([
           client.beta.extract({
-            url: htmlUrl,
+            urls: [htmlUrl], // API expects array
             objective,
           }),
           new Promise<never>((_, reject) =>
@@ -100,11 +105,13 @@ export async function extractDocumentContent(
           ),
         ])
 
+        const extracted = htmlResult.results?.[0] ?? htmlResult
+
         return {
           url: htmlUrl,
-          title: htmlResult.title ?? "Document",
-          content: htmlResult.content ?? "",
-          excerpts: htmlResult.excerpts ?? [],
+          title: extracted.title ?? "Document",
+          content: extracted.content ?? extracted.text ?? "",
+          excerpts: extracted.excerpts ?? [],
           fallback_used: true,
         }
       } catch (htmlError) {

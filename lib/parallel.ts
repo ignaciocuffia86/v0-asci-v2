@@ -143,44 +143,14 @@ export function buildImplementationsSearchParams(context: {
     ].slice(0, 5), // max 5 queries
     max_results: 10,
     source_policy: {
-      // Prioritize vendor/consultant domains
-      include_domains: [
-        "aws.amazon.com",
-        "customers.microsoft.com",
-        "azure.microsoft.com",
-        "cloud.google.com",
-        "sap.com",
-        "salesforce.com",
-        "oracle.com",
-        "accenture.com",
-        "deloitte.com",
-        "mckinsey.com",
-        "globant.com",
-        "ibm.com",
-        "servicenow.com",
-        "snowflake.com",
-        "databricks.com",
-        "tableau.com",
-      ],
-      // Exclude social, news media, and corporate documents (those go to other tabs)
+      // Exclude social and news media (keep under 10 domains to avoid API limits)
       exclude_domains: [
         "linkedin.com",
         "facebook.com",
         "twitter.com",
-        "x.com",
         "instagram.com",
-        "tiktok.com",
         "youtube.com",
-        "reuters.com",
-        "bloomberg.com",
-        "cnbc.com",
-        "forbes.com",
         "sec.gov", // SEC goes to public docs tab
-        // Corporate document sites (go to public docs tab)
-        "annualreports.com",
-        "sustainability-reports.com",
-        "globalreporting.org",
-        "unglobalcompact.org",
       ],
       after_date: afterDate,
     },
@@ -285,35 +255,13 @@ export function buildPublicDocsSearchParams(context: {
     search_queries: searchQueries.slice(0, 7), // Max 7 queries for bilingual coverage
     max_results: 12,
     source_policy: {
-      // Allow IR/corporate sites and financial data providers
-      include_domains: [
-        "seekingalpha.com", // Earnings transcripts
-        "fool.com", // Earnings transcripts
-        "annualreports.com",
-        // Note: Company IR sites are allowed by not being excluded
-      ],
-      // Exclude sources that belong to other tabs
+      // Minimal exclude list to stay under API limits
       exclude_domains: [
         "linkedin.com",
         "facebook.com",
         "twitter.com",
-        "x.com",
         "instagram.com",
         "youtube.com",
-        // Exclude news media (goes to news tab)
-        "reuters.com",
-        "bloomberg.com",
-        "cnbc.com",
-        "forbes.com",
-        "wsj.com",
-        "ft.com",
-        // Exclude vendors (goes to implementations tab)
-        "aws.amazon.com",
-        "customers.microsoft.com",
-        "salesforce.com",
-        "sap.com",
-        "accenture.com",
-        "deloitte.com",
       ],
       // Only documents from last 2 years
       after_date: afterDate,
