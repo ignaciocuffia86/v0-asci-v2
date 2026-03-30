@@ -26,6 +26,14 @@ import { toast } from "sonner"
 import { formatDistanceToNow } from "date-fns"
 import { es } from "date-fns/locale"
 
+interface TechSignal {
+  signal_type: "vendor_used" | "vendor_planned" | "tech_initiative" | "investment_planned"
+  name: string
+  confidence: "confirmed" | "likely" | "inferred"
+  context: string
+  source_quote: string
+}
+
 interface PublicDoc {
   id: string
   document_type: string
@@ -35,13 +43,16 @@ interface PublicDoc {
   source_url: string
   source_name: string | null
   ticker: string | null
+  content_extracted: boolean
   findings: Array<{
     category: string
     finding: string
     quote?: string
     source_section?: string
     relevance?: string
+    vendors_mentioned?: string[]
   }>
+  tech_signals: TechSignal[]
   digest: string | null
   created_at: string
 }
@@ -64,9 +75,24 @@ const DOC_TYPE_LABELS: Record<string, { label: string; icon: typeof FileText }> 
 
 const FINDING_CATEGORY_CONFIG: Record<string, { label: string; icon: typeof Target; color: string }> = {
   tech_investment: { label: "Inversión Tech", icon: Target, color: "text-blue-600 bg-blue-50 dark:bg-blue-950" },
+  vendor_mention: { label: "Vendor", icon: Building, color: "text-indigo-600 bg-indigo-50 dark:bg-indigo-950" },
+  digital_initiative: { label: "Iniciativa Digital", icon: Sparkles, color: "text-cyan-600 bg-cyan-50 dark:bg-cyan-950" },
   pain_point: { label: "Pain Point", icon: AlertTriangle, color: "text-amber-600 bg-amber-50 dark:bg-amber-950" },
   strategy: { label: "Estrategia", icon: Building, color: "text-purple-600 bg-purple-50 dark:bg-purple-950" },
   financial: { label: "Financiero", icon: DollarSign, color: "text-green-600 bg-green-50 dark:bg-green-950" },
+}
+
+const SIGNAL_TYPE_CONFIG: Record<string, { label: string; color: string; bgColor: string }> = {
+  vendor_used: { label: "Vendor Confirmado", color: "text-emerald-700", bgColor: "bg-emerald-100 dark:bg-emerald-900" },
+  vendor_planned: { label: "Vendor Planeado", color: "text-blue-700", bgColor: "bg-blue-100 dark:bg-blue-900" },
+  tech_initiative: { label: "Iniciativa Tech", color: "text-purple-700", bgColor: "bg-purple-100 dark:bg-purple-900" },
+  investment_planned: { label: "Inversión Planeada", color: "text-amber-700", bgColor: "bg-amber-100 dark:bg-amber-900" },
+}
+
+const CONFIDENCE_CONFIG: Record<string, { label: string; icon: string }> = {
+  confirmed: { label: "Confirmado", icon: "✓" },
+  likely: { label: "Probable", icon: "~" },
+  inferred: { label: "Inferido", icon: "?" },
 }
 
 interface CooldownInfo {
@@ -156,10 +182,13 @@ export function PublicDocsTab({ bookmarkId, companyId, companyName }: PublicDocs
       const result = await response.json()
       setIsPublicCompany(result.isPublic)
       
+      const signalsCount = result.techSignals?.length || 0
+      const findingsCount = result.totalFindings || 0
+      
       toast.success(
         result.isPublic
-          ? `Se encontraron ${result.docs?.length || 0} documentos públicos (empresa cotiza en bolsa)`
-          : `Se encontraron ${result.docs?.length || 0} documentos (empresa privada)`
+          ? `Se encontraron ${result.docs?.length || 0} documentos públicos${signalsCount > 0 ? ` con ${signalsCount} señales tech detectadas` : ""}`
+          : `Se encontraron ${result.docs?.length || 0} documentos (empresa privada)${signalsCount > 0 ? ` con ${signalsCount} señales tech` : ""}`
       )
 
       setCooldown({
@@ -193,6 +222,19 @@ export function PublicDocsTab({ bookmarkId, companyId, companyName }: PublicDocs
 
   const hasDocs = docs.length > 0
   const digest = docs.find(d => d.digest)?.digest
+  
+  // Collect all tech signals from docs (stored on first doc)
+  const techSignals: TechSignal[] = docs.flatMap(d => d.tech_signals || [])
+  
+  // Collect all findings from all docs
+  const allFindings = docs.flatMap(d => d.findings || [])
+  
+  // Group signals by type for display
+  const signalsByType = techSignals.reduce((acc, signal) => {
+    if (!acc[signal.signal_type]) acc[signal.signal_type] = []
+    acc[signal.signal_type].push(signal)
+    return acc
+  }, {} as Record<string, TechSignal[]>)
 
   // Group docs by type for better organization
   const groupedDocs = docs.reduce((acc, doc) => {
@@ -224,17 +266,109 @@ export function PublicDocsTab({ bookmarkId, companyId, companyName }: PublicDocs
         </p>
       </div>
 
+      {/* Tech Signals Section - Most Important */}
+      {techSignals.length > 0 && (
+        <Card className="border-indigo-200 bg-gradient-to-br from-indigo-50/80 to-purple-50/50 dark:from-indigo-950/30 dark:to-purple-950/20 dark:border-indigo-800">
+          <CardHeader className="py-3">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <Target className="h-4 w-4 text-indigo-600" />
+              Señales de Tecnología Detectadas
+              <Badge variant="secondary" className="ml-1">{techSignals.length}</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="py-0 pb-4 space-y-3">
+            {Object.entries(signalsByType).map(([signalType, signals]) => {
+              const config = SIGNAL_TYPE_CONFIG[signalType] || { label: signalType, color: "text-gray-700", bgColor: "bg-gray-100" }
+              
+              return (
+                <div key={signalType} className="space-y-2">
+                  <h4 className={`text-xs font-medium ${config.color}`}>{config.label}</h4>
+                  <div className="flex flex-wrap gap-2">
+                    {signals.map((signal, idx) => (
+                      <div
+                        key={idx}
+                        className={`group relative px-3 py-1.5 rounded-lg ${config.bgColor} cursor-help`}
+                        title={`${signal.context}\n\nCita: "${signal.source_quote}"`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className={`font-medium text-sm ${config.color}`}>
+                            {signal.name}
+                          </span>
+                          <span className="text-[10px] opacity-60">
+                            {CONFIDENCE_CONFIG[signal.confidence]?.icon || ""}
+                          </span>
+                        </div>
+                        {/* Tooltip on hover */}
+                        <div className="absolute hidden group-hover:block z-10 bottom-full left-0 mb-2 w-64 p-2 bg-popover border rounded-md shadow-lg text-xs">
+                          <p className="font-medium mb-1">{signal.context}</p>
+                          {signal.source_quote && (
+                            <p className="text-muted-foreground italic">"{signal.source_quote.slice(0, 150)}..."</p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Digest Card */}
       {digest && (
         <Card className="border-teal-200 bg-teal-50/50 dark:bg-teal-950/20 dark:border-teal-800">
           <CardHeader className="py-3">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
               <Sparkles className="h-4 w-4 text-teal-600" />
-              Documentos Encontrados
+              Resumen de Documentos
             </CardTitle>
           </CardHeader>
           <CardContent className="py-0 pb-3">
             <p className="text-sm text-muted-foreground">{digest}</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Key Findings Section */}
+      {allFindings.length > 0 && (
+        <Card>
+          <CardHeader className="py-3">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <AlertCircle className="h-4 w-4 text-amber-600" />
+              Hallazgos Clave
+              <Badge variant="secondary" className="ml-1">{allFindings.length}</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="py-0 pb-3 space-y-2">
+            {allFindings.slice(0, 6).map((finding, idx) => {
+              const catConfig = FINDING_CATEGORY_CONFIG[finding.category] || {
+                label: finding.category,
+                icon: Target,
+                color: "text-gray-600 bg-gray-50",
+              }
+              const FindingIcon = catConfig.icon
+
+              return (
+                <div key={idx} className="flex items-start gap-2 p-2 rounded-lg bg-muted/30">
+                  <Badge variant="secondary" className={`shrink-0 ${catConfig.color}`}>
+                    <FindingIcon className="h-3 w-3 mr-1" />
+                    {catConfig.label}
+                  </Badge>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm">{finding.finding}</p>
+                    {finding.quote && (
+                      <p className="text-xs text-muted-foreground mt-1 italic line-clamp-2">
+                        "{finding.quote}"
+                      </p>
+                    )}
+                  </div>
+                  {finding.relevance === "high" && (
+                    <Badge variant="destructive" className="text-[10px] shrink-0">Alta</Badge>
+                  )}
+                </div>
+              )
+            })}
           </CardContent>
         </Card>
       )}
@@ -351,6 +485,11 @@ export function PublicDocsTab({ bookmarkId, companyId, companyName }: PublicDocs
                               {doc.ticker && (
                                 <Badge variant="outline" className="text-[10px]">
                                   {doc.ticker}
+                                </Badge>
+                              )}
+                              {doc.content_extracted && (
+                                <Badge variant="secondary" className="text-[10px] bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">
+                                  Analizado
                                 </Badge>
                               )}
                             </div>

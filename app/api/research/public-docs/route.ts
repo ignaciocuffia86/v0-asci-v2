@@ -7,6 +7,11 @@ import {
   getCompanyFilings,
   mapSECFormToDocumentType,
 } from "@/lib/sec-edgar"
+import {
+  extractMultipleDocuments,
+  prioritizeAndLimitUrls,
+  PUBLIC_DOCS_EXTRACTION_OBJECTIVE,
+} from "@/lib/parallel-extract"
 import { GoogleGenerativeAI } from "@google/generative-ai"
 
 const DOCS_CACHE_DAYS = 30 // Refresh at most once per month
@@ -15,27 +20,27 @@ const MAX_DOCS = 10
 // ── Gemini structuring for public documents ─────────────────────────────
 const GEMINI_SYSTEM = `Eres un analista de inversiones B2B especializado en analizar documentos públicos de empresas.
 Se te dan excerpts de reportes anuales, reportes de sostenibilidad, transcripciones de earnings calls, y filings de SEC.
-Tu tarea es extraer información relevante para un vendedor B2B que quiere entender a esta empresa.
+Tu tarea es extraer SEÑALES DE INVERSIÓN TECNOLÓGICA y VENDORS para un vendedor B2B.
 
-REGLAS:
+REGLAS CRÍTICAS:
 1. Responde UNICAMENTE con JSON válido (sin markdown, sin texto extra).
 2. SIEMPRE cita el texto original entre comillas cuando extraigas un hallazgo.
 3. Indica la sección/página/fuente de cada hallazgo cuando sea posible.
-4. Enfócate en señales de inversión tecnológica, pain points, y estrategia corporativa.
-5. Si no hay información relevante, devuelve {"findings":[], "digest": null}
+4. PRIORIZA menciones de vendors específicos, tecnologías nombradas, y montos de inversión.
+5. Si no hay información relevante, devuelve {"findings":[], "tech_signals": [], "digest": null}
 
-CATEGORÍAS de hallazgos válidas:
+CATEGORÍAS de hallazgos:
 - tech_investment: Inversiones en tecnología, CAPEX IT, proyectos de modernización
-- pain_point: Desafíos, riesgos, problemas operativos, deuda técnica
-- strategy: Prioridades estratégicas, planes de expansión, M&A
-- financial: KPIs, guidance, métricas financieras relevantes
+- vendor_mention: Menciones de vendors específicos (SAP, AWS, Microsoft, Oracle, Salesforce, etc.)
+- digital_initiative: Proyectos de transformación digital, cloud, AI, automation
+- pain_point: Desafíos, riesgos tecnológicos, deuda técnica, sistemas legacy
+- strategy: Prioridades estratégicas relacionadas con tecnología
 
-ADEMAS de los hallazgos, genera un "digest" de EXACTAMENTE 1 párrafo (2-4 oraciones) en ESPAÑOL que resuma:
-- Inversiones o planes tecnológicos detectados
-- Desafíos operativos o pain points mencionados
-- Oportunidades para un vendedor B2B
-
-El digest debe responder: "¿Qué dice la empresa oficialmente sobre sus prioridades y desafíos?"
+SEÑALES TECH que debes buscar activamente:
+- Nombres de VENDORS: SAP, Oracle, Salesforce, Microsoft, AWS, Google Cloud, ServiceNow, Workday, etc.
+- Tecnologías: ERP, CRM, cloud migration, AI/ML, RPA, data analytics, cybersecurity
+- Proyectos: transformación digital, modernización, migración, integración
+- Inversiones: CAPEX IT, budget tecnológico, contrataciones IT
 
 FORMATO JSON:
 {
@@ -43,16 +48,38 @@ FORMATO JSON:
     {
       "category": "string (una de las categorías válidas)",
       "finding": "string (descripción del hallazgo en español)",
-      "quote": "string (cita textual del documento original)",
+      "quote": "string (cita textual del documento original - OBLIGATORIO)",
       "source_section": "string o null (sección/página donde se encontró)",
-      "relevance": "high | medium | low"
+      "relevance": "high | medium | low",
+      "vendors_mentioned": ["string"] // lista de vendors mencionados (si aplica)
     }
   ],
-  "digest": "string (párrafo resumen en ESPAÑOL) o null"
-}`
+  "tech_signals": [
+    {
+      "signal_type": "vendor_used | vendor_planned | tech_initiative | investment_planned",
+      "name": "string (nombre del vendor o tecnología)",
+      "confidence": "confirmed | likely | inferred",
+      "context": "string (contexto breve de cómo se menciona)",
+      "source_quote": "string (cita que respalda la señal)"
+    }
+  ],
+  "digest": "string (2-3 oraciones en ESPAÑOL) o null"
+}
+
+El digest debe responder: "¿Qué vendors/tecnologías usa esta empresa y qué proyectos tech tiene planeados?"
+SOLO incluye señales con evidencia REAL en el texto. NO inventes ni infieras sin cita.`
+
+interface TechSignal {
+  signal_type: "vendor_used" | "vendor_planned" | "tech_initiative" | "investment_planned"
+  name: string
+  confidence: "confirmed" | "likely" | "inferred"
+  context: string
+  source_quote: string
+}
 
 interface GeminiDocsResult {
   findings: any[]
+  tech_signals: TechSignal[]
   digest: string | null
 }
 
@@ -66,10 +93,11 @@ async function structureDocumentsWithGemini(
   const genAI = new GoogleGenerativeAI(apiKey)
   const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" })
 
+  // Build detailed excerpt text with more content for better analysis
   const excerptText = excerpts
     .map(
       (e, i) =>
-        `--- Documento ${i + 1}: ${e.title} [tipo: ${e.type}] (${e.url}) ---\n${e.content.slice(0, 8000)}`
+        `--- Documento ${i + 1}: ${e.title} [tipo: ${e.type}] (${e.url}) ---\n${e.content.slice(0, 12000)}`
     )
     .join("\n\n")
 
@@ -79,14 +107,14 @@ async function structureDocumentsWithGemini(
         role: "user",
         parts: [
           {
-            text: `${GEMINI_SYSTEM}\n\n---\nEmpresa: "${companyName}"\n\nExcerpts de documentos públicos:\n\n${excerptText}\n\nExtrae los hallazgos relevantes en JSON.`,
+            text: `${GEMINI_SYSTEM}\n\n---\nEmpresa: "${companyName}"\n\nExcerpts de documentos públicos:\n\n${excerptText}\n\nExtrae los hallazgos relevantes y SEÑALES TECH en JSON. PRIORIZA encontrar vendors específicos mencionados.`,
           },
         ],
       },
     ],
     generationConfig: {
       temperature: 0.2,
-      maxOutputTokens: 6000,
+      maxOutputTokens: 8000,
       responseMimeType: "application/json",
     },
   })
@@ -95,6 +123,7 @@ async function structureDocumentsWithGemini(
   const parsed = JSON.parse(text)
   return {
     findings: parsed.findings ?? [],
+    tech_signals: parsed.tech_signals ?? [],
     digest: parsed.digest ?? null,
   }
 }
@@ -362,52 +391,112 @@ export async function POST(request: Request) {
       })
     }
 
-    // ── 5. Extract content and structure with Gemini ─────────────
-    // For now, we'll use search excerpts directly (parallel-extract would need more setup)
-    // In production, you'd use extractMultipleDocuments from lib/parallel-extract.ts
+    // ── 5. Extract content from documents using Parallel Extract ─────────────
+    // Prioritize and limit URLs for extraction (max 6 docs, diverse types)
+    const prioritizedDocs = prioritizeAndLimitUrls(documentSources, 6)
+    console.log("[v0] Public Docs: Extracting content from", prioritizedDocs.length, "prioritized documents...")
 
-    console.log("[v0] Public Docs: Structuring", documentSources.length, "documents with Gemini...")
+    // Extract content from documents
+    let extractedDocs: { url: string; title: string; content: string; type: string; date?: string; excerpts: string[] }[] = []
+    
+    try {
+      const extractionResults = await extractMultipleDocuments(prioritizedDocs, {
+        objective: PUBLIC_DOCS_EXTRACTION_OBJECTIVE,
+        maxConcurrent: 3,
+        timeout: 45000,
+      })
 
-    // Prepare excerpts for Gemini
-    const excerpts = documentSources.slice(0, 8).map((doc) => ({
-      url: doc.url,
-      title: doc.title,
-      type: doc.type,
-      content: `[Documento: ${doc.title}]\nTipo: ${doc.type}\nURL: ${doc.url}`,
-    }))
+      // Process extraction results
+      for (const result of extractionResults) {
+        if (result.content && result.content.length > 100) {
+          extractedDocs.push({
+            url: result.url,
+            title: result.title,
+            content: result.content,
+            type: result.type,
+            date: result.date,
+            excerpts: result.excerpts,
+          })
+          console.log("[v0] Public Docs: Extracted", result.title, "-", result.content.length, "chars")
+        } else if (result.error) {
+          console.warn("[v0] Public Docs: Failed to extract", result.url, "-", result.error)
+        }
+      }
+    } catch (extractionError) {
+      console.error("[v0] Public Docs: Extraction error:", extractionError)
+    }
 
-    // If we have parallel search results with excerpts, use those
-    // (In a full implementation, we'd extract PDF content here)
-
+    // ── 6. Structure with Gemini to find tech signals ─────────────
     let findings: any[] = []
+    let techSignals: TechSignal[] = []
     let digest: string | null = null
 
-    // Since we can't extract PDFs directly in this simple version,
-    // we'll note that documents exist and let the user view them
-    // The digest will explain what's available
+    if (extractedDocs.length > 0) {
+      console.log("[v0] Public Docs: Analyzing", extractedDocs.length, "documents with Gemini for tech signals...")
 
-    const docSummary = documentSources.slice(0, 8).map(d => `${d.type}: ${d.title}`).join("; ")
-    digest = `Se encontraron ${documentSources.length} documentos públicos para ${companyName}: ${docSummary.slice(0, 200)}...`
+      try {
+        const geminiResult = await structureDocumentsWithGemini(extractedDocs, companyName)
+        findings = geminiResult.findings
+        techSignals = geminiResult.tech_signals
+        digest = geminiResult.digest
 
-    // ── 6. Save documents to database ────────────────────────────
-    const docsToInsert = documentSources.slice(0, MAX_DOCS).map((doc, idx) => ({
-      company_id: companyId,
-      bookmark_id: bookmarkId,
-      user_id: user.id,
-      requested_by: user.id,
-      requested_at: new Date().toISOString(),
-      document_type: doc.type,
-      document_title: doc.title,
-      document_date: doc.date || null,
-      source_url: doc.url,
-      source_name: doc.url.includes("sec.gov") ? "SEC EDGAR" : new URL(doc.url).hostname,
-      ticker: ticker || null,
-      findings: findings.length > 0 ? findings : [],
-      digest: idx === 0 ? digest : null,
-      digest_generated_at: idx === 0 && digest ? new Date().toISOString() : null,
-      ai_provider: "gemini-2.0-flash",
-      extraction_method: "search_metadata",
-    }))
+        console.log("[v0] Public Docs: Gemini found", findings.length, "findings and", techSignals.length, "tech signals")
+      } catch (geminiError) {
+        console.error("[v0] Public Docs: Gemini analysis error:", geminiError)
+        // Fallback digest
+        const docSummary = extractedDocs.map(d => `${d.type}: ${d.title}`).join("; ")
+        digest = `Se encontraron ${documentSources.length} documentos públicos. Documentos analizados: ${docSummary.slice(0, 200)}...`
+      }
+    } else {
+      // No content extracted - use metadata only
+      const docSummary = documentSources.slice(0, 6).map(d => `${d.type}: ${d.title}`).join("; ")
+      digest = `Se encontraron ${documentSources.length} documentos públicos para ${companyName}. No se pudo extraer contenido para análisis de señales tech.`
+    }
+
+    // ── 7. Save documents to database ────────────────────────────
+    // Create a map of extracted content and findings per URL
+    const extractedContentMap = new Map(extractedDocs.map(d => [d.url, d]))
+    
+    // Distribute findings to their respective documents based on source mentions
+    const findingsPerDoc: Map<string, any[]> = new Map()
+    for (const finding of findings) {
+      // Try to match finding to a document
+      const matchedDoc = extractedDocs.find(doc => 
+        finding.source_section?.toLowerCase().includes(doc.type.toLowerCase()) ||
+        finding.quote?.toLowerCase().includes(doc.title.toLowerCase().slice(0, 30))
+      )
+      if (matchedDoc) {
+        const existing = findingsPerDoc.get(matchedDoc.url) || []
+        existing.push(finding)
+        findingsPerDoc.set(matchedDoc.url, existing)
+      }
+    }
+
+    const docsToInsert = documentSources.slice(0, MAX_DOCS).map((doc, idx) => {
+      const extracted = extractedContentMap.get(doc.url)
+      const docFindings = findingsPerDoc.get(doc.url) || []
+      
+      return {
+        company_id: companyId,
+        bookmark_id: bookmarkId,
+        user_id: user.id,
+        requested_by: user.id,
+        requested_at: new Date().toISOString(),
+        document_type: doc.type,
+        document_title: doc.title,
+        document_date: doc.date || null,
+        source_url: doc.url,
+        source_name: doc.url.includes("sec.gov") ? "SEC EDGAR" : new URL(doc.url).hostname,
+        ticker: ticker || null,
+        findings: docFindings,
+        tech_signals: idx === 0 ? techSignals : [], // Store all tech signals on first doc
+        digest: idx === 0 ? digest : null,
+        digest_generated_at: idx === 0 && digest ? new Date().toISOString() : null,
+        ai_provider: "gemini-2.0-flash",
+        extraction_method: extracted ? "parallel_extract" : "search_metadata",
+        content_extracted: !!extracted,
+      }
+    })
 
     console.log("[v0] Public Docs: Inserting", docsToInsert.length, "documents")
 
@@ -425,7 +514,7 @@ export async function POST(request: Request) {
       console.error("[v0] Public Docs: Error inserting:", insertError)
     }
 
-    // ── 7. Return results ────────────────────────────────────────
+    // ── 8. Return results ────────────────────────────────────────
     const { data: allDocs } = await supabase
       .from("company_public_docs")
       .select("*")
@@ -444,6 +533,8 @@ export async function POST(request: Request) {
       canRefresh: freshCacheResult.canRefresh,
       lastSearchDate: freshCacheResult.lastSearchDate,
       daysUntilRefresh: freshCacheResult.daysUntilRefresh,
+      techSignals: techSignals, // Include tech signals in response
+      totalFindings: findings.length,
     })
   } catch (error) {
     console.error("[v0] Public Docs: Error in POST handler:", error)
