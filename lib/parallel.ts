@@ -132,12 +132,13 @@ export function buildImplementationsSearchParams(context: {
       `Microsoft (customers.microsoft.com), SAP (sap.com/customers), Salesforce (salesforce.com/customer-success-stories), ` +
       `Oracle, Google Cloud, Accenture, Deloitte, McKinsey, Globant, etc. ` +
       `NO busco noticias de prensa general - esas van en la pestaña de Noticias. ` +
+      `NO busco reportes de sostenibilidad, memorias anuales ni documentos corporativos - esos van en otra pestaña. ` +
       `Quiero saber: qué tecnología implementaron, qué problema resolvieron, qué resultados obtuvieron.`,
     search_queries: [
       `"${context.company_name}" customer success story case study`,
-      `"${context.company_name}" cliente caso de éxito implementación`,
-      `"${context.company_name}" AWS Azure Google Cloud customer story`,
-      `"${context.company_name}" SAP Salesforce Oracle customer reference`,
+      `"${context.company_name}" cliente caso de éxito implementación vendor`,
+      `"${context.company_name}" AWS Azure Google Cloud Microsoft customer story`,
+      `"${context.company_name}" SAP Salesforce Oracle implementation case study`,
       ...techQueries,
     ].slice(0, 5), // max 5 queries
     max_results: 10,
@@ -161,7 +162,7 @@ export function buildImplementationsSearchParams(context: {
         "databricks.com",
         "tableau.com",
       ],
-      // Exclude social and news media (news goes to news tab)
+      // Exclude social, news media, and corporate documents (those go to other tabs)
       exclude_domains: [
         "linkedin.com",
         "facebook.com",
@@ -175,6 +176,11 @@ export function buildImplementationsSearchParams(context: {
         "cnbc.com",
         "forbes.com",
         "sec.gov", // SEC goes to public docs tab
+        // Corporate document sites (go to public docs tab)
+        "annualreports.com",
+        "sustainability-reports.com",
+        "globalreporting.org",
+        "unglobalcompact.org",
       ],
       after_date: afterDate,
     },

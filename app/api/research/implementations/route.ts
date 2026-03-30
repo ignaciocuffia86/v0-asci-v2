@@ -9,36 +9,49 @@ const MAX_IMPLEMENTATIONS = 10
 // ── Gemini structuring ─────────────────────────────────────────────────
 const GEMINI_SYSTEM = `Eres un investigador de implementaciones tecnologicas e innovacion empresarial.
 Se te dan excerpts de paginas web sobre proyectos, casos de exito e implementaciones tecnologicas de una empresa.
-Tu tarea es extraer implementaciones y casos de exito relevantes.
+Tu tarea es extraer SOLO implementaciones con EVIDENCIA CONCRETA.
 
-REGLAS:
+REGLAS CRITICAS:
 1. Responde UNICAMENTE con JSON valido (sin markdown, sin texto extra).
 2. Resume con TUS PROPIAS PALABRAS, NO copies texto literal.
 3. Maximo 10 implementaciones. Prioriza calidad y evidencia fuerte.
 4. Si no hay implementaciones relevantes, devuelve {"implementations":[], "digest": null}
 5. Las fechas deben ser YYYY-MM-DD. Si no hay fecha exacta, intenta inferirla. Si es imposible, usa null.
 
-EVIDENCE LEVELS:
-- strong: Case study oficial, comunicado de prensa del vendor, announcement oficial
-- medium: Articulo con fuentes nombradas, LinkedIn post de ejecutivos, industry report
-- weak: Mencion indirecta, partnership announcement, inferencia de uso de tecnologia
+IMPORTANTE - QUE NO INCLUIR:
+- NO incluyas implementaciones INFERIDAS sin evidencia directa
+- NO extraigas informacion de reportes de sostenibilidad, memorias anuales o documentos corporativos generales
+- NO inventes tecnologias si el texto no las menciona explicitamente
+- Si la fuente es un reporte corporativo generico (sustainability report, annual report, memoria anual), IGNORALA
+- Si solo hay una mencion vaga o generica de "digitalizacion" o "transformacion digital" sin nombrar tecnologia especifica, NO la incluyas
+
+SOLO incluir si:
+- Es un case study oficial de un vendor (AWS, SAP, Microsoft, etc.)
+- Es un comunicado de prensa que menciona especificamente la tecnologia implementada
+- Hay evidencia directa con nombre de vendor/tecnologia y descripcion del proyecto
+
+EVIDENCE LEVELS (se estricto):
+- strong: Case study oficial de vendor, comunicado de prensa con detalles especificos
+- medium: Articulo de prensa tech con fuentes nombradas, noticia con detalles concretos
+- weak: SOLO usar si hay mencion EXPLICITA de la tecnologia, NO para inferencias
 
 AREAS validas: finanzas | ventas | logistica | rrhh | it | ciberseguridad | ecommerce | operaciones
 
-ADEMAS de las implementaciones, genera un "digest" de EXACTAMENTE 1 parrafo (2-4 oraciones) en ESPAÑOL que resuma:
-- Que tecnologias/vendors usa la empresa
+ADEMAS de las implementaciones (solo si hay alguna con evidencia real), genera un "digest" de EXACTAMENTE 1 parrafo (2-4 oraciones) en ESPAÑOL que resuma:
+- Que tecnologias/vendors usa la empresa (SOLO si hay evidencia concreta)
 - Que tipo de proyectos ha implementado recientemente
 - Como pueden usar esta info los vendedores para posicionarse
 
 El digest debe responder: "¿Con quien compito si quiero venderle a esta empresa?"
+Si no hay implementaciones con evidencia real, devuelve digest: null
 
 FORMATO JSON:
 {
   "implementations": [
     {
       "title": "string (titulo descriptivo del caso/proyecto)",
-      "provider_name": "string (vendor/consultora que implemento)",
-      "technology": "string (tecnologia implementada)",
+      "provider_name": "string (vendor/consultora que implemento - debe estar EXPLICITO en la fuente)",
+      "technology": "string (tecnologia implementada - debe estar EXPLICITA en la fuente)",
       "area": "string (area de la empresa)",
       "summary": "string (descripcion del caso en 2-3 oraciones)",
       "results": "string o null (resultados obtenidos si estan disponibles)",
@@ -47,12 +60,40 @@ FORMATO JSON:
       "published_at": "YYYY-MM-DD o null"
     }
   ],
-  "digest": "string (parrafo resumen en ESPAÑOL) o null si no hay implementaciones relevantes"
+  "digest": "string (parrafo resumen en ESPAÑOL) o null si no hay implementaciones con evidencia real"
 }`
 
 interface GeminiImplResult {
   implementations: any[]
   digest: string | null
+}
+
+// URLs and patterns that indicate corporate documents (should go to public docs tab)
+const CORPORATE_DOC_PATTERNS = [
+  /sustainability/i,
+  /sostenibilidad/i,
+  /sustentabilidad/i,
+  /annual.?report/i,
+  /memoria.?anual/i,
+  /informe.?anual/i,
+  /investor.?relations/i,
+  /relaciones.?con.?inversionistas/i,
+  /esg.?report/i,
+  /reporte.?integrado/i,
+  /financial.?report/i,
+  /reporte.?financiero/i,
+  /10-k/i,
+  /10-q/i,
+  /8-k/i,
+  /sec.?filing/i,
+]
+
+/**
+ * Check if a URL or title indicates a corporate document that should be excluded
+ */
+function isCorporateDocument(url: string, title: string): boolean {
+  const combined = `${url} ${title}`.toLowerCase()
+  return CORPORATE_DOC_PATTERNS.some(pattern => pattern.test(combined))
 }
 
 async function structureImplementationsWithGemini(
@@ -352,8 +393,23 @@ export async function POST(request: Request) {
       console.log("[v0] Implementations: Parallel returned", searchResult.results.length, "results")
 
       if (searchResult.results.length > 0) {
+        // Filter out corporate documents (sustainability reports, annual reports, etc.)
+        const filteredResults = searchResult.results.filter(r => {
+          const isCorpDoc = isCorporateDocument(r.url, r.title)
+          if (isCorpDoc) {
+            console.log("[v0] Implementations: Filtered out corporate document:", r.url)
+          }
+          return !isCorpDoc
+        })
+        
+        console.log("[v0] Implementations: After filtering corporate docs:", filteredResults.length, "results")
+        
+        // If all results were filtered out, skip Gemini processing
+        if (filteredResults.length === 0) {
+          console.log("[v0] Implementations: All results were corporate docs, skipping Gemini")
+        } else {
         // Prepare excerpts for Gemini structuring
-        const excerpts = searchResult.results.map(r => ({
+        const excerpts = filteredResults.map(r => ({
           url: r.url,
           title: r.title,
           publish_date: r.publish_date,
@@ -365,13 +421,13 @@ export async function POST(request: Request) {
         const { implementations: structured, digest } = await structureImplementationsWithGemini(excerpts, companyName, keywords)
         console.log("[v0] Implementations: Gemini structured", structured.length, "items, digest:", digest ? "generated" : "none")
 
-        // Map structured items back to source URLs from Parallel
+        // Map structured items back to source URLs from Parallel (using filtered results)
         implementations = structured.slice(0, MAX_IMPLEMENTATIONS).map((item: any, idx: number) => {
-          const matchingResult = searchResult.results.find(r =>
+          const matchingResult = filteredResults.find(r =>
             r.title.toLowerCase().includes((item.title || "").toLowerCase().slice(0, 30)) ||
             (item.source_name && r.url.toLowerCase().includes(item.source_name.toLowerCase().replace(/\s/g, "")))
           )
-          const sourceResult = matchingResult || searchResult.results[idx] || searchResult.results[0]
+          const sourceResult = matchingResult || filteredResults[idx] || filteredResults[0]
 
           return {
             title: item.title,
@@ -386,6 +442,7 @@ export async function POST(request: Request) {
             published_at: sanitizeDate(item.published_at) || sanitizeDate(sourceResult?.publish_date),
           }
         })
+        } // end else (filteredResults.length > 0)
       }
     } catch (parallelError) {
       console.error("[v0] Implementations: Parallel search error:", parallelError)
