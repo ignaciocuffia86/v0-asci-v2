@@ -265,26 +265,46 @@ export async function POST(request: Request) {
     let ticker = company.ticker
     let cik = company.cik
 
+    // Get company country - SEC only has US companies (and some ADRs with explicit tickers)
+    const companyCountry = (company.country || "").toLowerCase().trim()
+    const isUSCompany = !companyCountry || 
+                        companyCountry === "us" || 
+                        companyCountry === "usa" || 
+                        companyCountry === "united states" || 
+                        companyCountry === "estados unidos"
+
     // If we don't know yet, try to detect
     if (isPublicCompany === null || isPublicCompany === undefined) {
-      console.log("[v0] Public Docs: Checking if company is public...")
+      console.log("[v0] Public Docs: Checking if company is public... (country:", companyCountry || "unknown", ", isUS:", isUSCompany, ")")
 
-      // Try ticker first if available
+      // Only search SEC if:
+      // 1. Company has an explicit ticker (could be ADR), OR
+      // 2. Company is from US or country is unknown
+      
+      // Try ticker first if available (works for ADRs too)
       if (ticker) {
         cik = await getCIKByTicker(ticker)
         if (cik) {
           isPublicCompany = true
+          console.log("[v0] Public Docs: Found CIK by ticker:", cik)
         }
       }
 
-      // Try company name search
-      if (!cik) {
+      // Only try company name search for US companies or unknown country
+      // This prevents false matches like "Pluspetrol" -> "US Bancorp"
+      if (!cik && isUSCompany) {
+        console.log("[v0] Public Docs: Searching SEC by company name (US company)...")
         const secResult = await searchSECByCompanyName(companyName)
         if (secResult) {
           isPublicCompany = true
           cik = secResult.cik
           ticker = secResult.ticker ?? ticker
+          console.log("[v0] Public Docs: SEC match found:", secResult.name, "CIK:", cik)
         }
+      } else if (!cik && !isUSCompany) {
+        // Non-US company without ticker - mark as private (for SEC purposes)
+        console.log("[v0] Public Docs: Non-US company without ticker, skipping SEC search")
+        isPublicCompany = false
       }
 
       // Update company record with public status
@@ -298,7 +318,7 @@ export async function POST(request: Request) {
         })
         .eq("id", companyId)
 
-      console.log("[v0] Public Docs: Company is", isPublicCompany ? "PUBLIC" : "PRIVATE", "| CIK:", cik)
+      console.log("[v0] Public Docs: Company is", isPublicCompany ? "PUBLIC (SEC)" : "PRIVATE/Non-US", "| CIK:", cik || "none")
     }
 
     // ── 3. Gather document sources ───────────────────────────────
@@ -337,11 +357,36 @@ export async function POST(request: Request) {
       const searchResult = await parallelSearch(parallelParams)
       console.log("[v0] Public Docs: Parallel returned", searchResult.results.length, "results")
 
+      // Normalize company name for matching (remove suffixes, lowercase)
+      const companyNameNormalized = companyName
+        .toLowerCase()
+        .replace(/\s+(inc\.?|corp\.?|ltd\.?|llc\.?|s\.?a\.?|s\.?r\.?l\.?|plc\.?)$/i, "")
+        .replace(/[,\.]/g, "")
+        .trim()
+      const companyNameWords = companyNameNormalized.split(/\s+/).filter(w => w.length > 2)
+
       for (const result of searchResult.results) {
-        // Determine document type from URL/title
         const urlLower = result.url.toLowerCase()
         const titleLower = result.title.toLowerCase()
+        const excerptText = (result.excerpts || []).join(" ").toLowerCase()
+        
+        // VALIDATION: Check if this result actually relates to our company
+        // Must have company name (or significant parts) in title, URL, or excerpts
+        const combinedText = `${urlLower} ${titleLower} ${excerptText}`
+        
+        // Count how many significant words from company name appear
+        const matchingWords = companyNameWords.filter(word => combinedText.includes(word))
+        const matchRatio = matchingWords.length / companyNameWords.length
+        
+        // Require at least 50% of company name words to match, or exact match of first word
+        const hasCompanyMatch = matchRatio >= 0.5 || combinedText.includes(companyNameWords[0])
+        
+        if (!hasCompanyMatch) {
+          console.log("[v0] Public Docs: Skipping unrelated result:", result.title.slice(0, 60), "- no company match")
+          continue
+        }
 
+        // Determine document type from URL/title
         let docType = "financial"
         if (urlLower.includes("sustainability") || titleLower.includes("sustain") || titleLower.includes("esg")) {
           docType = "sustainability"
@@ -350,6 +395,23 @@ export async function POST(request: Request) {
         } else if (titleLower.includes("earnings") || titleLower.includes("call") || titleLower.includes("transcript")) {
           docType = "earnings_call"
         }
+
+        // Avoid duplicates
+        if (!documentSources.some((d) => d.url === result.url)) {
+          documentSources.push({
+            url: result.url,
+            title: result.title,
+            type: docType,
+            date: result.publish_date ?? undefined,
+            excerpts: result.excerpts ?? [], // Include search excerpts for fallback analysis
+          })
+        }
+      }
+      
+      console.log("[v0] Public Docs: After validation,", documentSources.length, "documents match company")
+    } catch (parallelError) {
+      console.error("[v0] Public Docs: Parallel search error:", parallelError)
+    }
 
                 // Avoid duplicates
                 if (!documentSources.some((d) => d.url === result.url)) {
