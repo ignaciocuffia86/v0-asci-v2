@@ -357,32 +357,54 @@ export async function POST(request: Request) {
       const searchResult = await parallelSearch(parallelParams)
       console.log("[v0] Public Docs: Parallel returned", searchResult.results.length, "results")
 
-      // Normalize company name for matching (remove suffixes, lowercase)
+      // Normalize company name for matching - STRICT validation
       const companyNameNormalized = companyName
         .toLowerCase()
         .replace(/\s+(inc\.?|corp\.?|ltd\.?|llc\.?|s\.?a\.?|s\.?r\.?l\.?|plc\.?)$/i, "")
         .replace(/[,\.]/g, "")
         .trim()
-      const companyNameWords = companyNameNormalized.split(/\s+/).filter(w => w.length > 2)
+      
+      // For single-word company names, require exact match
+      // For multi-word names, require the full name or significant portion
+      const isSingleWord = !companyNameNormalized.includes(" ")
 
       for (const result of searchResult.results) {
         const urlLower = result.url.toLowerCase()
         const titleLower = result.title.toLowerCase()
         const excerptText = (result.excerpts || []).join(" ").toLowerCase()
         
-        // VALIDATION: Check if this result actually relates to our company
-        // Must have company name (or significant parts) in title, URL, or excerpts
+        // STRICT VALIDATION: Check if this result actually relates to our company
         const combinedText = `${urlLower} ${titleLower} ${excerptText}`
         
-        // Count how many significant words from company name appear
-        const matchingWords = companyNameWords.filter(word => combinedText.includes(word))
-        const matchRatio = matchingWords.length / companyNameWords.length
+        let hasCompanyMatch = false
         
-        // Require at least 50% of company name words to match, or exact match of first word
-        const hasCompanyMatch = matchRatio >= 0.5 || combinedText.includes(companyNameWords[0])
+        if (isSingleWord) {
+          // For single-word names like "Pluspetrol", require EXACT word match
+          // Use word boundary matching to avoid "petrol" matching "Pluspetrol"
+          const wordBoundaryRegex = new RegExp(`\\b${companyNameNormalized}\\b`, "i")
+          hasCompanyMatch = wordBoundaryRegex.test(combinedText)
+          
+          // Also check if the URL contains the company name as a domain/path segment
+          const urlContainsCompany = urlLower.includes(companyNameNormalized) || 
+                                      urlLower.includes(companyNameNormalized.replace(/\s/g, ""))
+          
+          if (!hasCompanyMatch && urlContainsCompany) {
+            hasCompanyMatch = true
+          }
+        } else {
+          // For multi-word names, check for full name match or domain match
+          const fullNameMatch = combinedText.includes(companyNameNormalized)
+          const domainMatch = urlLower.includes(companyNameNormalized.replace(/\s/g, ""))
+          
+          // Also check if all significant words appear close together
+          const words = companyNameNormalized.split(/\s+/).filter(w => w.length > 2)
+          const allWordsPresent = words.every(word => combinedText.includes(word))
+          
+          hasCompanyMatch = fullNameMatch || domainMatch || (allWordsPresent && words.length > 1)
+        }
         
         if (!hasCompanyMatch) {
-          console.log("[v0] Public Docs: Skipping unrelated result:", result.title.slice(0, 60), "- no company match")
+          console.log("[v0] Public Docs: Skipping unrelated result:", result.title.slice(0, 60), "- no company match for", companyNameNormalized)
           continue
         }
 
@@ -409,21 +431,6 @@ export async function POST(request: Request) {
       }
       
       console.log("[v0] Public Docs: After validation,", documentSources.length, "documents match company")
-    } catch (parallelError) {
-      console.error("[v0] Public Docs: Parallel search error:", parallelError)
-    }
-
-                // Avoid duplicates
-                if (!documentSources.some((d) => d.url === result.url)) {
-                  documentSources.push({
-                    url: result.url,
-                    type: docType,
-                    title: result.title,
-                    date: result.publish_date ?? undefined,
-                    excerpts: result.excerpts ?? [], // Include search excerpts for fallback analysis
-                  })
-                }
-      }
     } catch (parallelError) {
       console.error("[v0] Public Docs: Parallel search error:", parallelError)
     }
