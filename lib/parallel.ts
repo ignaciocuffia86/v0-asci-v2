@@ -266,19 +266,26 @@ export function buildPublicDocsSearchParams(context: {
     }
   }
 
+  // Build exclusion hint for similar company names
+  const similarCompanyWarning = context.company_name.toLowerCase().includes("caja")
+    ? ` EXCLUIR documentos de: Caja Arequipa, Caja Cusco, Caja Huancayo, Caja Piura, Caja Trujillo, Caja Tacna - estas son OTRAS empresas diferentes.`
+    : context.company_name.toLowerCase().includes("banco")
+    ? ` EXCLUIR documentos de otros bancos que no sean exactamente "${context.company_name}".`
+    : ""
+
   return {
     objective:
-      `Busco DOCUMENTOS OFICIALES publicados directamente por la empresa "${context.company_name}"${tickerNote}: ` +
-      `${sourceDescriptions.join(", ")}.${languageNote} ` +
-      `SOLO documentos publicados por la empresa en su sitio de investor relations, su página corporativa, o comunicados oficiales. ` +
-      `IMPORTANTE: El documento DEBE mencionar explícitamente a "${context.company_name}" en su contenido. ` +
-      `NO busco artículos de prensa que HABLAN SOBRE reportes - busco los documentos ORIGINALES. ` +
-      `NO busco case studies de vendors - esos van en otra pestaña. ` +
-      `NO incluir documentos de OTRAS empresas aunque tengan nombres similares. ` +
-      `Años de interés: ${year} y ${prevYear}. ` +
-      `IMPORTANTE: Solo documentos publicados en los últimos 2 años (desde ${afterDate}).`,
+      `Busco DOCUMENTOS OFICIALES publicados ÚNICAMENTE por la empresa "${context.company_name}"${tickerNote}. ` +
+      `Tipos de documentos: ${sourceDescriptions.join(", ")}.${languageNote} ` +
+      `REQUISITOS ESTRICTOS: ` +
+      `1) El documento DEBE ser publicado por "${context.company_name}" (no sobre ella). ` +
+      `2) El título o URL DEBE contener "${context.company_name}" o su nombre comercial. ` +
+      `3) NO incluir documentos de empresas con nombres SIMILARES pero DIFERENTES.${similarCompanyWarning} ` +
+      `4) Sitios válidos: investor relations, página corporativa, reguladores financieros (CMF, CNV, SEC). ` +
+      `5) NO incluir: artículos de prensa, case studies de vendors, reportes de terceros. ` +
+      `Años de interés: ${year} y ${prevYear}. Solo documentos desde ${afterDate}.`,
     search_queries: searchQueries.slice(0, 7), // Max 7 queries for bilingual coverage
-    max_results: 12,
+    max_results: 10, // Reduced to get more relevant results
     source_policy: {
       // Minimal exclude list to stay under API limits
       exclude_domains: [

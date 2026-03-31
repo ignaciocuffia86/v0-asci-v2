@@ -387,6 +387,7 @@ export async function POST(request: Request) {
     })
 
     let implementations: any[] = []
+    let implementationsDigest: string | null = null
 
     try {
       const searchResult = await parallelSearch(searchParams)
@@ -418,11 +419,12 @@ export async function POST(request: Request) {
 
         // Structure with Gemini
         console.log("[v0] Implementations: Structuring with Gemini...")
-        const { implementations: structured, digest } = await structureImplementationsWithGemini(excerpts, companyName, keywords)
-        console.log("[v0] Implementations: Gemini structured", structured.length, "items, digest:", digest ? "generated" : "none")
+        const geminiResult = await structureImplementationsWithGemini(excerpts, companyName, keywords)
+        implementationsDigest = geminiResult.digest
+        console.log("[v0] Implementations: Gemini structured", geminiResult.implementations.length, "items, digest:", implementationsDigest ? "generated" : "none")
 
         // Map structured items back to source URLs from Parallel (using filtered results)
-        implementations = structured.slice(0, MAX_IMPLEMENTATIONS).map((item: any, idx: number) => {
+        implementations = geminiResult.implementations.slice(0, MAX_IMPLEMENTATIONS).map((item: any, idx: number) => {
           const matchingResult = filteredResults.find(r =>
             r.title.toLowerCase().includes((item.title || "").toLowerCase().slice(0, 30)) ||
             (item.source_name && r.url.toLowerCase().includes(item.source_name.toLowerCase().replace(/\s/g, "")))
@@ -491,8 +493,8 @@ export async function POST(request: Request) {
         evidence_level: item.evidence_level,
         search_context: searchContext,
         // Only store digest on the first item as a flag that batch was processed
-        digest: idx === 0 ? digest : null,
-        digest_generated_at: idx === 0 && digest ? new Date().toISOString() : null,
+        digest: idx === 0 ? implementationsDigest : null,
+        digest_generated_at: idx === 0 && implementationsDigest ? new Date().toISOString() : null,
       }))
 
     console.log(`[v0] Implementations: Inserting ${newToInsert.length} new items`)

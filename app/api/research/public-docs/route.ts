@@ -419,16 +419,23 @@ export async function POST(request: Request) {
       const searchResult = await parallelSearch(parallelParams)
       console.log("[v0] Public Docs: Parallel returned", searchResult.results.length, "results")
 
-      // Normalize company name for matching - STRICT validation
+      // ====== STRICT COMPANY NAME VALIDATION ======
+      // Normalize company name - remove legal suffixes
       const companyNameNormalized = companyName
         .toLowerCase()
-        .replace(/\s+(inc\.?|corp\.?|ltd\.?|llc\.?|s\.?a\.?|s\.?r\.?l\.?|plc\.?)$/i, "")
+        .replace(/\s+(inc\.?|corp\.?|ltd\.?|llc\.?|s\.?a\.?|s\.?r\.?l\.?|plc\.?|c\.?a\.?|ltda\.?)$/i, "")
         .replace(/[,\.]/g, "")
         .trim()
       
-      // For single-word company names, require exact match
-      // For multi-word names, require the full name or significant portion
-      const isSingleWord = !companyNameNormalized.includes(" ")
+      // Extract significant words (>2 chars, not common words)
+      const commonWords = new Set(["the", "and", "los", "las", "del", "de", "la", "el", "y", "e", "or", "of", "for", "en", "con"])
+      const companyWords = companyNameNormalized
+        .split(/\s+/)
+        .filter(w => w.length > 2 && !commonWords.has(w))
+      
+      // For names like "Caja Los Andes", the distinctive part is "Caja" + "Andes"
+      const distinctiveWords = companyWords.filter(w => w.length > 3)
+      const isSingleWord = distinctiveWords.length === 1
 
       for (const result of searchResult.results) {
         const urlLower = result.url.toLowerCase()
@@ -436,38 +443,102 @@ export async function POST(request: Request) {
         const excerptText = (result.excerpts || []).join(" ").toLowerCase()
         
         // STRICT VALIDATION: Check if this result actually relates to our company
-        const combinedText = `${urlLower} ${titleLower} ${excerptText}`
+        const combinedText = `${titleLower} ${excerptText}` // URL separate for domain check
         
         let hasCompanyMatch = false
+        let matchReason = ""
         
-        if (isSingleWord) {
-          // For single-word names like "Pluspetrol", require EXACT word match
-          // Use word boundary matching to avoid "petrol" matching "Pluspetrol"
-          const wordBoundaryRegex = new RegExp(`\\b${companyNameNormalized}\\b`, "i")
-          hasCompanyMatch = wordBoundaryRegex.test(combinedText)
-          
-          // Also check if the URL contains the company name as a domain/path segment
-          const urlContainsCompany = urlLower.includes(companyNameNormalized) || 
-                                      urlLower.includes(companyNameNormalized.replace(/\s/g, ""))
-          
-          if (!hasCompanyMatch && urlContainsCompany) {
+        // === VALIDATION STRATEGY ===
+        // 1. EXACT MATCH: Full name appears as contiguous phrase
+        const exactMatch = combinedText.includes(companyNameNormalized) ||
+                          combinedText.includes(companyNameNormalized.replace(/\s+/g, ""))
+        
+        if (exactMatch) {
+          hasCompanyMatch = true
+          matchReason = "exact_match"
+        }
+        
+        // 2. URL DOMAIN MATCH: Company name in URL (strong signal)
+        if (!hasCompanyMatch) {
+          const urlSlug = companyNameNormalized.replace(/\s+/g, "").replace(/[^a-z0-9]/g, "")
+          const domainMatch = urlLower.includes(urlSlug) || 
+                             urlLower.includes(companyNameNormalized.replace(/\s+/g, "-"))
+          if (domainMatch) {
             hasCompanyMatch = true
+            matchReason = "url_domain"
           }
-        } else {
-          // For multi-word names, check for full name match or domain match
-          const fullNameMatch = combinedText.includes(companyNameNormalized)
-          const domainMatch = urlLower.includes(companyNameNormalized.replace(/\s/g, ""))
+        }
+        
+        // 3. PROXIMITY CHECK: For multi-word names, words must appear CLOSE together
+        if (!hasCompanyMatch && !isSingleWord && distinctiveWords.length >= 2) {
+          // Check if distinctive words appear within 50 characters of each other
+          const firstWord = distinctiveWords[0]
+          const secondWord = distinctiveWords[1]
           
-          // Also check if all significant words appear close together
-          const words = companyNameNormalized.split(/\s+/).filter(w => w.length > 2)
-          const allWordsPresent = words.every(word => combinedText.includes(word))
+          const firstIdx = combinedText.indexOf(firstWord)
+          const secondIdx = combinedText.indexOf(secondWord)
           
-          hasCompanyMatch = fullNameMatch || domainMatch || (allWordsPresent && words.length > 1)
+          if (firstIdx !== -1 && secondIdx !== -1) {
+            const distance = Math.abs(firstIdx - secondIdx)
+            // Words should be within ~50 chars (allows for "Caja de Compensación Los Andes")
+            if (distance < 60) {
+              // Additional check: Make sure it's not a DIFFERENT company with similar words
+              // Look for other company indicators between the words
+              const segment = combinedText.slice(Math.min(firstIdx, secondIdx), Math.max(firstIdx, secondIdx) + 20)
+              
+              // Check for other company names that share words (e.g., "Caja Arequipa" vs "Caja Los Andes")
+              const otherCompanyPatterns = [
+                /caja\s+(arequipa|cusco|huancayo|piura|trujillo|tacna|sullana|maynas)/i,
+                /banco\s+(de\s+)?(credito|continental|scotiabank|interbank|bbva)/i,
+              ]
+              
+              const hasOtherCompany = otherCompanyPatterns.some(pattern => pattern.test(combinedText))
+              
+              if (!hasOtherCompany) {
+                hasCompanyMatch = true
+                matchReason = "proximity"
+              }
+            }
+          }
+        }
+        
+        // 4. SINGLE WORD with WORD BOUNDARY: For "Falabella", "Pluspetrol", etc.
+        if (!hasCompanyMatch && isSingleWord) {
+          const mainWord = distinctiveWords[0]
+          const wordBoundaryRegex = new RegExp(`\\b${mainWord}\\b`, "i")
+          if (wordBoundaryRegex.test(combinedText)) {
+            hasCompanyMatch = true
+            matchReason = "word_boundary"
+          }
+        }
+        
+        // === NEGATIVE FILTERS: Exclude common false positives ===
+        if (hasCompanyMatch) {
+          // Check if title explicitly mentions a DIFFERENT company
+          // Pattern: "[Other Company Name] - Annual Report" where Other Company != our company
+          const titleWords = titleLower.split(/\s+/).filter(w => w.length > 3)
+          
+          // If title starts with a different proper noun that's not in our company name
+          const titleFirstWord = titleWords[0]
+          if (titleFirstWord && 
+              !companyWords.includes(titleFirstWord) && 
+              titleFirstWord.match(/^[a-z]+$/) &&
+              !["annual", "report", "reporte", "memoria", "financial", "sustainability", "earnings"].includes(titleFirstWord)) {
+            
+            // Double-check: Does the title contain our company name?
+            if (!titleLower.includes(companyNameNormalized) && 
+                !distinctiveWords.some(w => titleLower.includes(w))) {
+              hasCompanyMatch = false
+              matchReason = "different_company_in_title"
+            }
+          }
         }
         
         if (!hasCompanyMatch) {
-          console.log("[v0] Public Docs: Skipping unrelated result:", result.title.slice(0, 60), "- no company match for", companyNameNormalized)
+          console.log("[v0] Public Docs: Skipping unrelated result:", result.title.slice(0, 60), "| Reason:", matchReason || "no_match", "| Company:", companyNameNormalized)
           continue
+        } else {
+          console.log("[v0] Public Docs: Accepted result:", result.title.slice(0, 50), "| Match:", matchReason)
         }
 
         // Determine document type from URL/title
