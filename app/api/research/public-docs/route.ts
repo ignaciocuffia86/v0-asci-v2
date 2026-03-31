@@ -20,76 +20,82 @@ const MAX_DOCS = 10
 // ── Gemini structuring for public documents ─────────────────────────────
 // This function builds the prompt dynamically with the tech dictionary
 function buildGeminiPrompt(techDictionary: string[], processDictionary: string[]): string {
-  const techList = techDictionary.slice(0, 100).join(", ")
-  const processList = processDictionary.slice(0, 100).join(", ")
+  const techList = techDictionary.slice(0, 120).join(", ")
+  const processList = processDictionary.slice(0, 120).join(", ")
   
   return `Eres un analista de inversiones B2B especializado en analizar documentos públicos de empresas.
 Se te dan excerpts de reportes anuales, reportes de sostenibilidad, transcripciones de earnings calls, y filings de SEC.
-Tu tarea es extraer SEÑALES DE INVERSIÓN TECNOLÓGICA, VENDORS y SNIPPETS relevantes para un vendedor B2B.
+Tu tarea CRÍTICA es extraer SEÑALES DE INVERSIÓN TECNOLÓGICA, VENDORS y SNIPPETS relevantes con contexto exacto.
 
-DICCIONARIO DE TECNOLOGÍAS CONOCIDAS (prioriza detectar estas):
+===== DICCIONARIO DE TECNOLOGÍAS Y VENDORS (PRIORITA DETECTAR ESTOS) =====
 ${techList}
 
-DICCIONARIO DE PROCESOS DE NEGOCIO (prioriza detectar estos):
+===== DICCIONARIO DE PROCESOS DE NEGOCIO =====
 ${processList}
 
-REGLAS CRÍTICAS:
-1. Responde UNICAMENTE con JSON válido (sin markdown, sin texto extra).
-2. SIEMPRE extrae el SNIPPET EXACTO (párrafo o oración) donde se menciona cada tecnología/vendor.
-3. Indica la sección/página/fuente de cada hallazgo cuando sea posible.
-4. PRIORIZA menciones de vendors específicos, tecnologías del diccionario, y montos de inversión.
-5. Si no hay información relevante, devuelve {"findings":[], "tech_signals": [], "tech_snippets": [], "digest": null}
+===== REGLAS CRÍTICAS =====
+1. Responde UNICAMENTE con JSON válido (sin markdown, sin explicación extra).
+2. SIEMPRE extrae el SNIPPET EXACTO (párrafo completo) donde se menciona cada tecnología.
+3. Si un vendor/tecnología se menciona, busca si está en el diccionario y marca dictionary_match.
+4. Extrae montos de inversión ($M, presupuesto %, CAPEX, etc.) si se mencionan.
+5. Si no hay información relevante, devuelve empty arrays: {"findings":[], "tech_signals": [], "tech_snippets": [], "digest": null}
 
-CATEGORÍAS de hallazgos:
-- tech_investment: Inversiones en tecnología, CAPEX IT, proyectos de modernización
-- vendor_mention: Menciones de vendors específicos (SAP, AWS, Microsoft, Oracle, Salesforce, etc.)
-- digital_initiative: Proyectos de transformación digital, cloud, AI, automation
-- pain_point: Desafíos, riesgos tecnológicos, deuda técnica, sistemas legacy
-- strategy: Prioridades estratégicas relacionadas con tecnología
+===== CATEGORÍAS DE HALLAZGOS =====
+- tech_investment: Inversiones, CAPEX, presupuestos IT, proyectos en millones
+- vendor_mention: Menciones explícitas de vendors (SAP, AWS, Microsoft, Oracle, Salesforce, ServiceNow, etc.)
+- digital_initiative: Proyectos de transformación digital, cloud, AI, automation, RPA
+- pain_point: Desafíos tecnológicos, deuda técnica, sistemas legacy, vulnerabilidades
+- strategy: Prioridades estratégicas en tecnología
 
-FORMATO JSON:
+===== INSTRUCCIONES PARA tech_snippets (CRÍTICO) =====
+1. CADA MENCIÓN de vendor/tecnología del diccionario DEBE tener un snippet
+2. El snippet debe ser 2-5 ORACIONES COMPLETAS del documento original - contexto suficiente para entender cómo usa la tecnología
+3. Si hay inversión/presupuesto/implementación/planes futuros: investment_signal=true
+4. Extrae montos EXACTOS: "$15M", "5% del budget", "2 millones de euros", etc.
+5. document_source es el TÍTULO del documento de donde viene
+6. snippet_type: "vendor" (empresa específica), "technology" (producto/solución), "process" (proceso negocio), "investment" (gasto/inversión)
+
+===== FORMATO JSON RESPUESTA =====
 {
   "findings": [
     {
-      "category": "string (una de las categorías válidas)",
-      "finding": "string (descripción del hallazgo en español)",
-      "quote": "string (cita textual del documento original - OBLIGATORIO)",
-      "source_section": "string o null (sección/página donde se encontró)",
-      "relevance": "high | medium | low",
-      "vendors_mentioned": ["string"]
+      "category": "string (tech_investment|vendor_mention|digital_initiative|pain_point|strategy)",
+      "finding": "string (descripción 1-2 líneas)",
+      "quote": "string (cita textual - OBLIGATORIO)",
+      "source_section": "string|null (ej: 'página 5, management discussion')",
+      "relevance": "high|medium|low",
+      "vendors_mentioned": ["string array"]
     }
   ],
   "tech_signals": [
     {
-      "signal_type": "vendor_used | vendor_planned | tech_initiative | investment_planned",
-      "name": "string (nombre del vendor o tecnología)",
-      "confidence": "confirmed | likely | inferred",
-      "context": "string (contexto breve de cómo se menciona)",
-      "source_quote": "string (cita que respalda la señal)"
+      "signal_type": "vendor_used|vendor_planned|tech_initiative|investment_planned",
+      "name": "string (vendor/tecnología)",
+      "confidence": "confirmed|likely|inferred",
+      "context": "string (contexto breve)",
+      "source_quote": "string (cita)"
     }
   ],
   "tech_snippets": [
     {
-      "technology": "string (nombre de la tecnología/vendor/proceso detectado)",
-      "dictionary_match": "string o null (nombre EXACTO del diccionario si hace match)",
-      "snippet_type": "technology | process | vendor | investment",
-      "snippet": "string (el párrafo o contexto COMPLETO donde se menciona - 2-5 oraciones)",
-      "document_source": "string (título del documento de donde viene)",
-      "investment_signal": "boolean (true si indica inversión, compra, implementación o plan futuro)",
-      "monetary_amount": "string o null (si menciona montos específicos, ej: '$5M', '10% del presupuesto')"
+      "technology": "string (nombre tal como aparece en documento)",
+      "dictionary_match": "string|null (NOMBRE EXACTO del diccionario si hace match)",
+      "snippet_type": "technology|process|vendor|investment",
+      "snippet": "string (PÁRRAFO COMPLETO: 2-5 oraciones con contexto de negocios)",
+      "document_source": "string (TÍTULO del documento de donde viene)",
+      "investment_signal": boolean (true si hay inversión/compra/implementación/plan futuro",
+      "monetary_amount": "string|null (ej: '$5M', '10% del presupuesto', 'inversión de 2 años')"
     }
   ],
-  "digest": "string (2-3 oraciones en ESPAÑOL) o null"
+  "digest": "string (2-3 oraciones SPANISH) que resuma: tecnologías usadas, vendors principales, proyectos principales" 
 }
 
-INSTRUCCIONES PARA tech_snippets:
-- Extrae CADA mención de tecnología, vendor o proceso de negocio del diccionario
-- El snippet debe ser el CONTEXTO COMPLETO (2-5 oraciones) para entender cómo usa la empresa esa tecnología
-- Si menciona inversión, presupuesto, implementación futura o planes, marca investment_signal: true
-- Si menciona montos específicos (millones, porcentajes de budget), extráelos en monetary_amount
+===== EJEMPLOS BUENOS DE tech_snippets =====
+✓ Vendor usado: {"technology":"SAP","dictionary_match":"SAP","snippet_type":"vendor","snippet":"La empresa implementó SAP S/4HANA para centralizar la gestión de sus operaciones globales. Esta plataforma permite una mejor visibilidad del inventario y reduce tiempos de ciclo operativo.","investment_signal":true,"monetary_amount":"$8.5M"}
+✓ Proceso: {"technology":"Data Analytics","dictionary_match":"Data Analytics","snippet_type":"process","snippet":"El equipo de analytics ahora utiliza herramientas avanzadas para predecir patrones de demanda. Esta capacidad ha mejorado la precisión de pronósticos en 35% en el último año.","investment_signal":true}
+✓ Sin match: {"technology":"Blockchain","dictionary_match":null,"snippet_type":"technology",...}
 
-El digest debe responder: "¿Qué vendors/tecnologías usa esta empresa y qué proyectos tech tiene planeados?"
-SOLO incluye señales con evidencia REAL en el texto. NO inventes ni infieras sin cita.`
+SOLO incluye hallazgos con evidencia REAL en el texto. NO inventes ni infieras sin cita directa.`
 }
 
 interface TechSignal {
@@ -160,6 +166,22 @@ async function structureDocumentsWithGemini(
 
   const text = result.response.text()
   const parsed = JSON.parse(text)
+  
+  // Post-processing: Apply dictionary matching to tech_snippets
+  if (parsed.tech_snippets && Array.isArray(parsed.tech_snippets)) {
+    const { findDictionaryMatch } = await import("@/lib/documents/dictionary-matcher")
+    
+    for (const snippet of parsed.tech_snippets) {
+      if (!snippet.dictionary_match && snippet.technology) {
+        // Try to find dictionary match
+        const match = findDictionaryMatch(snippet.technology, techDictionary)
+        if (match) {
+          snippet.dictionary_match = match
+        }
+      }
+    }
+  }
+  
   return {
     findings: parsed.findings ?? [],
     tech_signals: parsed.tech_signals ?? [],
@@ -625,9 +647,23 @@ export async function POST(request: Request) {
       }
     }
 
+    // Map tech snippets to their respective documents
+    const snippetsPerDoc = new Map<string, TechSnippet[]>()
+    for (const snippet of techSnippets) {
+      // Find which document this snippet came from
+      const sourceDoc = extractedDocs.find((d) =>
+        snippet.document_source.toLowerCase().includes(d.title.toLowerCase().slice(0, 30))
+      ) || extractedDocs[0]
+      
+      const existing = snippetsPerDoc.get(sourceDoc.url) || []
+      existing.push(snippet)
+      snippetsPerDoc.set(sourceDoc.url, existing)
+    }
+
     const docsToInsert = documentSources.slice(0, MAX_DOCS).map((doc, idx) => {
       const extracted = extractedContentMap.get(doc.url)
       const docFindings = findingsPerDoc.get(doc.url) || []
+      const docSnippets = snippetsPerDoc.get(doc.url) || []
       
       return {
         company_id: companyId,
@@ -643,6 +679,7 @@ export async function POST(request: Request) {
         ticker: ticker || null,
         findings: docFindings,
         tech_signals: idx === 0 ? techSignals : [], // Store all tech signals on first doc
+        tech_snippets: docSnippets, // Store tech snippets for this document
         digest: idx === 0 ? digest : null,
         digest_generated_at: idx === 0 && digest ? new Date().toISOString() : null,
         ai_provider: "gemini-2.0-flash",
@@ -687,6 +724,7 @@ export async function POST(request: Request) {
       lastSearchDate: freshCacheResult.lastSearchDate,
       daysUntilRefresh: freshCacheResult.daysUntilRefresh,
       techSignals: techSignals, // Include tech signals in response
+      techSnippets: techSnippets, // Include technology snippets with quotes
       totalFindings: findings.length,
     })
   } catch (error) {

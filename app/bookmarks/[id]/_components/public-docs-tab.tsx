@@ -34,6 +34,16 @@ interface TechSignal {
   source_quote: string
 }
 
+interface TechSnippet {
+  technology: string
+  dictionary_match: string | null
+  snippet_type: "technology" | "process" | "vendor" | "investment"
+  snippet: string
+  document_source: string
+  investment_signal: boolean
+  monetary_amount: string | null
+}
+
 interface PublicDoc {
   id: string
   document_type: string
@@ -53,6 +63,7 @@ interface PublicDoc {
     vendors_mentioned?: string[]
   }>
   tech_signals: TechSignal[]
+  tech_snippets: TechSnippet[]
   digest: string | null
   created_at: string
 }
@@ -183,13 +194,21 @@ export function PublicDocsTab({ bookmarkId, companyId, companyName }: PublicDocs
       setIsPublicCompany(result.isPublic)
       
       const signalsCount = result.techSignals?.length || 0
+      const snippetsCount = result.techSnippets?.length || 0
       const findingsCount = result.totalFindings || 0
       
-      toast.success(
-        result.isPublic
-          ? `Se encontraron ${result.docs?.length || 0} documentos públicos${signalsCount > 0 ? ` con ${signalsCount} señales tech detectadas` : ""}`
-          : `Se encontraron ${result.docs?.length || 0} documentos (empresa privada)${signalsCount > 0 ? ` con ${signalsCount} señales tech` : ""}`
-      )
+      const message = result.isPublic
+        ? `Se encontraron ${result.docs?.length || 0} documentos públicos`
+        : `Se encontraron ${result.docs?.length || 0} documentos (empresa privada)`
+      
+      const detailsArray = []
+      if (signalsCount > 0) detailsArray.push(`${signalsCount} señales tech`)
+      if (snippetsCount > 0) detailsArray.push(`${snippetsCount} snippets de tecnologías`)
+      if (findingsCount > 0) detailsArray.push(`${findingsCount} hallazgos`)
+      
+      const details = detailsArray.length > 0 ? ` con ${detailsArray.join(", ")}` : ""
+      
+      toast.success(message + details)
 
       setCooldown({
         canRefresh: result.canRefresh ?? isSuperAdmin,
@@ -226,6 +245,9 @@ export function PublicDocsTab({ bookmarkId, companyId, companyName }: PublicDocs
   // Collect all tech signals from docs (stored on first doc)
   const techSignals: TechSignal[] = docs.flatMap(d => d.tech_signals || [])
   
+  // Collect all tech snippets from all docs
+  const techSnippets: TechSnippet[] = docs.flatMap(d => d.tech_snippets || [])
+  
   // Collect all findings from all docs
   const allFindings = docs.flatMap(d => d.findings || [])
   
@@ -235,6 +257,13 @@ export function PublicDocsTab({ bookmarkId, companyId, companyName }: PublicDocs
     acc[signal.signal_type].push(signal)
     return acc
   }, {} as Record<string, TechSignal[]>)
+
+  // Group snippets by snippet_type for display
+  const snippetsByType = techSnippets.reduce((acc, snippet) => {
+    if (!acc[snippet.snippet_type]) acc[snippet.snippet_type] = []
+    acc[snippet.snippet_type].push(snippet)
+    return acc
+  }, {} as Record<string, TechSnippet[]>)
 
   // Group docs by type for better organization
   const groupedDocs = docs.reduce((acc, doc) => {
@@ -304,6 +333,86 @@ export function PublicDocsTab({ bookmarkId, companyId, companyName }: PublicDocs
                           {signal.source_quote && (
                             <p className="text-muted-foreground italic">"{signal.source_quote.slice(0, 150)}..."</p>
                           )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Tech Snippets Section - Technology Mentions with Context */}
+      {techSnippets.length > 0 && (
+        <Card className="border-cyan-200 bg-gradient-to-br from-cyan-50/80 to-blue-50/50 dark:from-cyan-950/30 dark:to-blue-950/20 dark:border-cyan-800">
+          <CardHeader className="py-3">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <TrendingUp className="h-4 w-4 text-cyan-600" />
+              Tecnologías y Procesos Mencionados
+              <Badge variant="secondary" className="ml-1">{techSnippets.length}</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="py-0 pb-4 space-y-4">
+            {Object.entries(snippetsByType).map(([snippetType, snippets]) => {
+              const typeLabel = {
+                vendor: "Vendors Específicos",
+                technology: "Tecnologías",
+                process: "Procesos de Negocio",
+                investment: "Inversiones Tecnológicas",
+              }[snippetType] || snippetType
+
+              return (
+                <div key={snippetType} className="space-y-3">
+                  <h4 className="text-xs font-medium text-cyan-700 dark:text-cyan-300 flex items-center gap-2">
+                    {snippetType === "vendor" && <Building className="h-3 w-3" />}
+                    {snippetType === "technology" && <Sparkles className="h-3 w-3" />}
+                    {snippetType === "process" && <TrendingUp className="h-3 w-3" />}
+                    {snippetType === "investment" && <DollarSign className="h-3 w-3" />}
+                    {typeLabel}
+                  </h4>
+                  
+                  <div className="space-y-2">
+                    {snippets.map((snippet, idx) => (
+                      <div
+                        key={idx}
+                        className="p-3 rounded-lg bg-white/60 dark:bg-slate-900/40 border border-cyan-100/30 dark:border-cyan-800/30 space-y-1.5 hover:bg-white/80 dark:hover:bg-slate-900/60 transition-colors"
+                      >
+                        {/* Technology name with dictionary match */}
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-2 flex-1">
+                            <span className="font-medium text-sm text-cyan-700 dark:text-cyan-300">
+                              {snippet.dictionary_match || snippet.technology}
+                            </span>
+                            {snippet.dictionary_match && snippet.dictionary_match !== snippet.technology && (
+                              <span className="text-xs text-muted-foreground">
+                                ({snippet.technology})
+                              </span>
+                            )}
+                            {snippet.investment_signal && (
+                              <Badge variant="outline" className="text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300">
+                                Inversión
+                              </Badge>
+                            )}
+                          </div>
+                          {snippet.monetary_amount && (
+                            <Badge variant="secondary" className="text-[10px] bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 shrink-0">
+                              {snippet.monetary_amount}
+                            </Badge>
+                          )}
+                        </div>
+                        
+                        {/* Snippet text */}
+                        <p className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed italic">
+                          "{snippet.snippet}"
+                        </p>
+                        
+                        {/* Source document */}
+                        <div className="flex items-center justify-between gap-2 pt-1">
+                          <span className="text-xs text-muted-foreground">
+                            Fuente: <span className="font-medium">{snippet.document_source}</span>
+                          </span>
                         </div>
                       </div>
                     ))}
