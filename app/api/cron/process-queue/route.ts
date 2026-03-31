@@ -67,16 +67,22 @@ export async function GET(request: Request) {
   try {
     while (Date.now() - startTime < TIME_BUDGET_MS) {
       // ── PHASE 3: FIFO order (oldest first) + skip failing batches ──
-      const { data: batch, error: fetchErr } = await supabase
+      const { data: batches, error: fetchErr } = await supabase
         .from("import_batches")
         .select("id, batch_type, filename, status, consecutive_failures")
         .in("status", ["pending", "processing"])
         .lt("consecutive_failures", MAX_CONSECUTIVE_FAILURES)
         .order("created_at", { ascending: true })  // FIFO: oldest batch first
         .limit(1)
-        .single()
 
-      if (fetchErr || !batch) {
+      if (fetchErr) {
+        debugLogs.push(`[ERROR] Database fetch failed: ${fetchErr.message}`)
+        break
+      }
+
+      const batch = batches && batches.length > 0 ? batches[0] : null
+      
+      if (!batch) {
         // Check if there are skipped batches (all exceeded failure limit)
         const { count: stuckCount } = await supabase
           .from("import_batches")
@@ -141,10 +147,10 @@ export async function GET(request: Request) {
 
         if (rpcError) {
           // Atomic increment - prevents stale-read race condition
-          debugLogs.push(`RPC error (${callMs}ms): ${rpcError.message}`)
+          debugLogs.push(`[ERROR] RPC error (${callMs}ms): ${rpcError.message}`)
           await supabase.rpc("increment_batch_failures", {
             p_batch_id: batch.id,
-            p_error: rpcError.message,
+            p_error: rpcError.message.slice(0, 500),  // Limit error message length
           })
           break // Move to next batch
         }
