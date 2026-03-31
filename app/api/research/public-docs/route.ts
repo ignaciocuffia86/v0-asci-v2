@@ -18,16 +18,27 @@ const DOCS_CACHE_DAYS = 30 // Refresh at most once per month
 const MAX_DOCS = 10
 
 // ── Gemini structuring for public documents ─────────────────────────────
-const GEMINI_SYSTEM = `Eres un analista de inversiones B2B especializado en analizar documentos públicos de empresas.
+// This function builds the prompt dynamically with the tech dictionary
+function buildGeminiPrompt(techDictionary: string[], processDictionary: string[]): string {
+  const techList = techDictionary.slice(0, 100).join(", ")
+  const processList = processDictionary.slice(0, 100).join(", ")
+  
+  return `Eres un analista de inversiones B2B especializado en analizar documentos públicos de empresas.
 Se te dan excerpts de reportes anuales, reportes de sostenibilidad, transcripciones de earnings calls, y filings de SEC.
-Tu tarea es extraer SEÑALES DE INVERSIÓN TECNOLÓGICA y VENDORS para un vendedor B2B.
+Tu tarea es extraer SEÑALES DE INVERSIÓN TECNOLÓGICA, VENDORS y SNIPPETS relevantes para un vendedor B2B.
+
+DICCIONARIO DE TECNOLOGÍAS CONOCIDAS (prioriza detectar estas):
+${techList}
+
+DICCIONARIO DE PROCESOS DE NEGOCIO (prioriza detectar estos):
+${processList}
 
 REGLAS CRÍTICAS:
 1. Responde UNICAMENTE con JSON válido (sin markdown, sin texto extra).
-2. SIEMPRE cita el texto original entre comillas cuando extraigas un hallazgo.
+2. SIEMPRE extrae el SNIPPET EXACTO (párrafo o oración) donde se menciona cada tecnología/vendor.
 3. Indica la sección/página/fuente de cada hallazgo cuando sea posible.
-4. PRIORIZA menciones de vendors específicos, tecnologías nombradas, y montos de inversión.
-5. Si no hay información relevante, devuelve {"findings":[], "tech_signals": [], "digest": null}
+4. PRIORIZA menciones de vendors específicos, tecnologías del diccionario, y montos de inversión.
+5. Si no hay información relevante, devuelve {"findings":[], "tech_signals": [], "tech_snippets": [], "digest": null}
 
 CATEGORÍAS de hallazgos:
 - tech_investment: Inversiones en tecnología, CAPEX IT, proyectos de modernización
@@ -35,12 +46,6 @@ CATEGORÍAS de hallazgos:
 - digital_initiative: Proyectos de transformación digital, cloud, AI, automation
 - pain_point: Desafíos, riesgos tecnológicos, deuda técnica, sistemas legacy
 - strategy: Prioridades estratégicas relacionadas con tecnología
-
-SEÑALES TECH que debes buscar activamente:
-- Nombres de VENDORS: SAP, Oracle, Salesforce, Microsoft, AWS, Google Cloud, ServiceNow, Workday, etc.
-- Tecnologías: ERP, CRM, cloud migration, AI/ML, RPA, data analytics, cybersecurity
-- Proyectos: transformación digital, modernización, migración, integración
-- Inversiones: CAPEX IT, budget tecnológico, contrataciones IT
 
 FORMATO JSON:
 {
@@ -51,7 +56,7 @@ FORMATO JSON:
       "quote": "string (cita textual del documento original - OBLIGATORIO)",
       "source_section": "string o null (sección/página donde se encontró)",
       "relevance": "high | medium | low",
-      "vendors_mentioned": ["string"] // lista de vendors mencionados (si aplica)
+      "vendors_mentioned": ["string"]
     }
   ],
   "tech_signals": [
@@ -63,11 +68,29 @@ FORMATO JSON:
       "source_quote": "string (cita que respalda la señal)"
     }
   ],
+  "tech_snippets": [
+    {
+      "technology": "string (nombre de la tecnología/vendor/proceso detectado)",
+      "dictionary_match": "string o null (nombre EXACTO del diccionario si hace match)",
+      "snippet_type": "technology | process | vendor | investment",
+      "snippet": "string (el párrafo o contexto COMPLETO donde se menciona - 2-5 oraciones)",
+      "document_source": "string (título del documento de donde viene)",
+      "investment_signal": "boolean (true si indica inversión, compra, implementación o plan futuro)",
+      "monetary_amount": "string o null (si menciona montos específicos, ej: '$5M', '10% del presupuesto')"
+    }
+  ],
   "digest": "string (2-3 oraciones en ESPAÑOL) o null"
 }
 
+INSTRUCCIONES PARA tech_snippets:
+- Extrae CADA mención de tecnología, vendor o proceso de negocio del diccionario
+- El snippet debe ser el CONTEXTO COMPLETO (2-5 oraciones) para entender cómo usa la empresa esa tecnología
+- Si menciona inversión, presupuesto, implementación futura o planes, marca investment_signal: true
+- Si menciona montos específicos (millones, porcentajes de budget), extráelos en monetary_amount
+
 El digest debe responder: "¿Qué vendors/tecnologías usa esta empresa y qué proyectos tech tiene planeados?"
 SOLO incluye señales con evidencia REAL en el texto. NO inventes ni infieras sin cita.`
+}
 
 interface TechSignal {
   signal_type: "vendor_used" | "vendor_planned" | "tech_initiative" | "investment_planned"
@@ -77,15 +100,28 @@ interface TechSignal {
   source_quote: string
 }
 
+interface TechSnippet {
+  technology: string
+  dictionary_match: string | null
+  snippet_type: "technology" | "process" | "vendor" | "investment"
+  snippet: string
+  document_source: string
+  investment_signal: boolean
+  monetary_amount: string | null
+}
+
 interface GeminiDocsResult {
   findings: any[]
   tech_signals: TechSignal[]
+  tech_snippets: TechSnippet[]
   digest: string | null
 }
 
 async function structureDocumentsWithGemini(
   excerpts: { url: string; title: string; content: string; type: string }[],
-  companyName: string
+  companyName: string,
+  techDictionary: string[],
+  processDictionary: string[]
 ): Promise<GeminiDocsResult> {
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY
   if (!apiKey) throw new Error("GOOGLE_GENERATIVE_AI_API_KEY not configured")
@@ -101,20 +137,23 @@ async function structureDocumentsWithGemini(
     )
     .join("\n\n")
 
+  // Build prompt with dictionaries
+  const systemPrompt = buildGeminiPrompt(techDictionary, processDictionary)
+
   const result = await model.generateContent({
     contents: [
       {
         role: "user",
         parts: [
           {
-            text: `${GEMINI_SYSTEM}\n\n---\nEmpresa: "${companyName}"\n\nExcerpts de documentos públicos:\n\n${excerptText}\n\nExtrae los hallazgos relevantes y SEÑALES TECH en JSON. PRIORIZA encontrar vendors específicos mencionados.`,
+            text: `${systemPrompt}\n\n---\nEmpresa: "${companyName}"\n\nExcerpts de documentos públicos:\n\n${excerptText}\n\nExtrae los hallazgos relevantes, SEÑALES TECH y SNIPPETS donde se mencionan tecnologías. PRIORIZA encontrar vendors específicos y tecnologías del diccionario.`,
           },
         ],
       },
     ],
     generationConfig: {
       temperature: 0.2,
-      maxOutputTokens: 8000,
+      maxOutputTokens: 12000, // Increased for snippets
       responseMimeType: "application/json",
     },
   })
@@ -124,6 +163,7 @@ async function structureDocumentsWithGemini(
   return {
     findings: parsed.findings ?? [],
     tech_signals: parsed.tech_signals ?? [],
+    tech_snippets: parsed.tech_snippets ?? [],
     digest: parsed.digest ?? null,
   }
 }
@@ -496,21 +536,32 @@ export async function POST(request: Request) {
       console.error("[v0] Public Docs: Extraction error:", extractionError)
     }
 
-    // ── 6. Structure with Gemini to find tech signals ─────────────
+    // ── 6. Load dictionaries and structure with Gemini ─────────────
+    // Load tech and process dictionaries for matching
+    const [{ data: products }, { data: processes }] = await Promise.all([
+      supabase.from("dictionary_products").select("name").limit(200),
+      supabase.from("dictionary_processes").select("name").limit(200),
+    ])
+    const techDictionary = (products || []).map((p: any) => p.name)
+    const processDictionary = (processes || []).map((p: any) => p.name)
+    console.log("[v0] Public Docs: Loaded", techDictionary.length, "tech and", processDictionary.length, "process dictionary entries")
+
     let findings: any[] = []
     let techSignals: TechSignal[] = []
+    let techSnippets: TechSnippet[] = []
     let digest: string | null = null
 
     if (extractedDocs.length > 0) {
       console.log("[v0] Public Docs: Analyzing", extractedDocs.length, "documents with Gemini for tech signals...")
 
       try {
-        const geminiResult = await structureDocumentsWithGemini(extractedDocs, companyName)
+        const geminiResult = await structureDocumentsWithGemini(extractedDocs, companyName, techDictionary, processDictionary)
         findings = geminiResult.findings
         techSignals = geminiResult.tech_signals
+        techSnippets = geminiResult.tech_snippets
         digest = geminiResult.digest
 
-        console.log("[v0] Public Docs: Gemini found", findings.length, "findings and", techSignals.length, "tech signals")
+        console.log("[v0] Public Docs: Gemini found", findings.length, "findings,", techSignals.length, "tech signals, and", techSnippets.length, "tech snippets")
       } catch (geminiError) {
         console.error("[v0] Public Docs: Gemini analysis error:", geminiError)
         // Fallback digest
@@ -536,12 +587,13 @@ export async function POST(request: Request) {
         console.log("[v0] Public Docs: Using", searchExcerpts.length, "search excerpts as fallback")
         
         try {
-          const geminiResult = await structureDocumentsWithGemini(searchExcerpts, companyName)
+          const geminiResult = await structureDocumentsWithGemini(searchExcerpts, companyName, techDictionary, processDictionary)
           findings = geminiResult.findings
           techSignals = geminiResult.tech_signals
+          techSnippets = geminiResult.tech_snippets
           digest = geminiResult.digest
           
-          console.log("[v0] Public Docs: Fallback Gemini found", findings.length, "findings and", techSignals.length, "tech signals")
+          console.log("[v0] Public Docs: Fallback Gemini found", findings.length, "findings,", techSignals.length, "tech signals, and", techSnippets.length, "snippets")
         } catch (geminiError) {
           console.error("[v0] Public Docs: Fallback Gemini analysis error:", geminiError)
           const docSummary = documentSources.slice(0, 6).map(d => `${d.type}: ${d.title}`).join("; ")
