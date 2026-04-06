@@ -4,8 +4,6 @@
  * Provides functions to extract and parse content from URLs (including PDFs)
  * using Parallel's Extract API, which converts documents to markdown
  * optimized for LLM processing.
- * 
- * API Reference: https://docs.parallel.ai/api-reference/extract-beta/extract
  */
 
 import Parallel from "parallel-web"
@@ -59,8 +57,6 @@ y menciona la sección/página donde se encontró.
 /**
  * Extract content from a URL using Parallel Extract API
  * With fallback strategies for failed extractions
- * 
- * NOTE: Parallel API expects `urls` (array) not `url` (singular)
  */
 export async function extractDocumentContent(
   options: ExtractOptions
@@ -68,30 +64,22 @@ export async function extractDocumentContent(
   const { url, objective = PUBLIC_DOCS_EXTRACTION_OBJECTIVE, timeout = 30000 } = options
 
   try {
-    // Attempt 1: Direct extraction via Parallel (using urls array as required by API)
-    console.log("[v0] Parallel Extract: Calling with urls:", [url])
-    const extractParams = {
-      urls: [url], // API expects array of URLs - REQUIRED field
-      objective,
-      excerpts: true,
-    }
-    console.log("[v0] Parallel Extract: Params:", JSON.stringify(extractParams))
-    
+    // Attempt 1: Direct extraction via Parallel
     const result = await Promise.race([
-      client.beta.extract(extractParams),
+      client.beta.extract({
+        url,
+        objective,
+      }),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error("Timeout")), timeout)
       ),
     ])
 
-    // Result contains array of extracted documents
-    const extracted = result.results?.[0] ?? result
-
     return {
       url,
-      title: extracted.title ?? "Document",
-      content: extracted.content ?? extracted.text ?? "",
-      excerpts: extracted.excerpts ?? [],
+      title: result.title ?? "Document",
+      content: result.content ?? "",
+      excerpts: result.excerpts ?? [],
     }
   } catch (error) {
     console.warn(`[Parallel Extract] Failed for ${url}:`, error)
@@ -104,7 +92,7 @@ export async function extractDocumentContent(
 
         const htmlResult = await Promise.race([
           client.beta.extract({
-            urls: [htmlUrl], // API expects array
+            url: htmlUrl,
             objective,
           }),
           new Promise<never>((_, reject) =>
@@ -112,13 +100,11 @@ export async function extractDocumentContent(
           ),
         ])
 
-        const extracted = htmlResult.results?.[0] ?? htmlResult
-
         return {
           url: htmlUrl,
-          title: extracted.title ?? "Document",
-          content: extracted.content ?? extracted.text ?? "",
-          excerpts: extracted.excerpts ?? [],
+          title: htmlResult.title ?? "Document",
+          content: htmlResult.content ?? "",
+          excerpts: htmlResult.excerpts ?? [],
           fallback_used: true,
         }
       } catch (htmlError) {

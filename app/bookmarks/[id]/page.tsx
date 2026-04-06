@@ -37,7 +37,6 @@ import { cn } from "@/lib/utils"
 import { BookmarkOverview } from "./_components/overview-tab"
 import { BookmarkJobPostings } from "./_components/job-postings-tab"
 import { IntelligenceTab } from "./_components/intelligence-tab"
-import { PublicDocsTab } from "./_components/public-docs-tab"
 import { BookmarkIcebreakers } from "./_components/icebreakers-tab"
 import { BookmarkStrategy } from "./_components/strategy-tab"
 import { ProspectsTab } from "./_components/prospects-tab"
@@ -304,11 +303,6 @@ export default function BookmarkWorkspacePage() {
               <Sparkles className="h-3.5 w-3.5 md:h-4 md:w-4 text-amber-500" />
               Inteligencia
             </TabsTrigger>
-            <TabsTrigger value="public-docs" className="gap-1.5 text-xs md:text-sm" data-onboarding="workspace-tab-public-docs">
-              <FileText className="h-3.5 w-3.5 md:h-4 md:w-4 text-purple-500" />
-              <span className="hidden sm:inline">Docs Públicos</span>
-              <span className="sm:hidden">Docs</span>
-            </TabsTrigger>
             <TabsTrigger value="strategy" className="gap-1.5 text-xs md:text-sm" data-onboarding="workspace-tab-strategy">
               <BrainCircuit className="h-3.5 w-3.5 md:h-4 md:w-4" />
               Estrategia
@@ -345,10 +339,6 @@ export default function BookmarkWorkspacePage() {
 
           <TabsContent value="intelligence" className="m-0 focus-visible:ring-0">
             <IntelligenceTab bookmarkId={bookmarkId} companyId={company.id} companyName={company.name} />
-          </TabsContent>
-
-          <TabsContent value="public-docs" className="m-0 focus-visible:ring-0">
-            <PublicDocsTab bookmarkId={bookmarkId} companyId={company.id} companyName={company.name} country={company.country_normalized} />
           </TabsContent>
 
           <TabsContent value="strategy" className="m-0 focus-visible:ring-0">

@@ -7,127 +7,58 @@ import {
   getCompanyFilings,
   mapSECFormToDocumentType,
 } from "@/lib/sec-edgar"
-import {
-  extractMultipleDocuments,
-  prioritizeAndLimitUrls,
-  PUBLIC_DOCS_EXTRACTION_OBJECTIVE,
-} from "@/lib/parallel-extract"
 import { GoogleGenerativeAI } from "@google/generative-ai"
 
 const DOCS_CACHE_DAYS = 30 // Refresh at most once per month
 const MAX_DOCS = 10
 
 // ── Gemini structuring for public documents ─────────────────────────────
-// This function builds the prompt dynamically with the tech dictionary
-function buildGeminiPrompt(techDictionary: string[], processDictionary: string[]): string {
-  const techList = techDictionary.slice(0, 120).join(", ")
-  const processList = processDictionary.slice(0, 120).join(", ")
-  
-  return `Eres un analista de inversiones B2B especializado en analizar documentos públicos de empresas.
+const GEMINI_SYSTEM = `Eres un analista de inversiones B2B especializado en analizar documentos públicos de empresas.
 Se te dan excerpts de reportes anuales, reportes de sostenibilidad, transcripciones de earnings calls, y filings de SEC.
-Tu tarea CRÍTICA es extraer SEÑALES DE INVERSIÓN TECNOLÓGICA, VENDORS y SNIPPETS relevantes con contexto exacto.
+Tu tarea es extraer información relevante para un vendedor B2B que quiere entender a esta empresa.
 
-===== DICCIONARIO DE TECNOLOGÍAS Y VENDORS (PRIORITA DETECTAR ESTOS) =====
-${techList}
+REGLAS:
+1. Responde UNICAMENTE con JSON válido (sin markdown, sin texto extra).
+2. SIEMPRE cita el texto original entre comillas cuando extraigas un hallazgo.
+3. Indica la sección/página/fuente de cada hallazgo cuando sea posible.
+4. Enfócate en señales de inversión tecnológica, pain points, y estrategia corporativa.
+5. Si no hay información relevante, devuelve {"findings":[], "digest": null}
 
-===== DICCIONARIO DE PROCESOS DE NEGOCIO =====
-${processList}
+CATEGORÍAS de hallazgos válidas:
+- tech_investment: Inversiones en tecnología, CAPEX IT, proyectos de modernización
+- pain_point: Desafíos, riesgos, problemas operativos, deuda técnica
+- strategy: Prioridades estratégicas, planes de expansión, M&A
+- financial: KPIs, guidance, métricas financieras relevantes
 
-===== REGLAS CRÍTICAS =====
-1. Responde UNICAMENTE con JSON válido (sin markdown, sin explicación extra).
-2. SIEMPRE extrae el SNIPPET EXACTO (párrafo completo) donde se menciona cada tecnología.
-3. Si un vendor/tecnología se menciona, busca si está en el diccionario y marca dictionary_match.
-4. Extrae montos de inversión ($M, presupuesto %, CAPEX, etc.) si se mencionan.
-5. Si no hay información relevante, devuelve empty arrays: {"findings":[], "tech_signals": [], "tech_snippets": [], "digest": null}
+ADEMAS de los hallazgos, genera un "digest" de EXACTAMENTE 1 párrafo (2-4 oraciones) en ESPAÑOL que resuma:
+- Inversiones o planes tecnológicos detectados
+- Desafíos operativos o pain points mencionados
+- Oportunidades para un vendedor B2B
 
-===== CATEGORÍAS DE HALLAZGOS =====
-- tech_investment: Inversiones, CAPEX, presupuestos IT, proyectos en millones
-- vendor_mention: Menciones explícitas de vendors (SAP, AWS, Microsoft, Oracle, Salesforce, ServiceNow, etc.)
-- digital_initiative: Proyectos de transformación digital, cloud, AI, automation, RPA
-- pain_point: Desafíos tecnológicos, deuda técnica, sistemas legacy, vulnerabilidades
-- strategy: Prioridades estratégicas en tecnología
+El digest debe responder: "¿Qué dice la empresa oficialmente sobre sus prioridades y desafíos?"
 
-===== INSTRUCCIONES PARA tech_snippets (CRÍTICO) =====
-1. CADA MENCIÓN de vendor/tecnología del diccionario DEBE tener un snippet
-2. El snippet debe ser 2-5 ORACIONES COMPLETAS del documento original - contexto suficiente para entender cómo usa la tecnología
-3. Si hay inversión/presupuesto/implementación/planes futuros: investment_signal=true
-4. Extrae montos EXACTOS: "$15M", "5% del budget", "2 millones de euros", etc.
-5. document_source es el TÍTULO del documento de donde viene
-6. snippet_type: "vendor" (empresa específica), "technology" (producto/solución), "process" (proceso negocio), "investment" (gasto/inversión)
-
-===== FORMATO JSON RESPUESTA =====
+FORMATO JSON:
 {
   "findings": [
     {
-      "category": "string (tech_investment|vendor_mention|digital_initiative|pain_point|strategy)",
-      "finding": "string (descripción 1-2 líneas)",
-      "quote": "string (cita textual - OBLIGATORIO)",
-      "source_section": "string|null (ej: 'página 5, management discussion')",
-      "relevance": "high|medium|low",
-      "vendors_mentioned": ["string array"]
+      "category": "string (una de las categorías válidas)",
+      "finding": "string (descripción del hallazgo en español)",
+      "quote": "string (cita textual del documento original)",
+      "source_section": "string o null (sección/página donde se encontró)",
+      "relevance": "high | medium | low"
     }
   ],
-  "tech_signals": [
-    {
-      "signal_type": "vendor_used|vendor_planned|tech_initiative|investment_planned",
-      "name": "string (vendor/tecnología)",
-      "confidence": "confirmed|likely|inferred",
-      "context": "string (contexto breve)",
-      "source_quote": "string (cita)"
-    }
-  ],
-  "tech_snippets": [
-    {
-      "technology": "string (nombre tal como aparece en documento)",
-      "dictionary_match": "string|null (NOMBRE EXACTO del diccionario si hace match)",
-      "snippet_type": "technology|process|vendor|investment",
-      "snippet": "string (PÁRRAFO COMPLETO: 2-5 oraciones con contexto de negocios)",
-      "document_source": "string (TÍTULO del documento de donde viene)",
-      "investment_signal": boolean (true si hay inversión/compra/implementación/plan futuro",
-      "monetary_amount": "string|null (ej: '$5M', '10% del presupuesto', 'inversión de 2 años')"
-    }
-  ],
-  "digest": "string (2-3 oraciones SPANISH) que resuma: tecnologías usadas, vendors principales, proyectos principales" 
-}
-
-===== EJEMPLOS BUENOS DE tech_snippets =====
-✓ Vendor usado: {"technology":"SAP","dictionary_match":"SAP","snippet_type":"vendor","snippet":"La empresa implementó SAP S/4HANA para centralizar la gestión de sus operaciones globales. Esta plataforma permite una mejor visibilidad del inventario y reduce tiempos de ciclo operativo.","investment_signal":true,"monetary_amount":"$8.5M"}
-✓ Proceso: {"technology":"Data Analytics","dictionary_match":"Data Analytics","snippet_type":"process","snippet":"El equipo de analytics ahora utiliza herramientas avanzadas para predecir patrones de demanda. Esta capacidad ha mejorado la precisión de pronósticos en 35% en el último año.","investment_signal":true}
-✓ Sin match: {"technology":"Blockchain","dictionary_match":null,"snippet_type":"technology",...}
-
-SOLO incluye hallazgos con evidencia REAL en el texto. NO inventes ni infieras sin cita directa.`
-}
-
-interface TechSignal {
-  signal_type: "vendor_used" | "vendor_planned" | "tech_initiative" | "investment_planned"
-  name: string
-  confidence: "confirmed" | "likely" | "inferred"
-  context: string
-  source_quote: string
-}
-
-interface TechSnippet {
-  technology: string
-  dictionary_match: string | null
-  snippet_type: "technology" | "process" | "vendor" | "investment"
-  snippet: string
-  document_source: string
-  investment_signal: boolean
-  monetary_amount: string | null
-}
+  "digest": "string (párrafo resumen en ESPAÑOL) o null"
+}`
 
 interface GeminiDocsResult {
   findings: any[]
-  tech_signals: TechSignal[]
-  tech_snippets: TechSnippet[]
   digest: string | null
 }
 
 async function structureDocumentsWithGemini(
   excerpts: { url: string; title: string; content: string; type: string }[],
-  companyName: string,
-  techDictionary: string[],
-  processDictionary: string[]
+  companyName: string
 ): Promise<GeminiDocsResult> {
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY
   if (!apiKey) throw new Error("GOOGLE_GENERATIVE_AI_API_KEY not configured")
@@ -135,16 +66,12 @@ async function structureDocumentsWithGemini(
   const genAI = new GoogleGenerativeAI(apiKey)
   const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" })
 
-  // Build detailed excerpt text with more content for better analysis
   const excerptText = excerpts
     .map(
       (e, i) =>
-        `--- Documento ${i + 1}: ${e.title} [tipo: ${e.type}] (${e.url}) ---\n${e.content.slice(0, 12000)}`
+        `--- Documento ${i + 1}: ${e.title} [tipo: ${e.type}] (${e.url}) ---\n${e.content.slice(0, 8000)}`
     )
     .join("\n\n")
-
-  // Build prompt with dictionaries
-  const systemPrompt = buildGeminiPrompt(techDictionary, processDictionary)
 
   const result = await model.generateContent({
     contents: [
@@ -152,40 +79,22 @@ async function structureDocumentsWithGemini(
         role: "user",
         parts: [
           {
-            text: `${systemPrompt}\n\n---\nEmpresa: "${companyName}"\n\nExcerpts de documentos públicos:\n\n${excerptText}\n\nExtrae los hallazgos relevantes, SEÑALES TECH y SNIPPETS donde se mencionan tecnologías. PRIORIZA encontrar vendors específicos y tecnologías del diccionario.`,
+            text: `${GEMINI_SYSTEM}\n\n---\nEmpresa: "${companyName}"\n\nExcerpts de documentos públicos:\n\n${excerptText}\n\nExtrae los hallazgos relevantes en JSON.`,
           },
         ],
       },
     ],
     generationConfig: {
       temperature: 0.2,
-      maxOutputTokens: 12000, // Increased for snippets
+      maxOutputTokens: 6000,
       responseMimeType: "application/json",
     },
   })
 
   const text = result.response.text()
   const parsed = JSON.parse(text)
-  
-  // Post-processing: Apply dictionary matching to tech_snippets
-  if (parsed.tech_snippets && Array.isArray(parsed.tech_snippets)) {
-    const { findDictionaryMatch } = await import("@/lib/documents/dictionary-matcher")
-    
-    for (const snippet of parsed.tech_snippets) {
-      if (!snippet.dictionary_match && snippet.technology) {
-        // Try to find dictionary match
-        const match = findDictionaryMatch(snippet.technology, techDictionary)
-        if (match) {
-          snippet.dictionary_match = match
-        }
-      }
-    }
-  }
-  
   return {
     findings: parsed.findings ?? [],
-    tech_signals: parsed.tech_signals ?? [],
-    tech_snippets: parsed.tech_snippets ?? [],
     digest: parsed.digest ?? null,
   }
 }
@@ -327,46 +236,26 @@ export async function POST(request: Request) {
     let ticker = company.ticker
     let cik = company.cik
 
-    // Get company country - SEC only has US companies (and some ADRs with explicit tickers)
-    const companyCountry = (company.country || "").toLowerCase().trim()
-    const isUSCompany = !companyCountry || 
-                        companyCountry === "us" || 
-                        companyCountry === "usa" || 
-                        companyCountry === "united states" || 
-                        companyCountry === "estados unidos"
-
     // If we don't know yet, try to detect
     if (isPublicCompany === null || isPublicCompany === undefined) {
-      console.log("[v0] Public Docs: Checking if company is public... (country:", companyCountry || "unknown", ", isUS:", isUSCompany, ")")
+      console.log("[v0] Public Docs: Checking if company is public...")
 
-      // Only search SEC if:
-      // 1. Company has an explicit ticker (could be ADR), OR
-      // 2. Company is from US or country is unknown
-      
-      // Try ticker first if available (works for ADRs too)
+      // Try ticker first if available
       if (ticker) {
         cik = await getCIKByTicker(ticker)
         if (cik) {
           isPublicCompany = true
-          console.log("[v0] Public Docs: Found CIK by ticker:", cik)
         }
       }
 
-      // Only try company name search for US companies or unknown country
-      // This prevents false matches like "Pluspetrol" -> "US Bancorp"
-      if (!cik && isUSCompany) {
-        console.log("[v0] Public Docs: Searching SEC by company name (US company)...")
+      // Try company name search
+      if (!cik) {
         const secResult = await searchSECByCompanyName(companyName)
         if (secResult) {
           isPublicCompany = true
           cik = secResult.cik
           ticker = secResult.ticker ?? ticker
-          console.log("[v0] Public Docs: SEC match found:", secResult.name, "CIK:", cik)
         }
-      } else if (!cik && !isUSCompany) {
-        // Non-US company without ticker - mark as private (for SEC purposes)
-        console.log("[v0] Public Docs: Non-US company without ticker, skipping SEC search")
-        isPublicCompany = false
       }
 
       // Update company record with public status
@@ -380,11 +269,11 @@ export async function POST(request: Request) {
         })
         .eq("id", companyId)
 
-      console.log("[v0] Public Docs: Company is", isPublicCompany ? "PUBLIC (SEC)" : "PRIVATE/Non-US", "| CIK:", cik || "none")
+      console.log("[v0] Public Docs: Company is", isPublicCompany ? "PUBLIC" : "PRIVATE", "| CIK:", cik)
     }
 
     // ── 3. Gather document sources ───────────────────────────────
-    const documentSources: { url: string; type: string; title: string; date?: string; excerpts?: string[] }[] = []
+    const documentSources: { url: string; type: string; title: string; date?: string }[] = []
 
     // 3a. If public company with CIK, get SEC filings
     if (isPublicCompany && cik) {
@@ -419,129 +308,11 @@ export async function POST(request: Request) {
       const searchResult = await parallelSearch(parallelParams)
       console.log("[v0] Public Docs: Parallel returned", searchResult.results.length, "results")
 
-      // ====== STRICT COMPANY NAME VALIDATION ======
-      // Normalize company name - remove legal suffixes
-      const companyNameNormalized = companyName
-        .toLowerCase()
-        .replace(/\s+(inc\.?|corp\.?|ltd\.?|llc\.?|s\.?a\.?|s\.?r\.?l\.?|plc\.?|c\.?a\.?|ltda\.?)$/i, "")
-        .replace(/[,\.]/g, "")
-        .trim()
-      
-      // Extract significant words (>2 chars, not common words)
-      const commonWords = new Set(["the", "and", "los", "las", "del", "de", "la", "el", "y", "e", "or", "of", "for", "en", "con"])
-      const companyWords = companyNameNormalized
-        .split(/\s+/)
-        .filter(w => w.length > 2 && !commonWords.has(w))
-      
-      // For names like "Caja Los Andes", the distinctive part is "Caja" + "Andes"
-      const distinctiveWords = companyWords.filter(w => w.length > 3)
-      const isSingleWord = distinctiveWords.length === 1
-
       for (const result of searchResult.results) {
+        // Determine document type from URL/title
         const urlLower = result.url.toLowerCase()
         const titleLower = result.title.toLowerCase()
-        const excerptText = (result.excerpts || []).join(" ").toLowerCase()
-        
-        // STRICT VALIDATION: Check if this result actually relates to our company
-        const combinedText = `${titleLower} ${excerptText}` // URL separate for domain check
-        
-        let hasCompanyMatch = false
-        let matchReason = ""
-        
-        // === VALIDATION STRATEGY ===
-        // 1. EXACT MATCH: Full name appears as contiguous phrase
-        const exactMatch = combinedText.includes(companyNameNormalized) ||
-                          combinedText.includes(companyNameNormalized.replace(/\s+/g, ""))
-        
-        if (exactMatch) {
-          hasCompanyMatch = true
-          matchReason = "exact_match"
-        }
-        
-        // 2. URL DOMAIN MATCH: Company name in URL (strong signal)
-        if (!hasCompanyMatch) {
-          const urlSlug = companyNameNormalized.replace(/\s+/g, "").replace(/[^a-z0-9]/g, "")
-          const domainMatch = urlLower.includes(urlSlug) || 
-                             urlLower.includes(companyNameNormalized.replace(/\s+/g, "-"))
-          if (domainMatch) {
-            hasCompanyMatch = true
-            matchReason = "url_domain"
-          }
-        }
-        
-        // 3. PROXIMITY CHECK: For multi-word names, words must appear CLOSE together
-        if (!hasCompanyMatch && !isSingleWord && distinctiveWords.length >= 2) {
-          // Check if distinctive words appear within 50 characters of each other
-          const firstWord = distinctiveWords[0]
-          const secondWord = distinctiveWords[1]
-          
-          const firstIdx = combinedText.indexOf(firstWord)
-          const secondIdx = combinedText.indexOf(secondWord)
-          
-          if (firstIdx !== -1 && secondIdx !== -1) {
-            const distance = Math.abs(firstIdx - secondIdx)
-            // Words should be within ~50 chars (allows for "Caja de Compensación Los Andes")
-            if (distance < 60) {
-              // Additional check: Make sure it's not a DIFFERENT company with similar words
-              // Look for other company indicators between the words
-              const segment = combinedText.slice(Math.min(firstIdx, secondIdx), Math.max(firstIdx, secondIdx) + 20)
-              
-              // Check for other company names that share words (e.g., "Caja Arequipa" vs "Caja Los Andes")
-              const otherCompanyPatterns = [
-                /caja\s+(arequipa|cusco|huancayo|piura|trujillo|tacna|sullana|maynas)/i,
-                /banco\s+(de\s+)?(credito|continental|scotiabank|interbank|bbva)/i,
-              ]
-              
-              const hasOtherCompany = otherCompanyPatterns.some(pattern => pattern.test(combinedText))
-              
-              if (!hasOtherCompany) {
-                hasCompanyMatch = true
-                matchReason = "proximity"
-              }
-            }
-          }
-        }
-        
-        // 4. SINGLE WORD with WORD BOUNDARY: For "Falabella", "Pluspetrol", etc.
-        if (!hasCompanyMatch && isSingleWord) {
-          const mainWord = distinctiveWords[0]
-          const wordBoundaryRegex = new RegExp(`\\b${mainWord}\\b`, "i")
-          if (wordBoundaryRegex.test(combinedText)) {
-            hasCompanyMatch = true
-            matchReason = "word_boundary"
-          }
-        }
-        
-        // === NEGATIVE FILTERS: Exclude common false positives ===
-        if (hasCompanyMatch) {
-          // Check if title explicitly mentions a DIFFERENT company
-          // Pattern: "[Other Company Name] - Annual Report" where Other Company != our company
-          const titleWords = titleLower.split(/\s+/).filter(w => w.length > 3)
-          
-          // If title starts with a different proper noun that's not in our company name
-          const titleFirstWord = titleWords[0]
-          if (titleFirstWord && 
-              !companyWords.includes(titleFirstWord) && 
-              titleFirstWord.match(/^[a-z]+$/) &&
-              !["annual", "report", "reporte", "memoria", "financial", "sustainability", "earnings"].includes(titleFirstWord)) {
-            
-            // Double-check: Does the title contain our company name?
-            if (!titleLower.includes(companyNameNormalized) && 
-                !distinctiveWords.some(w => titleLower.includes(w))) {
-              hasCompanyMatch = false
-              matchReason = "different_company_in_title"
-            }
-          }
-        }
-        
-        if (!hasCompanyMatch) {
-          console.log("[v0] Public Docs: Skipping unrelated result:", result.title.slice(0, 60), "| Reason:", matchReason || "no_match", "| Company:", companyNameNormalized)
-          continue
-        } else {
-          console.log("[v0] Public Docs: Accepted result:", result.title.slice(0, 50), "| Match:", matchReason)
-        }
 
-        // Determine document type from URL/title
         let docType = "financial"
         if (urlLower.includes("sustainability") || titleLower.includes("sustain") || titleLower.includes("esg")) {
           docType = "sustainability"
@@ -555,15 +326,12 @@ export async function POST(request: Request) {
         if (!documentSources.some((d) => d.url === result.url)) {
           documentSources.push({
             url: result.url,
-            title: result.title,
             type: docType,
+            title: result.title,
             date: result.publish_date ?? undefined,
-            excerpts: result.excerpts ?? [], // Include search excerpts for fallback analysis
           })
         }
       }
-      
-      console.log("[v0] Public Docs: After validation,", documentSources.length, "documents match company")
     } catch (parallelError) {
       console.error("[v0] Public Docs: Parallel search error:", parallelError)
     }
@@ -594,170 +362,52 @@ export async function POST(request: Request) {
       })
     }
 
-    // ── 5. Extract content from documents using Parallel Extract ─────────────
-    // Prioritize and limit URLs for extraction (max 6 docs, diverse types)
-    const prioritizedDocs = prioritizeAndLimitUrls(documentSources, 6)
-    console.log("[v0] Public Docs: Extracting content from", prioritizedDocs.length, "prioritized documents...")
+    // ── 5. Extract content and structure with Gemini ─────────────
+    // For now, we'll use search excerpts directly (parallel-extract would need more setup)
+    // In production, you'd use extractMultipleDocuments from lib/parallel-extract.ts
 
-    // Extract content from documents
-    let extractedDocs: { url: string; title: string; content: string; type: string; date?: string; excerpts: string[] }[] = []
-    
-    try {
-      const extractionResults = await extractMultipleDocuments(prioritizedDocs, {
-        objective: PUBLIC_DOCS_EXTRACTION_OBJECTIVE,
-        maxConcurrent: 3,
-        timeout: 45000,
-      })
+    console.log("[v0] Public Docs: Structuring", documentSources.length, "documents with Gemini...")
 
-      // Process extraction results
-      for (const result of extractionResults) {
-        if (result.content && result.content.length > 100) {
-          extractedDocs.push({
-            url: result.url,
-            title: result.title,
-            content: result.content,
-            type: result.type,
-            date: result.date,
-            excerpts: result.excerpts,
-          })
-          console.log("[v0] Public Docs: Extracted", result.title, "-", result.content.length, "chars")
-        } else if (result.error) {
-          console.warn("[v0] Public Docs: Failed to extract", result.url, "-", result.error)
-        }
-      }
-    } catch (extractionError) {
-      console.error("[v0] Public Docs: Extraction error:", extractionError)
-    }
+    // Prepare excerpts for Gemini
+    const excerpts = documentSources.slice(0, 8).map((doc) => ({
+      url: doc.url,
+      title: doc.title,
+      type: doc.type,
+      content: `[Documento: ${doc.title}]\nTipo: ${doc.type}\nURL: ${doc.url}`,
+    }))
 
-    // ── 6. Load dictionaries and structure with Gemini ─────────────
-    // Load tech and process dictionaries for matching
-    const [{ data: products }, { data: processes }] = await Promise.all([
-      supabase.from("dictionary_products").select("name").limit(200),
-      supabase.from("dictionary_processes").select("name").limit(200),
-    ])
-    const techDictionary = (products || []).map((p: any) => p.name)
-    const processDictionary = (processes || []).map((p: any) => p.name)
-    console.log("[v0] Public Docs: Loaded", techDictionary.length, "tech and", processDictionary.length, "process dictionary entries")
+    // If we have parallel search results with excerpts, use those
+    // (In a full implementation, we'd extract PDF content here)
 
     let findings: any[] = []
-    let techSignals: TechSignal[] = []
-    let techSnippets: TechSnippet[] = []
     let digest: string | null = null
 
-    if (extractedDocs.length > 0) {
-      console.log("[v0] Public Docs: Analyzing", extractedDocs.length, "documents with Gemini for tech signals...")
+    // Since we can't extract PDFs directly in this simple version,
+    // we'll note that documents exist and let the user view them
+    // The digest will explain what's available
 
-      try {
-        const geminiResult = await structureDocumentsWithGemini(extractedDocs, companyName, techDictionary, processDictionary)
-        findings = geminiResult.findings
-        techSignals = geminiResult.tech_signals
-        techSnippets = geminiResult.tech_snippets
-        digest = geminiResult.digest
+    const docSummary = documentSources.slice(0, 8).map(d => `${d.type}: ${d.title}`).join("; ")
+    digest = `Se encontraron ${documentSources.length} documentos públicos para ${companyName}: ${docSummary.slice(0, 200)}...`
 
-        console.log("[v0] Public Docs: Gemini found", findings.length, "findings,", techSignals.length, "tech signals, and", techSnippets.length, "tech snippets")
-      } catch (geminiError) {
-        console.error("[v0] Public Docs: Gemini analysis error:", geminiError)
-        // Fallback digest
-        const docSummary = extractedDocs.map(d => `${d.type}: ${d.title}`).join("; ")
-        digest = `Se encontraron ${documentSources.length} documentos públicos. Documentos analizados: ${docSummary.slice(0, 200)}...`
-      }
-    } else {
-      // No content extracted via Parallel Extract - try using search excerpts as fallback
-      console.log("[v0] Public Docs: No extracted content, trying search excerpts as fallback...")
-      
-      // Build fallback excerpts from search results if available
-      const searchExcerpts = documentSources
-        .filter(d => d.excerpts && d.excerpts.length > 0)
-        .slice(0, 6)
-        .map(d => ({
-          url: d.url,
-          title: d.title,
-          content: d.excerpts?.join("\n") || "",
-          type: d.type,
-        }))
-      
-      if (searchExcerpts.length > 0 && searchExcerpts.some(e => e.content.length > 100)) {
-        console.log("[v0] Public Docs: Using", searchExcerpts.length, "search excerpts as fallback")
-        
-        try {
-          const geminiResult = await structureDocumentsWithGemini(searchExcerpts, companyName, techDictionary, processDictionary)
-          findings = geminiResult.findings
-          techSignals = geminiResult.tech_signals
-          techSnippets = geminiResult.tech_snippets
-          digest = geminiResult.digest
-          
-          console.log("[v0] Public Docs: Fallback Gemini found", findings.length, "findings,", techSignals.length, "tech signals, and", techSnippets.length, "snippets")
-        } catch (geminiError) {
-          console.error("[v0] Public Docs: Fallback Gemini analysis error:", geminiError)
-          const docSummary = documentSources.slice(0, 6).map(d => `${d.type}: ${d.title}`).join("; ")
-          digest = `Se encontraron ${documentSources.length} documentos públicos. No se pudo analizar el contenido.`
-        }
-      } else {
-        // No useful content available
-        const docSummary = documentSources.slice(0, 6).map(d => `${d.type}: ${d.title}`).join("; ")
-        digest = `Se encontraron ${documentSources.length} documentos públicos para ${companyName}. No se pudo extraer contenido para análisis de señales tech.`
-      }
-    }
-
-    // ── 7. Save documents to database ────────────────────────────
-    // Create a map of extracted content and findings per URL
-    const extractedContentMap = new Map(extractedDocs.map(d => [d.url, d]))
-    
-    // Distribute findings to their respective documents based on source mentions
-    const findingsPerDoc: Map<string, any[]> = new Map()
-    for (const finding of findings) {
-      // Try to match finding to a document
-      const matchedDoc = extractedDocs.find(doc => 
-        finding.source_section?.toLowerCase().includes(doc.type.toLowerCase()) ||
-        finding.quote?.toLowerCase().includes(doc.title.toLowerCase().slice(0, 30))
-      )
-      if (matchedDoc) {
-        const existing = findingsPerDoc.get(matchedDoc.url) || []
-        existing.push(finding)
-        findingsPerDoc.set(matchedDoc.url, existing)
-      }
-    }
-
-    // Map tech snippets to their respective documents
-    const snippetsPerDoc = new Map<string, TechSnippet[]>()
-    for (const snippet of techSnippets) {
-      // Find which document this snippet came from
-      const sourceDoc = extractedDocs.find((d) =>
-        snippet.document_source.toLowerCase().includes(d.title.toLowerCase().slice(0, 30))
-      ) || extractedDocs[0]
-      
-      const existing = snippetsPerDoc.get(sourceDoc.url) || []
-      existing.push(snippet)
-      snippetsPerDoc.set(sourceDoc.url, existing)
-    }
-
-    const docsToInsert = documentSources.slice(0, MAX_DOCS).map((doc, idx) => {
-      const extracted = extractedContentMap.get(doc.url)
-      const docFindings = findingsPerDoc.get(doc.url) || []
-      const docSnippets = snippetsPerDoc.get(doc.url) || []
-      
-      return {
-        company_id: companyId,
-        bookmark_id: bookmarkId,
-        user_id: user.id,
-        requested_by: user.id,
-        requested_at: new Date().toISOString(),
-        document_type: doc.type,
-        document_title: doc.title,
-        document_date: doc.date || null,
-        source_url: doc.url,
-        source_name: doc.url.includes("sec.gov") ? "SEC EDGAR" : new URL(doc.url).hostname,
-        ticker: ticker || null,
-        findings: docFindings,
-        tech_signals: idx === 0 ? techSignals : [], // Store all tech signals on first doc
-        tech_snippets: docSnippets, // Store tech snippets for this document
-        digest: idx === 0 ? digest : null,
-        digest_generated_at: idx === 0 && digest ? new Date().toISOString() : null,
-        ai_provider: "gemini-2.0-flash",
-        extraction_method: extracted ? "parallel_extract" : "search_metadata",
-        content_extracted: !!extracted,
-      }
-    })
+    // ── 6. Save documents to database ────────────────────────────
+    const docsToInsert = documentSources.slice(0, MAX_DOCS).map((doc, idx) => ({
+      company_id: companyId,
+      bookmark_id: bookmarkId,
+      user_id: user.id,
+      requested_by: user.id,
+      requested_at: new Date().toISOString(),
+      document_type: doc.type,
+      document_title: doc.title,
+      document_date: doc.date || null,
+      source_url: doc.url,
+      source_name: doc.url.includes("sec.gov") ? "SEC EDGAR" : new URL(doc.url).hostname,
+      ticker: ticker || null,
+      findings: findings.length > 0 ? findings : [],
+      digest: idx === 0 ? digest : null,
+      digest_generated_at: idx === 0 && digest ? new Date().toISOString() : null,
+      ai_provider: "gemini-2.0-flash",
+      extraction_method: "search_metadata",
+    }))
 
     console.log("[v0] Public Docs: Inserting", docsToInsert.length, "documents")
 
@@ -775,7 +425,7 @@ export async function POST(request: Request) {
       console.error("[v0] Public Docs: Error inserting:", insertError)
     }
 
-    // ── 8. Return results ────────────────────────────────────────
+    // ── 7. Return results ────────────────────────────────────────
     const { data: allDocs } = await supabase
       .from("company_public_docs")
       .select("*")
@@ -794,9 +444,6 @@ export async function POST(request: Request) {
       canRefresh: freshCacheResult.canRefresh,
       lastSearchDate: freshCacheResult.lastSearchDate,
       daysUntilRefresh: freshCacheResult.daysUntilRefresh,
-      techSignals: techSignals, // Include tech signals in response
-      techSnippets: techSnippets, // Include technology snippets with quotes
-      totalFindings: findings.length,
     })
   } catch (error) {
     console.error("[v0] Public Docs: Error in POST handler:", error)

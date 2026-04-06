@@ -132,24 +132,48 @@ export function buildImplementationsSearchParams(context: {
       `Microsoft (customers.microsoft.com), SAP (sap.com/customers), Salesforce (salesforce.com/customer-success-stories), ` +
       `Oracle, Google Cloud, Accenture, Deloitte, McKinsey, Globant, etc. ` +
       `NO busco noticias de prensa general - esas van en la pestaña de Noticias. ` +
-      `NO busco reportes de sostenibilidad, memorias anuales ni documentos corporativos - esos van en otra pestaña. ` +
       `Quiero saber: qué tecnología implementaron, qué problema resolvieron, qué resultados obtuvieron.`,
     search_queries: [
       `"${context.company_name}" customer success story case study`,
-      `"${context.company_name}" cliente caso de éxito implementación vendor`,
-      `"${context.company_name}" AWS Azure Google Cloud Microsoft customer story`,
-      `"${context.company_name}" SAP Salesforce Oracle implementation case study`,
+      `"${context.company_name}" cliente caso de éxito implementación`,
+      `"${context.company_name}" AWS Azure Google Cloud customer story`,
+      `"${context.company_name}" SAP Salesforce Oracle customer reference`,
       ...techQueries,
     ].slice(0, 5), // max 5 queries
     max_results: 10,
     source_policy: {
-      // Exclude social and news media (keep under 10 domains to avoid API limits)
+      // Prioritize vendor/consultant domains
+      include_domains: [
+        "aws.amazon.com",
+        "customers.microsoft.com",
+        "azure.microsoft.com",
+        "cloud.google.com",
+        "sap.com",
+        "salesforce.com",
+        "oracle.com",
+        "accenture.com",
+        "deloitte.com",
+        "mckinsey.com",
+        "globant.com",
+        "ibm.com",
+        "servicenow.com",
+        "snowflake.com",
+        "databricks.com",
+        "tableau.com",
+      ],
+      // Exclude social and news media (news goes to news tab)
       exclude_domains: [
         "linkedin.com",
         "facebook.com",
         "twitter.com",
+        "x.com",
         "instagram.com",
+        "tiktok.com",
         "youtube.com",
+        "reuters.com",
+        "bloomberg.com",
+        "cnbc.com",
+        "forbes.com",
         "sec.gov", // SEC goes to public docs tab
       ],
       after_date: afterDate,
@@ -243,57 +267,47 @@ export function buildPublicDocsSearchParams(context: {
     ? " Buscar en español e inglés."
     : " Search in English."
 
-  // Add company-specific IR site search if we can infer it
-  const companyDomain = context.company_name
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "")
-  
-  // For LATAM, add specific queries for local regulator sites
-  if (isLatam && context.country) {
-    const countryLower = context.country.toLowerCase()
-    if (countryLower.includes("argentin")) {
-      searchQueries.push(`"${context.company_name}" site:cnv.gob.ar OR site:byma.com.ar`)
-    } else if (countryLower.includes("chile")) {
-      searchQueries.push(`"${context.company_name}" site:cmfchile.cl OR site:bolsadesantiago.com`)
-    } else if (countryLower.includes("colombia")) {
-      searchQueries.push(`"${context.company_name}" site:superfinanciera.gov.co OR site:bvc.com.co`)
-    } else if (countryLower.includes("mexic")) {
-      searchQueries.push(`"${context.company_name}" site:bmv.com.mx reporte anual`)
-    } else if (countryLower.includes("brasil") || countryLower.includes("brazil")) {
-      searchQueries.push(`"${context.company_name}" site:cvm.gov.br OR site:b3.com.br`)
-    } else if (countryLower.includes("peru")) {
-      searchQueries.push(`"${context.company_name}" site:smv.gob.pe OR site:bvl.com.pe`)
-    }
-  }
-
-  // Build exclusion hint for similar company names
-  const similarCompanyWarning = context.company_name.toLowerCase().includes("caja")
-    ? ` EXCLUIR documentos de: Caja Arequipa, Caja Cusco, Caja Huancayo, Caja Piura, Caja Trujillo, Caja Tacna - estas son OTRAS empresas diferentes.`
-    : context.company_name.toLowerCase().includes("banco")
-    ? ` EXCLUIR documentos de otros bancos que no sean exactamente "${context.company_name}".`
-    : ""
-
   return {
     objective:
-      `Busco DOCUMENTOS OFICIALES publicados ÚNICAMENTE por la empresa "${context.company_name}"${tickerNote}. ` +
-      `Tipos de documentos: ${sourceDescriptions.join(", ")}.${languageNote} ` +
-      `REQUISITOS ESTRICTOS: ` +
-      `1) El documento DEBE ser publicado por "${context.company_name}" (no sobre ella). ` +
-      `2) El título o URL DEBE contener "${context.company_name}" o su nombre comercial. ` +
-      `3) NO incluir documentos de empresas con nombres SIMILARES pero DIFERENTES.${similarCompanyWarning} ` +
-      `4) Sitios válidos: investor relations, página corporativa, reguladores financieros (CMF, CNV, SEC). ` +
-      `5) NO incluir: artículos de prensa, case studies de vendors, reportes de terceros. ` +
-      `Años de interés: ${year} y ${prevYear}. Solo documentos desde ${afterDate}.`,
+      `Busco DOCUMENTOS OFICIALES publicados directamente por la empresa "${context.company_name}"${tickerNote}: ` +
+      `${sourceDescriptions.join(", ")}.${languageNote} ` +
+      `SOLO documentos publicados por la empresa en su sitio de investor relations o comunicados oficiales. ` +
+      `NO busco artículos de prensa que HABLAN SOBRE reportes - busco los documentos ORIGINALES. ` +
+      `NO busco case studies de vendors - esos van en otra pestaña. ` +
+      `Años de interés: ${year} y ${prevYear}. ` +
+      `IMPORTANTE: Solo documentos publicados en los últimos 2 años (desde ${afterDate}).`,
     search_queries: searchQueries.slice(0, 7), // Max 7 queries for bilingual coverage
-    max_results: 10, // Reduced to get more relevant results
+    max_results: 12,
     source_policy: {
-      // Minimal exclude list to stay under API limits
+      // Allow IR/corporate sites and financial data providers
+      include_domains: [
+        "seekingalpha.com", // Earnings transcripts
+        "fool.com", // Earnings transcripts
+        "annualreports.com",
+        // Note: Company IR sites are allowed by not being excluded
+      ],
+      // Exclude sources that belong to other tabs
       exclude_domains: [
         "linkedin.com",
         "facebook.com",
         "twitter.com",
+        "x.com",
         "instagram.com",
         "youtube.com",
+        // Exclude news media (goes to news tab)
+        "reuters.com",
+        "bloomberg.com",
+        "cnbc.com",
+        "forbes.com",
+        "wsj.com",
+        "ft.com",
+        // Exclude vendors (goes to implementations tab)
+        "aws.amazon.com",
+        "customers.microsoft.com",
+        "salesforce.com",
+        "sap.com",
+        "accenture.com",
+        "deloitte.com",
       ],
       // Only documents from last 2 years
       after_date: afterDate,

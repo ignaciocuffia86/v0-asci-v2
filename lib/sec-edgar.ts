@@ -71,9 +71,6 @@ export async function getCIKByTicker(ticker: string): Promise<string | null> {
 /**
  * Searches SEC EDGAR for a company by name
  * Returns company info including CIK if found
- * 
- * IMPORTANT: This is STRICT matching to avoid false positives.
- * Only returns a match if the company name is very similar.
  */
 export async function searchSECByCompanyName(
   companyName: string
@@ -96,26 +93,15 @@ export async function searchSECByCompanyName(
     }
 
     const data = await response.json()
-    const searchName = companyName.toLowerCase().trim()
+    const searchName = companyName.toLowerCase()
     
-    // Normalize search name - remove common suffixes
-    const normalizedSearch = searchName
-      .replace(/\s+(inc\.?|corp\.?|ltd\.?|llc\.?|s\.?a\.?|s\.?r\.?l\.?|plc\.?)$/i, "")
-      .replace(/[,\.]/g, "")
-      .trim()
-    
-    // First pass: Look for EXACT match (highest confidence)
+    // Search for partial match in company names
     for (const key of Object.keys(data)) {
       const company = data[key]
       const title = (company.title || "").toLowerCase()
-      const normalizedTitle = title
-        .replace(/\s+(inc\.?|corp\.?|ltd\.?|llc\.?|s\.?a\.?|s\.?r\.?l\.?|plc\.?)$/i, "")
-        .replace(/[,\.]/g, "")
-        .trim()
       
-      // Exact match after normalization
-      if (normalizedTitle === normalizedSearch) {
-        console.log(`[SEC EDGAR] Exact match found: "${company.title}" for "${companyName}"`)
+      // Check for partial match
+      if (title.includes(searchName) || searchName.includes(title.split(" ")[0])) {
         return {
           cik: String(company.cik_str).padStart(10, "0"),
           name: company.title,
@@ -123,40 +109,7 @@ export async function searchSECByCompanyName(
         }
       }
     }
-    
-    // Second pass: Full word match (company name must START with search term or vice versa)
-    // Only if search term is long enough (>5 chars) to avoid false positives
-    if (normalizedSearch.length > 5) {
-      for (const key of Object.keys(data)) {
-        const company = data[key]
-        const title = (company.title || "").toLowerCase()
-        const normalizedTitle = title
-          .replace(/\s+(inc\.?|corp\.?|ltd\.?|llc\.?|s\.?a\.?|s\.?r\.?l\.?|plc\.?)$/i, "")
-          .replace(/[,\.]/g, "")
-          .trim()
-        
-        // Check if one starts with the other AND they share significant overlap
-        const startsWithMatch = normalizedTitle.startsWith(normalizedSearch) || 
-                                normalizedSearch.startsWith(normalizedTitle)
-        
-        // Calculate similarity - must be > 80% similar to match
-        const longerLen = Math.max(normalizedTitle.length, normalizedSearch.length)
-        const shorterLen = Math.min(normalizedTitle.length, normalizedSearch.length)
-        const similarity = shorterLen / longerLen
-        
-        if (startsWithMatch && similarity > 0.8) {
-          console.log(`[SEC EDGAR] High-similarity match: "${company.title}" for "${companyName}" (${Math.round(similarity * 100)}%)`)
-          return {
-            cik: String(company.cik_str).padStart(10, "0"),
-            name: company.title,
-            ticker: company.ticker,
-          }
-        }
-      }
-    }
 
-    // No match found - this is fine, many companies aren't in SEC
-    console.log(`[SEC EDGAR] No match found for "${companyName}"`)
     return null
   } catch (error) {
     console.error("[SEC EDGAR] Error searching by company name:", error)

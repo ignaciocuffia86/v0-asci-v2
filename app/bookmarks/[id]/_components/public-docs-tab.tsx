@@ -26,24 +26,6 @@ import { toast } from "sonner"
 import { formatDistanceToNow } from "date-fns"
 import { es } from "date-fns/locale"
 
-interface TechSignal {
-  signal_type: "vendor_used" | "vendor_planned" | "tech_initiative" | "investment_planned"
-  name: string
-  confidence: "confirmed" | "likely" | "inferred"
-  context: string
-  source_quote: string
-}
-
-interface TechSnippet {
-  technology: string
-  dictionary_match: string | null
-  snippet_type: "technology" | "process" | "vendor" | "investment"
-  snippet: string
-  document_source: string
-  investment_signal: boolean
-  monetary_amount: string | null
-}
-
 interface PublicDoc {
   id: string
   document_type: string
@@ -53,17 +35,13 @@ interface PublicDoc {
   source_url: string
   source_name: string | null
   ticker: string | null
-  content_extracted: boolean
   findings: Array<{
     category: string
     finding: string
     quote?: string
     source_section?: string
     relevance?: string
-    vendors_mentioned?: string[]
   }>
-  tech_signals: TechSignal[]
-  tech_snippets: TechSnippet[]
   digest: string | null
   created_at: string
 }
@@ -86,24 +64,9 @@ const DOC_TYPE_LABELS: Record<string, { label: string; icon: typeof FileText }> 
 
 const FINDING_CATEGORY_CONFIG: Record<string, { label: string; icon: typeof Target; color: string }> = {
   tech_investment: { label: "Inversión Tech", icon: Target, color: "text-blue-600 bg-blue-50 dark:bg-blue-950" },
-  vendor_mention: { label: "Vendor", icon: Building, color: "text-indigo-600 bg-indigo-50 dark:bg-indigo-950" },
-  digital_initiative: { label: "Iniciativa Digital", icon: Sparkles, color: "text-cyan-600 bg-cyan-50 dark:bg-cyan-950" },
   pain_point: { label: "Pain Point", icon: AlertTriangle, color: "text-amber-600 bg-amber-50 dark:bg-amber-950" },
   strategy: { label: "Estrategia", icon: Building, color: "text-purple-600 bg-purple-50 dark:bg-purple-950" },
   financial: { label: "Financiero", icon: DollarSign, color: "text-green-600 bg-green-50 dark:bg-green-950" },
-}
-
-const SIGNAL_TYPE_CONFIG: Record<string, { label: string; color: string; bgColor: string }> = {
-  vendor_used: { label: "Vendor Confirmado", color: "text-emerald-700", bgColor: "bg-emerald-100 dark:bg-emerald-900" },
-  vendor_planned: { label: "Vendor Planeado", color: "text-blue-700", bgColor: "bg-blue-100 dark:bg-blue-900" },
-  tech_initiative: { label: "Iniciativa Tech", color: "text-purple-700", bgColor: "bg-purple-100 dark:bg-purple-900" },
-  investment_planned: { label: "Inversión Planeada", color: "text-amber-700", bgColor: "bg-amber-100 dark:bg-amber-900" },
-}
-
-const CONFIDENCE_CONFIG: Record<string, { label: string; icon: string }> = {
-  confirmed: { label: "Confirmado", icon: "✓" },
-  likely: { label: "Probable", icon: "~" },
-  inferred: { label: "Inferido", icon: "?" },
 }
 
 interface CooldownInfo {
@@ -193,22 +156,11 @@ export function PublicDocsTab({ bookmarkId, companyId, companyName }: PublicDocs
       const result = await response.json()
       setIsPublicCompany(result.isPublic)
       
-      const signalsCount = result.techSignals?.length || 0
-      const snippetsCount = result.techSnippets?.length || 0
-      const findingsCount = result.totalFindings || 0
-      
-      const message = result.isPublic
-        ? `Se encontraron ${result.docs?.length || 0} documentos públicos`
-        : `Se encontraron ${result.docs?.length || 0} documentos (empresa privada)`
-      
-      const detailsArray = []
-      if (signalsCount > 0) detailsArray.push(`${signalsCount} señales tech`)
-      if (snippetsCount > 0) detailsArray.push(`${snippetsCount} snippets de tecnologías`)
-      if (findingsCount > 0) detailsArray.push(`${findingsCount} hallazgos`)
-      
-      const details = detailsArray.length > 0 ? ` con ${detailsArray.join(", ")}` : ""
-      
-      toast.success(message + details)
+      toast.success(
+        result.isPublic
+          ? `Se encontraron ${result.docs?.length || 0} documentos públicos (empresa cotiza en bolsa)`
+          : `Se encontraron ${result.docs?.length || 0} documentos (empresa privada)`
+      )
 
       setCooldown({
         canRefresh: result.canRefresh ?? isSuperAdmin,
@@ -241,29 +193,6 @@ export function PublicDocsTab({ bookmarkId, companyId, companyName }: PublicDocs
 
   const hasDocs = docs.length > 0
   const digest = docs.find(d => d.digest)?.digest
-  
-  // Collect all tech signals from docs (stored on first doc)
-  const techSignals: TechSignal[] = docs.flatMap(d => d.tech_signals || [])
-  
-  // Collect all tech snippets from all docs
-  const techSnippets: TechSnippet[] = docs.flatMap(d => d.tech_snippets || [])
-  
-  // Collect all findings from all docs
-  const allFindings = docs.flatMap(d => d.findings || [])
-  
-  // Group signals by type for display
-  const signalsByType = techSignals.reduce((acc, signal) => {
-    if (!acc[signal.signal_type]) acc[signal.signal_type] = []
-    acc[signal.signal_type].push(signal)
-    return acc
-  }, {} as Record<string, TechSignal[]>)
-
-  // Group snippets by snippet_type for display
-  const snippetsByType = techSnippets.reduce((acc, snippet) => {
-    if (!acc[snippet.snippet_type]) acc[snippet.snippet_type] = []
-    acc[snippet.snippet_type].push(snippet)
-    return acc
-  }, {} as Record<string, TechSnippet[]>)
 
   // Group docs by type for better organization
   const groupedDocs = docs.reduce((acc, doc) => {
@@ -295,189 +224,17 @@ export function PublicDocsTab({ bookmarkId, companyId, companyName }: PublicDocs
         </p>
       </div>
 
-      {/* Tech Signals Section - Most Important */}
-      {techSignals.length > 0 && (
-        <Card className="border-indigo-200 bg-gradient-to-br from-indigo-50/80 to-purple-50/50 dark:from-indigo-950/30 dark:to-purple-950/20 dark:border-indigo-800">
-          <CardHeader className="py-3">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Target className="h-4 w-4 text-indigo-600" />
-              Señales de Tecnología Detectadas
-              <Badge variant="secondary" className="ml-1">{techSignals.length}</Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="py-0 pb-4 space-y-3">
-            {Object.entries(signalsByType).map(([signalType, signals]) => {
-              const config = SIGNAL_TYPE_CONFIG[signalType] || { label: signalType, color: "text-gray-700", bgColor: "bg-gray-100" }
-              
-              return (
-                <div key={signalType} className="space-y-2">
-                  <h4 className={`text-xs font-medium ${config.color}`}>{config.label}</h4>
-                  <div className="flex flex-wrap gap-2">
-                    {signals.map((signal, idx) => (
-                      <div
-                        key={idx}
-                        className={`group relative px-3 py-1.5 rounded-lg ${config.bgColor} cursor-help`}
-                        title={`${signal.context}\n\nCita: "${signal.source_quote}"`}
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className={`font-medium text-sm ${config.color}`}>
-                            {signal.name}
-                          </span>
-                          <span className="text-[10px] opacity-60">
-                            {CONFIDENCE_CONFIG[signal.confidence]?.icon || ""}
-                          </span>
-                        </div>
-                        {/* Tooltip on hover */}
-                        <div className="absolute hidden group-hover:block z-10 bottom-full left-0 mb-2 w-64 p-2 bg-popover border rounded-md shadow-lg text-xs">
-                          <p className="font-medium mb-1">{signal.context}</p>
-                          {signal.source_quote && (
-                            <p className="text-muted-foreground italic">"{signal.source_quote.slice(0, 150)}..."</p>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )
-            })}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Tech Snippets Section - Technology Mentions with Context */}
-      {techSnippets.length > 0 && (
-        <Card className="border-cyan-200 bg-gradient-to-br from-cyan-50/80 to-blue-50/50 dark:from-cyan-950/30 dark:to-blue-950/20 dark:border-cyan-800">
-          <CardHeader className="py-3">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <TrendingUp className="h-4 w-4 text-cyan-600" />
-              Tecnologías y Procesos Mencionados
-              <Badge variant="secondary" className="ml-1">{techSnippets.length}</Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="py-0 pb-4 space-y-4">
-            {Object.entries(snippetsByType).map(([snippetType, snippets]) => {
-              const typeLabel = {
-                vendor: "Vendors Específicos",
-                technology: "Tecnologías",
-                process: "Procesos de Negocio",
-                investment: "Inversiones Tecnológicas",
-              }[snippetType] || snippetType
-
-              return (
-                <div key={snippetType} className="space-y-3">
-                  <h4 className="text-xs font-medium text-cyan-700 dark:text-cyan-300 flex items-center gap-2">
-                    {snippetType === "vendor" && <Building className="h-3 w-3" />}
-                    {snippetType === "technology" && <Sparkles className="h-3 w-3" />}
-                    {snippetType === "process" && <TrendingUp className="h-3 w-3" />}
-                    {snippetType === "investment" && <DollarSign className="h-3 w-3" />}
-                    {typeLabel}
-                  </h4>
-                  
-                  <div className="space-y-2">
-                    {snippets.map((snippet, idx) => (
-                      <div
-                        key={idx}
-                        className="p-3 rounded-lg bg-white/60 dark:bg-slate-900/40 border border-cyan-100/30 dark:border-cyan-800/30 space-y-1.5 hover:bg-white/80 dark:hover:bg-slate-900/60 transition-colors"
-                      >
-                        {/* Technology name with dictionary match */}
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex items-center gap-2 flex-1">
-                            <span className="font-medium text-sm text-cyan-700 dark:text-cyan-300">
-                              {snippet.dictionary_match || snippet.technology}
-                            </span>
-                            {snippet.dictionary_match && snippet.dictionary_match !== snippet.technology && (
-                              <span className="text-xs text-muted-foreground">
-                                ({snippet.technology})
-                              </span>
-                            )}
-                            {snippet.investment_signal && (
-                              <Badge variant="outline" className="text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300">
-                                Inversión
-                              </Badge>
-                            )}
-                          </div>
-                          {snippet.monetary_amount && (
-                            <Badge variant="secondary" className="text-[10px] bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 shrink-0">
-                              {snippet.monetary_amount}
-                            </Badge>
-                          )}
-                        </div>
-                        
-                        {/* Snippet text */}
-                        <p className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed italic">
-                          "{snippet.snippet}"
-                        </p>
-                        
-                        {/* Source document */}
-                        <div className="flex items-center justify-between gap-2 pt-1">
-                          <span className="text-xs text-muted-foreground">
-                            Fuente: <span className="font-medium">{snippet.document_source}</span>
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )
-            })}
-          </CardContent>
-        </Card>
-      )}
-
       {/* Digest Card */}
       {digest && (
         <Card className="border-teal-200 bg-teal-50/50 dark:bg-teal-950/20 dark:border-teal-800">
           <CardHeader className="py-3">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
               <Sparkles className="h-4 w-4 text-teal-600" />
-              Resumen de Documentos
+              Documentos Encontrados
             </CardTitle>
           </CardHeader>
           <CardContent className="py-0 pb-3">
             <p className="text-sm text-muted-foreground">{digest}</p>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Key Findings Section */}
-      {allFindings.length > 0 && (
-        <Card>
-          <CardHeader className="py-3">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <AlertCircle className="h-4 w-4 text-amber-600" />
-              Hallazgos Clave
-              <Badge variant="secondary" className="ml-1">{allFindings.length}</Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="py-0 pb-3 space-y-2">
-            {allFindings.slice(0, 6).map((finding, idx) => {
-              const catConfig = FINDING_CATEGORY_CONFIG[finding.category] || {
-                label: finding.category,
-                icon: Target,
-                color: "text-gray-600 bg-gray-50",
-              }
-              const FindingIcon = catConfig.icon
-
-              return (
-                <div key={idx} className="flex items-start gap-2 p-2 rounded-lg bg-muted/30">
-                  <Badge variant="secondary" className={`shrink-0 ${catConfig.color}`}>
-                    <FindingIcon className="h-3 w-3 mr-1" />
-                    {catConfig.label}
-                  </Badge>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm">{finding.finding}</p>
-                    {finding.quote && (
-                      <p className="text-xs text-muted-foreground mt-1 italic line-clamp-2">
-                        "{finding.quote}"
-                      </p>
-                    )}
-                  </div>
-                  {finding.relevance === "high" && (
-                    <Badge variant="destructive" className="text-[10px] shrink-0">Alta</Badge>
-                  )}
-                </div>
-              )
-            })}
           </CardContent>
         </Card>
       )}
@@ -594,11 +351,6 @@ export function PublicDocsTab({ bookmarkId, companyId, companyName }: PublicDocs
                               {doc.ticker && (
                                 <Badge variant="outline" className="text-[10px]">
                                   {doc.ticker}
-                                </Badge>
-                              )}
-                              {doc.content_extracted && (
-                                <Badge variant="secondary" className="text-[10px] bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">
-                                  Analizado
                                 </Badge>
                               )}
                             </div>
