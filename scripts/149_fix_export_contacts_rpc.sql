@@ -1,14 +1,14 @@
--- Create or replace the export_contacts RPC function
+-- Fix export_contacts - drop all overloads and recreate with correct signature
+
+-- Drop ALL existing export_contacts functions regardless of signature
+DROP FUNCTION IF EXISTS public.export_contacts CASCADE;
+
+-- Create the definitive export_contacts RPC function
 -- Supports: multi-country filter, process/technology filter, corporate email only filter
-
--- Drop existing functions with different signatures to allow update
-DROP FUNCTION IF EXISTS public.export_contacts(text, text, text) CASCADE;
-DROP FUNCTION IF EXISTS public.export_contacts(text, text, text, boolean) CASCADE;
-
-CREATE OR REPLACE FUNCTION export_contacts(
-  p_signal_type TEXT DEFAULT NULL,           -- 'process' or 'technology'
-  p_signal_name TEXT DEFAULT NULL,           -- name of process or technology
-  p_countries TEXT[] DEFAULT NULL,           -- array of country codes/names
+CREATE FUNCTION public.export_contacts(
+  p_signal_type TEXT DEFAULT NULL,
+  p_signal_name TEXT DEFAULT NULL,
+  p_countries TEXT[] DEFAULT NULL,
   p_exclude_service_providers BOOLEAN DEFAULT TRUE,
   p_only_corporate_email BOOLEAN DEFAULT TRUE,
   p_limit INT DEFAULT 10000
@@ -29,6 +29,7 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
+STABLE
 AS $$
 DECLARE
   personal_email_domains TEXT[] := ARRAY[
@@ -47,6 +48,7 @@ DECLARE
     'fastmail.com',
     'hey.com'
   ];
+  v_is_personal_email BOOLEAN;
 BEGIN
   RETURN QUERY
   WITH contact_signals AS (
@@ -74,13 +76,7 @@ BEGIN
       AND (p_countries IS NULL OR array_length(p_countries, 1) IS NULL OR comp.country = ANY(p_countries))
       AND (NOT p_exclude_service_providers OR comp.is_service_provider IS NOT TRUE)
       AND c.email IS NOT NULL
-      AND (
-        NOT p_only_corporate_email 
-        OR NOT (
-          SELECT bool_or(c.email ILIKE '%@' || domain)
-          FROM unnest(personal_email_domains) AS domain
-        )
-      )
+      AND c.email != ''
     
     UNION ALL
     
@@ -108,13 +104,7 @@ BEGIN
       AND (p_countries IS NULL OR array_length(p_countries, 1) IS NULL OR comp.country = ANY(p_countries))
       AND (NOT p_exclude_service_providers OR comp.is_service_provider IS NOT TRUE)
       AND c.email IS NOT NULL
-      AND (
-        NOT p_only_corporate_email 
-        OR NOT (
-          SELECT bool_or(c.email ILIKE '%@' || domain)
-          FROM unnest(personal_email_domains) AS domain
-        )
-      )
+      AND c.email != ''
   )
   SELECT DISTINCT ON (cs.contact_id, cs.signal_type, cs.signal_name)
     cs.contact_id,
@@ -130,13 +120,16 @@ BEGIN
     cs.signal_name,
     cs.signal_context
   FROM contact_signals cs
+  WHERE 
+    -- Apply corporate email filter if requested
+    (NOT p_only_corporate_email OR NOT (cs.email ILIKE ANY(ARRAY(SELECT '%@' || domain FROM unnest(personal_email_domains) AS domain))))
   ORDER BY cs.contact_id, cs.signal_type, cs.signal_name, cs.company_name
   LIMIT p_limit;
 END;
 $$;
 
 -- Grant execute permission to authenticated users (admin check done in app)
-GRANT EXECUTE ON FUNCTION export_contacts TO authenticated;
+GRANT EXECUTE ON FUNCTION public.export_contacts(TEXT, TEXT, TEXT[], BOOLEAN, BOOLEAN, INT) TO authenticated;
 
 -- Add comment for documentation
-COMMENT ON FUNCTION export_contacts IS 'Export contacts with signals. Supports multi-country, process/technology filter, and corporate email filter.';
+COMMENT ON FUNCTION public.export_contacts IS 'Export contacts with signals. Supports multi-country, process/technology filter, and corporate email filter. p_countries: array of country names, p_only_corporate_email: excludes personal email domains when true.';
