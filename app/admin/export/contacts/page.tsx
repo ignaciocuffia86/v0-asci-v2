@@ -41,7 +41,6 @@ export default function ExportContactsPage() {
   const [signalType, setSignalType] = useState<"process" | "technology" | "all">("all")
   const [signalName, setSignalName] = useState<string>("all")
   const [selectedCountries, setSelectedCountries] = useState<string[]>([])
-  const [excludeServiceProviders, setExcludeServiceProviders] = useState(true)
   const [onlyCorporateEmail, setOnlyCorporateEmail] = useState(true)
 
   // Results
@@ -72,11 +71,10 @@ export default function ExportContactsPage() {
       signalType: signalType === "all" ? null : signalType,
       signalName: signalName === "all" ? null : signalName,
       countries: selectedCountries,
-      excludeServiceProviders,
       onlyCorporateEmail,
       limit: 10000,
     }
-  }, [signalType, signalName, selectedCountries, excludeServiceProviders, onlyCorporateEmail])
+  }, [signalType, signalName, selectedCountries, onlyCorporateEmail])
 
   // Search handler
   const handleSearch = useCallback(async () => {
@@ -213,7 +211,6 @@ export default function ExportContactsPage() {
     (signalType !== "all" ? 1 : 0) +
     (signalName !== "all" ? 1 : 0) +
     selectedCountries.length +
-    (excludeServiceProviders ? 0 : 1) +
     (onlyCorporateEmail ? 0 : 1)
 
   return (
@@ -334,14 +331,15 @@ export default function ExportContactsPage() {
             </div>
             <div className="flex items-center space-x-2">
               <Checkbox
-                id="exclude-providers"
-                checked={excludeServiceProviders}
-                onCheckedChange={(c) => setExcludeServiceProviders(c === true)}
+                id="corporate-email"
+                checked={onlyCorporateEmail}
+                onCheckedChange={(c) => setOnlyCorporateEmail(c === true)}
               />
-              <Label htmlFor="exclude-providers" className="text-sm cursor-pointer flex items-center gap-1">
-                <Building2 className="h-3 w-3" /> Excluir proveedores de servicios
+              <Label htmlFor="corporate-email" className="text-sm cursor-pointer flex items-center gap-1">
+                <Mail className="h-3 w-3" /> Solo emails corporativos
               </Label>
             </div>
+          </div>
           </div>
 
           {/* Action Buttons */}

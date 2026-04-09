@@ -6,8 +6,7 @@ import { createClient } from "@/lib/supabase/server"
 export interface ExportFilters {
   signalType: "process" | "technology" | null // null = both
   signalName: string | null // nombre exacto del proceso o tecnología, null = all
-  countries: string[] // Array de países
-  excludeServiceProviders: boolean
+  countries: string[] // Array de países (del campo companies.country)
   onlyCorporateEmail: boolean
   limit: number
 }
@@ -17,14 +16,13 @@ export interface ExportRow {
   first_name: string | null
   last_name: string | null
   full_name: string | null
-  job_title: string | null
+  position: string | null
   company_name: string | null
   company_country: string | null
   linkedin_url: string | null
   email: string | null
   signal_type: string | null
   signal_name: string | null
-  signal_context: string | null
 }
 
 export interface DictionaryEntry {
@@ -99,16 +97,12 @@ export async function previewExport(
 ): Promise<{ data: ExportRow[]; total: number }> {
   const supabase = await createClient()
 
-  // Build countries array for PostgreSQL - pass as array directly
-  const countriesParam = filters.countries.length > 0 ? filters.countries : null
-
   const { data, error } = await supabase.rpc("export_contacts", {
     p_signal_type: filters.signalType,
     p_signal_name: filters.signalName,
-    p_countries: countriesParam,
-    p_exclude_service_providers: filters.excludeServiceProviders,
+    p_countries: filters.countries.length > 0 ? filters.countries : null,
     p_only_corporate_email: filters.onlyCorporateEmail,
-    p_limit: 10000, // Get all to count total
+    p_limit: 10000,
   })
 
   if (error) {
@@ -129,13 +123,10 @@ export async function exportToCSV(
 ): Promise<ExportRow[]> {
   const supabase = await createClient()
 
-  const countriesParam = filters.countries.length > 0 ? filters.countries : null
-
   const { data, error } = await supabase.rpc("export_contacts", {
     p_signal_type: filters.signalType,
     p_signal_name: filters.signalName,
-    p_countries: countriesParam,
-    p_exclude_service_providers: filters.excludeServiceProviders,
+    p_countries: filters.countries.length > 0 ? filters.countries : null,
     p_only_corporate_email: filters.onlyCorporateEmail,
     p_limit: Math.min(filters.limit, 10000),
   })
