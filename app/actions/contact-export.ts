@@ -170,6 +170,31 @@ export async function previewContactExport(
   }
 }
 
+// Full export (same query, returns all for CSV generation)
+export async function exportContactsToCSV(
+  filters: ContactExportFilters
+): Promise<ContactExportRow[]> {
+  const supabase = await createClient()
+
+  const { data, error } = await supabase.rpc("export_contacts", {
+    p_process_ids: filters.processIds?.length ? filters.processIds : null,
+    p_tech_ids: filters.techIds?.length ? filters.techIds : null,
+    p_country: filters.country || null,
+    p_industry: filters.industry || null,
+    p_search_text: filters.searchText || null,
+    p_only_with_email: filters.onlyWithEmail || false,
+    p_only_with_phone: filters.onlyWithPhone || false,
+    p_limit_count: Math.min(filters.limit, 1000),
+  })
+
+  if (error) {
+    console.error("Error exporting contacts:", error)
+    return []
+  }
+
+  return data || []
+}
+
 // NEW: Preview contacts with signals (returns 15 rows)
 export async function previewSignalExport(
   filters: SignalExportFilters
