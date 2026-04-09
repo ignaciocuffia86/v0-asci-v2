@@ -9,6 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Download,
   Users,
@@ -28,19 +29,25 @@ import {
   getContactIndustries,
   previewContactExport,
   exportContactsToCSV,
+  previewSignalExport,
+  exportSignalContactsToCSV,
   type ContactExportFilters,
   type ContactExportRow,
   type DictionaryEntry,
+  type SignalExportFilters,
 } from "@/app/actions/contact-export"
 
 export default function ExportContactsPage() {
+  // Search mode: 'standard' or 'signals'
+  const [searchMode, setSearchMode] = useState<"standard" | "signals">("standard")
+  
   // Dropdown options
   const [processes, setProcesses] = useState<DictionaryEntry[]>([])
   const [technologies, setTechnologies] = useState<DictionaryEntry[]>([])
   const [countries, setCountries] = useState<string[]>([])
   const [industries, setIndustries] = useState<string[]>([])
 
-  // Filter state
+  // Standard filter state
   const [selectedProcesses, setSelectedProcesses] = useState<string[]>([])
   const [selectedTechs, setSelectedTechs] = useState<string[]>([])
   const [selectedCountry, setSelectedCountry] = useState<string>("all")
@@ -50,11 +57,18 @@ export default function ExportContactsPage() {
   const [onlyWithPhone, setOnlyWithPhone] = useState(false)
   const [limit, setLimit] = useState<number>(100)
 
+  // Signal filter state (NEW)
+  const [signalType, setSignalType] = useState<"process" | "technology">("process")
+  const [signalName, setSignalName] = useState<string>("")
+  const [selectedCountries, setSelectedCountries] = useState<string[]>([]) // Multi-country
+  const [onlyCorporateEmail, setOnlyCorporateEmail] = useState(true) // Default: true
+
   // Results
-  const [results, setResults] = useState<ContactExportRow[]>([])
+  const [results, setResults] = useState<ContactExportRow[] | any[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [isExporting, setIsExporting] = useState(false)
   const [hasSearched, setHasSearched] = useState(false)
+  const [totalCount, setTotalCount] = useState(0)
 
   // Load filter options
   useEffect(() => {
@@ -90,73 +104,86 @@ export default function ExportContactsPage() {
     setIsLoading(true)
     setHasSearched(true)
     try {
-      const { data } = await previewContactExport(buildFilters())
-      setResults(data)
+      if (searchMode === "standard") {
+        const { data, total } = await previewContactExport(buildFilters())
+        setResults(data)
+        setTotalCount(total)
+      } else {
+        // Signal mode
+        if (!signalName || selectedCountries.length === 0) {
+          alert("Por favor selecciona una señal y al menos un país")
+          return
+        }
+        const { data, total } = await previewSignalExport({
+          signalType,
+          signalName,
+          countries: selectedCountries,
+          onlyCorporateEmail,
+        })
+        setResults(data)
+        setTotalCount(total)
+      }
     } catch (error) {
-      console.error("Error searching contacts:", error)
+      console.error("[v0] Error searching contacts:", error)
+      alert("Error al buscar contactos: " + (error as any).message)
     } finally {
       setIsLoading(false)
     }
-  }, [buildFilters])
+  }, [searchMode, buildFilters, signalName, selectedCountries, signalType, onlyCorporateEmail])
 
   const handleExport = useCallback(async () => {
+    if (results.length === 0) {
+      alert("No hay resultados para exportar")
+      return
+    }
+
     setIsExporting(true)
     try {
-      const data = await exportContactsToCSV(buildFilters())
+      let data: any[] = []
+      
+      if (searchMode === "standard") {
+        data = await exportContactsToCSV(buildFilters())
+      } else {
+        data = await exportSignalContactsToCSV({
+          signalType,
+          signalName,
+          countries: selectedCountries,
+          onlyCorporateEmail,
+          limit: 5000,
+        })
+      }
 
-      if (data.length === 0) return
+      if (!data.length) {
+        alert("No hay datos para exportar")
+        return
+      }
 
+      // Generate CSV
       const headers = [
         "Nombre",
         "Apellido",
-        "Nombre Completo",
         "Cargo",
-        "Headline",
+        "Compañía",
         "LinkedIn",
         "Email",
-        "Email Tipo",
-        "Email Status",
-        "Email 2",
-        "Telefono",
-        "Telefono Tipo",
-        "Telefono 2",
-        "Pais",
-        "Compania",
-        "Industria",
-        "Website Compania",
-        "LinkedIn Compania",
-        "Pais Compania",
-        "Procesos Detectados",
-        "Tecnologias Detectadas",
+        "País",
+        "Tipo de Señal",
+        "Señal",
       ]
-
-      const escape = (val: string | null) => `"${(val || "").replace(/"/g, '""')}"`
 
       const csvContent = [
         headers.join(","),
         ...data.map((row) =>
           [
-            escape(row.first_name),
-            escape(row.last_name),
-            escape(row.full_name),
-            escape(row.current_position_title),
-            escape(row.headline),
-            escape(row.linkedin_url),
-            escape(row.email1),
-            escape(row.email1_type),
-            escape(row.email1_status),
-            escape(row.email2),
-            escape(row.phone1),
-            escape(row.phone1_type),
-            escape(row.phone2),
-            escape(row.country),
-            escape(row.company_name),
-            escape(row.company_industry),
-            escape(row.company_website),
-            escape(row.company_linkedin),
-            escape(row.company_country),
-            escape(row.process_signals),
-            escape(row.technology_signals),
+            escape(row.first_name || ""),
+            escape(row.last_name || ""),
+            escape(row.position || row.current_position_title || ""),
+            escape(row.company_name || ""),
+            escape(row.linkedin_url || ""),
+            escape(row.email || row.email1 || ""),
+            escape(row.country || row.company_country || ""),
+            escape(row.signal_type || ""),
+            escape(row.signal_name || ""),
           ].join(",")
         ),
       ].join("\n")
@@ -172,11 +199,12 @@ export default function ExportContactsPage() {
       document.body.removeChild(link)
       URL.revokeObjectURL(url)
     } catch (error) {
-      console.error("Error exporting:", error)
+      console.error("[v0] Error exporting:", error)
+      alert("Error al exportar: " + (error as any).message)
     } finally {
       setIsExporting(false)
     }
-  }, [buildFilters])
+  }, [results, searchMode, buildFilters, signalType, signalName, selectedCountries, onlyCorporateEmail])
 
   const toggleProcess = (id: string) => {
     setSelectedProcesses((prev) =>
@@ -190,6 +218,14 @@ export default function ExportContactsPage() {
     )
   }
 
+  const toggleCountry = (country: string) => {
+    setSelectedCountries((prev) =>
+      prev.includes(country)
+        ? prev.filter((c) => c !== country)
+        : [...prev, country]
+    )
+  }
+
   const clearFilters = () => {
     setSelectedProcesses([])
     setSelectedTechs([])
@@ -199,8 +235,14 @@ export default function ExportContactsPage() {
     setOnlyWithEmail(false)
     setOnlyWithPhone(false)
     setLimit(100)
+    // Clear signal filters too
+    setSignalType("process")
+    setSignalName("")
+    setSelectedCountries([])
+    setOnlyCorporateEmail(true)
     setResults([])
     setHasSearched(false)
+    setTotalCount(0)
   }
 
   const activeFilterCount =
@@ -224,26 +266,35 @@ export default function ExportContactsPage() {
       {/* Filters */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between mb-4">
             <div>
               <CardTitle className="flex items-center gap-2">
                 <Filter className="h-5 w-5" />
                 Filtros
-                {activeFilterCount > 0 && (
-                  <Badge variant="secondary">{activeFilterCount} activos</Badge>
+                {(searchMode === "standard" ? activeFilterCount : selectedCountries.length) > 0 && (
+                  <Badge variant="secondary">
+                    {searchMode === "standard" ? activeFilterCount : selectedCountries.length + (signalName ? 1 : 0)} activos
+                  </Badge>
                 )}
               </CardTitle>
               <CardDescription>Selecciona los criterios para generar tu lista de contactos</CardDescription>
             </div>
-            {activeFilterCount > 0 && (
+            {((searchMode === "standard" ? activeFilterCount : selectedCountries.length) > 0 || signalName) && (
               <Button variant="ghost" size="sm" onClick={clearFilters}>
                 <X className="h-4 w-4 mr-1" />
                 Limpiar filtros
               </Button>
             )}
           </div>
-        </CardHeader>
-        <CardContent className="space-y-6">
+
+          {/* Mode Tabs */}
+          <Tabs defaultValue="standard" value={searchMode} onValueChange={(v) => setSearchMode(v as "standard" | "signals")}>
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="standard">Búsqueda Estándar</TabsTrigger>
+              <TabsTrigger value="signals">Por Señales</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="standard" className="mt-6 space-y-6">
           {/* Search text */}
           <div className="space-y-2">
             <Label>Busqueda por texto</Label>
@@ -367,9 +418,94 @@ export default function ExportContactsPage() {
             </div>
           </div>
 
+            </TabsContent>
+
+            {/* Signals Mode Tab */}
+            <TabsContent value="signals" className="mt-6 space-y-6">
+              {/* Signal Type */}
+              <div className="space-y-2">
+                <Label>Tipo de Señal</Label>
+                <div className="flex gap-2">
+                  <Badge
+                    variant={signalType === "process" ? "default" : "outline"}
+                    className="cursor-pointer transition-colors"
+                    onClick={() => setSignalType("process")}
+                  >
+                    Proceso
+                  </Badge>
+                  <Badge
+                    variant={signalType === "technology" ? "default" : "outline"}
+                    className="cursor-pointer transition-colors"
+                    onClick={() => setSignalType("technology")}
+                  >
+                    Tecnología
+                  </Badge>
+                </div>
+              </div>
+
+              {/* Signal Name */}
+              <div className="space-y-2">
+                <Label>
+                  Nombre de {signalType === "process" ? "Proceso" : "Tecnología"}
+                </Label>
+                <Select value={signalName} onValueChange={setSignalName}>
+                  <SelectTrigger>
+                    <SelectValue placeholder={`Selecciona un ${signalType === "process" ? "proceso" : "tecnología"}`} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(signalType === "process" ? processes : technologies).map((item) => (
+                      <SelectItem key={item.id} value={item.name}>
+                        {item.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Countries Multi-Select */}
+              <div className="space-y-2">
+                <Label>Países (Selecciona múltiples)</Label>
+                <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto border rounded-lg p-3 bg-muted/30">
+                  {countries.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">Cargando países...</p>
+                  ) : (
+                    countries.map((country) => (
+                      <Badge
+                        key={country}
+                        variant={selectedCountries.includes(country) ? "default" : "outline"}
+                        className="cursor-pointer transition-colors"
+                        onClick={() => toggleCountry(country)}
+                      >
+                        {country}
+                      </Badge>
+                    ))
+                  )}
+                </div>
+                {selectedCountries.length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {selectedCountries.length} país(es) seleccionado(s): {selectedCountries.join(", ")}
+                  </p>
+                )}
+              </div>
+
+              {/* Corporate Email Filter */}
+              <div className="flex items-center space-x-2 p-3 rounded-lg bg-muted/50">
+                <Checkbox
+                  id="corporate-email"
+                  checked={onlyCorporateEmail}
+                  onCheckedChange={(c) => setOnlyCorporateEmail(c === true)}
+                />
+                <Label htmlFor="corporate-email" className="text-sm cursor-pointer flex items-center gap-1">
+                  <Mail className="h-3 w-3" /> Solo emails corporativos
+                </Label>
+              </div>
+            </TabsContent>
+          </Tabs>
+        </CardHeader>
+        <CardContent className="space-y-4">
           {/* Action Buttons */}
-          <div className="flex gap-2 pt-2">
-            <Button onClick={handleSearch} disabled={isLoading}>
+          <div className="flex gap-2">
+            <Button onClick={handleSearch} disabled={isLoading || (searchMode === "signals" && (!signalName || selectedCountries.length === 0))}>
               {isLoading ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -386,12 +522,12 @@ export default function ExportContactsPage() {
               {isExporting ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Exportando {limit} contactos...
+                  Exportando...
                 </>
               ) : (
                 <>
                   <Download className="h-4 w-4 mr-2" />
-                  Exportar CSV ({limit} contactos)
+                  Exportar CSV ({results.length} encontrados)
                 </>
               )}
             </Button>
@@ -406,12 +542,14 @@ export default function ExportContactsPage() {
             <CardTitle className="flex items-center gap-2">
               <Users className="h-5 w-5" />
               {results.length > 0
-                ? `${results.length} contactos encontrados`
+                ? `${totalCount} contactos encontrados (preview: ${results.length})`
                 : "Sin resultados"}
             </CardTitle>
             {results.length > 0 && (
               <CardDescription>
-                Preview de los primeros {results.length} resultados. El CSV exportara hasta {limit} registros completos.
+                {searchMode === "standard"
+                  ? `El CSV exportará hasta ${limit} registros completos.`
+                  : `Se encontraron ${totalCount} contactos con la señal seleccionada.`}
               </CardDescription>
             )}
           </CardHeader>
@@ -424,7 +562,7 @@ export default function ExportContactsPage() {
                       <TableHead className="min-w-[180px]">Nombre</TableHead>
                       <TableHead className="min-w-[150px]">Cargo</TableHead>
                       <TableHead className="min-w-[150px]">Empresa</TableHead>
-                      <TableHead>Pais</TableHead>
+                      <TableHead>País</TableHead>
                       <TableHead className="text-center">
                         <span className="sr-only">LinkedIn</span>
                         <Linkedin className="h-4 w-4 inline" />
@@ -433,12 +571,22 @@ export default function ExportContactsPage() {
                         <span className="sr-only">Email</span>
                         <Mail className="h-4 w-4 inline" />
                       </TableHead>
-                      <TableHead className="text-center">
-                        <span className="sr-only">Telefono</span>
-                        <Phone className="h-4 w-4 inline" />
-                      </TableHead>
-                      <TableHead className="min-w-[140px]">Procesos</TableHead>
-                      <TableHead className="min-w-[140px]">Tecnologias</TableHead>
+                      {searchMode === "standard" && (
+                        <>
+                          <TableHead className="text-center">
+                            <span className="sr-only">Teléfono</span>
+                            <Phone className="h-4 w-4 inline" />
+                          </TableHead>
+                          <TableHead className="min-w-[140px]">Procesos</TableHead>
+                          <TableHead className="min-w-[140px]">Tecnologías</TableHead>
+                        </>
+                      )}
+                      {searchMode === "signals" && (
+                        <>
+                          <TableHead className="min-w-[140px]">Tipo de Señal</TableHead>
+                          <TableHead className="min-w-[140px]">Señal</TableHead>
+                        </>
+                      )}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -467,59 +615,75 @@ export default function ExportContactsPage() {
                           )}
                         </TableCell>
                         <TableCell className="text-center">
-                          {row.email1 ? (
-                            <span title={row.email1}>
+                          {row.email || row.email1 ? (
+                            <span title={row.email || row.email1}>
                               <Mail className="h-4 w-4 inline text-green-600" />
                             </span>
                           ) : (
                             <span className="text-muted-foreground">-</span>
                           )}
                         </TableCell>
-                        <TableCell className="text-center">
-                          {row.phone1 ? (
-                            <span title={row.phone1}>
-                              <Phone className="h-4 w-4 inline text-green-600" />
-                            </span>
-                          ) : (
-                            <span className="text-muted-foreground">-</span>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          {row.process_signals ? (
-                            <div className="flex flex-wrap gap-1">
-                              {row.process_signals.split(", ").slice(0, 2).map((p, i) => (
-                                <Badge key={i} variant="secondary" className="text-xs">
-                                  {p}
-                                </Badge>
-                              ))}
-                              {row.process_signals.split(", ").length > 2 && (
-                                <Badge variant="outline" className="text-xs">
-                                  +{row.process_signals.split(", ").length - 2}
-                                </Badge>
+                        {searchMode === "standard" && (
+                          <>
+                            <TableCell className="text-center">
+                              {row.phone1 ? (
+                                <span title={row.phone1}>
+                                  <Phone className="h-4 w-4 inline text-green-600" />
+                                </span>
+                              ) : (
+                                <span className="text-muted-foreground">-</span>
                               )}
-                            </div>
-                          ) : (
-                            <span className="text-muted-foreground text-sm">-</span>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          {row.technology_signals ? (
-                            <div className="flex flex-wrap gap-1">
-                              {row.technology_signals.split(", ").slice(0, 2).map((t, i) => (
-                                <Badge key={i} variant="secondary" className="text-xs">
-                                  {t}
-                                </Badge>
-                              ))}
-                              {row.technology_signals.split(", ").length > 2 && (
-                                <Badge variant="outline" className="text-xs">
-                                  +{row.technology_signals.split(", ").length - 2}
-                                </Badge>
+                            </TableCell>
+                            <TableCell>
+                              {row.process_signals ? (
+                                <div className="flex flex-wrap gap-1">
+                                  {row.process_signals.split(", ").slice(0, 2).map((p, i) => (
+                                    <Badge key={i} variant="secondary" className="text-xs">
+                                      {p}
+                                    </Badge>
+                                  ))}
+                                  {row.process_signals.split(", ").length > 2 && (
+                                    <Badge variant="outline" className="text-xs">
+                                      +{row.process_signals.split(", ").length - 2}
+                                    </Badge>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="text-muted-foreground text-sm">-</span>
                               )}
-                            </div>
-                          ) : (
-                            <span className="text-muted-foreground text-sm">-</span>
-                          )}
-                        </TableCell>
+                            </TableCell>
+                            <TableCell>
+                              {row.technology_signals ? (
+                                <div className="flex flex-wrap gap-1">
+                                  {row.technology_signals.split(", ").slice(0, 2).map((t, i) => (
+                                    <Badge key={i} variant="secondary" className="text-xs">
+                                      {t}
+                                    </Badge>
+                                  ))}
+                                  {row.technology_signals.split(", ").length > 2 && (
+                                    <Badge variant="outline" className="text-xs">
+                                      +{row.technology_signals.split(", ").length - 2}
+                                    </Badge>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="text-muted-foreground text-sm">-</span>
+                              )}
+                            </TableCell>
+                          </>
+                        )}
+                        {searchMode === "signals" && (
+                          <>
+                            <TableCell>
+                              <Badge variant="outline" className="text-xs">
+                                {row.signal_type === "process" ? "Proceso" : "Tecnología"}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="font-medium">
+                              {row.signal_name || "-"}
+                            </TableCell>
+                          </>
+                        )}
                       </TableRow>
                     ))}
                   </TableBody>

@@ -13,6 +13,15 @@ export interface ContactExportFilters {
   limit: number
 }
 
+// NEW: Filters for signal-based export (by signal name, not ID)
+export interface SignalExportFilters {
+  signalType: "process" | "technology" // 'process' or 'technology'
+  signalName: string // Nombre exacto del proceso o tecnología
+  countries: string[] // Array de países: ["Chile", "Argentina", "Colombia"]
+  onlyCorporateEmail: boolean // Filter out personal email domains
+  limit?: number
+}
+
 export interface ContactExportRow {
   first_name: string | null
   last_name: string | null
@@ -161,27 +170,49 @@ export async function previewContactExport(
   }
 }
 
-// Full export (same query, returns all for CSV generation)
-export async function exportContactsToCSV(
-  filters: ContactExportFilters
-): Promise<ContactExportRow[]> {
+// NEW: Preview contacts with signals (returns 15 rows)
+export async function previewSignalExport(
+  filters: SignalExportFilters
+): Promise<{ data: any[]; total: number }> {
   const supabase = await createClient()
 
   const { data, error } = await supabase.rpc("export_contacts", {
-    p_process_ids: filters.processIds?.length ? filters.processIds : null,
-    p_tech_ids: filters.techIds?.length ? filters.techIds : null,
-    p_country: filters.country || null,
-    p_industry: filters.industry || null,
-    p_search_text: filters.searchText || null,
-    p_only_with_email: filters.onlyWithEmail || false,
-    p_only_with_phone: filters.onlyWithPhone || false,
-    p_limit_count: Math.min(filters.limit, 1000),
+    p_signal_type: filters.signalType,
+    p_signal_name: filters.signalName,
+    p_countries: JSON.stringify(filters.countries),
+    p_only_corporate_email: filters.onlyCorporateEmail,
   })
 
   if (error) {
-    console.error("Error exporting contacts:", error)
+    console.error("[v0] Error previewing signal export:", error)
+    return { data: [], total: 0 }
+  }
+
+  // Return only first 15 for preview
+  return {
+    data: (data || []).slice(0, 15),
+    total: data?.length || 0,
+  }
+}
+
+// NEW: Full export contacts with signals to CSV
+export async function exportSignalContactsToCSV(
+  filters: SignalExportFilters
+): Promise<any[]> {
+  const supabase = await createClient()
+
+  const { data, error } = await supabase.rpc("export_contacts", {
+    p_signal_type: filters.signalType,
+    p_signal_name: filters.signalName,
+    p_countries: JSON.stringify(filters.countries),
+    p_only_corporate_email: filters.onlyCorporateEmail,
+  })
+
+  if (error) {
+    console.error("[v0] Error exporting signal contacts:", error)
     return []
   }
 
-  return data || []
+  // Limit to 5000 rows for CSV
+  return (data || []).slice(0, Math.min(filters.limit || 5000, 5000))
 }
