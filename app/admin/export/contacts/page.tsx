@@ -39,7 +39,7 @@ export default function ExportContactsPage() {
 
   // Filter state
   const [signalType, setSignalType] = useState<"process" | "technology" | "all">("all")
-  const [signalName, setSignalName] = useState<string>("all")
+  const [selectedSignalNames, setSelectedSignalNames] = useState<string[]>([])
   const [selectedCountries, setSelectedCountries] = useState<string[]>([])
   const [onlyCorporateEmail, setOnlyCorporateEmail] = useState(true)
 
@@ -69,12 +69,12 @@ export default function ExportContactsPage() {
   const buildFilters = useCallback((): ExportFilters => {
     return {
       signalType: signalType === "all" ? null : signalType,
-      signalName: signalName === "all" ? null : signalName,
+      signalNames: selectedSignalNames,
       countries: selectedCountries,
       onlyCorporateEmail,
       limit: 10000,
     }
-  }, [signalType, signalName, selectedCountries, onlyCorporateEmail])
+  }, [signalType, selectedSignalNames, selectedCountries, onlyCorporateEmail])
 
   // Search handler
   const handleSearch = useCallback(async () => {
@@ -137,7 +137,6 @@ export default function ExportContactsPage() {
         "Email",
         "Tipo de Señal",
         "Señal",
-        "Contexto",
       ]
 
       const csvContent = [
@@ -147,14 +146,13 @@ export default function ExportContactsPage() {
             escapeCSV(row.first_name),
             escapeCSV(row.last_name),
             escapeCSV(row.full_name),
-            escapeCSV(row.job_title),
+            escapeCSV(row.position),
             escapeCSV(row.company_name),
             escapeCSV(row.company_country),
             escapeCSV(row.linkedin_url),
             escapeCSV(row.email),
             escapeCSV(row.signal_type === "process" ? "Proceso" : "Tecnología"),
             escapeCSV(row.signal_name),
-            escapeCSV(row.signal_context),
           ].join(",")
         ),
       ].join("\n")
@@ -188,16 +186,22 @@ export default function ExportContactsPage() {
     )
   }
 
-  // Clear filters
+  const toggleSignalName = (signalName: string) => {
+    setSelectedSignalNames((prev) =>
+      prev.includes(signalName)
+        ? prev.filter((s) => s !== signalName)
+        : [...prev, signalName]
+    )
+  }
+
   const clearFilters = () => {
     setSignalType("all")
-    setSignalName("all")
+    setSelectedSignalNames([])
     setSelectedCountries([])
-    setExcludeServiceProviders(true)
     setOnlyCorporateEmail(true)
     setResults([])
-    setTotalCount(0)
     setHasSearched(false)
+    setTotalCount(0)
   }
 
   // Get current signal options based on type
@@ -209,7 +213,7 @@ export default function ExportContactsPage() {
 
   const activeFilterCount = 
     (signalType !== "all" ? 1 : 0) +
-    (signalName !== "all" ? 1 : 0) +
+    selectedSignalNames.length +
     selectedCountries.length +
     (onlyCorporateEmail ? 0 : 1)
 
@@ -272,22 +276,34 @@ export default function ExportContactsPage() {
               </Select>
             </div>
 
-            {/* Signal Name */}
+            {/* Signal Names - Multi-Select */}
             <div className="space-y-2">
-              <Label>Señal Específica</Label>
-              <Select value={signalName} onValueChange={setSignalName}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Selecciona señal" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Todas las señales</SelectItem>
-                  {signalOptions.map((item) => (
-                    <SelectItem key={item.id} value={item.name}>
+              <Label>Señales (selecciona una o más)</Label>
+              <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto border rounded-lg p-3 bg-muted/30">
+                {signalType === "all" ? (
+                  <p className="text-sm text-muted-foreground">Selecciona primero un tipo de señal</p>
+                ) : signalType === "process" && processes.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Cargando procesos...</p>
+                ) : signalType === "technology" && technologies.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Cargando tecnologías...</p>
+                ) : (
+                  (signalType === "process" ? processes : technologies).map((item) => (
+                    <Badge
+                      key={item.id}
+                      variant={selectedSignalNames.includes(item.name) ? "default" : "outline"}
+                      className="cursor-pointer transition-colors hover:bg-primary/80"
+                      onClick={() => toggleSignalName(item.name)}
+                    >
                       {item.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                    </Badge>
+                  ))
+                )}
+              </div>
+              {selectedSignalNames.length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  {selectedSignalNames.length} señal(es): {selectedSignalNames.join(", ")}
+                </p>
+              )}
             </div>
           </div>
 
@@ -319,16 +335,6 @@ export default function ExportContactsPage() {
 
           {/* Checkboxes */}
           <div className="flex flex-wrap gap-6">
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="corporate-email"
-                checked={onlyCorporateEmail}
-                onCheckedChange={(c) => setOnlyCorporateEmail(c === true)}
-              />
-              <Label htmlFor="corporate-email" className="text-sm cursor-pointer flex items-center gap-1">
-                <Mail className="h-3 w-3" /> Solo emails corporativos
-              </Label>
-            </div>
             <div className="flex items-center space-x-2">
               <Checkbox
                 id="corporate-email"
@@ -423,7 +429,7 @@ export default function ExportContactsPage() {
                           {row.full_name || `${row.first_name || ""} ${row.last_name || ""}`.trim() || "-"}
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">
-                          {row.job_title || "-"}
+                          {row.position || "-"}
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-1">

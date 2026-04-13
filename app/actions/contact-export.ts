@@ -2,11 +2,11 @@
 
 import { createClient } from "@/lib/supabase/server"
 
-// Unified export filters - one search mode
+// Unified export filters - multi-señal support
 export interface ExportFilters {
   signalType: "process" | "technology" | null // null = both
-  signalName: string | null // nombre exacto del proceso o tecnología, null = all
-  countries: string[] // Array de países (del campo companies.country)
+  signalNames: string[] // Array de nombres de señales (multi-select)
+  countries: string[] // Array de países normalizados
   onlyCorporateEmail: boolean
   limit: number
 }
@@ -64,15 +64,15 @@ export async function getDictionaryTechnologies(): Promise<DictionaryEntry[]> {
   return data || []
 }
 
-// Get distinct countries from companies for filter dropdown (sorted alphabetically)
+// Get distinct countries from companies (using country_normalized field)
 export async function getContactCountries(): Promise<string[]> {
   const supabase = await createClient()
 
   const { data, error } = await supabase
     .from("companies")
-    .select("country")
-    .not("country", "is", null)
-    .neq("country", "")
+    .select("country_normalized")
+    .not("country_normalized", "is", null)
+    .neq("country_normalized", "")
 
   if (error) {
     console.error("Error getting contact countries:", error)
@@ -81,7 +81,7 @@ export async function getContactCountries(): Promise<string[]> {
 
   const countries = new Set<string>()
   data.forEach((row) => {
-    const country = row.country?.trim()
+    const country = row.country_normalized?.trim()
     if (country) {
       countries.add(country)
     }
@@ -99,7 +99,7 @@ export async function previewExport(
 
   const { data, error } = await supabase.rpc("export_contacts", {
     p_signal_type: filters.signalType,
-    p_signal_name: filters.signalName,
+    p_signal_names: filters.signalNames.length > 0 ? filters.signalNames : null,
     p_countries: filters.countries.length > 0 ? filters.countries : null,
     p_only_corporate_email: filters.onlyCorporateEmail,
     p_limit: 10000,
@@ -125,7 +125,7 @@ export async function exportToCSV(
 
   const { data, error } = await supabase.rpc("export_contacts", {
     p_signal_type: filters.signalType,
-    p_signal_name: filters.signalName,
+    p_signal_names: filters.signalNames.length > 0 ? filters.signalNames : null,
     p_countries: filters.countries.length > 0 ? filters.countries : null,
     p_only_corporate_email: filters.onlyCorporateEmail,
     p_limit: Math.min(filters.limit, 10000),
