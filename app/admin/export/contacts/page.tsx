@@ -340,7 +340,6 @@ export default function ExportContactsPage() {
               </Label>
             </div>
           </div>
-          </div>
 
           {/* Action Buttons */}
           <div className="flex gap-2 pt-2">
