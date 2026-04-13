@@ -163,7 +163,7 @@ export default function ExportContactsPage() {
       const link = document.createElement("a")
       link.href = url
       const dateStr = new Date().toISOString().split("T")[0]
-      const signalLabel = signalName !== "all" ? `_${signalName.replace(/\s+/g, "_")}` : ""
+      const signalLabel = selectedSignalNames.length > 0 ? `_${selectedSignalNames.join("_").replace(/\s+/g, "_")}` : ""
       link.download = `contactos_export${signalLabel}_${dateStr}.csv`
       document.body.appendChild(link)
       link.click()
