@@ -146,7 +146,7 @@ export default function ExportContactsPage() {
             escapeCSV(row.first_name),
             escapeCSV(row.last_name),
             escapeCSV(row.full_name),
-            escapeCSV(row.position),
+            escapeCSV(row.job_title),
             escapeCSV(row.company_name),
             escapeCSV(row.company_country),
             escapeCSV(row.linkedin_url),
@@ -263,7 +263,7 @@ export default function ExportContactsPage() {
               <Label>Tipo de Señal</Label>
               <Select value={signalType} onValueChange={(v) => {
                 setSignalType(v as "process" | "technology" | "all")
-                setSignalName("all") // Reset signal name when type changes
+                setSelectedSignalNames([]) // Reset signal names when type changes
               }}>
                 <SelectTrigger>
                   <SelectValue placeholder="Selecciona tipo" />
@@ -429,7 +429,7 @@ export default function ExportContactsPage() {
                           {row.full_name || `${row.first_name || ""} ${row.last_name || ""}`.trim() || "-"}
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">
-                          {row.position || "-"}
+                          {row.job_title || "-"}
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-1">
