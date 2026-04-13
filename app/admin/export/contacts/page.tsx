@@ -175,7 +175,7 @@ export default function ExportContactsPage() {
     } finally {
       setIsExporting(false)
     }
-  }, [buildFilters, totalCount, signalName])
+  }, [buildFilters, totalCount, selectedSignalNames])
 
   // Toggle country selection
   const toggleCountry = (country: string) => {
