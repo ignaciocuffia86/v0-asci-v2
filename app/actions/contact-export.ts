@@ -97,6 +97,13 @@ export async function previewExport(
 ): Promise<{ data: ExportRow[]; total: number }> {
   const supabase = await createClient()
 
+  console.log("[v0] previewExport called with filters:", {
+    signalType: filters.signalType,
+    signalNames: filters.signalNames,
+    countries: filters.countries,
+    onlyCorporateEmail: filters.onlyCorporateEmail,
+  })
+
   const { data, error } = await supabase.rpc("export_contacts", {
     p_signal_type: filters.signalType,
     p_signal_names: filters.signalNames.length > 0 ? filters.signalNames : null,
@@ -108,6 +115,11 @@ export async function previewExport(
   if (error) {
     console.error("[v0] Error previewing export:", error)
     return { data: [], total: 0 }
+  }
+
+  console.log("[v0] previewExport result count:", data?.length || 0)
+  if (data && data.length > 0) {
+    console.log("[v0] First result signal_name:", data[0].signal_name, "signal_type:", data[0].signal_type)
   }
 
   // Return only first 15 for preview, but total count of all
