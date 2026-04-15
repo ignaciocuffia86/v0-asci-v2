@@ -91,7 +91,6 @@ BEGIN
         OR LOWER(COALESCE(c.email1, c.email2, c.email3)) LIKE '%@mail.com'
       )
     )
-  ORDER BY comp.country_normalized, comp.name, c.last_name, c.first_name
   LIMIT p_limit;
 END;
 $$;
