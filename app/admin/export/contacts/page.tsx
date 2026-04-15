@@ -440,7 +440,7 @@ export default function ExportContactsPage() {
             </CardTitle>
             {results.length > 0 && (
               <CardDescription>
-                Preview de los primeros {results.length} resultados. El CSV contendrá todos los {totalCount} registros.
+                Preview de los primeros {results.length} resultados. El CSV contendrá todos los {totalCount > 10000 ? "10,000+" : totalCount} registros (máximo 10,000).
               </CardDescription>
             )}
           </CardHeader>
