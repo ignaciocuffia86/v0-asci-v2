@@ -24,6 +24,7 @@ import {
   getDictionaryProcesses,
   getDictionaryTechnologies,
   getContactCountries,
+  getContactIndustries,
   previewExport,
   exportToCSV,
   type ExportFilters,
@@ -36,11 +37,13 @@ export default function ExportContactsPage() {
   const [processes, setProcesses] = useState<DictionaryEntry[]>([])
   const [technologies, setTechnologies] = useState<DictionaryEntry[]>([])
   const [countries, setCountries] = useState<string[]>([])
+  const [industries, setIndustries] = useState<string[]>([])
 
   // Filter state
   const [signalType, setSignalType] = useState<"process" | "technology" | "all">("all")
   const [selectedSignalNames, setSelectedSignalNames] = useState<string[]>([])
   const [selectedCountries, setSelectedCountries] = useState<string[]>([])
+  const [selectedIndustries, setSelectedIndustries] = useState<string[]>([])
   const [onlyCorporateEmail, setOnlyCorporateEmail] = useState(true)
 
   // Results
@@ -53,14 +56,16 @@ export default function ExportContactsPage() {
   // Load dropdown options on mount
   useEffect(() => {
     const loadOptions = async () => {
-      const [procs, techs, ctrs] = await Promise.all([
+      const [procs, techs, ctrs, inds] = await Promise.all([
         getDictionaryProcesses(),
         getDictionaryTechnologies(),
         getContactCountries(),
+        getContactIndustries(),
       ])
       setProcesses(procs)
       setTechnologies(techs)
       setCountries(ctrs)
+      setIndustries(inds)
     }
     loadOptions()
   }, [])
@@ -71,10 +76,11 @@ export default function ExportContactsPage() {
       signalType: signalType === "all" ? null : signalType,
       signalNames: selectedSignalNames,
       countries: selectedCountries,
+      industries: selectedIndustries,
       onlyCorporateEmail,
       limit: 10000,
     }
-  }, [signalType, selectedSignalNames, selectedCountries, onlyCorporateEmail])
+  }, [signalType, selectedSignalNames, selectedCountries, selectedIndustries, onlyCorporateEmail])
 
   // Search handler
   const handleSearch = useCallback(async () => {
@@ -194,10 +200,19 @@ export default function ExportContactsPage() {
     )
   }
 
+  const toggleIndustry = (industry: string) => {
+    setSelectedIndustries((prev) =>
+      prev.includes(industry)
+        ? prev.filter((i) => i !== industry)
+        : [...prev, industry]
+    )
+  }
+
   const clearFilters = () => {
     setSignalType("all")
     setSelectedSignalNames([])
     setSelectedCountries([])
+    setSelectedIndustries([])
     setOnlyCorporateEmail(true)
     setResults([])
     setHasSearched(false)
@@ -215,6 +230,7 @@ export default function ExportContactsPage() {
     (signalType !== "all" ? 1 : 0) +
     selectedSignalNames.length +
     selectedCountries.length +
+    selectedIndustries.length +
     (onlyCorporateEmail ? 0 : 1)
 
   return (
@@ -329,6 +345,32 @@ export default function ExportContactsPage() {
             {selectedCountries.length > 0 && (
               <p className="text-xs text-muted-foreground">
                 {selectedCountries.length} país(es): {selectedCountries.join(", ")}
+              </p>
+            )}
+          </div>
+
+          {/* Industries Multi-Select */}
+          <div className="space-y-2">
+            <Label>Industrias (selecciona una o más)</Label>
+            <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto border rounded-lg p-3 bg-muted/30">
+              {industries.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Cargando industrias...</p>
+              ) : (
+                industries.map((industry) => (
+                  <Badge
+                    key={industry}
+                    variant={selectedIndustries.includes(industry) ? "default" : "outline"}
+                    className="cursor-pointer transition-colors hover:bg-primary/80"
+                    onClick={() => toggleIndustry(industry)}
+                  >
+                    {industry}
+                  </Badge>
+                ))
+              )}
+            </div>
+            {selectedIndustries.length > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {selectedIndustries.length} industria(s): {selectedIndustries.join(", ")}
               </p>
             )}
           </div>

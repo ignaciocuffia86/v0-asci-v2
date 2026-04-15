@@ -7,6 +7,7 @@ export interface ExportFilters {
   signalType: "process" | "technology" | null // null = both
   signalNames: string[] // Array de nombres de señales (multi-select)
   countries: string[] // Array de países normalizados
+  industries: string[] // Array de industrias
   onlyCorporateEmail: boolean
   limit: number
 }
@@ -64,6 +65,32 @@ export async function getDictionaryTechnologies(): Promise<DictionaryEntry[]> {
   return data || []
 }
 
+// Get distinct industries from companies
+export async function getContactIndustries(): Promise<string[]> {
+  const supabase = await createClient()
+
+  const { data, error } = await supabase
+    .from("companies")
+    .select("industry")
+    .not("industry", "is", null)
+    .neq("industry", "")
+
+  if (error) {
+    console.error("Error getting industries:", error)
+    return []
+  }
+
+  const industries = new Set<string>()
+  data.forEach((row) => {
+    const industry = row.industry?.trim()
+    if (industry) {
+      industries.add(industry)
+    }
+  })
+
+  return Array.from(industries).sort((a, b) => a.localeCompare(b, "es"))
+}
+
 // Get distinct countries from companies (using country_normalized field)
 export async function getContactCountries(): Promise<string[]> {
   const supabase = await createClient()
@@ -97,29 +124,18 @@ export async function previewExport(
 ): Promise<{ data: ExportRow[]; total: number }> {
   const supabase = await createClient()
 
-  console.log("[v0] previewExport called with filters:", {
-    signalType: filters.signalType,
-    signalNames: filters.signalNames,
-    countries: filters.countries,
-    onlyCorporateEmail: filters.onlyCorporateEmail,
-  })
-
   const { data, error } = await supabase.rpc("export_contacts", {
     p_signal_type: filters.signalType,
     p_signal_names: filters.signalNames.length > 0 ? filters.signalNames : null,
     p_countries: filters.countries.length > 0 ? filters.countries : null,
+    p_industries: filters.industries.length > 0 ? filters.industries : null,
     p_only_corporate_email: filters.onlyCorporateEmail,
     p_limit: 10000,
   })
 
   if (error) {
-    console.error("[v0] Error previewing export:", error)
+    console.error("Error previewing export:", error)
     return { data: [], total: 0 }
-  }
-
-  console.log("[v0] previewExport result count:", data?.length || 0)
-  if (data && data.length > 0) {
-    console.log("[v0] First result signal_name:", data[0].signal_name, "signal_type:", data[0].signal_type)
   }
 
   // Return only first 15 for preview, but total count of all
@@ -139,12 +155,13 @@ export async function exportToCSV(
     p_signal_type: filters.signalType,
     p_signal_names: filters.signalNames.length > 0 ? filters.signalNames : null,
     p_countries: filters.countries.length > 0 ? filters.countries : null,
+    p_industries: filters.industries.length > 0 ? filters.industries : null,
     p_only_corporate_email: filters.onlyCorporateEmail,
     p_limit: Math.min(filters.limit, 10000),
   })
 
   if (error) {
-    console.error("[v0] Error exporting to CSV:", error)
+    console.error("Error exporting to CSV:", error)
     return []
   }
 
