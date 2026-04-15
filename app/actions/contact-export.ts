@@ -2,39 +2,28 @@
 
 import { createClient } from "@/lib/supabase/server"
 
-export interface ContactExportFilters {
-  processIds?: string[]
-  techIds?: string[]
-  country?: string | null
-  industry?: string | null
-  searchText?: string | null
-  onlyWithEmail?: boolean
-  onlyWithPhone?: boolean
+// Unified export filters - multi-señal support
+export interface ExportFilters {
+  signalType: "process" | "technology" | null // null = both
+  signalNames: string[] // Array de nombres de señales (multi-select)
+  countries: string[] // Array de países normalizados
+  industries: string[] // Array de industrias
+  onlyCorporateEmail: boolean
   limit: number
 }
 
-export interface ContactExportRow {
+export interface ExportRow {
+  contact_id: string
   first_name: string | null
   last_name: string | null
   full_name: string | null
-  current_position_title: string | null
-  headline: string | null
-  linkedin_url: string | null
-  email1: string | null
-  email1_type: string | null
-  email1_status: string | null
-  email2: string | null
-  phone1: string | null
-  phone1_type: string | null
-  phone2: string | null
-  country: string | null
+  job_title: string | null // matches RPC column name
   company_name: string | null
-  company_industry: string | null
-  company_website: string | null
-  company_linkedin: string | null
   company_country: string | null
-  process_signals: string | null
-  technology_signals: string | null
+  linkedin_url: string | null
+  email: string | null
+  signal_type: string | null
+  signal_name: string | null
 }
 
 export interface DictionaryEntry {
@@ -76,35 +65,7 @@ export async function getDictionaryTechnologies(): Promise<DictionaryEntry[]> {
   return data || []
 }
 
-// Get distinct countries from contacts for filter dropdown
-export async function getContactCountries(): Promise<string[]> {
-  const supabase = await createClient()
-
-  const { data, error } = await supabase
-    .from("contacts")
-    .select("country")
-    .not("country", "is", null)
-    .neq("country", "")
-
-  if (error) {
-    console.error("Error getting contact countries:", error)
-    return []
-  }
-
-  const countryMap = new Map<string, number>()
-  data.forEach((row) => {
-    const country = row.country?.trim()
-    if (country) {
-      countryMap.set(country, (countryMap.get(country) || 0) + 1)
-    }
-  })
-
-  return Array.from(countryMap.entries())
-    .sort((a, b) => b[1] - a[1])
-    .map(([country]) => country)
-}
-
-// Get distinct industries from companies for filter dropdown
+// Get distinct industries from companies
 export async function getContactIndustries(): Promise<string[]> {
   const supabase = await createClient()
 
@@ -119,67 +80,88 @@ export async function getContactIndustries(): Promise<string[]> {
     return []
   }
 
-  const industryMap = new Map<string, number>()
+  const industries = new Set<string>()
   data.forEach((row) => {
     const industry = row.industry?.trim()
     if (industry) {
-      industryMap.set(industry, (industryMap.get(industry) || 0) + 1)
+      industries.add(industry)
     }
   })
 
-  return Array.from(industryMap.entries())
-    .sort((a, b) => b[1] - a[1])
-    .map(([industry]) => industry)
+  return Array.from(industries).sort((a, b) => a.localeCompare(b, "es"))
+}
+
+// Get distinct countries from companies (using country_normalized field)
+export async function getContactCountries(): Promise<string[]> {
+  const supabase = await createClient()
+
+  const { data, error } = await supabase
+    .from("companies")
+    .select("country_normalized")
+    .not("country_normalized", "is", null)
+    .neq("country_normalized", "")
+
+  if (error) {
+    console.error("Error getting contact countries:", error)
+    return []
+  }
+
+  const countries = new Set<string>()
+  data.forEach((row) => {
+    const country = row.country_normalized?.trim()
+    if (country) {
+      countries.add(country)
+    }
+  })
+
+  // Sort alphabetically
+  return Array.from(countries).sort((a, b) => a.localeCompare(b, "es"))
 }
 
 // Preview contacts (returns only 15 rows for preview table)
-export async function previewContactExport(
-  filters: ContactExportFilters
-): Promise<{ data: ContactExportRow[]; total: number }> {
+export async function previewExport(
+  filters: ExportFilters
+): Promise<{ data: ExportRow[]; total: number }> {
   const supabase = await createClient()
 
-  // Preview: only fetch 15 rows for the table
   const { data, error } = await supabase.rpc("export_contacts", {
-    p_process_ids: filters.processIds?.length ? filters.processIds : null,
-    p_tech_ids: filters.techIds?.length ? filters.techIds : null,
-    p_country: filters.country || null,
-    p_industry: filters.industry || null,
-    p_search_text: filters.searchText || null,
-    p_only_with_email: filters.onlyWithEmail || false,
-    p_only_with_phone: filters.onlyWithPhone || false,
-    p_limit_count: 15,
+    p_signal_type: filters.signalType,
+    p_signal_names: filters.signalNames.length > 0 ? filters.signalNames : null,
+    p_countries: filters.countries.length > 0 ? filters.countries : null,
+    p_industries: filters.industries.length > 0 ? filters.industries : null,
+    p_only_corporate_email: filters.onlyCorporateEmail,
+    p_limit: 10000,
   })
 
   if (error) {
-    console.error("Error previewing contacts:", error)
+    console.error("Error previewing export:", error)
     return { data: [], total: 0 }
   }
 
+  // Return only first 15 for preview, but total count of all
   return {
-    data: data || [],
+    data: (data || []).slice(0, 15),
     total: data?.length || 0,
   }
 }
 
-// Full export (same query, returns all for CSV generation)
-export async function exportContactsToCSV(
-  filters: ContactExportFilters
-): Promise<ContactExportRow[]> {
+// Full export to CSV
+export async function exportToCSV(
+  filters: ExportFilters
+): Promise<ExportRow[]> {
   const supabase = await createClient()
 
   const { data, error } = await supabase.rpc("export_contacts", {
-    p_process_ids: filters.processIds?.length ? filters.processIds : null,
-    p_tech_ids: filters.techIds?.length ? filters.techIds : null,
-    p_country: filters.country || null,
-    p_industry: filters.industry || null,
-    p_search_text: filters.searchText || null,
-    p_only_with_email: filters.onlyWithEmail || false,
-    p_only_with_phone: filters.onlyWithPhone || false,
-    p_limit_count: Math.min(filters.limit, 1000),
+    p_signal_type: filters.signalType,
+    p_signal_names: filters.signalNames.length > 0 ? filters.signalNames : null,
+    p_countries: filters.countries.length > 0 ? filters.countries : null,
+    p_industries: filters.industries.length > 0 ? filters.industries : null,
+    p_only_corporate_email: filters.onlyCorporateEmail,
+    p_limit: Math.min(filters.limit, 10000),
   })
 
   if (error) {
-    console.error("Error exporting contacts:", error)
+    console.error("Error exporting to CSV:", error)
     return []
   }
 
