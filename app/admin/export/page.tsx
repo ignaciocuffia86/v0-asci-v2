@@ -232,6 +232,7 @@ export default function ExportPage() {
                   <SelectItem value="250">250 compañías</SelectItem>
                   <SelectItem value="500">500 compañías</SelectItem>
                   <SelectItem value="1000">1,000 compañías</SelectItem>
+                  <SelectItem value="10000">10,000 compañías</SelectItem>
                 </SelectContent>
               </Select>
             </div>
