@@ -200,16 +200,16 @@ export function AdminSidebar() {
                 </Button>
                 {exportOpen && (
                   <div className="ml-6 mt-1 space-y-1">
-                    <Link href="/admin/export">
+                    <Link href="/admin/export/companies-signals">
                       <Button
                         variant="ghost"
                         size="sm"
                         className={cn(
                           "w-full justify-start text-sm",
-                          pathname === "/admin/export" && "bg-sidebar-accent/50"
+                          pathname === "/admin/export/companies-signals" && "bg-sidebar-accent/50"
                         )}
                       >
-                        Export Companias
+                        Export Compañías
                       </Button>
                     </Link>
                     <Link href="/admin/export/contacts">

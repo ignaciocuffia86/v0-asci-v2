@@ -4,12 +4,10 @@ import { useState, useEffect, useCallback } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Download, Building2, Loader2, Mail, Filter } from "lucide-react"
-import { Input } from "@/components/ui/input"
+import { Download, Building2, Loader2, Filter } from "lucide-react"
 import {
   getCompaniesWithSignals,
   getSignalNamesForExport,
@@ -31,7 +29,6 @@ export default function CompaniesSignalsExportPage() {
   const [selectedSignalNames, setSelectedSignalNames] = useState<string[]>([])
   const [selectedCountries, setSelectedCountries] = useState<string[]>([])
   const [selectedIndustries, setSelectedIndustries] = useState<string[]>([])
-  const [minSignals, setMinSignals] = useState<number>(1)
 
   // Results state
   const [results, setResults] = useState<CompanyWithSignalsRow[]>([])
@@ -64,10 +61,9 @@ export default function CompaniesSignalsExportPage() {
       signalNames: selectedSignalNames,
       countries: selectedCountries,
       industries: selectedIndustries,
-      minSignals,
       limit: 10000,
     }
-  }, [signalType, selectedSignalNames, selectedCountries, selectedIndustries, minSignals])
+  }, [signalType, selectedSignalNames, selectedCountries, selectedIndustries])
 
   // Toggle functions
   const toggleCountry = (country: string) => {
@@ -93,7 +89,6 @@ export default function CompaniesSignalsExportPage() {
     setSelectedSignalNames([])
     setSelectedCountries([])
     setSelectedIndustries([])
-    setMinSignals(1)
     setResults([])
     setHasSearched(false)
     setTotalCount(0)
@@ -295,19 +290,6 @@ export default function CompaniesSignalsExportPage() {
             </div>
 
             {/* Min Signals */}
-            <div className="space-y-2">
-              <Label>Mínimo de Señales</Label>
-              <Input
-                type="number"
-                min="1"
-                max="10000"
-                value={minSignals}
-                onChange={(e) => setMinSignals(Math.max(1, parseInt(e.target.value) || 1))}
-                className="max-w-xs"
-              />
-              <p className="text-xs text-muted-foreground">Mostrar solo compañías con al menos este número de señales</p>
-            </div>
-
             {/* Action Buttons */}
             <div className="flex gap-2 pt-2">
               <Button onClick={handleSearch} disabled={isLoading} size="lg">

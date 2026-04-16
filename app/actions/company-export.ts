@@ -20,7 +20,6 @@ export interface CompanyWithSignalsFilters {
   signalNames: string[] // Nombres específicos de señales
   countries: string[]
   industries: string[]
-  minSignals: number
   limit: number
 }
 
@@ -107,7 +106,6 @@ export async function getCompaniesWithSignals(filters: CompanyWithSignalsFilters
     p_signal_names: filters.signalNames.length > 0 ? filters.signalNames : null,
     p_countries: filters.countries.length > 0 ? filters.countries : null,
     p_industries: filters.industries.length > 0 ? filters.industries : null,
-    p_min_signals: filters.minSignals || 0,
     p_limit: Math.min(filters.limit, 10000),
   })
 
