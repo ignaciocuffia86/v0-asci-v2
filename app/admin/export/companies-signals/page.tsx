@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Download, Building2, Loader2, Filter } from "lucide-react"
+import { Download, Building2, Loader2, Filter, Shield } from "lucide-react"
 import {
   getCompaniesWithSignals,
   getSignalNamesForExport,
@@ -16,6 +16,7 @@ import {
   type CompanyWithSignalsFilters,
   type CompanyWithSignalsRow,
 } from "@/app/actions/company-export"
+import { Checkbox } from "@/components/ui/checkbox"
 
 export default function CompaniesSignalsExportPage() {
   // Dropdown options
@@ -29,6 +30,7 @@ export default function CompaniesSignalsExportPage() {
   const [selectedSignalNames, setSelectedSignalNames] = useState<string[]>([])
   const [selectedCountries, setSelectedCountries] = useState<string[]>([])
   const [selectedIndustries, setSelectedIndustries] = useState<string[]>([])
+  const [excludeServiceProviders, setExcludeServiceProviders] = useState(true)
 
   // Results state
   const [results, setResults] = useState<CompanyWithSignalsRow[]>([])
@@ -61,9 +63,10 @@ export default function CompaniesSignalsExportPage() {
       signalNames: selectedSignalNames,
       countries: selectedCountries,
       industries: selectedIndustries,
+      excludeServiceProviders,
       limit: 10000,
     }
-  }, [signalType, selectedSignalNames, selectedCountries, selectedIndustries])
+  }, [signalType, selectedSignalNames, selectedCountries, selectedIndustries, excludeServiceProviders])
 
   // Toggle functions
   const toggleCountry = (country: string) => {
@@ -89,6 +92,7 @@ export default function CompaniesSignalsExportPage() {
     setSelectedSignalNames([])
     setSelectedCountries([])
     setSelectedIndustries([])
+    setExcludeServiceProviders(true)
     setResults([])
     setHasSearched(false)
     setTotalCount(0)
@@ -289,7 +293,20 @@ export default function CompaniesSignalsExportPage() {
               )}
             </div>
 
-            {/* Min Signals */}
+            {/* Checkboxes */}
+            <div className="flex flex-wrap gap-6">
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="exclude-providers"
+                  checked={excludeServiceProviders}
+                  onCheckedChange={(c) => setExcludeServiceProviders(c === true)}
+                />
+                <Label htmlFor="exclude-providers" className="text-sm cursor-pointer flex items-center gap-1">
+                  <Shield className="h-3 w-3" /> Excluir proveedores de servicios
+                </Label>
+              </div>
+            </div>
+
             {/* Action Buttons */}
             <div className="flex gap-2 pt-2">
               <Button onClick={handleSearch} disabled={isLoading} size="lg">
