@@ -8,6 +8,7 @@ CREATE OR REPLACE FUNCTION export_companies_with_signals(
   p_signal_names TEXT[] DEFAULT NULL,
   p_countries TEXT[] DEFAULT NULL,
   p_industries TEXT[] DEFAULT NULL,
+  p_exclude_providers BOOLEAN DEFAULT FALSE,
   p_limit INT DEFAULT 1000
 )
 RETURNS TABLE (
@@ -52,6 +53,8 @@ BEGIN
     AND (p_countries IS NULL OR c.country_normalized = ANY(p_countries))
     -- Filtro por industrias
     AND (p_industries IS NULL OR c.industry = ANY(p_industries))
+    -- Excluir proveedores de servicios
+    AND (NOT p_exclude_providers OR c.is_service_provider IS NOT TRUE)
   GROUP BY c.id, c.name, c.website, c.linkedin_url, c.country_normalized, c.industry
   HAVING COUNT(s.id) > 0
   ORDER BY COUNT(s.id) DESC
