@@ -322,14 +322,14 @@ export async function updateBookmarkScope(
     filterType: string | null
     filtersUsed: { technology?: string[]; process?: string[] }
   }
-): Promise<{ success: boolean; collision?: boolean; error?: any }> {
+): Promise<{ success: boolean; collision?: boolean; bookmark?: any; error?: any }> {
   const supabase = await createClient()
 
   try {
     // 1. Get the current bookmark to know its company_id and current context
     const { data: currentBookmark, error: fetchError } = await supabase
       .from("bookmarks")
-      .select("company_id, search_context")
+      .select("*")
       .eq("id", bookmarkId)
       .eq("user_id", userId)
       .single()
@@ -371,17 +371,19 @@ export async function updateBookmarkScope(
       scope_modified_at: new Date().toISOString(),
     }
 
-    const { error: updateError } = await supabase
+    const { data: updatedBookmark, error: updateError } = await supabase
       .from("bookmarks")
       .update({ search_context: updatedContext, updated_at: new Date().toISOString() })
       .eq("id", bookmarkId)
       .eq("user_id", userId)
+      .select("*")
+      .single()
 
     if (updateError) {
       return { success: false, error: updateError }
     }
 
-    return { success: true }
+    return { success: true, bookmark: updatedBookmark }
   } catch (error) {
     console.error("Error updating bookmark scope:", error)
     return { success: false, error }

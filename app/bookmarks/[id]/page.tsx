@@ -58,6 +58,7 @@ export default function BookmarkWorkspacePage() {
   const [availableCountries, setAvailableCountries] = useState<string[]>([])
   const [isExporting, setIsExporting] = useState(false)
   const [userId, setUserId] = useState<string | null>(null)
+  const [scopeVersion, setScopeVersion] = useState(0)
   const supabase = createClient()
 
   const handleExportExcel = async () => {
@@ -270,11 +271,23 @@ export default function BookmarkWorkspacePage() {
                   companyId={company.id}
                   companyName={company.name}
                   currentScope={bookmark.search_context}
-                  onScopeUpdated={(newScope) => {
-                    setBookmark((prev: any) => ({
-                      ...prev,
-                      search_context: { ...prev.search_context, ...newScope }
-                    }))
+                  onScopeUpdated={(updatedBookmarkOrScope) => {
+                    // Update the bookmark state with the new data
+                    if (updatedBookmarkOrScope && typeof updatedBookmarkOrScope === 'object' && 'id' in updatedBookmarkOrScope) {
+                      // It's a full bookmark object
+                      setBookmark(updatedBookmarkOrScope)
+                    } else {
+                      // It's just the scope changes
+                      setBookmark((prev: any) => ({
+                        ...prev,
+                        search_context: { 
+                          ...prev.search_context, 
+                          ...(typeof updatedBookmarkOrScope === 'object' ? updatedBookmarkOrScope : {})
+                        }
+                      }))
+                    }
+                    // Increment scope version to trigger tab re-mounts
+                    setScopeVersion(v => v + 1)
                   }}
                   trigger={
                     <Button variant="outline" size="sm" className="h-9 w-[170px] justify-start gap-2">
@@ -417,7 +430,7 @@ export default function BookmarkWorkspacePage() {
             <BookmarkOverview bookmarkId={bookmarkId} company={company} countryFilter={countryFilter || null} />
           </TabsContent>
 
-          <TabsContent value="jobpostings" className="m-0 focus-visible:ring-0">
+          <TabsContent value="jobpostings" key={`job-${scopeVersion}`} className="m-0 focus-visible:ring-0">
             <BookmarkJobPostings bookmarkId={bookmarkId} countryFilter={countryFilter || null} />
           </TabsContent>
 
@@ -425,11 +438,11 @@ export default function BookmarkWorkspacePage() {
             <IntelligenceTab bookmarkId={bookmarkId} companyId={company.id} companyName={company.name} />
           </TabsContent>
 
-          <TabsContent value="strategy" className="m-0 focus-visible:ring-0">
+          <TabsContent value="strategy" key={`strategy-${scopeVersion}`} className="m-0 focus-visible:ring-0">
             <BookmarkStrategy bookmarkId={bookmarkId} companyName={company.name} />
           </TabsContent>
 
-          <TabsContent value="prospects" className="m-0 focus-visible:ring-0">
+          <TabsContent value="prospects" key={`prospects-${scopeVersion}`} className="m-0 focus-visible:ring-0">
             <ProspectsTab 
               bookmarkId={bookmarkId} 
               companyName={company.name}
@@ -438,7 +451,7 @@ export default function BookmarkWorkspacePage() {
             />
           </TabsContent>
 
-          <TabsContent value="icebreakers" className="m-0 focus-visible:ring-0">
+          <TabsContent value="icebreakers" key={`icebreakers-${scopeVersion}`} className="m-0 focus-visible:ring-0">
             <BookmarkIcebreakers bookmarkId={bookmarkId} companyName={company.name} />
           </TabsContent>
 

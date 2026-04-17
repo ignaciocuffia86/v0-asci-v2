@@ -158,7 +158,8 @@ export function BookmarkScopeEditor({
 
     if (result.success) {
       setSaved(true)
-      onScopeUpdated?.(newScope)
+      // Pass the full updated bookmark to the callback so data can be refreshed
+      onScopeUpdated?.(result.bookmark || newScope)
       setTimeout(() => setOpen(false), 800)
     }
   }
