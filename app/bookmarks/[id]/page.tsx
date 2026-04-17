@@ -67,6 +67,7 @@ export default function BookmarkWorkspacePage() {
       const response = await fetch(`/api/bookmarks/${bookmarkId}/export`)
       if (!response.ok) {
         const error = await response.json()
+        console.error("Export error:", error)
         throw new Error(error.error || "Error al exportar")
       }
       const blob = await response.blob()
@@ -80,6 +81,7 @@ export default function BookmarkWorkspacePage() {
       a.remove()
       toast.success("Excel exportado correctamente")
     } catch (err: any) {
+      console.error("Export error details:", err)
       toast.error(err.message || "Error al exportar")
     } finally {
       setIsExporting(false)

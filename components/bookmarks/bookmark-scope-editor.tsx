@@ -105,7 +105,11 @@ export function BookmarkScopeEditor({
           setAvailableTags(result.signals)
         } else {
           setFetchError(true)
+          console.error("Error fetching available signals:", result.error)
         }
+      } catch (error: any) {
+        console.error("Unexpected error fetching signals:", error)
+        setFetchError(true)
       } finally {
         setIsFetchingTags(false)
       }
@@ -146,22 +150,44 @@ export function BookmarkScopeEditor({
     setIsSaving(true)
     setCollisionError(false)
 
-    const newScope = buildScope()
-    const result = await updateBookmarkScope(bookmarkId, userId, newScope)
+    try {
+      const newScope = buildScope()
+      const result = await updateBookmarkScope(bookmarkId, userId, newScope)
 
-    setIsSaving(false)
+      setIsSaving(false)
 
-    if (result.collision) {
-      setCollisionError(true)
-      return
-    }
+      if (result.collision) {
+        setCollisionError(true)
+        return
+      }
 
-    if (result.success) {
-      setSaved(true)
-      // Pass the full updated bookmark to the callback so data can be refreshed
-      onScopeUpdated?.(result.bookmark || newScope)
-      setTimeout(() => setOpen(false), 800)
-    }
+      if (result.success) {
+        setSaved(true)
+        // Pass the full updated bookmark to the callback so data can be refreshed
+        onScopeUpdated?.(result.bookmark || newScope)
+        setTimeout(() => setOpen(false), 800)
+      } else if (result.error) {
+        console.error("Error updating bookmark scope:", result.error)
+        toast.error("Error al guardar el scope. Intenta de nuevo.")
+      }
+      } catch (error: any) {
+        console.error("Unexpected error in handleSave:", error)
+        setIsSaving(false)
+        
+        // Check if it's a Server Action desync error
+        if (error?.message?.includes("Failed to find Server Action")) {
+          // This happens when the dev server restarts - show helpful message
+          toast.error("La sesión ha expirado. Por favor, recarga la página para continuar.", {
+            action: {
+              label: "Recargar",
+              onClick: () => window.location.reload()
+            },
+            duration: 10000
+          })
+        } else {
+          toast.error("Error inesperado al guardar. Intenta de nuevo.")
+        }
+      }
   }
 
   const hasChanges =
