@@ -22,11 +22,13 @@ import {
   Loader2,
   FolderOpen,
   BookmarkCheck,
+  SlidersHorizontal,
 } from "lucide-react"
 import { bookmarkCompany, unbookmarkCompany, checkBookmarkWithContext } from "@/app/actions/bookmarks"
 import { useToast } from "@/hooks/use-toast"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useRouter } from "next/navigation"
+import { BookmarkScopeEditor } from "@/components/bookmarks/bookmark-scope-editor"
 import type React from "react"
 
 type CompanyDetails = {
@@ -133,6 +135,7 @@ type CompanyDrawerProps = {
 
 export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, filterType }: CompanyDrawerProps) {
   const [isBookmarked, setIsBookmarked] = useState(false)
+  const [userId, setUserId] = useState<string | null>(null)
   const [bookmarkState, setBookmarkState] = useState<{
     hasExactMatch: boolean
     exactMatchId?: string
@@ -235,6 +238,7 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
     } = await supabase.auth.getUser()
 
     if (user) {
+      setUserId(user.id)
       const result = await checkBookmarkWithContext(user.id, companyId, filterSignalIds, filterType)
 
       setBookmarkState({
@@ -510,6 +514,27 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
                           <ExternalLink className="h-4 w-4" />
                           Ir al Workspace
                         </Button>
+                        {userId && bookmarkState.exactMatchId && (
+                          <BookmarkScopeEditor
+                            bookmarkId={bookmarkState.exactMatchId}
+                            userId={userId}
+                            companyName={company?.name || ""}
+                            currentScope={{
+                              filterSignalIds: filterSignalIds || [],
+                              filterType: filterType || null,
+                            }}
+                            onScopeUpdated={() => {
+                              // Refrescar el estado del bookmark
+                              checkBookmarkStatus()
+                            }}
+                            trigger={
+                              <Button variant="outline" size="sm" className="gap-1">
+                                <SlidersHorizontal className="h-3.5 w-3.5" />
+                                Scope
+                              </Button>
+                            }
+                          />
+                        )}
                         <Button variant="outline" size="sm" onClick={handleBookmark}>
                           <BookmarkCheck className="h-4 w-4" />
                         </Button>
