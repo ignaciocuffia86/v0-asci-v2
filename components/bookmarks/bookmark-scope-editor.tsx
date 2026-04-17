@@ -191,173 +191,175 @@ export function BookmarkScopeEditor({
         )}
       </DialogTrigger>
 
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
+      <DialogContent className="sm:max-w-md max-h-[85vh] flex flex-col">
+        <DialogHeader className="flex-shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
             Scope del bookmark
           </DialogTitle>
           <DialogDescription>
-            Selecciona las señales que representan este bookmark de{" "}
+            Selecciona las señales para{" "}
             <span className="font-medium text-foreground">{companyName}</span>.
-            Solo se muestran señales donde hay empleados activos detectados.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-5 py-2">
-          {/* Loading state */}
-          {isFetchingTags && (
-            <div className="flex items-center justify-center py-10 gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Cargando señales de la empresa...
-            </div>
-          )}
-
-          {/* Error fetching */}
-          {!isFetchingTags && fetchError && (
-            <div className="flex items-start gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
-              <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
-              <p>No se pudieron cargar las señales. Intenta de nuevo.</p>
-            </div>
-          )}
-
-          {/* No signals found */}
-          {!isFetchingTags && !fetchError && availableTags.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-10 gap-2 text-center text-sm text-muted-foreground">
-              <SlidersHorizontal className="h-8 w-8 opacity-30" />
-              <p className="font-medium">Sin señales disponibles</p>
-              <p className="text-xs max-w-xs">
-                No se encontraron señales con empleados activos para esta empresa.
-              </p>
-            </div>
-          )}
-
-          {!isFetchingTags && !fetchError && availableTags.length > 0 && (
-            <>
-              {/* Current selection summary */}
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <span>Scope actual:</span>
-                <Badge
-                  variant={currentScope?.scope_modified_by_user ? "secondary" : "outline"}
-                  className="text-xs"
-                >
-                  {currentScope?.scope_modified_by_user && <Check className="h-3 w-3 mr-1" />}
-                  {scopeLabel(currentScope, availableTags)}
-                </Badge>
+        <div className="flex-1 overflow-y-auto min-h-0 py-2 -mx-6 px-6">
+          <div className="space-y-4">
+            {/* Loading state */}
+            {isFetchingTags && (
+              <div className="flex items-center justify-center py-8 gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Cargando señales...
               </div>
+            )}
 
-              {/* Technology tags */}
-              {techTags.length > 0 && (
-                <div className="space-y-2">
-                  <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                    <Cpu className="h-3.5 w-3.5" />
-                    Tecnologias
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {techTags.map((tag) => {
-                      const isActive = selectedIds.includes(tag.id)
-                      return (
-                        <button
-                          key={tag.id}
-                          onClick={() => toggleTag(tag.id)}
-                          className={cn(
-                            "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-medium transition-all select-none",
-                            isActive
-                              ? "bg-primary text-primary-foreground border-primary"
-                              : "bg-transparent border-border text-foreground hover:border-muted-foreground/60 hover:bg-muted/40"
-                          )}
-                        >
-                          {isActive && <Check className="h-3 w-3 shrink-0" />}
-                          {tag.name}
-                          <span
+            {/* Error fetching */}
+            {!isFetchingTags && fetchError && (
+              <div className="flex items-start gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
+                <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                <p>No se pudieron cargar las señales. Intenta de nuevo.</p>
+              </div>
+            )}
+
+            {/* No signals found */}
+            {!isFetchingTags && !fetchError && availableTags.length === 0 && (
+              <div className="flex flex-col items-center justify-center py-8 gap-2 text-center text-sm text-muted-foreground">
+                <SlidersHorizontal className="h-6 w-6 opacity-30" />
+                <p className="font-medium">Sin señales disponibles</p>
+                <p className="text-xs max-w-xs">
+                  No se encontraron señales con empleados activos.
+                </p>
+              </div>
+            )}
+
+            {!isFetchingTags && !fetchError && availableTags.length > 0 && (
+              <>
+                {/* Current selection summary */}
+                <div className="flex items-center gap-2 text-sm text-muted-foreground pb-2 border-b">
+                  <span>Actual:</span>
+                  <Badge
+                    variant={currentScope?.scope_modified_by_user ? "secondary" : "outline"}
+                    className="text-xs"
+                  >
+                    {currentScope?.scope_modified_by_user && <Check className="h-3 w-3 mr-1" />}
+                    {scopeLabel(currentScope, availableTags)}
+                  </Badge>
+                </div>
+
+                {/* Technology tags */}
+                {techTags.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                      <Cpu className="h-3 w-3" />
+                      Tecnologias ({techTags.length})
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {techTags.map((tag) => {
+                        const isActive = selectedIds.includes(tag.id)
+                        return (
+                          <button
+                            key={tag.id}
+                            onClick={() => toggleTag(tag.id)}
                             className={cn(
-                              "font-normal tabular-nums",
-                              isActive ? "text-primary-foreground/70" : "text-muted-foreground"
+                              "inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-xs font-medium transition-all select-none",
+                              isActive
+                                ? "bg-primary text-primary-foreground border-primary"
+                                : "bg-transparent border-border text-foreground hover:border-muted-foreground/60 hover:bg-muted/40"
                             )}
                           >
-                            {tag.count}
-                          </span>
-                        </button>
-                      )
-                    })}
+                            {isActive && <Check className="h-2.5 w-2.5 shrink-0" />}
+                            <span className="truncate max-w-[150px]">{tag.name}</span>
+                            <span
+                              className={cn(
+                                "font-normal tabular-nums text-[10px]",
+                                isActive ? "text-primary-foreground/70" : "text-muted-foreground"
+                              )}
+                            >
+                              {tag.count}
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
 
-              {/* Process tags */}
-              {processTags.length > 0 && (
-                <div className="space-y-2">
-                  <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                    <Workflow className="h-3.5 w-3.5" />
-                    Procesos
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {processTags.map((tag) => {
-                      const isActive = selectedIds.includes(tag.id)
-                      return (
-                        <button
-                          key={tag.id}
-                          onClick={() => toggleTag(tag.id)}
-                          className={cn(
-                            "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-medium transition-all select-none",
-                            isActive
-                              ? "bg-primary text-primary-foreground border-primary"
-                              : "bg-transparent border-border text-foreground hover:border-muted-foreground/60 hover:bg-muted/40"
-                          )}
-                        >
-                          {isActive && <Check className="h-3 w-3 shrink-0" />}
-                          {tag.name}
-                          <span
+                {/* Process tags */}
+                {processTags.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                      <Workflow className="h-3 w-3" />
+                      Procesos ({processTags.length})
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {processTags.map((tag) => {
+                        const isActive = selectedIds.includes(tag.id)
+                        return (
+                          <button
+                            key={tag.id}
+                            onClick={() => toggleTag(tag.id)}
                             className={cn(
-                              "font-normal tabular-nums",
-                              isActive ? "text-primary-foreground/70" : "text-muted-foreground"
+                              "inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-xs font-medium transition-all select-none",
+                              isActive
+                                ? "bg-primary text-primary-foreground border-primary"
+                                : "bg-transparent border-border text-foreground hover:border-muted-foreground/60 hover:bg-muted/40"
                             )}
                           >
-                            {tag.count}
-                          </span>
-                        </button>
-                      )
-                    })}
+                            {isActive && <Check className="h-2.5 w-2.5 shrink-0" />}
+                            <span className="truncate max-w-[150px]">{tag.name}</span>
+                            <span
+                              className={cn(
+                                "font-normal tabular-nums text-[10px]",
+                                isActive ? "text-primary-foreground/70" : "text-muted-foreground"
+                              )}
+                            >
+                              {tag.count}
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
 
-              {/* Collision error */}
-              {collisionError && (
-                <div className="flex items-start gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
-                  <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
-                  <div>
-                    <p className="font-medium">Scope duplicado</p>
-                    <p className="text-xs opacity-80 mt-0.5">
-                      Ya existe otro bookmark de esta empresa con el mismo conjunto de señales. Selecciona una combinación diferente.
-                    </p>
+                {/* Collision error */}
+                {collisionError && (
+                  <div className="flex items-start gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
+                    <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                    <div>
+                      <p className="font-medium">Scope duplicado</p>
+                      <p className="text-xs opacity-80 mt-0.5">
+                        Ya existe otro bookmark con estas señales.
+                      </p>
+                    </div>
                   </div>
-                </div>
-              )}
-            </>
-          )}
+                )}
+              </>
+            )}
+          </div>
         </div>
 
-        <DialogFooter className="gap-2 sm:gap-0">
-          <Button variant="ghost" onClick={() => setOpen(false)}>
+        <DialogFooter className="flex-shrink-0 gap-2 sm:gap-0 pt-4 border-t">
+          <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
             Cancelar
           </Button>
           <Button
+            size="sm"
             onClick={handleSave}
             disabled={isSaving || !hasChanges || saved || availableTags.length === 0 || selectedIds.length === 0}
           >
             {isSaving ? (
               <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
                 Guardando...
               </>
             ) : saved ? (
               <>
-                <Check className="h-4 w-4 mr-2" />
+                <Check className="h-3.5 w-3.5 mr-1.5" />
                 Guardado
               </>
             ) : (
-              "Guardar cambios"
+              "Guardar"
             )}
           </Button>
         </DialogFooter>
