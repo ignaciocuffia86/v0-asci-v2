@@ -278,23 +278,67 @@ export async function getAvailableSignalsForCompany(companyId: string): Promise<
 
   try {
     // Query signals table grouped by signal_id to get unique signals with counts
-    const { data, error } = await supabase
+    const { data: signalsData, error: signalsError } = await supabase
       .from("signals")
       .select("signal_id, keyword_matched, signal_type, is_current_employee")
       .eq("company_id", companyId)
       .eq("is_current_employee", true)
       .not("signal_id", "is", null)
 
-    if (error) throw error
+    if (signalsError) throw signalsError
 
-    // Group by signal_id and count occurrences
-    const grouped = (data || []).reduce(
+    // Get unique signal_ids
+    const signalIds = [...new Set((signalsData || []).map(s => s.signal_id))]
+    
+    // Fetch product names from dictionary_products (for technology signals)
+    const { data: productsData } = await supabase
+      .from("dictionary_products")
+      .select("id, name, vendor_id")
+      .in("id", signalIds)
+    
+    // Fetch vendor names for the products
+    const vendorIds = [...new Set((productsData || []).map(p => p.vendor_id).filter(Boolean))]
+    const { data: vendorsData } = await supabase
+      .from("dictionary_vendors")
+      .select("id, name")
+      .in("id", vendorIds)
+    
+    // Fetch process names from dictionary_processes (for process signals)
+    const { data: processesData } = await supabase
+      .from("dictionary_processes")
+      .select("id, name")
+      .in("id", signalIds)
+
+    // Build lookup maps
+    const vendorMap = new Map((vendorsData || []).map(v => [v.id, v.name]))
+    const productMap = new Map((productsData || []).map(p => [p.id, { name: p.name, vendorId: p.vendor_id }]))
+    const processMap = new Map((processesData || []).map(p => [p.id, p.name]))
+
+    // Group by signal_id and count occurrences, using product/process name instead of keyword
+    const grouped = (signalsData || []).reduce(
       (acc: Record<string, { id: string; name: string; type: "technology" | "process"; count: number }>, row) => {
         const key = row.signal_id
         if (!acc[key]) {
+          let displayName = row.keyword_matched // fallback to keyword_matched
+          
+          if (row.signal_type === "technology" || row.signal_type === "product") {
+            // Get product name, preferably with vendor prefix
+            const product = productMap.get(row.signal_id)
+            if (product) {
+              const vendorName = product.vendorId ? vendorMap.get(product.vendorId) : null
+              displayName = vendorName ? `${vendorName} ${product.name}` : product.name
+            }
+          } else if (row.signal_type === "process") {
+            // Get process name
+            const processName = processMap.get(row.signal_id)
+            if (processName) {
+              displayName = processName
+            }
+          }
+          
           acc[key] = {
             id: row.signal_id,
-            name: row.keyword_matched,
+            name: displayName,
             type: row.signal_type === "process" ? "process" : "technology",
             count: 0,
           }
