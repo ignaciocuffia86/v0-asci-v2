@@ -17,7 +17,10 @@ import {
   Target,
   Sparkles,
   MapPin,
+  Download,
+  Loader2,
 } from "lucide-react"
+import { toast } from "sonner"
 import { Input } from "@/components/ui/input"
 import Link from "next/link"
 import { 
@@ -41,6 +44,8 @@ import { BookmarkIcebreakers } from "./_components/icebreakers-tab"
 import { BookmarkStrategy } from "./_components/strategy-tab"
 import { ProspectsTab } from "./_components/prospects-tab"
 import { SummaryTab } from "./_components/summary-tab"
+import { BookmarkScopeEditor } from "@/components/bookmarks/bookmark-scope-editor"
+import { SlidersHorizontal, Filter } from "lucide-react"
 
 export default function BookmarkWorkspacePage() {
   const params = useParams()
@@ -51,11 +56,44 @@ export default function BookmarkWorkspacePage() {
   const [isLoading, setIsLoading] = useState(true)
   const [countryFilter, setCountryFilter] = useState<string>("")
   const [availableCountries, setAvailableCountries] = useState<string[]>([])
+  const [isExporting, setIsExporting] = useState(false)
+  const [userId, setUserId] = useState<string | null>(null)
   const supabase = createClient()
+
+  const handleExportExcel = async () => {
+    setIsExporting(true)
+    try {
+      const response = await fetch(`/api/bookmarks/${bookmarkId}/export`)
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || "Error al exportar")
+      }
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = response.headers.get("Content-Disposition")?.split("filename=")[1]?.replace(/"/g, "") || "export.xlsx"
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      a.remove()
+      toast.success("Excel exportado correctamente")
+    } catch (err: any) {
+      toast.error(err.message || "Error al exportar")
+    } finally {
+      setIsExporting(false)
+    }
+  }
 
   useEffect(() => {
     const fetchBookmarkAndCompany = async () => {
       setIsLoading(true)
+
+      // Get user id first
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        setUserId(user.id)
+      }
 
       // 1. Fetch Bookmark to get company_id
       const { data: bookmarkData, error: bookmarkError } = await supabase
@@ -200,12 +238,57 @@ export default function BookmarkWorkspacePage() {
                     </Link>
                   </Button>
                 )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs px-3 bg-transparent"
+                  onClick={handleExportExcel}
+                  disabled={isExporting}
+                >
+                  {isExporting ? (
+                    <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                  ) : (
+                    <Download className="h-3 w-3 mr-1.5" />
+                  )}
+                  Exportar
+                </Button>
               </div>
             </div>
           </div>
 
           {/* Status, Priority, and Country Controls */}
           <div className="flex flex-col sm:flex-row gap-3 lg:items-start">
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-muted-foreground font-medium flex items-center gap-1">
+                <Filter className="h-3 w-3" />
+                Scope del Filtro
+              </span>
+              {userId && (
+                <BookmarkScopeEditor
+                  bookmarkId={bookmarkId}
+                  userId={userId}
+                  companyName={company.name}
+                  currentScope={bookmark.search_context}
+                  onScopeUpdated={(newScope) => {
+                    setBookmark((prev: any) => ({
+                      ...prev,
+                      search_context: { ...prev.search_context, ...newScope }
+                    }))
+                  }}
+                  trigger={
+                    <Button variant="outline" size="sm" className="h-9 w-[170px] justify-start gap-2">
+                      <SlidersHorizontal className="h-3.5 w-3.5" />
+                      <span className="truncate">
+                        {bookmark.search_context?.filtersUsed?.technology?.slice(0, 1).join(", ") ||
+                          bookmark.search_context?.filtersUsed?.process?.slice(0, 1).join(", ") ||
+                          "General"}
+                      </span>
+                    </Button>
+                  }
+                />
+              )}
+            </div>
+
             <div className="flex flex-col gap-1">
               <span className="text-xs text-muted-foreground font-medium flex items-center gap-1">
                 <MapPin className="h-3 w-3" />

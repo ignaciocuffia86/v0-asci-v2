@@ -1,7 +1,7 @@
 "use server"
 
 import { createClient } from "@/lib/supabase/server"
-import { type BookmarkStatus } from "@/lib/bookmark-types"
+import { type BookmarkStatus, BOOKMARK_STATUS_CONFIG } from "@/lib/bookmark-types"
 
 export async function bookmarkCompany(userId: string, companyId: string, searchContext: any = {}) {
   const supabase = await createClient()
@@ -261,6 +261,80 @@ export async function getBookmarkStats(userId: string) {
   } catch (error) {
     console.error("Error fetching bookmark stats:", error)
     return { success: false, stats: null, error }
+  }
+}
+
+export async function updateBookmarkScope(
+  bookmarkId: string,
+  userId: string,
+  newScope: {
+    filterSignalIds: string[]
+    filterType: string | null
+    filtersUsed: { technology?: string[]; process?: string[] }
+  }
+): Promise<{ success: boolean; collision?: boolean; error?: any }> {
+  const supabase = await createClient()
+
+  try {
+    // 1. Get the current bookmark to know its company_id and current context
+    const { data: currentBookmark, error: fetchError } = await supabase
+      .from("bookmarks")
+      .select("company_id, search_context")
+      .eq("id", bookmarkId)
+      .eq("user_id", userId)
+      .single()
+
+    if (fetchError || !currentBookmark) {
+      return { success: false, error: fetchError || "Bookmark not found" }
+    }
+
+    // 2. Check for collision: does another bookmark for same company have same scope?
+    const newSignalIds = (newScope.filterSignalIds || []).sort().join(",")
+    const newFilterType = newScope.filterType || "generic"
+
+    const { data: existingBookmarks, error: checkError } = await supabase
+      .from("bookmarks")
+      .select("id, search_context")
+      .eq("user_id", userId)
+      .eq("company_id", currentBookmark.company_id)
+      .neq("id", bookmarkId)
+
+    if (checkError) {
+      return { success: false, error: checkError }
+    }
+
+    for (const other of existingBookmarks || []) {
+      const ctx = other.search_context || {}
+      const otherSignalIds = (ctx.filterSignalIds || []).sort().join(",")
+      const otherFilterType = ctx.filterType || "generic"
+
+      if (otherSignalIds === newSignalIds && otherFilterType === newFilterType) {
+        return { success: false, collision: true }
+      }
+    }
+
+    // 3. No collision, update the bookmark's search_context
+    const updatedContext = {
+      ...currentBookmark.search_context,
+      ...newScope,
+      scope_modified_by_user: true,
+      scope_modified_at: new Date().toISOString(),
+    }
+
+    const { error: updateError } = await supabase
+      .from("bookmarks")
+      .update({ search_context: updatedContext, updated_at: new Date().toISOString() })
+      .eq("id", bookmarkId)
+      .eq("user_id", userId)
+
+    if (updateError) {
+      return { success: false, error: updateError }
+    }
+
+    return { success: true }
+  } catch (error) {
+    console.error("Error updating bookmark scope:", error)
+    return { success: false, error }
   }
 }
 
