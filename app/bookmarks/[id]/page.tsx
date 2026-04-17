@@ -426,8 +426,8 @@ export default function BookmarkWorkspacePage() {
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="overview" className="m-0 focus-visible:ring-0">
-            <BookmarkOverview bookmarkId={bookmarkId} company={company} countryFilter={countryFilter || null} />
+          <TabsContent value="overview" key={`overview-${scopeVersion}`} className="m-0 focus-visible:ring-0">
+            <BookmarkOverview bookmarkId={bookmarkId} company={company} countryFilter={countryFilter || null} scopeVersion={scopeVersion} />
           </TabsContent>
 
           <TabsContent value="jobpostings" key={`job-${scopeVersion}`} className="m-0 focus-visible:ring-0">

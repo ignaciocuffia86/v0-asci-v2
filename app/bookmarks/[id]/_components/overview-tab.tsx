@@ -44,7 +44,7 @@ type SmartContext = {
   logicUsed: string
 }
 
-export function BookmarkOverview({ bookmarkId, company, countryFilter }: { bookmarkId: string; company: any; countryFilter?: string | null }) {
+export function BookmarkOverview({ bookmarkId, company, countryFilter, scopeVersion }: { bookmarkId: string; company: any; countryFilter?: string | null; scopeVersion?: number }) {
   const [smartContext, setSmartContext] = useState<SmartContext | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -64,7 +64,7 @@ export function BookmarkOverview({ bookmarkId, company, countryFilter }: { bookm
     if (bookmarkId) {
       fetchContext()
     }
-  }, [bookmarkId, countryFilter])
+  }, [bookmarkId, countryFilter, scopeVersion])
 
   if (loading) {
     return <div className="p-4 text-center text-muted-foreground">Cargando contexto...</div>
