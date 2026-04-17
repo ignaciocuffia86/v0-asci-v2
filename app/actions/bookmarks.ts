@@ -1,7 +1,7 @@
 "use server"
 
 import { createClient } from "@/lib/supabase/server"
-import { type BookmarkStatus } from "@/lib/bookmark-types"
+import { type BookmarkStatus, BOOKMARK_STATUS_CONFIG } from "@/lib/bookmark-types"
 
 export async function bookmarkCompany(userId: string, companyId: string, searchContext: any = {}) {
   const supabase = await createClient()
@@ -261,6 +261,176 @@ export async function getBookmarkStats(userId: string) {
   } catch (error) {
     console.error("Error fetching bookmark stats:", error)
     return { success: false, stats: null, error }
+  }
+}
+
+export async function getAvailableSignalsForCompany(companyId: string): Promise<{
+  success: boolean
+  signals: Array<{
+    id: string
+    name: string
+    type: "technology" | "process"
+    count: number
+  }>
+  error?: any
+}> {
+  const supabase = await createClient()
+
+  try {
+    // Query signals table grouped by signal_id to get unique signals with counts
+    const { data: signalsData, error: signalsError } = await supabase
+      .from("signals")
+      .select("signal_id, keyword_matched, signal_type, is_current_employee")
+      .eq("company_id", companyId)
+      .eq("is_current_employee", true)
+      .not("signal_id", "is", null)
+
+    if (signalsError) throw signalsError
+
+    // Get unique signal_ids
+    const signalIds = [...new Set((signalsData || []).map(s => s.signal_id))]
+    
+    // Fetch product names from dictionary_products (for technology signals)
+    const { data: productsData } = await supabase
+      .from("dictionary_products")
+      .select("id, name, vendor_id")
+      .in("id", signalIds)
+    
+    // Fetch vendor names for the products
+    const vendorIds = [...new Set((productsData || []).map(p => p.vendor_id).filter(Boolean))]
+    const { data: vendorsData } = await supabase
+      .from("dictionary_vendors")
+      .select("id, name")
+      .in("id", vendorIds)
+    
+    // Fetch process names from dictionary_processes (for process signals)
+    const { data: processesData } = await supabase
+      .from("dictionary_processes")
+      .select("id, name")
+      .in("id", signalIds)
+
+    // Build lookup maps
+    const vendorMap = new Map((vendorsData || []).map(v => [v.id, v.name]))
+    const productMap = new Map((productsData || []).map(p => [p.id, { name: p.name, vendorId: p.vendor_id }]))
+    const processMap = new Map((processesData || []).map(p => [p.id, p.name]))
+
+    // Group by signal_id and count occurrences, using product/process name instead of keyword
+    const grouped = (signalsData || []).reduce(
+      (acc: Record<string, { id: string; name: string; type: "technology" | "process"; count: number }>, row) => {
+        const key = row.signal_id
+        if (!acc[key]) {
+          let displayName = row.keyword_matched // fallback to keyword_matched
+          
+          if (row.signal_type === "technology" || row.signal_type === "product") {
+            // Get product name, preferably with vendor prefix
+            const product = productMap.get(row.signal_id)
+            if (product) {
+              const vendorName = product.vendorId ? vendorMap.get(product.vendorId) : null
+              displayName = vendorName ? `${vendorName} ${product.name}` : product.name
+            }
+          } else if (row.signal_type === "process") {
+            // Get process name
+            const processName = processMap.get(row.signal_id)
+            if (processName) {
+              displayName = processName
+            }
+          }
+          
+          acc[key] = {
+            id: row.signal_id,
+            name: displayName,
+            type: row.signal_type === "process" ? "process" : "technology",
+            count: 0,
+          }
+        }
+        acc[key].count += 1
+        return acc
+      },
+      {}
+    )
+
+    const signals = Object.values(grouped).sort((a, b) => b.count - a.count)
+
+    return { success: true, signals }
+  } catch (error) {
+    console.error("Error fetching available signals for company:", error)
+    return { success: false, signals: [], error }
+  }
+}
+
+export async function updateBookmarkScope(
+  bookmarkId: string,
+  userId: string,
+  newScope: {
+    filterSignalIds: string[]
+    filterType: string | null
+    filtersUsed: { technology?: string[]; process?: string[] }
+  }
+): Promise<{ success: boolean; collision?: boolean; bookmark?: any; error?: any }> {
+  const supabase = await createClient()
+
+  try {
+    // 1. Get the current bookmark to know its company_id and current context
+    const { data: currentBookmark, error: fetchError } = await supabase
+      .from("bookmarks")
+      .select("*")
+      .eq("id", bookmarkId)
+      .eq("user_id", userId)
+      .single()
+
+    if (fetchError || !currentBookmark) {
+      return { success: false, error: fetchError || "Bookmark not found" }
+    }
+
+    // 2. Check for collision: does another bookmark for same company have same scope?
+    const newSignalIds = (newScope.filterSignalIds || []).sort().join(",")
+    const newFilterType = newScope.filterType || "generic"
+
+    const { data: existingBookmarks, error: checkError } = await supabase
+      .from("bookmarks")
+      .select("id, search_context")
+      .eq("user_id", userId)
+      .eq("company_id", currentBookmark.company_id)
+      .neq("id", bookmarkId)
+
+    if (checkError) {
+      return { success: false, error: checkError }
+    }
+
+    for (const other of existingBookmarks || []) {
+      const ctx = other.search_context || {}
+      const otherSignalIds = (ctx.filterSignalIds || []).sort().join(",")
+      const otherFilterType = ctx.filterType || "generic"
+
+      if (otherSignalIds === newSignalIds && otherFilterType === newFilterType) {
+        return { success: false, collision: true }
+      }
+    }
+
+    // 3. No collision, update the bookmark's search_context
+    const updatedContext = {
+      ...currentBookmark.search_context,
+      ...newScope,
+      scope_modified_by_user: true,
+      scope_modified_at: new Date().toISOString(),
+    }
+
+    const { data: updatedBookmark, error: updateError } = await supabase
+      .from("bookmarks")
+      .update({ search_context: updatedContext, updated_at: new Date().toISOString() })
+      .eq("id", bookmarkId)
+      .eq("user_id", userId)
+      .select("*")
+      .single()
+
+    if (updateError) {
+      return { success: false, error: updateError }
+    }
+
+    return { success: true, bookmark: updatedBookmark }
+  } catch (error) {
+    console.error("Error updating bookmark scope:", error)
+    return { success: false, error }
   }
 }
 
