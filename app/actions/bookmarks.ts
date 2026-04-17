@@ -264,6 +264,56 @@ export async function getBookmarkStats(userId: string) {
   }
 }
 
+export async function getAvailableSignalsForCompany(companyId: string): Promise<{
+  success: boolean
+  signals: Array<{
+    id: string
+    name: string
+    type: "technology" | "process"
+    count: number
+  }>
+  error?: any
+}> {
+  const supabase = await createClient()
+
+  try {
+    // Query signals table grouped by signal_id to get unique signals with counts
+    const { data, error } = await supabase
+      .from("signals")
+      .select("signal_id, keyword_matched, signal_type, is_current_employee")
+      .eq("company_id", companyId)
+      .eq("is_current_employee", true)
+      .not("signal_id", "is", null)
+
+    if (error) throw error
+
+    // Group by signal_id and count occurrences
+    const grouped = (data || []).reduce(
+      (acc: Record<string, { id: string; name: string; type: "technology" | "process"; count: number }>, row) => {
+        const key = row.signal_id
+        if (!acc[key]) {
+          acc[key] = {
+            id: row.signal_id,
+            name: row.keyword_matched,
+            type: row.signal_type === "process" ? "process" : "technology",
+            count: 0,
+          }
+        }
+        acc[key].count += 1
+        return acc
+      },
+      {}
+    )
+
+    const signals = Object.values(grouped).sort((a, b) => b.count - a.count)
+
+    return { success: true, signals }
+  } catch (error) {
+    console.error("Error fetching available signals for company:", error)
+    return { success: false, signals: [], error }
+  }
+}
+
 export async function updateBookmarkScope(
   bookmarkId: string,
   userId: string,

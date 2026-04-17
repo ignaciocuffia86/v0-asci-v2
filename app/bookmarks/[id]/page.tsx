@@ -263,10 +263,11 @@ export default function BookmarkWorkspacePage() {
                 <Filter className="h-3 w-3" />
                 Scope del Filtro
               </span>
-              {userId && (
+              {userId && company?.id && (
                 <BookmarkScopeEditor
                   bookmarkId={bookmarkId}
                   userId={userId}
+                  companyId={company.id}
                   companyName={company.name}
                   currentScope={bookmark.search_context}
                   onScopeUpdated={(newScope) => {
@@ -281,7 +282,7 @@ export default function BookmarkWorkspacePage() {
                       <span className="truncate">
                         {bookmark.search_context?.filtersUsed?.technology?.slice(0, 1).join(", ") ||
                           bookmark.search_context?.filtersUsed?.process?.slice(0, 1).join(", ") ||
-                          "General"}
+                          "Señales activas"}
                       </span>
                     </Button>
                   }

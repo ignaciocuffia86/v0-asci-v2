@@ -518,13 +518,13 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
                           <BookmarkScopeEditor
                             bookmarkId={bookmarkState.exactMatchId}
                             userId={userId}
+                            companyId={companyId}
                             companyName={company?.name || ""}
                             currentScope={{
                               filterSignalIds: filterSignalIds || [],
                               filterType: filterType || null,
                             }}
                             onScopeUpdated={() => {
-                              // Refrescar el estado del bookmark
                               checkBookmarkStatus()
                             }}
                             trigger={
