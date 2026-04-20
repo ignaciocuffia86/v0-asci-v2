@@ -15,6 +15,8 @@ drop policy if exists "apollo_contacts_cache_authenticated_all" on apollo_contac
 drop policy if exists "apollo_contacts_cache_insert" on apollo_contacts_cache;
 drop policy if exists "apollo_contacts_cache_update" on apollo_contacts_cache;
 drop policy if exists "apollo_contacts_cache_select" on apollo_contacts_cache;
+drop policy if exists "apollo_contacts_cache_read" on apollo_contacts_cache;
+drop policy if exists "apollo_contacts_cache_write_service" on apollo_contacts_cache;
 
 create policy "apollo_contacts_cache_read"
   on apollo_contacts_cache for select
@@ -29,6 +31,8 @@ create policy "apollo_contacts_cache_write_service"
 
 -- apollo_search_queries: lectura amplia, escritura service_role
 drop policy if exists "apollo_search_queries_all" on apollo_search_queries;
+drop policy if exists "apollo_search_queries_read" on apollo_search_queries;
+drop policy if exists "apollo_search_queries_write_service" on apollo_search_queries;
 
 create policy "apollo_search_queries_read"
   on apollo_search_queries for select
@@ -43,6 +47,8 @@ create policy "apollo_search_queries_write_service"
 
 -- apollo_search_results: lectura amplia, escritura service_role
 drop policy if exists "apollo_search_results_all" on apollo_search_results;
+drop policy if exists "apollo_search_results_read" on apollo_search_results;
+drop policy if exists "apollo_search_results_write_service" on apollo_search_results;
 
 create policy "apollo_search_results_read"
   on apollo_search_results for select
@@ -57,6 +63,8 @@ create policy "apollo_search_results_write_service"
 
 -- apollo_title_catalog: lectura amplia (para autocomplete), escritura service_role
 drop policy if exists "apollo_title_catalog_all" on apollo_title_catalog;
+drop policy if exists "apollo_title_catalog_read" on apollo_title_catalog;
+drop policy if exists "apollo_title_catalog_write_service" on apollo_title_catalog;
 
 create policy "apollo_title_catalog_read"
   on apollo_title_catalog for select
