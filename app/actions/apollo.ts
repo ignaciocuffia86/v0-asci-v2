@@ -782,23 +782,39 @@ export async function requestPhoneReveal(
         const workFromArr = phoneNumbers?.find((n) => n.type === "work")?.sanitized_number
         const best = inlineMobile || mobileFromArr || workFromArr || null
 
+        // Log para debugging: que respondio realmente Apollo sync
+        console.log(
+          "[v0] requestPhoneReveal Apollo sync response — id:",
+          p.id,
+          "apollo_id:",
+          p.apollo_person_id,
+          "has_phone_numbers:",
+          phoneNumbers !== undefined,
+          "phone_numbers_length:",
+          phoneNumbers?.length ?? "n/a",
+          "best_phone:",
+          best,
+        )
+
         if (best) {
-          // Apollo respondió con el teléfono inline
+          // Apollo devolvio el telefono inline: lo guardamos ya
           await admin
             .from("user_company_contacts")
             .update({ mobile_phone: best, phone: best, phone_status: "received" })
             .eq("id", p.id)
-        } else if (phoneNumbers !== undefined) {
-          // Apollo respondió OK pero sin phone_numbers válidos: no va a llegar por webhook.
-          // Marcamos not_available para que la UI deje de mostrar "Solicitando..."
-          await admin
-            .from("user_company_contacts")
-            .update({ phone_status: "not_available" })
-            .eq("id", p.id)
         }
-        // Si phone_numbers es undefined (Apollo no devolvió el campo), el webhook
-        // es quien completará: mantenemos phone_status = "pending".
+        // IMPORTANTE: si phone_numbers viene vacio, NO lo marcamos como not_available.
+        // Apollo devuelve [] cuando va a completar el reveal por webhook.
+        // Si el webhook nunca llega, el cliente tiene un timeout de 3 min que
+        // visualmente lo vuelve a "not_requested" para que el usuario reintente.
       } else {
+        const errorText = await res.text().catch(() => "<could not read body>")
+        console.error(
+          "[v0] requestPhoneReveal Apollo HTTP error — status:",
+          res.status,
+          "body:",
+          errorText,
+        )
         // Error HTTP de Apollo (429, 5xx, etc): devolvemos el estado a not_requested
         // para que el usuario pueda reintentar sin quedar trabado en "Solicitando...".
         await admin

@@ -36,7 +36,6 @@ import {
   removeProspect,
   restoreProspect,
   getRemovedProspects,
-  pollPhoneStatus,
   requestPhoneReveal,
   type ApolloSearchStats,
 } from "@/app/actions/apollo"
@@ -278,7 +277,27 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
 
     const tick = async () => {
       if (stopped) return
-      const statuses = await pollPhoneStatus(bookmarkId)
+      // IMPORTANTE: usamos fetch() contra un route handler, NO una server action.
+      // Las server actions de Next.js disparan router.refresh() implicito que
+      // causa un "refresh" visible del tab. fetch() a un API route no lo hace.
+      let statuses: Array<{
+        id: string
+        phone_status: string | null
+        mobile_phone: string | null
+        phone: string | null
+      }> = []
+      try {
+        const res = await fetch(
+          `/api/apollo/poll-phone-status?bookmarkId=${encodeURIComponent(bookmarkId)}`,
+          { cache: "no-store" },
+        )
+        if (res.ok) {
+          const json = await res.json()
+          statuses = json.statuses || []
+        }
+      } catch (err) {
+        console.error("[v0] pollPhoneStatus fetch failed", err)
+      }
       if (stopped) return
 
       const now = Date.now()
@@ -437,21 +456,33 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
     )
     try {
       await requestPhoneReveal([prospectId])
-      // Refrescamos por si Apollo devolvió el teléfono inline
-      const statuses = await pollPhoneStatus(bookmarkId)
-      setProspects((prev) =>
-        prev.map((p) => {
-          const fresh = statuses.find((s) => s.id === p.id)
-          return fresh
-            ? {
-                ...p,
-                phone_status: fresh.phone_status,
-                mobile_phone: fresh.mobile_phone,
-                phone: fresh.phone,
-              }
-            : p
-        }),
+      // Refresh via fetch (no server action) para no causar router.refresh()
+      const res = await fetch(
+        `/api/apollo/poll-phone-status?bookmarkId=${encodeURIComponent(bookmarkId)}`,
+        { cache: "no-store" },
       )
+      if (res.ok) {
+        const json = await res.json()
+        const statuses: Array<{
+          id: string
+          phone_status: string | null
+          mobile_phone: string | null
+          phone: string | null
+        }> = json.statuses || []
+        setProspects((prev) =>
+          prev.map((p) => {
+            const fresh = statuses.find((s) => s.id === p.id)
+            return fresh
+              ? {
+                  ...p,
+                  phone_status: fresh.phone_status,
+                  mobile_phone: fresh.mobile_phone,
+                  phone: fresh.phone,
+                }
+              : p
+          }),
+        )
+      }
     } catch (err) {
       console.error("[v0] handleRequestPhone failed", err)
     } finally {
