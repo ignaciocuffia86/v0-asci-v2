@@ -43,7 +43,11 @@ function endpointToPath(endpoint: ApolloEndpoint): string {
     case "organizations/enrich":
       return "/organizations/enrich"
     case "mixed_people/search":
-      return "/mixed_people/search"
+      // Apollo deprecó /mixed_people/search para callers de API.
+      // El endpoint oficial actual es /mixed_people/api_search.
+      // Mantenemos el nombre lógico "mixed_people/search" internamente para
+      // no romper logs/queries históricos.
+      return "/mixed_people/api_search"
     case "people/match":
     case "people/match:phone":
       return "/people/match"

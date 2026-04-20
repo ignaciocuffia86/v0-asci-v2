@@ -1,9 +1,10 @@
 /**
  * Búsqueda de personas en Apollo.
  *
- * Usa `/mixed_people/search` (endpoint estándar, el que usa la UI) en lugar
- * de `api_search`. Prefiere `organization_ids` sobre `q_organization_name`
- * para lograr paridad con la UI.
+ * Usa `/mixed_people/api_search` (endpoint oficial de Apollo para API callers;
+ * `/mixed_people/search` fue deprecado para callers de API). Prefiere
+ * `organization_ids` sobre `q_organization_name` para maximizar paridad con
+ * la UI de Apollo.
  *
  * Pagina automáticamente hasta `maxResults` (default 50).
  */

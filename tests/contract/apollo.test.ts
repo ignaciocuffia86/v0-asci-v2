@@ -29,8 +29,8 @@ runIf("Apollo API contract", () => {
     expect(data.organization?.id).toBeTruthy()
   })
 
-  it("mixed_people/search con organization_ids devuelve schema esperado", async () => {
-    const res = await fetch("https://api.apollo.io/api/v1/mixed_people/search", {
+  it("mixed_people/api_search con organization_ids devuelve schema esperado", async () => {
+    const res = await fetch("https://api.apollo.io/api/v1/mixed_people/api_search", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

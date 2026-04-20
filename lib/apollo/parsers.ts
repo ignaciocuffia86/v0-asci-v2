@@ -117,7 +117,8 @@ export function normalizePerson(raw: ApolloPersonRaw | null | undefined): Apollo
 }
 
 /**
- * Parsea el response de /mixed_people/search.
+ * Parsea el response de /mixed_people/api_search (endpoint oficial de Apollo
+ * para API callers).
  * Devuelve `{ people, totalEntries }` y no falla si faltan campos.
  */
 export function parseSearchResponse(resp: unknown): {
