@@ -32,6 +32,20 @@ export type ApolloCallLog = {
 }
 
 export async function logApolloCall(entry: ApolloCallLog): Promise<void> {
+  // Diagnostico: si falta env var, gritarlo con error (no warn) para que sea
+  // visible en produccion. Esta es una de las razones mas frecuentes por las
+  // que la tabla apollo_api_calls queda vacia.
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    console.error(
+      "[apollo:logger] CRITICAL — SUPABASE_SERVICE_ROLE_KEY no esta configurado. Los logs de Apollo y el webhook NO van a funcionar.",
+    )
+    return
+  }
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
+    console.error("[apollo:logger] CRITICAL — NEXT_PUBLIC_SUPABASE_URL no esta configurado.")
+    return
+  }
+
   try {
     const supabase = createAdminClient()
     const { error } = await supabase.from("apollo_api_calls").insert({
@@ -50,9 +64,19 @@ export async function logApolloCall(entry: ApolloCallLog): Promise<void> {
       metadata: entry.extraMetadata ?? {},
     })
     if (error) {
-      console.warn("[apollo:logger] failed to persist log:", error.message)
+      // Log con error (no warn) para que sea visible en Vercel logs
+      console.error(
+        "[apollo:logger] failed to persist log — endpoint:",
+        entry.endpoint,
+        "code:",
+        error.code,
+        "message:",
+        error.message,
+        "hint:",
+        error.hint,
+      )
     }
   } catch (err) {
-    console.warn("[apollo:logger] unexpected error:", err)
+    console.error("[apollo:logger] unexpected error:", err)
   }
 }

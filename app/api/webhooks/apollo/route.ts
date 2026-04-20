@@ -24,6 +24,21 @@ function verifySignature(request: Request): boolean {
   return provided === expected
 }
 
+// GET healthcheck para verificar que la URL del webhook es accesible desde fuera.
+// Uso: curl https://<tu-dominio>/api/webhooks/apollo
+// Apollo hace POST, pero un GET publico nos sirve para confirmar deploy + ruteo.
+export async function GET() {
+  return NextResponse.json({
+    ok: true,
+    method: "POST",
+    message: "Apollo webhook activo. Apollo debe llamar con POST a esta URL.",
+    configured: {
+      signature_validation: !!process.env.APOLLO_WEBHOOK_SECRET,
+      site_url: process.env.NEXT_PUBLIC_SITE_URL || "(no seteado, usando fallback)",
+    },
+  })
+}
+
 export async function POST(request: Request) {
   const start = Date.now()
 

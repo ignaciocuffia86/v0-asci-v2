@@ -11,6 +11,7 @@ import { normalizeDomain } from "@/lib/apollo/domain"
 import { hashSearchParams } from "@/lib/apollo/query-hash"
 import { readSearchCache, writeSearchCache } from "@/lib/apollo/search-cache"
 import { recordTitleObservations, recordTitleSuccess } from "@/lib/apollo/title-catalog"
+import { logApolloCall } from "@/lib/apollo/logger"
 
 // ---------------------------------------------------------------------------
 // Tipos expuestos a la UI
@@ -746,19 +747,20 @@ export async function requestPhoneReveal(
   let requested = 0
 
   for (const p of prospects) {
-    try {
-      const matchBody: Record<string, unknown> = {
-        reveal_phone_number: true,
-        webhook_url: `${baseUrl}/api/webhooks/apollo`,
-      }
-      if (p.apollo_person_id) matchBody.id = p.apollo_person_id
-      else if (p.linkedin_url) matchBody.linkedin_url = p.linkedin_url
-      else if (p.email) matchBody.email = p.email
-      else if (p.first_name && p.last_name) {
-        matchBody.first_name = p.first_name
-        matchBody.last_name = p.last_name
-      } else continue
+    const startedAt = Date.now()
+    const matchBody: Record<string, unknown> = {
+      reveal_phone_number: true,
+      webhook_url: `${baseUrl}/api/webhooks/apollo`,
+    }
+    if (p.apollo_person_id) matchBody.id = p.apollo_person_id
+    else if (p.linkedin_url) matchBody.linkedin_url = p.linkedin_url
+    else if (p.email) matchBody.email = p.email
+    else if (p.first_name && p.last_name) {
+      matchBody.first_name = p.first_name
+      matchBody.last_name = p.last_name
+    } else continue
 
+    try {
       const res = await fetch("https://api.apollo.io/api/v1/people/match", {
         method: "POST",
         headers: {
@@ -768,6 +770,8 @@ export async function requestPhoneReveal(
         },
         body: JSON.stringify(matchBody),
       })
+
+      const latencyMs = Date.now() - startedAt
 
       if (res.ok) {
         const data = await res.json()
@@ -782,41 +786,44 @@ export async function requestPhoneReveal(
         const workFromArr = phoneNumbers?.find((n) => n.type === "work")?.sanitized_number
         const best = inlineMobile || mobileFromArr || workFromArr || null
 
-        // Log para debugging: que respondio realmente Apollo sync
-        console.log(
-          "[v0] requestPhoneReveal Apollo sync response — id:",
-          p.id,
-          "apollo_id:",
-          p.apollo_person_id,
-          "has_phone_numbers:",
-          phoneNumbers !== undefined,
-          "phone_numbers_length:",
-          phoneNumbers?.length ?? "n/a",
-          "best_phone:",
-          best,
-        )
+        // Log estructurado a apollo_api_calls para diagnostico
+        await logApolloCall({
+          endpoint: "people/match:phone",
+          userId: user.id,
+          requestBody: matchBody,
+          responseStatus: res.status,
+          responseCount: phoneNumbers?.length ?? 0,
+          latencyMs,
+          extraMetadata: {
+            prospect_id: p.id,
+            apollo_person_id: p.apollo_person_id,
+            inline_phone: best,
+            phone_numbers_returned: phoneNumbers?.length ?? 0,
+            webhook_url_sent: matchBody.webhook_url,
+          },
+        })
 
         if (best) {
-          // Apollo devolvio el telefono inline: lo guardamos ya
+          // Apollo devolvio el telefono inline: guardamos ya
           await admin
             .from("user_company_contacts")
             .update({ mobile_phone: best, phone: best, phone_status: "received" })
             .eq("id", p.id)
         }
-        // IMPORTANTE: si phone_numbers viene vacio, NO lo marcamos como not_available.
-        // Apollo devuelve [] cuando va a completar el reveal por webhook.
-        // Si el webhook nunca llega, el cliente tiene un timeout de 3 min que
-        // visualmente lo vuelve a "not_requested" para que el usuario reintente.
+        // Si phone_numbers viene vacio/undefined, dejamos phone_status = pending.
+        // Apollo va a completar por webhook (o el timeout de 3 min lo limpiara).
       } else {
         const errorText = await res.text().catch(() => "<could not read body>")
-        console.error(
-          "[v0] requestPhoneReveal Apollo HTTP error — status:",
-          res.status,
-          "body:",
-          errorText,
-        )
-        // Error HTTP de Apollo (429, 5xx, etc): devolvemos el estado a not_requested
-        // para que el usuario pueda reintentar sin quedar trabado en "Solicitando...".
+        await logApolloCall({
+          endpoint: "people/match:phone",
+          userId: user.id,
+          requestBody: matchBody,
+          responseStatus: res.status,
+          latencyMs,
+          errorMessage: errorText.slice(0, 500),
+          extraMetadata: { prospect_id: p.id, apollo_person_id: p.apollo_person_id },
+        })
+        // Error HTTP de Apollo: devolvemos a not_requested para reintentar
         await admin
           .from("user_company_contacts")
           .update({ phone_status: "not_requested" })
