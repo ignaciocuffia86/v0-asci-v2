@@ -1,7 +1,7 @@
 "use server"
 
 import { createClient } from "@/lib/supabase/server"
-import { createServiceRoleClient } from "@/lib/supabase/admin"
+import { createAdminClient } from "@/lib/supabase/admin"
 import { revalidatePath } from "next/cache"
 import { generateGeminiContent } from "@/lib/ai-service"
 import { resolveCompanyOrganizationId } from "@/lib/apollo/organizations"
@@ -221,7 +221,7 @@ async function saveToLegacyCache(
   companyLinkedIn: string | null,
   jobTitles: string[],
 ): Promise<void> {
-  const supabase = createServiceRoleClient()
+  const supabase = createAdminClient()
 
   for (const contact of contacts) {
     if (!contact.lastName && !contact.linkedinUrl && !contact.email) continue

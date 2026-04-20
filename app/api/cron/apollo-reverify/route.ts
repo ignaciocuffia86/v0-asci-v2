@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server"
-import { createServiceRoleClient } from "@/lib/supabase/admin"
+import { createAdminClient } from "@/lib/supabase/admin"
 import { apolloRequest } from "@/lib/apollo/client"
 import { parsePerson } from "@/lib/apollo/parsers"
 
@@ -19,7 +19,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 })
   }
 
-  const supabase = createServiceRoleClient()
+  const supabase = createAdminClient()
   const batchSize = 50
 
   // Lee candidatos desde la vista

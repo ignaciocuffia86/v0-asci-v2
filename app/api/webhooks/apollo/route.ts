@@ -12,7 +12,7 @@
  */
 
 import { NextResponse } from "next/server"
-import { createServiceRoleClient } from "@/lib/supabase/admin"
+import { createAdminClient } from "@/lib/supabase/admin"
 import { pickBestPhone, type ApolloPhoneNumber } from "@/lib/apollo/parsers"
 import { logApolloCall } from "@/lib/apollo/logger"
 
@@ -66,7 +66,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, message: "No phone data to update" })
   }
 
-  const supabase = createServiceRoleClient()
+  const supabase = createAdminClient()
   const phoneUpdate = {
     mobile_phone: mobilePhone,
     phone: workPhone || mobilePhone,

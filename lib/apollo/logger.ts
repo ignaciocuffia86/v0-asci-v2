@@ -6,7 +6,7 @@
  * Un fallo de observabilidad no debe romper la feature principal.
  */
 
-import { createServiceRoleClient } from "@/lib/supabase/admin"
+import { createAdminClient } from "@/lib/supabase/admin"
 
 export type ApolloEndpoint =
   | "organizations/enrich"
@@ -33,7 +33,7 @@ export type ApolloCallLog = {
 
 export async function logApolloCall(entry: ApolloCallLog): Promise<void> {
   try {
-    const supabase = createServiceRoleClient()
+    const supabase = createAdminClient()
     const { error } = await supabase.from("apollo_api_calls").insert({
       endpoint: entry.endpoint,
       user_id: entry.userId,

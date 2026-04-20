@@ -13,7 +13,7 @@
  * del TTL → servir todo lo cacheado. Sin criterios fuzzy.
  */
 
-import { createServiceRoleClient } from "@/lib/supabase/admin"
+import { createAdminClient } from "@/lib/supabase/admin"
 import type { EnrichedPerson } from "./enrich"
 import type { SearchParams } from "./query-hash"
 
@@ -36,7 +36,7 @@ export async function readSearchCache(
   queryHash: string,
   ttlDays: number = DEFAULT_TTL_DAYS,
 ): Promise<SearchCacheHit | SearchCacheMiss> {
-  const supabase = createServiceRoleClient()
+  const supabase = createAdminClient()
 
   const cutoff = new Date(Date.now() - ttlDays * 24 * 60 * 60 * 1000).toISOString()
 
@@ -96,7 +96,7 @@ export async function writeSearchCache(opts: {
   totalEntries: number
   contacts: EnrichedPerson[]
 }): Promise<void> {
-  const supabase = createServiceRoleClient()
+  const supabase = createAdminClient()
   const now = new Date().toISOString()
 
   // 1) Upsert de la fila principal

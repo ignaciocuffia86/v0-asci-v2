@@ -10,7 +10,7 @@
  * 5. Persistir el resultado (id, industry, employees, status).
  */
 
-import { createServiceRoleClient } from "@/lib/supabase/admin"
+import { createAdminClient } from "@/lib/supabase/admin"
 import { apolloRequest } from "./client"
 import { normalizeDomain } from "./domain"
 import { parseOrganizationResponse, type ApolloOrganization } from "./parsers"
@@ -44,7 +44,7 @@ export async function resolveCompanyOrganizationId(
   companyId: string,
   opts: { userId: string | null; bookmarkId?: string | null; forceRefresh?: boolean } = { userId: null },
 ): Promise<ResolvedOrganization> {
-  const supabase = createServiceRoleClient()
+  const supabase = createAdminClient()
 
   const { data: company, error } = await supabase
     .from("companies")
