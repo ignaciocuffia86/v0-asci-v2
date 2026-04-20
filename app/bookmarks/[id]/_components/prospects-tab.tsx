@@ -232,26 +232,31 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
     setTimeout(() => setCopiedId(null), 2000)
   }
 
-  // Cargar contexto y prospectos existentes
-  const loadData = useCallback(async () => {
-    setIsLoading(true)
+  // Cargar contexto y prospectos existentes.
+  // silent=true: actualiza la data en background sin toggle del skeleton global
+  // (para refrescos post-búsqueda o post-acciones puntuales).
+  const loadData = useCallback(
+    async ({ silent = false }: { silent?: boolean } = {}) => {
+      if (!silent) setIsLoading(true)
 
-    // Cargar contexto de busqueda
-    const context = await getBookmarkSearchContext(bookmarkId)
+      // Cargar contexto de busqueda
+      const context = await getBookmarkSearchContext(bookmarkId)
 
-    setTechnologies(context.technologies)
-    setProcesses(context.processes)
-    setCompany(context.company)
+      setTechnologies(context.technologies)
+      setProcesses(context.processes)
+      setCompany(context.company)
 
-    // Cargar prospectos existentes
-    const existingProspects = await getProspects(bookmarkId)
-    setProspects(existingProspects)
+      // Cargar prospectos existentes
+      const existingProspects = await getProspects(bookmarkId)
+      setProspects(existingProspects)
 
-    const removed = await getRemovedProspects(bookmarkId)
-    setRemovedProspects(removed)
+      const removed = await getRemovedProspects(bookmarkId)
+      setRemovedProspects(removed)
 
-    setIsLoading(false)
-  }, [bookmarkId])
+      if (!silent) setIsLoading(false)
+    },
+    [bookmarkId],
+  )
 
   useEffect(() => {
     loadData()
@@ -364,7 +369,8 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
       }
 
       if (result.success) {
-        await loadData()
+        // silent: no mostrar el skeleton del tab, el Loader del botón ya indica progreso
+        await loadData({ silent: true })
       } else {
         setLastSearchError(result.error || "No se pudieron encontrar prospectos")
       }
