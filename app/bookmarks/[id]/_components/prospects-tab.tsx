@@ -25,6 +25,9 @@ import {
   FileSpreadsheet,
   CheckSquare,
   Square,
+  AlertCircle,
+  Info,
+  Code,
 } from "lucide-react"
 import {
   getBookmarkSearchContext,
@@ -33,11 +36,15 @@ import {
   removeProspect,
   restoreProspect,
   getRemovedProspects,
+  type ApolloSearchStats,
 } from "@/app/actions/apollo"
 import Link from "next/link"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Switch } from "@/components/ui/switch"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { validateTitle } from "@/lib/apollo/title-validator"
 
 // Countries LATAM + Spain + US - label in Spanish, value in English for Apollo API
 const APOLLO_COUNTRIES = [
@@ -192,6 +199,23 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
   const [selectedJobTitles, setSelectedJobTitles] = useState<string[]>([])
   const [customJobTitle, setCustomJobTitle] = useState("")
 
+  // UX: validación del input custom (feedback en vivo)
+  const [customTitleHint, setCustomTitleHint] = useState<{
+    kind: "error" | "warning" | null
+    message: string
+  }>({ kind: null, message: "" })
+
+  // UX: opciones avanzadas (opt-in de reveals)
+  const [revealEmail, setRevealEmail] = useState(true)
+  const [revealPhone, setRevealPhone] = useState(false)
+  const [useOrganizationLocation, setUseOrganizationLocation] = useState(false)
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [showDebugPayload, setShowDebugPayload] = useState(false)
+
+  // UX: stats de la última búsqueda
+  const [lastSearchStats, setLastSearchStats] = useState<ApolloSearchStats | null>(null)
+  const [lastSearchError, setLastSearchError] = useState<string | null>(null)
+
   // Copiar al portapapeles
   const [copiedId, setCopiedId] = useState<string | null>(null)
 
@@ -231,12 +255,48 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
     setSelectedJobTitles((prev) => (prev.includes(title) ? prev.filter((t) => t !== title) : [...prev, title]))
   }
 
-  // Agregar job title personalizado
-  const addCustomJobTitle = () => {
-    if (customJobTitle.trim() && !selectedJobTitles.includes(customJobTitle.trim())) {
-      setSelectedJobTitles((prev) => [...prev, customJobTitle.trim()])
-      setCustomJobTitle("")
+  // Validación en vivo al tipear en el input custom
+  const handleCustomTitleChange = (value: string) => {
+    setCustomJobTitle(value)
+    if (!value.trim()) {
+      setCustomTitleHint({ kind: null, message: "" })
+      return
     }
+    const result = validateTitle(value)
+    if (!result.valid) {
+      setCustomTitleHint({ kind: "error", message: result.reason })
+      return
+    }
+    // Dup contra seleccionados (case-insensitive)
+    const lower = value.trim().toLowerCase()
+    if (selectedJobTitles.some((t) => t.toLowerCase() === lower)) {
+      setCustomTitleHint({ kind: "warning", message: "Ya está en la lista" })
+      return
+    }
+    if (result.warning) {
+      setCustomTitleHint({ kind: "warning", message: result.warning })
+      return
+    }
+    setCustomTitleHint({ kind: null, message: "" })
+  }
+
+  // Agregar job title personalizado (con validación)
+  const addCustomJobTitle = () => {
+    const trimmed = customJobTitle.trim()
+    if (!trimmed) return
+    const result = validateTitle(trimmed)
+    if (!result.valid) {
+      setCustomTitleHint({ kind: "error", message: result.reason })
+      return
+    }
+    const lower = trimmed.toLowerCase()
+    if (selectedJobTitles.some((t) => t.toLowerCase() === lower)) {
+      setCustomTitleHint({ kind: "warning", message: "Ya está en la lista" })
+      return
+    }
+    setSelectedJobTitles((prev) => [...prev, trimmed])
+    setCustomJobTitle("")
+    setCustomTitleHint({ kind: null, message: "" })
   }
 
   // Buscar en Apollo
@@ -244,17 +304,33 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
     if (selectedJobTitles.length === 0) return
 
     setIsSearching(true)
+    setLastSearchError(null)
+    setLastSearchStats(null)
     try {
-      const result = await searchApolloProspects(bookmarkId, selectedJobTitles, undefined, prospectCountry || undefined)
-      
+      const result = await searchApolloProspects(
+        bookmarkId,
+        selectedJobTitles,
+        undefined,
+        prospectCountry || undefined,
+        {
+          revealEmail,
+          revealPhone,
+          useOrganizationLocation,
+        },
+      )
+
+      if (result.stats) {
+        setLastSearchStats(result.stats)
+      }
+
       if (result.success) {
-        await loadData() // Recargar prospectos
+        await loadData()
       } else {
-        alert(`Error en la búsqueda: ${result.error || "No se pudieron encontrar prospectos"}`)
+        setLastSearchError(result.error || "No se pudieron encontrar prospectos")
       }
     } catch (error) {
       console.error("Error searching:", error)
-      alert(`Error inesperado: ${error instanceof Error ? error.message : "Error desconocido"}`)
+      setLastSearchError(error instanceof Error ? error.message : "Error desconocido")
     }
     setIsSearching(false)
   }
@@ -484,14 +560,93 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
               <Input
                 placeholder="Ej: VP de Compras, CIO, Gerente de Logistica..."
                 value={customJobTitle}
-                onChange={(e) => setCustomJobTitle(e.target.value)}
+                onChange={(e) => handleCustomTitleChange(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && addCustomJobTitle()}
-                className="flex-1"
+                className={`flex-1 ${
+                  customTitleHint.kind === "error"
+                    ? "border-destructive focus-visible:ring-destructive"
+                    : customTitleHint.kind === "warning"
+                      ? "border-amber-400 focus-visible:ring-amber-400"
+                      : ""
+                }`}
               />
-              <Button variant="outline" size="icon" onClick={addCustomJobTitle} disabled={!customJobTitle.trim()}>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={addCustomJobTitle}
+                disabled={!customJobTitle.trim() || customTitleHint.kind === "error"}
+              >
                 <Plus className="h-4 w-4" />
               </Button>
             </div>
+            {customTitleHint.message && (
+              <p
+                className={`mt-1.5 text-xs flex items-start gap-1.5 ${
+                  customTitleHint.kind === "error" ? "text-destructive" : "text-amber-600 dark:text-amber-400"
+                }`}
+              >
+                <AlertCircle className="h-3 w-3 mt-0.5 flex-shrink-0" />
+                <span>{customTitleHint.message}</span>
+              </p>
+            )}
+            <p className="mt-1.5 text-[11px] text-muted-foreground">
+              Tip: Apollo funciona mejor con títulos de 2-4 palabras. &quot;IT Director&quot; traerá más
+              resultados que &quot;Director de Tecnología y Transformación Digital&quot;.
+            </p>
+          </div>
+
+          {/* Opciones avanzadas */}
+          <div className="pt-2 border-t">
+            <button
+              type="button"
+              onClick={() => setShowAdvanced((v) => !v)}
+              className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+            >
+              {showAdvanced ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+              Opciones avanzadas
+            </button>
+            {showAdvanced && (
+              <div className="mt-3 space-y-3 rounded-md border bg-muted/30 p-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex-1">
+                    <label htmlFor="reveal-email" className="text-sm font-medium">
+                      Revelar email personal
+                    </label>
+                    <p className="text-xs text-muted-foreground">
+                      Consume 1 crédito Apollo por contacto.
+                    </p>
+                  </div>
+                  <Switch id="reveal-email" checked={revealEmail} onCheckedChange={setRevealEmail} />
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex-1">
+                    <label htmlFor="reveal-phone" className="text-sm font-medium">
+                      Revelar teléfono
+                    </label>
+                    <p className="text-xs text-muted-foreground">
+                      Consume 1 crédito adicional. Apollo puede devolverlo inline o async via webhook.
+                    </p>
+                  </div>
+                  <Switch id="reveal-phone" checked={revealPhone} onCheckedChange={setRevealPhone} />
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex-1">
+                    <label htmlFor="use-org-location" className="text-sm font-medium">
+                      Filtrar por país de la empresa
+                    </label>
+                    <p className="text-xs text-muted-foreground">
+                      Por default filtramos por ubicación del contacto. Activá esto si querés incluir
+                      expats que trabajan para la empresa pero viven en otro país.
+                    </p>
+                  </div>
+                  <Switch
+                    id="use-org-location"
+                    checked={useOrganizationLocation}
+                    onCheckedChange={setUseOrganizationLocation}
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Resumen + Boton de busqueda */}
@@ -521,6 +676,139 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
           </div>
         </CardContent>
       </Card>
+
+      {/* Error de la última búsqueda */}
+      {lastSearchError && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>No se pudo completar la búsqueda</AlertTitle>
+          <AlertDescription>{lastSearchError}</AlertDescription>
+        </Alert>
+      )}
+
+      {/* Stats de la última búsqueda */}
+      {lastSearchStats && (
+        <Card className="border-muted">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <Info className="h-4 w-4 text-muted-foreground" />
+              Resultado de la búsqueda
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {/* Warnings de la organización */}
+            {lastSearchStats.warnings.length > 0 && (
+              <div className="space-y-1.5">
+                {lastSearchStats.warnings.map((w, i) => (
+                  <p key={i} className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5">
+                    <AlertCircle className="h-3 w-3 mt-0.5 flex-shrink-0" />
+                    <span>{w}</span>
+                  </p>
+                ))}
+              </div>
+            )}
+
+            {/* Titles rechazados */}
+            {lastSearchStats.rejectedTitles.length > 0 && (
+              <div className="rounded-md border border-amber-200 bg-amber-50/50 p-2 dark:border-amber-900 dark:bg-amber-950/20">
+                <p className="text-xs font-medium text-amber-700 dark:text-amber-300 mb-1">
+                  {lastSearchStats.rejectedTitles.length} cargo
+                  {lastSearchStats.rejectedTitles.length !== 1 ? "s" : ""} rechazado
+                  {lastSearchStats.rejectedTitles.length !== 1 ? "s" : ""}:
+                </p>
+                <ul className="text-xs text-amber-700 dark:text-amber-300 space-y-0.5">
+                  {lastSearchStats.rejectedTitles.slice(0, 5).map((r, i) => (
+                    <li key={i}>
+                      &quot;{r.input}&quot;: {r.reason}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Métricas en grid */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
+              <div className="rounded-md border p-2">
+                <p className="text-xl font-semibold">{lastSearchStats.totalEntries}</p>
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  En Apollo
+                </p>
+              </div>
+              <div className="rounded-md border p-2">
+                <p className="text-xl font-semibold">{lastSearchStats.apiReturned}</p>
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Traídos</p>
+              </div>
+              <div className="rounded-md border p-2">
+                <p className="text-xl font-semibold">{lastSearchStats.enrichedOk}</p>
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  Enriquecidos
+                </p>
+              </div>
+              <div className="rounded-md border p-2">
+                <p className="text-xl font-semibold">{lastSearchStats.saved}</p>
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Guardados</p>
+              </div>
+            </div>
+
+            {/* Mensajes contextuales */}
+            {lastSearchStats.fromCache && (
+              <p className="text-xs text-muted-foreground">
+                Resultados servidos desde cache. Activá &quot;Forzar refresh&quot; en opciones avanzadas
+                para traer datos frescos.
+              </p>
+            )}
+            {lastSearchStats.apolloCalled && lastSearchStats.totalEntries === 0 && (
+              <p className="text-xs text-muted-foreground">
+                Apollo no encontró contactos con estos filtros. Probá relajar el país, ampliar cargos o
+                activar &quot;Filtrar por país de la empresa&quot; en opciones avanzadas.
+              </p>
+            )}
+            {lastSearchStats.apolloCalled &&
+              lastSearchStats.apiReturned > 0 &&
+              lastSearchStats.saved === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Todos los contactos ya estaban en tu lista ({lastSearchStats.skippedDuplicates}{" "}
+                  duplicados).
+                </p>
+              )}
+            {lastSearchStats.enrichedFailed > 0 && (
+              <p className="text-xs text-amber-600 dark:text-amber-400">
+                {lastSearchStats.enrichedFailed} contacto
+                {lastSearchStats.enrichedFailed !== 1 ? "s" : ""} no se pudo enriquecer (Apollo 429/5xx).
+              </p>
+            )}
+            {lastSearchStats.phoneAwaitingWebhook > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {lastSearchStats.phoneAwaitingWebhook} teléfono
+                {lastSearchStats.phoneAwaitingWebhook !== 1 ? "s" : ""} se enviará via webhook en los
+                próximos minutos.
+              </p>
+            )}
+
+            {/* Preview del payload */}
+            {lastSearchStats.requestPreview && (
+              <div className="pt-2 border-t">
+                <button
+                  type="button"
+                  onClick={() => setShowDebugPayload((v) => !v)}
+                  className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <Code className="h-3 w-3" />
+                  {showDebugPayload ? "Ocultar" : "Ver"} query enviada a Apollo
+                </button>
+                {showDebugPayload && (
+                  <pre className="mt-2 overflow-x-auto rounded-md bg-muted p-2 text-[11px] leading-relaxed">
+                    {JSON.stringify(lastSearchStats.requestPreview, null, 2)}
+                  </pre>
+                )}
+                <p className="mt-1.5 text-[10px] text-muted-foreground font-mono">
+                  query_hash: {lastSearchStats.queryHash}
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Lista de prospectos */}
       {prospects.length === 0 ? (

@@ -1,48 +1,51 @@
 "use server"
 
 import { createClient } from "@/lib/supabase/server"
+import { createServiceRoleClient } from "@/lib/supabase/admin"
 import { revalidatePath } from "next/cache"
 import { generateGeminiContent } from "@/lib/ai-service"
+import { resolveCompanyOrganizationId } from "@/lib/apollo/organizations"
+import { searchPeople } from "@/lib/apollo/search"
+import { enrichMany, type EnrichedPerson } from "@/lib/apollo/enrich"
+import { sanitizeTitleList } from "@/lib/apollo/title-validator"
+import { normalizeDomain } from "@/lib/apollo/domain"
+import { hashSearchParams } from "@/lib/apollo/query-hash"
 
-// Tipos para Apollo API
-interface ApolloPersonSearchResult {
-  id: string
-  first_name: string
-  last_name: string
-  name: string
-  title: string
-  headline?: string
-  email?: string
-  email_status?: string
-  phone_numbers?: { raw_number: string; sanitized_number?: string; type: string }[]
-  sanitized_phone?: string
-  linkedin_url?: string
-  photo_url?: string
-  city?: string
-  state?: string
-  country?: string
-  seniority?: string
+// ---------------------------------------------------------------------------
+// Tipos expuestos a la UI
+// ---------------------------------------------------------------------------
+
+export type ApolloSearchStats = {
+  queryHash: string
+  fromCache: boolean
+  apolloCalled: boolean
+  totalEntries: number
+  apiReturned: number
+  enrichedOk: number
+  enrichedFailed: number
+  phoneAwaitingWebhook: number
+  saved: number
+  skippedDuplicates: number
+  organizationNotFound: boolean
+  rejectedTitles: Array<{ input: string; reason: string }>
+  requestPreview: Record<string, unknown> | null
+  warnings: string[]
+}
+
+export type ApolloSearchOptions = {
+  revealPhone?: boolean
+  revealEmail?: boolean
+  useOrganizationLocation?: boolean
+  seniorities?: string[]
   departments?: string[]
-  employment_history?: any[]
-  organization?: {
-    name: string
-    website_url?: string
-    linkedin_url?: string
-    industry?: string
-  }
+  forceRefresh?: boolean
+  maxResults?: number
 }
 
-interface ApolloSearchResponse {
-  people: ApolloPersonSearchResult[]
-  pagination: {
-    page: number
-    per_page: number
-    total_entries: number
-    total_pages: number
-  }
-}
+// ---------------------------------------------------------------------------
+// inferJobTitles (intacto, misma firma)
+// ---------------------------------------------------------------------------
 
-// Inferir job titles usando IA según el contexto de búsqueda
 export async function inferJobTitles(
   technologies: string[],
   processes: string[],
@@ -90,7 +93,9 @@ ${valueProfileSection}
 
 4. Incluir variantes como las personas realmente ponen en LinkedIn (abreviaciones, mezcla de idiomas, cargo con "de" o sin "de").
 
-5. Maximo 12 job titles, ordenados por relevancia para la venta.
+5. IMPORTANTE: Los job titles deben tener entre 2 y 4 palabras. NUNCA uses titulos largos como "Director de Tecnologia y Transformacion Digital" — esos strings no estan indexados en Apollo y devuelven 0 resultados. Usa la forma corta ("IT Director", "Director de TI").
+
+6. Maximo 12 job titles, ordenados por relevancia para la venta.
 
 Devuelve SOLO un JSON valido con este formato exacto:
 {
@@ -100,30 +105,30 @@ Devuelve SOLO un JSON valido con este formato exacto:
 
   try {
     const text = await generateGeminiContent(prompt, "gemini-2.5-flash", 0.5)
-
     const jsonMatch = text.match(/\{[\s\S]*\}/)
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0])
+      const sanitized = sanitizeTitleList(parsed.jobTitles || [])
       return {
-        jobTitles: parsed.jobTitles || [],
+        jobTitles: sanitized.accepted,
         reasoning: parsed.reasoning || "",
       }
     }
   } catch (error) {
     console.error("Error inferring job titles with Gemini:", error)
-
     try {
       const text = await generateGeminiContent(prompt, "gemini-2.0-flash", 0.5)
       const jsonMatch = text.match(/\{[\s\S]*\}/)
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0])
+        const sanitized = sanitizeTitleList(parsed.jobTitles || [])
         return {
-          jobTitles: parsed.jobTitles || [],
+          jobTitles: sanitized.accepted,
           reasoning: parsed.reasoning || "",
         }
       }
     } catch (fallbackError) {
-      console.error("Fallback Gemini 1.5 Pro also failed:", fallbackError)
+      console.error("Fallback Gemini also failed:", fallbackError)
     }
   }
 
@@ -140,7 +145,10 @@ Devuelve SOLO un JSON valido con este formato exacto:
   }
 }
 
-// Obtener contexto de búsqueda del bookmark (tecnologías y procesos)
+// ---------------------------------------------------------------------------
+// getBookmarkSearchContext (intacto)
+// ---------------------------------------------------------------------------
+
 export async function getBookmarkSearchContext(bookmarkId: string): Promise<{
   technologies: string[]
   processes: string[]
@@ -200,250 +208,97 @@ export async function getBookmarkSearchContext(bookmarkId: string): Promise<{
   }
 }
 
-// Buscar en cache de Apollo antes de llamar a la API
-async function searchApolloCache(
+// ---------------------------------------------------------------------------
+// Helpers de cache legacy (apollo_contacts_cache)
+// ---------------------------------------------------------------------------
+
+async function readLegacyCache(
   companyDomain: string | null,
   companyLinkedIn: string | null,
-  jobTitles: string[],
-): Promise<ApolloPersonSearchResult[]> {
+): Promise<EnrichedPerson[]> {
   const supabase = await createClient()
 
   let query = supabase.from("apollo_contacts_cache").select("*")
-
-  if (companyDomain) {
-    query = query.eq("company_domain", companyDomain)
-  } else if (companyLinkedIn) {
-    query = query.eq("company_linkedin_url", companyLinkedIn)
-  } else {
-    return []
-  }
+  if (companyDomain) query = query.eq("company_domain", companyDomain)
+  else if (companyLinkedIn) query = query.eq("company_linkedin_url", companyLinkedIn)
+  else return []
 
   const thirtyDaysAgo = new Date()
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
   query = query.gte("created_at", thirtyDaysAgo.toISOString())
 
   const { data: cached } = await query
-
-  if (!cached || cached.length === 0) return []
-
-  const normalizedJobTitles = jobTitles.map((jt) => jt.toLowerCase())
+  if (!cached) return []
 
   return cached
-    .filter((c) => {
-      // Quality check: skip un-enriched entries (no last_name = not enriched)
-      if (!c.last_name && !c.linkedin_url && !c.email) return false
-      const cachedTitle = (c.title || "").toLowerCase()
-      return normalizedJobTitles.some((jt) => cachedTitle.includes(jt) || jt.includes(cachedTitle.split(",")[0]))
-    })
+    .filter((c) => c.last_name || c.linkedin_url || c.email)
     .map((c) => ({
-      id: c.apollo_id || c.id,
-      first_name: c.first_name || "",
-      last_name: c.last_name || "",
-      name: c.full_name || "",
-      title: c.title || "",
-      headline: c.headline,
-      email: c.email,
-      email_status: c.email_status,
-      phone_numbers: c.mobile_phone
-        ? [{ raw_number: c.mobile_phone, type: "mobile" }]
-        : c.phone
-          ? [{ raw_number: c.phone, type: "work" }]
-          : [],
-      linkedin_url: c.linkedin_url,
-      photo_url: c.profile_picture_url,
-      city: c.city,
-      state: c.state,
-      country: c.country,
-      seniority: c.seniority,
-      departments: c.departments,
-      organization: {
-        name: c.organization_name || "",
-        website_url: c.organization_website,
-        linkedin_url: c.organization_linkedin_url,
-        industry: c.organization_industry,
-      },
+      apolloId: c.apollo_id || c.id,
+      firstName: c.first_name || null,
+      lastName: c.last_name || null,
+      fullName: c.full_name || [c.first_name, c.last_name].filter(Boolean).join(" ") || "Sin nombre",
+      title: c.title || null,
+      headline: c.headline || null,
+      email: c.email || null,
+      emailStatus: c.email_status || null,
+      linkedinUrl: c.linkedin_url || null,
+      photoUrl: c.profile_picture_url || null,
+      city: c.city || null,
+      state: c.state || null,
+      country: c.country || null,
+      seniority: c.seniority || null,
+      departments: c.departments || [],
+      mobilePhone: c.mobile_phone || null,
+      workPhone: c.phone || null,
+      organizationId: null,
+      enrichmentStatus: "ok" as const,
+      phoneAwaitingWebhook: false,
     }))
 }
 
-// Llamar a Apollo API para buscar personas
-async function callApolloAPI(
-  companyDomain: string | null,
-  companyName: string,
-  jobTitles: string[],
-  limit = 10,
-  countryFilter?: string | null,
-): Promise<ApolloPersonSearchResult[]> {
-  const apiKey = process.env.APOLLO_API_KEY
-
-  if (!apiKey) {
-    console.error("APOLLO_API_KEY not configured")
-    return []
-  }
-
-  try {
-    const requestBody: Record<string, any> = {
-      per_page: limit,
-      page: 1,
-      person_titles: jobTitles,
-    }
-
-    if (companyDomain) {
-      requestBody.q_organization_domains = companyDomain
-    } else {
-      requestBody.q_organization_name = companyName
-    }
-
-    // Add country filter for Apollo person_locations
-    if (countryFilter) {
-      requestBody.person_locations = [countryFilter]
-    }
-
-    const response = await fetch("https://api.apollo.io/api/v1/mixed_people/api_search", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Cache-Control": "no-cache",
-        "x-api-key": apiKey,
-      },
-      body: JSON.stringify(requestBody),
-      signal: AbortSignal.timeout(30000), // 30s timeout
-    })
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error("Apollo API error:", response.status, errorText)
-      return []
-    }
-
-    const data: ApolloSearchResponse = await response.json()
-
-    if (data.people && data.people.length > 0) {
-      // api_search returns minimal data (first_name, title, id only)
-      // Enrich each person via people/match with their id to get full data
-      const enrichedPeople = await enrichApolloContacts(data.people, apiKey)
-      return enrichedPeople.length > 0 ? enrichedPeople : data.people
-    }
-
-    return data.people || []
-  } catch (error) {
-    console.error("Error calling Apollo API:", error)
-    return []
-  }
+function filterCacheByTitles(cache: EnrichedPerson[], titles: string[]): EnrichedPerson[] {
+  if (titles.length === 0) return cache
+  const lowered = titles.map((t) => t.toLowerCase())
+  return cache.filter((c) => {
+    const cachedTitle = (c.title || "").toLowerCase()
+    if (!cachedTitle) return false
+    return lowered.some((jt) => cachedTitle.includes(jt) || jt.includes(cachedTitle.split(",")[0]))
+  })
 }
 
-// Enrich contacts using people/match (singular) with the person's Apollo ID.
-// api_search only returns first_name, title, id. people/match with id returns
-// full data: last_name, email, linkedin_url, photo_url, seniority, etc.
-// Each call consumes 1 credit. We process sequentially with small delays.
-async function enrichApolloContacts(
-  people: ApolloPersonSearchResult[],
-  apiKey: string,
-): Promise<ApolloPersonSearchResult[]> {
-  const enriched: ApolloPersonSearchResult[] = []
-
-  for (const person of people) {
-    try {
-      const response = await fetch("https://api.apollo.io/api/v1/people/match", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-        },
-        body: JSON.stringify({
-          id: person.id,
-          reveal_personal_emails: true,
-        }),
-      })
-
-      if (!response.ok) {
-        // If enrichment fails for one person, keep the search data
-        enriched.push(person)
-        continue
-      }
-
-      const data = await response.json()
-      if (data.person) {
-        enriched.push(data.person)
-
-        // Request phone number asynchronously via webhook (Apollo requires this)
-        const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://asci.bigua.lat"
-        try {
-          await fetch("https://api.apollo.io/api/v1/people/match", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-api-key": apiKey,
-            },
-            body: JSON.stringify({
-              id: person.id,
-              reveal_phone_number: true,
-              webhook_url: `${baseUrl}/api/webhooks/apollo`,
-            }),
-          })
-        } catch {
-          // Phone reveal is best-effort, don't break the flow
-        }
-      } else {
-        enriched.push(person)
-      }
-
-      // Small delay between calls to respect rate limits
-      if (people.length > 1) {
-        await new Promise((resolve) => setTimeout(resolve, 200))
-      }
-    } catch (error) {
-      enriched.push(person)
-    }
-  }
-
-  return enriched
-}
-
-// Guardar contactos en cache global
-async function saveToApolloCache(
-  contacts: ApolloPersonSearchResult[],
+async function saveToLegacyCache(
+  contacts: EnrichedPerson[],
   companyDomain: string | null,
   companyLinkedIn: string | null,
   jobTitles: string[],
-) {
-  const supabase = await createClient()
+): Promise<void> {
+  const supabase = createServiceRoleClient()
 
   for (const contact of contacts) {
-    // Only cache enriched contacts (must have at least last_name or linkedin_url)
-    if (!contact.last_name && !contact.linkedin_url && !contact.email) continue
-
-    const mobileEntry = contact.phone_numbers?.find((p) => p.type === "mobile")
-    const workEntry = contact.phone_numbers?.find((p) => p.type === "work")
-    const anyEntry = contact.phone_numbers?.[0]
-    const phoneNumber = mobileEntry?.raw_number || mobileEntry?.sanitized_number || contact.sanitized_phone || null
-    const workPhone = workEntry?.raw_number || workEntry?.sanitized_number || anyEntry?.raw_number || anyEntry?.sanitized_number || null
+    if (!contact.lastName && !contact.linkedinUrl && !contact.email) continue
 
     await supabase.from("apollo_contacts_cache").upsert(
       {
-        apollo_id: contact.id,
+        apollo_id: contact.apolloId,
         company_domain: companyDomain,
         company_linkedin_url: companyLinkedIn,
-        first_name: contact.first_name || null,
-        last_name: contact.last_name || null,
-        full_name: contact.name || [contact.first_name, contact.last_name].filter(Boolean).join(" ") || "Sin nombre",
+        first_name: contact.firstName,
+        last_name: contact.lastName,
+        full_name: contact.fullName,
         title: contact.title,
         headline: contact.headline,
         email: contact.email,
-        email_status: contact.email_status,
-        phone: workPhone,
-        mobile_phone: phoneNumber,
-        linkedin_url: contact.linkedin_url,
-        profile_picture_url: contact.photo_url,
+        email_status: contact.emailStatus,
+        phone: contact.workPhone,
+        mobile_phone: contact.mobilePhone,
+        linkedin_url: contact.linkedinUrl,
+        profile_picture_url: contact.photoUrl,
         city: contact.city,
         state: contact.state,
         country: contact.country,
         seniority: contact.seniority,
         departments: contact.departments,
-        employment_history: contact.employment_history,
-        organization_name: contact.organization?.name,
-        organization_website: contact.organization?.website_url,
-        organization_linkedin_url: contact.organization?.linkedin_url,
-        organization_industry: contact.organization?.industry,
+        organization_name: null,
         job_titles_searched: jobTitles,
         updated_at: new Date().toISOString(),
       },
@@ -452,13 +307,17 @@ async function saveToApolloCache(
   }
 }
 
-// Función principal: buscar prospectos en Apollo
+// ---------------------------------------------------------------------------
+// searchApolloProspects — orquestador principal
+// ---------------------------------------------------------------------------
+
 export async function searchApolloProspects(
   bookmarkId: string,
   jobTitles: string[],
   customJobTitles?: string[],
   countryFilter?: string | null,
-): Promise<{ success: boolean; count: number; error?: string }> {
+  options: ApolloSearchOptions = {},
+): Promise<{ success: boolean; count: number; error?: string; stats?: ApolloSearchStats }> {
   const supabase = await createClient()
   const {
     data: { user },
@@ -488,44 +347,177 @@ export async function searchApolloProspects(
     return { success: false, count: 0, error: "Compañía no encontrada" }
   }
 
-  let companyDomain: string | null = null
-  if (company.website) {
-    try {
-      const url = new URL(company.website.startsWith("http") ? company.website : `https://${company.website}`)
-      companyDomain = url.hostname.replace("www.", "")
-    } catch {
-      companyDomain = company.website.replace("www.", "")
+  // --- 1. Sanitizar titles
+  const rawTitles = customJobTitles?.length ? customJobTitles : jobTitles
+  const sanitized = sanitizeTitleList(rawTitles)
+  const warnings: string[] = []
+
+  if (sanitized.accepted.length === 0) {
+    return {
+      success: false,
+      count: 0,
+      error: "Ningún título de cargo válido. Revisá la selección.",
+      stats: {
+        queryHash: "",
+        fromCache: false,
+        apolloCalled: false,
+        totalEntries: 0,
+        apiReturned: 0,
+        enrichedOk: 0,
+        enrichedFailed: 0,
+        phoneAwaitingWebhook: 0,
+        saved: 0,
+        skippedDuplicates: 0,
+        organizationNotFound: false,
+        rejectedTitles: sanitized.rejected,
+        requestPreview: null,
+        warnings: [],
+      },
     }
   }
 
-  const finalJobTitles = customJobTitles?.length ? customJobTitles : jobTitles
+  if (sanitized.truncated) {
+    warnings.push(`Se enviaron los primeros ${sanitized.accepted.length} títulos (máximo soportado).`)
+  }
 
-  let contacts = await searchApolloCache(companyDomain, company.linkedin_url, finalJobTitles)
+  // --- 2. Resolver organization_id
+  const orgResult = await resolveCompanyOrganizationId(company.id, {
+    userId: user.id,
+    bookmarkId,
+    forceRefresh: options.forceRefresh,
+  })
 
-  if (contacts.length < 3) {
-    const apiContacts = await callApolloAPI(companyDomain, company.name, finalJobTitles, 10, countryFilter)
+  let organizationId: string | null = null
+  if (orgResult.status === "found") {
+    organizationId = orgResult.organizationId
+  } else if (orgResult.status === "not_found") {
+    warnings.push(
+      "Empresa no indexada en Apollo. Buscando por dominio (puede traer resultados menos precisos).",
+    )
+  } else {
+    warnings.push(`No se pudo resolver la empresa en Apollo: ${orgResult.reason}`)
+  }
 
-    if (apiContacts.length > 0) {
-      await saveToApolloCache(apiContacts, companyDomain, company.linkedin_url, finalJobTitles)
-      contacts = apiContacts
+  // --- 3. Fallback de dominio
+  const normalized = normalizeDomain(company.website)
+  const domain = normalized?.primary || null
+
+  // --- 4. Cache legacy hit
+  const fullCache = await readLegacyCache(domain, company.linkedin_url)
+  const cacheForTitles = filterCacheByTitles(fullCache, sanitized.accepted)
+  const queryHash = hashSearchParams({
+    organizationId,
+    domain,
+    jobTitles: sanitized.accepted,
+    country: countryFilter ?? null,
+    seniorities: options.seniorities,
+    departments: options.departments,
+    includeSimilarTitles: true,
+    useOrganizationLocation: options.useOrganizationLocation ?? false,
+  })
+
+  let contacts: EnrichedPerson[] = []
+  let fromCache = false
+  let apolloCalled = false
+  let totalEntries = 0
+  let apiReturned = 0
+  let enrichedOk = 0
+  let enrichedFailed = 0
+  let phoneAwaitingCount = 0
+  let requestPreview: Record<string, unknown> | null = null
+
+  // --- 5. Llamar Apollo si es necesario
+  //     Usamos cache solo si: (a) hay 3+ resultados relevantes, (b) no se pidio forceRefresh
+  if (!options.forceRefresh && cacheForTitles.length >= 3) {
+    contacts = cacheForTitles
+    fromCache = true
+  } else {
+    apolloCalled = true
+    const searchRes = await searchPeople({
+      organizationId,
+      domain,
+      jobTitles: sanitized.accepted,
+      country: countryFilter ?? null,
+      seniorities: options.seniorities,
+      departments: options.departments,
+      includeSimilarTitles: true,
+      useOrganizationLocation: options.useOrganizationLocation ?? false,
+      userId: user.id,
+      bookmarkId,
+      companyId: company.id,
+      maxResults: options.maxResults ?? 50,
+    })
+
+    if (!searchRes.ok) {
+      return {
+        success: false,
+        count: 0,
+        error: `Apollo search falló: ${searchRes.error}`,
+        stats: {
+          queryHash,
+          fromCache: false,
+          apolloCalled: true,
+          totalEntries: 0,
+          apiReturned: 0,
+          enrichedOk: 0,
+          enrichedFailed: 0,
+          phoneAwaitingWebhook: 0,
+          saved: 0,
+          skippedDuplicates: 0,
+          organizationNotFound: orgResult.status === "not_found",
+          rejectedTitles: sanitized.rejected,
+          requestPreview: null,
+          warnings,
+        },
+      }
+    }
+
+    totalEntries = searchRes.totalEntries
+    apiReturned = searchRes.people.length
+    requestPreview = searchRes.requestBody
+
+    // --- 6. Enrichment con opt-in de reveals
+    const webhookUrl = (() => {
+      const base =
+        process.env.NEXT_PUBLIC_APP_URL ||
+        (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ||
+        "https://asci.bigua.lat"
+      return `${base.replace(/\/$/, "")}/api/webhooks/apollo`
+    })()
+
+    const enriched = await enrichMany(
+      searchRes.people,
+      {
+        userId: user.id,
+        bookmarkId,
+        companyId: company.id,
+        revealEmail: options.revealEmail ?? true,
+        revealPhone: options.revealPhone ?? false,
+        webhookUrl,
+      },
+      4,
+    )
+
+    for (const p of enriched) {
+      if (p.enrichmentStatus === "ok") enrichedOk++
+      else enrichedFailed++
+      if (p.phoneAwaitingWebhook) phoneAwaitingCount++
+    }
+
+    contacts = enriched.filter((p) => p.lastName || p.linkedinUrl || p.email)
+
+    // Persist a cache legacy (compatibilidad)
+    if (contacts.length > 0) {
+      await saveToLegacyCache(contacts, domain, company.linkedin_url, sanitized.accepted)
     }
   }
 
-  let savedCount = 0
+  // --- 7. Persist en user_company_contacts con dedup
+  let saved = 0
+  let skippedDuplicates = 0
+
   for (const contact of contacts) {
-    // Skip un-enriched contacts (only have first_name from search, nothing useful)
-    if (!contact.last_name && !contact.linkedin_url && !contact.email) continue
-
-    const mobileEntry = contact.phone_numbers?.find((p) => p.type === "mobile")
-    const workEntry = contact.phone_numbers?.find((p) => p.type === "work")
-    const anyEntry = contact.phone_numbers?.[0]
-    const phoneNumber = mobileEntry?.raw_number || mobileEntry?.sanitized_number || contact.sanitized_phone || null
-    const workPhone = workEntry?.raw_number || workEntry?.sanitized_number || anyEntry?.raw_number || anyEntry?.sanitized_number || null
-
-    // Check for duplicate: by linkedin_url if available, otherwise by name
-    const firstName = contact.first_name || ""
-    const lastName = contact.last_name || ""
-    const fullName = contact.name || [firstName, lastName].filter(Boolean).join(" ") || "Sin nombre"
+    if (!contact.lastName && !contact.linkedinUrl && !contact.email) continue
 
     let existingQuery = supabase
       .from("user_company_contacts")
@@ -533,51 +525,76 @@ export async function searchApolloProspects(
       .eq("user_id", user.id)
       .eq("company_id", company.id)
 
-    if (contact.linkedin_url) {
-      existingQuery = existingQuery.eq("linkedin_url", contact.linkedin_url)
+    if (contact.linkedinUrl) {
+      existingQuery = existingQuery.eq("linkedin_url", contact.linkedinUrl)
     } else {
-      existingQuery = existingQuery.eq("full_name", fullName)
+      existingQuery = existingQuery.eq("full_name", contact.fullName)
     }
 
     const { data: existing } = await existingQuery.maybeSingle()
 
-    if (!existing) {
-      const { error } = await supabase.from("user_company_contacts").insert({
-        user_id: user.id,
-        company_id: company.id,
-        bookmark_id: bookmarkId,
-        first_name: firstName || null,
-        last_name: lastName || null,
-        full_name: fullName,
-        role: contact.title,
-        headline: contact.headline,
-        email: contact.email,
-        email_status: contact.email_status,
-        phone: workPhone,
-        mobile_phone: phoneNumber,
-        linkedin_url: contact.linkedin_url,
-        profile_picture_url: contact.photo_url,
-        city: contact.city,
-        country: contact.country,
-        seniority: contact.seniority,
-        departments: contact.departments,
-        source: "apollo",
-        status: "new",
-        is_decision_maker: true,
-        job_titles_searched: finalJobTitles,
-        search_context: bookmark.search_context,
-      })
-
-      if (!error) savedCount++
+    if (existing) {
+      skippedDuplicates++
+      continue
     }
+
+    const { error } = await supabase.from("user_company_contacts").insert({
+      user_id: user.id,
+      company_id: company.id,
+      bookmark_id: bookmarkId,
+      first_name: contact.firstName,
+      last_name: contact.lastName,
+      full_name: contact.fullName,
+      role: contact.title,
+      headline: contact.headline,
+      email: contact.email,
+      email_status: contact.emailStatus,
+      phone: contact.workPhone,
+      mobile_phone: contact.mobilePhone,
+      linkedin_url: contact.linkedinUrl,
+      profile_picture_url: contact.photoUrl,
+      city: contact.city,
+      country: contact.country,
+      seniority: contact.seniority,
+      departments: contact.departments,
+      source: "apollo",
+      status: "new",
+      is_decision_maker: true,
+      job_titles_searched: sanitized.accepted,
+      search_context: bookmark.search_context,
+    })
+
+    if (!error) saved++
   }
 
   revalidatePath(`/bookmarks/${bookmarkId}`)
 
-  return { success: true, count: savedCount }
+  return {
+    success: true,
+    count: saved,
+    stats: {
+      queryHash,
+      fromCache,
+      apolloCalled,
+      totalEntries,
+      apiReturned,
+      enrichedOk,
+      enrichedFailed,
+      phoneAwaitingWebhook: phoneAwaitingCount,
+      saved,
+      skippedDuplicates,
+      organizationNotFound: orgResult.status === "not_found",
+      rejectedTitles: sanitized.rejected,
+      requestPreview,
+      warnings,
+    },
+  }
 }
 
-// Obtener prospectos (DMs) guardados - busca por company_id para reutilizar entre bookmarks
+// ---------------------------------------------------------------------------
+// Getters y accions de prospectos (intactos)
+// ---------------------------------------------------------------------------
+
 export async function getProspects(bookmarkId: string) {
   const supabase = await createClient()
   const {
@@ -607,9 +624,7 @@ export async function removeProspect(prospectId: string): Promise<{ success: boo
     data: { user },
   } = await supabase.auth.getUser()
 
-  if (!user) {
-    return { success: false, error: "No autorizado" }
-  }
+  if (!user) return { success: false, error: "No autorizado" }
 
   const { error } = await supabase
     .from("user_company_contacts")
@@ -621,7 +636,6 @@ export async function removeProspect(prospectId: string): Promise<{ success: boo
     console.error("Error removing prospect:", error)
     return { success: false, error: error.message }
   }
-
   return { success: true }
 }
 
@@ -631,9 +645,7 @@ export async function restoreProspect(prospectId: string): Promise<{ success: bo
     data: { user },
   } = await supabase.auth.getUser()
 
-  if (!user) {
-    return { success: false, error: "No autorizado" }
-  }
+  if (!user) return { success: false, error: "No autorizado" }
 
   const { error } = await supabase
     .from("user_company_contacts")
@@ -645,7 +657,6 @@ export async function restoreProspect(prospectId: string): Promise<{ success: bo
     console.error("Error restoring prospect:", error)
     return { success: false, error: error.message }
   }
-
   return { success: true }
 }
 
@@ -672,7 +683,6 @@ export async function getRemovedProspects(bookmarkId: string) {
   return data || []
 }
 
-// Obtener todos los contactos para icebreakers (incluyendo DMs)
 export async function getContactsForIcebreaker(bookmarkId: string) {
   const supabase = await createClient()
   const {
@@ -682,7 +692,6 @@ export async function getContactsForIcebreaker(bookmarkId: string) {
   if (!user) return { contacts: [], prospects: [] }
 
   const { data: bookmark } = await supabase.from("bookmarks").select("company_id").eq("id", bookmarkId).single()
-
   if (!bookmark) return { contacts: [], prospects: [] }
 
   const { data: contacts } = await supabase
