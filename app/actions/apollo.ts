@@ -11,6 +11,7 @@ import { sanitizeTitleList } from "@/lib/apollo/title-validator"
 import { normalizeDomain } from "@/lib/apollo/domain"
 import { hashSearchParams } from "@/lib/apollo/query-hash"
 import { readSearchCache, writeSearchCache } from "@/lib/apollo/search-cache"
+import { recordTitleObservations, recordTitleSuccess } from "@/lib/apollo/title-catalog"
 
 // ---------------------------------------------------------------------------
 // Tipos expuestos a la UI
@@ -476,13 +477,16 @@ export async function searchApolloProspects(
   for (const contact of contacts) {
     if (!contact.lastName && !contact.linkedinUrl && !contact.email) continue
 
+    // Dedup prioriza apollo_person_id (key fuerte), luego linkedin_url, luego full_name
     let existingQuery = supabase
       .from("user_company_contacts")
       .select("id")
       .eq("user_id", user.id)
       .eq("company_id", company.id)
 
-    if (contact.linkedinUrl) {
+    if (contact.apolloId) {
+      existingQuery = existingQuery.eq("apollo_person_id", contact.apolloId)
+    } else if (contact.linkedinUrl) {
       existingQuery = existingQuery.eq("linkedin_url", contact.linkedinUrl)
     } else {
       existingQuery = existingQuery.eq("full_name", contact.fullName)
@@ -499,6 +503,7 @@ export async function searchApolloProspects(
       user_id: user.id,
       company_id: company.id,
       bookmark_id: bookmarkId,
+      apollo_person_id: contact.apolloId,
       first_name: contact.firstName,
       last_name: contact.lastName,
       full_name: contact.fullName,
@@ -519,9 +524,25 @@ export async function searchApolloProspects(
       is_decision_maker: true,
       job_titles_searched: sanitized.accepted,
       search_context: bookmark.search_context,
+      last_verified_at: new Date().toISOString(),
     })
 
     if (!error) saved++
+  }
+
+  // Feedback loop al catálogo (Fase 4): registramos títulos observados y éxito
+  // Se hace después del save para no bloquear la persistencia.
+  if (contacts.length > 0) {
+    const observations = contacts
+      .filter((c) => c.title)
+      .map((c) => ({
+        title: c.title!,
+        seniority: c.seniority,
+        departments: c.departments,
+      }))
+    // Fire-and-forget: no esperamos al catálogo, no debe romper el flujo
+    recordTitleObservations(observations).catch(() => {})
+    recordTitleSuccess(sanitized.accepted, totalEntries).catch(() => {})
   }
 
   revalidatePath(`/bookmarks/${bookmarkId}`)

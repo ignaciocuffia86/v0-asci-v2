@@ -101,16 +101,29 @@ export async function POST(request: Request) {
 
   // Propagar a user_company_contacts de todos los usuarios.
   // Captura tanto null como string vacio ("") en mobile_phone.
+  // Preferimos match por apollo_person_id (key fuerte), fallback a linkedin_url.
   let updatedRows = 0
+  if (person.id) {
+    const { count } = await supabase
+      .from("user_company_contacts")
+      .update(phoneUpdate)
+      .eq("apollo_person_id", person.id)
+      .or("mobile_phone.is.null,mobile_phone.eq.")
+      .select("id", { count: "exact", head: true })
+
+    updatedRows += count || 0
+  }
+
   if (linkedinForPropagation) {
     const { count } = await supabase
       .from("user_company_contacts")
       .update(phoneUpdate)
       .eq("linkedin_url", linkedinForPropagation)
+      .is("apollo_person_id", null) // sólo los que no matchearon por apollo_person_id
       .or("mobile_phone.is.null,mobile_phone.eq.")
       .select("id", { count: "exact", head: true })
 
-    updatedRows = count || 0
+    updatedRows += count || 0
   }
 
   await logApolloCall({
