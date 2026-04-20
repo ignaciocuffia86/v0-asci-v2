@@ -30,6 +30,232 @@ Este plan organiza las mejoras en cuatro fases incrementales. Cada fase es indep
 
 ---
 
+## Bug reportado — Teléfonos no llegan al export de DMs
+
+### Diagnóstico
+
+El flujo actual en `enrichApolloContacts`:
+
+```ts
+// Primera llamada (sincrónica): trae datos + email
+await fetch("https://api.apollo.io/api/v1/people/match", {
+  body: JSON.stringify({ id: person.id, reveal_personal_emails: true })
+})
+
+// Segunda llamada (fire-and-forget): pide teléfono via webhook
+await fetch("https://api.apollo.io/api/v1/people/match", {
+  body: JSON.stringify({
+    id: person.id,
+    reveal_phone_number: true,
+    webhook_url: `${baseUrl}/api/webhooks/apollo`,
+  }),
+})
+```
+
+Causas candidatas ordenadas por probabilidad:
+
+1. **No se lee la respuesta del segundo `people/match`**. Cuando Apollo tiene el teléfono cacheado, lo devuelve sincrónico en el mismo response; el webhook sólo dispara si el teléfono requiere scraping async. Al ignorar el body, perdemos el ~40% de teléfonos que sí vienen inline.
+2. **`webhook_url` apunta a `https://asci.bigua.lat` por default** (hardcodeado). Si el deploy usa otro dominio o estamos en preview, Apollo no puede notificar. Tampoco hay retry ni logging de si la llamada retornó 200.
+3. **El webhook filtra con `.is("mobile_phone", null)`**. Si una corrida previa escribió string vacío `""`, la update nunca ocurre.
+4. **El match del webhook usa `linkedin_url`** como única key. Para personas sin LinkedIn indexado, la actualización queda huérfana. No intentamos match por `apollo_id`.
+5. **No se propaga el webhook a `apollo_search_results` / `apollo_people`** (Fase 2) ni al contacto de otros usuarios que hayan cacheado la misma persona.
+6. **El request de phone reveal cuesta 1 crédito aunque no traiga teléfono** (Apollo cobra por intento). No estamos midiendo el success rate, así que no detectamos regresiones.
+
+### Fix
+
+Lo incluye la Fase 1 (captura sync + logging) y la Fase 3 (webhook robusto). Sintéticamente:
+
+- Leer el body del segundo `people/match`: si viene `phone_numbers`, guardarlo ya.
+- Firmar el webhook con un secreto (`APOLLO_WEBHOOK_SECRET`) que Apollo incluye en el header. Rechazar requests sin firma.
+- En el webhook, match por `apollo_id` como primary key, `linkedin_url` fallback, y propagar al `user_company_contacts` de todos los usuarios (no sólo uno).
+- Reemplazar `.is("mobile_phone", null)` por `or(mobile_phone.is.null,mobile_phone.eq.)` para capturar también strings vacíos.
+- Loggear cada llamada en `apollo_api_calls` (Fase 3), incluyendo `response_status` y si trajo phone inline vs async.
+- Exponer toggle `revealPhone` en UI (Fase 4) — hoy se gasta el crédito aunque el usuario no lo pida.
+
+---
+
+## Edge cases
+
+Inventario de escenarios a cubrir explícitamente con tests y defensive coding:
+
+### Resolución de organización
+
+| Caso | Comportamiento esperado |
+|---|---|
+| `companies.website` es `null` y `linkedin_url` también | Return temprano con `error: "La empresa no tiene dominio ni LinkedIn registrado"`. UI muestra banner con CTA "Completar datos de empresa". |
+| `website` contiene path (`https://acme.com/about`) | Extraer sólo hostname; no fallar. |
+| `website` sin protocolo (`acme.com.ar`) | Prependar `https://` antes de `new URL`. |
+| Subdominio regional (`ar.acme.com`) | `tldts.getDomain()` devuelve `acme.com`. Si Apollo no encuentra, reintentar con el subdominio original. |
+| Empresa con múltiples dominios (`acme.com` + `acmegroup.com`) | Tras `organizations/enrich`, usar `organization_id` como identidad; dominio es solo hint. |
+| `organizations/enrich` devuelve 404 | Persistir `apollo_organization_id = 'NOT_FOUND'` con `TTL 7d`; no reintentar hasta TTL. UI muestra "Empresa no indexada en Apollo". |
+| `organizations/enrich` 429 | Backoff exponencial, máximo 3 reintentos; si persiste, guardar error transitorio sin marcar NOT_FOUND. |
+
+### Job titles (input)
+
+| Caso | Comportamiento |
+|---|---|
+| Lista vacía | Botón de search disabled + tooltip "Seleccioná al menos 1 cargo". |
+| Único título y > 120 chars | Advertencia en UI "Cargos muy largos suelen devolver 0 resultados. Acortá a 3-4 palabras". |
+| Título sólo con símbolos / emoji | Sanitizar y rechazar (regex `/[a-z]{2,}/i` mínimo). |
+| Duplicados con diferente casing ("CFO" vs "cfo") | Normalizar a lowercase para dedupe, mostrar el display form del catálogo. |
+| Más de 25 títulos | Truncar a 25 (límite interno para no saturar el payload) con aviso. |
+| Caracteres no-ASCII (acentos, ñ) | Permitir; pasar tal cual a Apollo. |
+| Títulos que empiezan con "VP de X" vs "Vice President of X" | Autocomplete sugiere ambas formas desde el catálogo (Fase 4). |
+
+### País / locación
+
+| Caso | Comportamiento |
+|---|---|
+| País no seleccionado | Permitir; Apollo devuelve global. Banner "Búsqueda global: puede traer muchos resultados". |
+| País "United States" y el usuario espera LATAM | No se valida; confiamos en el selector. |
+| La empresa está en Argentina pero el DM en Madrid (expat) | Fase 1: filtrar por `organization_locations` (país de la empresa) en lugar de `person_locations`. Exponer toggle "Filtrar por ubicación del DM". |
+
+### Enrichment / teléfono
+
+| Caso | Comportamiento |
+|---|---|
+| `people/match` 200 pero `person` es null | Devolver search data original, marcar `enrichment_failed = true`. |
+| `people/match` 429 | Retry con backoff; si falla 3 veces, persistir sin enriquecer. |
+| Phone reveal returns `phone_numbers: []` | Registrar intento en `apollo_api_calls` con `response_count: 0`; no reintentar automáticamente. |
+| Webhook llega sin `linkedin_url` ni `apollo_id` | Registrar warning, ignorar payload. |
+| Webhook firma inválida | 401. |
+| Webhook duplicado (Apollo reintenta) | Idempotent via upsert sobre `apollo_id`. |
+
+### Cache y persistencia
+
+| Caso | Comportamiento |
+|---|---|
+| El mismo `apollo_person_id` aparece para dos empresas distintas (cambió de trabajo) | Actualizar `apollo_people` con últimos datos; no borrar `user_company_contacts` vinculados al empleador anterior. |
+| Query hash colisión improbable | Usar SHA-256 truncado a 32 chars; probabilidad despreciable. |
+| Cache miss pero Apollo devuelve 0 | **Guardar la entrada igual** (con `result_count: 0`) para no reintentar por el TTL completo; mostrar "0 resultados con estos filtros" en UI. |
+| `apollo_search_results` tiene datos con `fetched_at > ttl` | Tratar como miss, no borrar (se borra en background por cron). |
+
+### Concurrencia
+
+| Caso | Comportamiento |
+|---|---|
+| Usuario clickea "Buscar" dos veces seguidas | Botón disabled mientras `isSearching`; el request es idempotente via query_hash pero evita spam de créditos. |
+| Dos usuarios distintos buscan la misma empresa a la vez | El segundo hit en cache (si termina primero el primero). Race benigna. |
+
+---
+
+## Helpers de UX para prevenir errores de input
+
+Implementación distribuida entre Fase 1 (básicos) y Fase 4 (avanzados con catálogo).
+
+### En Fase 1
+
+1. **Preview del payload antes de ejecutar**:
+   - Sección colapsable "Ver query que se enviará a Apollo" con el JSON exacto que iría al endpoint. Reduce soporte "¿por qué no aparece fulano?".
+   - Resalta si falta un filtro importante: "Sin filtro de país → búsqueda global".
+
+2. **Validador de título en tiempo real** (al tipear en el input custom):
+   - Longitud < 3 chars → "Muy corto".
+   - Longitud > 60 chars → "Apollo funciona mejor con 2-4 palabras. Probá 'IT Director' en vez de 'Director de Tecnología y Transformación Digital'".
+   - Contiene solo símbolos → "Sólo caracteres especiales".
+   - Ya está en la lista seleccionada → "Ya agregado" + no agregar.
+
+3. **Chips con estado**:
+   - Color verde si `success_count > 0` en el catálogo (Fase 4).
+   - Color amarillo si es custom (no verificado).
+   - Color gris si fue rechazado en búsquedas anteriores (0 resultados).
+
+4. **Mensaje contextual post-búsqueda**:
+   - Si `total_entries == 0`: "Apollo no encontró contactos con estos filtros. Probá relajar país, o ampliar job titles."
+   - Si `total_entries > 0` pero `savedCount == 0`: "Todos los contactos ya estaban en tu lista."
+   - Si `enrichedFailed > 0`: "N contactos parciales — [Reintentar enrichment]".
+
+5. **Estado de créditos (Fase 3)**:
+   - Banner superior: "Has usado X créditos Apollo este mes (límite: Y)". Leído de `apollo_api_calls`.
+
+### En Fase 4
+
+6. **Autocomplete de títulos** con ranking por `success_count` del catálogo.
+7. **Sugerencia de expansión automática**: si el usuario escribe "CFO", el sistema muestra "Incluir también: Director Financiero, Finance Director (aliases)". Con checkboxes.
+8. **Detector de redundancia**: si el usuario selecciona "CTO" y "Chief Technology Officer" (aliases del mismo normalized_title), banner "Son el mismo cargo. Incluimos ambas variantes automáticamente".
+9. **Prefill inteligente** al abrir el tab: usar `inferJobTitles` para presentar un set sugerido ya marcado.
+
+---
+
+## Estrategia de testing
+
+### Niveles y herramientas
+
+- **Unit**: `vitest` + `@testing-library/react`. Testeos puros de helpers (normalización de dominios, hash de query, parsing de respuestas Apollo).
+- **Integration (server actions)**: `vitest` con mocks de `fetch` via `msw/node`. Simulamos responses de Apollo y validamos el payload enviado, el cache y la persistencia (usando un cliente Supabase mockeado).
+- **E2E (smoke)**: Playwright contra un bookmark fixture. Corre solo en CI nightly contra Apollo sandbox (ver abajo).
+- **Contract tests**: un set chico contra la API real de Apollo (behind flag `RUN_APOLLO_CONTRACT_TESTS=1`), para detectar breaking changes del proveedor. Corre semanal.
+
+### Cobertura objetivo
+
+- `lib/apollo/*` helpers: 95%+ (son puras, testables).
+- `app/actions/apollo.ts`: 80%+ con integration tests mockeados.
+- Webhook: 100% de los paths críticos (firma inválida, persona no encontrada, idempotencia).
+
+### Suites concretas
+
+#### Unit (`tests/unit/apollo/`)
+
+- `domain.test.ts`:
+  - Extrae registrable domain de `https://ar.acme.com/path?q=1`.
+  - Extrae `.com.ar` correctamente.
+  - Devuelve null para strings inválidos.
+- `query-hash.test.ts`:
+  - Hash determinístico independiente del orden de `person_titles`.
+  - Hash distinto si cambia `country`.
+  - Hash distinto si cambia `include_similar_titles`.
+- `normalize-title.test.ts`:
+  - Trim + lowercase + colapsa espacios dobles.
+  - Deduplica aliases ("CFO" + "cfo" → una sola entrada).
+- `parse-apollo-response.test.ts`:
+  - Extrae `phone_numbers` con `type: "mobile"` antes que "work".
+  - Devuelve null si `person_numbers` es array vacío.
+  - No rompe si Apollo cambia la forma (defensive parsing).
+
+#### Integration (`tests/integration/apollo/`)
+
+- `search-flow.test.ts`:
+  - Mock: Apollo devuelve 25 personas. Verifica que se pagina hasta traer todas.
+  - Mock: Apollo devuelve 0. Verifica que se persiste el miss en cache.
+  - Mock: `organization_ids` vacío. Verifica que se llama primero `organizations/enrich`.
+- `cache-determinism.test.ts`:
+  - Dos búsquedas idénticas → 1 llamada a Apollo.
+  - Dos búsquedas con 1 filtro distinto → 2 llamadas.
+  - Búsqueda con filtros en distinto orden → 1 llamada (hash normalizado).
+- `phone-reveal.test.ts`:
+  - Respuesta sincrónica con `phone_numbers` → se persiste inmediatamente.
+  - Respuesta sin phone → no persiste placeholder, queda esperando webhook.
+  - Opt-in off → no se hace la segunda llamada a `people/match`.
+- `enrichment-retry.test.ts`:
+  - 429 en primer intento, 200 en segundo → resultado OK.
+  - 3 errores consecutivos → marca `enrichment_failed` pero no lanza.
+
+#### Webhook (`tests/integration/webhook/`)
+
+- Request sin firma → 401.
+- Firma válida + `phone_numbers` → update en cache, `apollo_people`, y cada `user_company_contacts` asociado.
+- Webhook duplicado con mismo `apollo_id` → no duplica fila, updated_at avanza.
+- Webhook con `linkedin_url` pero sin `apollo_id` → fallback por linkedin.
+
+#### Contract (`tests/contract/apollo.test.ts`)
+
+- Llama a `organizations/enrich` con un dominio conocido (ej. `vercel.com`) y verifica que la respuesta tenga `organization.id`.
+- Llama a `mixed_people/search` con `organization_ids` + un título y verifica schema (no valores).
+- Skipped por default; corre en CI nightly con `APOLLO_API_KEY_TEST`.
+
+### Fixtures
+
+- `tests/fixtures/apollo/*.json`: snapshots de responses reales (anonimizados). Permite probar parsing sin pegarle a la API.
+- Usamos un `apollo-mock.ts` con factory functions (`makeSearchResponse({ count, withPhone })`).
+
+### CI
+
+- `vitest run` en cada PR.
+- Playwright nightly contra staging.
+- Contract tests weekly, alertan en Slack si fallan.
+
+---
+
 ## Fase 1 — Paridad con la UI de Apollo
 
 **Objetivo:** que una búsqueda ejecutada desde nuestra API devuelva el mismo universo de candidatos que la UI oficial de Apollo para la misma empresa y filtros equivalentes.
