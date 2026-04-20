@@ -17,6 +17,7 @@ Este plan organiza las mejoras en cuatro fases incrementales. Cada fase es indep
 ## Objetivos
 
 - Alcanzar **paridad de resultados** con la UI de Apollo para la misma empresa y mismos filtros.
+- **Elevar la calidad del input de búsqueda** (cargos, seniority, departamento) para evitar falsos negativos por strings inexistentes en el índice de Apollo.
 - Hacer el **cache determinístico** respecto a la query (mismos inputs → mismos outputs).
 - **Reducir costos** de créditos Apollo haciendo opt-in los reveals caros.
 - Poder **auditar y reproducir** cualquier búsqueda reportada como inconsistente.
@@ -274,12 +275,71 @@ Cron en `app/api/cron/apollo-reverify/route.ts` (diario):
 - Llama `people/match` en batch (hasta 10 por corrida), actualiza, marca `needs_review = true` si cambió empresa.
 - Se expone como setting del workspace (on/off) para evitar consumo no deseado.
 
-### Catálogo de job titles
+### Calidad del input de cargo (job titles)
 
-Reemplazar la inferencia libre de `inferJobTitles` por:
+> Esta sección es crítica: **la calidad de los resultados depende más del input de título que de cualquier otro filtro**. Un título mal planteado (ej. "Director de Tecnología y Transformación Digital") produce 0 matches aunque la persona exista en Apollo. Hoy dependemos de la inferencia libre de Gemini en `inferJobTitles`, que puede inventar variantes largas que no existen como strings indexados.
 
-1. Tabla `apollo_title_catalog (title text primary key, usage_count int)`, alimentada por los títulos que Apollo realmente devuelve.
-2. El prompt de Gemini elige **de este catálogo**, no inventa. Si no hay match suficiente, sugiere strings nuevos pero los marca como "no verificados".
+#### 1. Catálogo de títulos verificados contra Apollo
+
+Nueva tabla `apollo_title_catalog`, alimentada por feedback loop de producción:
+
+`scripts/105_apollo_title_catalog.sql`:
+
+```sql
+create table apollo_title_catalog (
+  normalized_title text primary key,             -- ej: "chief financial officer"
+  display_title text not null,                   -- ej: "Chief Financial Officer"
+  language text,                                  -- 'en' | 'es' | 'pt' | null
+  seniority text,                                 -- 'c_suite' | 'vp' | 'director' | ...
+  department text,                                -- 'finance' | 'engineering' | ...
+  aliases text[] default '{}',                    -- ['CFO', 'Director Financiero', 'Finance Director']
+  usage_count int default 0,                      -- veces que Apollo lo devolvió
+  success_count int default 0,                    -- veces que fue usado en search y devolvió >0
+  first_seen_at timestamptz default now(),
+  last_seen_at timestamptz default now()
+);
+
+create index idx_apollo_title_catalog_dept on apollo_title_catalog (department);
+create index idx_apollo_title_catalog_seniority on apollo_title_catalog (seniority);
+-- GIN index para búsqueda por aliases
+create index idx_apollo_title_catalog_aliases on apollo_title_catalog using gin (aliases);
+```
+
+**Cómo se alimenta:**
+
+- Cada vez que Apollo devuelve resultados en Fase 1/2, se insertan/actualizan los `title` recibidos en el catálogo (`on conflict ... do update set usage_count = usage_count + 1, last_seen_at = now()`).
+- Cada vez que una búsqueda con un `person_titles` dado devuelve `total_entries > 0`, se incrementa `success_count` de ese título.
+- El catálogo se vuelve **datos reales de Apollo**, no una lista estática.
+
+#### 2. Cambio en `inferJobTitles`
+
+El prompt deja de pedir a Gemini "sugerí 12 títulos" en texto libre. Pasa a un proceso en dos pasos:
+
+1. **Gemini clasifica**: dado el contexto del bookmark (rol objetivo, industria), devuelve un JSON con `{ seniorities: [...], departments: [...], language: "es" | "en" }`. No inventa títulos.
+2. **Query al catálogo**: `select display_title from apollo_title_catalog where seniority = any($1) and department = any($2) and success_count > 0 order by success_count desc limit 20`.
+
+El usuario ve títulos que **demostradamente existen** en Apollo y han devuelto resultados antes. Fallback: si el catálogo aún está vacío (primer uso por industria), usar inferencia libre y marcar esos títulos como `is_inferred: true` para auditarlos.
+
+#### 3. UX en el tab de prospectos
+
+Cambios en `app/bookmarks/[id]/_components/prospects-tab.tsx`:
+
+- **Selector de títulos con autocomplete** alimentado por `apollo_title_catalog`, con chips agrupados por `seniority` / `department`.
+- **Filtros explícitos** de `seniority` y `department` (que Apollo soporta nativamente y son mucho más estables que strings de título).
+- **Preview de query**: antes de ejecutar, mostrar el payload normalizado que se va a mandar a Apollo (títulos, seniorities, país, organization_id). Esto elimina la sensación de "caja negra" cuando los resultados no coinciden con la expectativa.
+- **Feedback del último resultado**: "Esta combinación devolvió X contactos la última vez (hace Y días)" — leído de `apollo_search_results` (Fase 2) + `apollo_api_calls` (Fase 3).
+- **Sugerencia de ensanchar filtros**: si `total_entries == 0`, el sistema propone alternativas desde el catálogo (ej: "No encontramos 'Chief Revenue Officer'. ¿Probar 'VP of Sales' o 'Chief Sales Officer'?") — basadas en títulos del mismo `department` con mayor `success_count`.
+
+#### 4. Validación de aliases multilingües
+
+El catálogo guarda `aliases` para unificar variantes sin pegarle al usuario con decisiones técnicas:
+
+- "CFO", "Chief Financial Officer", "Director Financiero", "Diretor Financeiro" → mismo `normalized_title`.
+- Cuando el usuario escribe "CFO", el sistema expande a **todos los aliases** antes de mandar a Apollo, maximizando recall sin perder precisión (Apollo trata la lista como OR).
+
+#### Nota sobre priorización
+
+Si el feedback de usuarios sugiere que la calidad del título es el bloqueo principal, los puntos **1, 2 y 3** de esta sección pueden adelantarse a la **Fase 2** (quedan agrupados como "mejoras de input" junto al rediseño de cache, porque ambas afectan directamente la relevancia del resultado). Los puntos **4** y el re-verify quedan en Fase 4.
 
 ### RLS endurecido
 
@@ -301,6 +361,8 @@ Revisar `scripts/099_fix_apollo_rls.sql`:
 
 El orden importa: Fase 1 es prerequisito de Fase 2 (sin `apollo_organization_id` confiable el cache no vale). Fase 3 se puede empezar en paralelo con Fase 2. Fase 4 asume Fase 3 para medir el impacto.
 
+> **Nota sobre calidad de input (títulos):** si en producción se confirma que los falsos negativos vienen mayormente de títulos mal formados, los puntos 1-3 de "Calidad del input de cargo" pueden adelantarse a Fase 2 sin romper dependencias. El catálogo se puede empezar a poblar desde el primer día con los títulos que Apollo devuelva en Fase 1, aunque el uso activo del catálogo se active después.
+
 ```
 Fase 1 ─────────►
        Fase 2 ─────────►
@@ -314,6 +376,8 @@ Fase 1 ─────────►
 - **Cache hit-rate**: búsquedas servidas desde `apollo_search_results`. Meta: > 40% después del primer mes.
 - **Cost efficiency**: créditos Apollo por contacto nuevo agregado. Meta: baja 50% vs hoy.
 - **MTTR de issues**: tiempo en reproducir y cerrar un ticket "resultados no coinciden". Meta: < 1 hora (con Fase 3).
+- **Calidad de título**: % de `person_titles` enviados a Apollo que corresponden a entradas del `apollo_title_catalog` con `success_count > 0`. Meta: > 85% después de 2 meses de feedback loop.
+- **Recall por búsqueda**: promedio de `total_entries` devuelto por Apollo por búsqueda. Meta: incremento > 30% vs hoy (indicador indirecto de mejor input).
 
 ## Anexo — Archivos tocados por fase
 
