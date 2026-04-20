@@ -10,6 +10,7 @@ import { enrichMany, type EnrichedPerson } from "@/lib/apollo/enrich"
 import { sanitizeTitleList } from "@/lib/apollo/title-validator"
 import { normalizeDomain } from "@/lib/apollo/domain"
 import { hashSearchParams } from "@/lib/apollo/query-hash"
+import { readSearchCache, writeSearchCache } from "@/lib/apollo/search-cache"
 
 // ---------------------------------------------------------------------------
 // Tipos expuestos a la UI
@@ -209,62 +210,9 @@ export async function getBookmarkSearchContext(bookmarkId: string): Promise<{
 }
 
 // ---------------------------------------------------------------------------
-// Helpers de cache legacy (apollo_contacts_cache)
+// Persistencia legacy en apollo_contacts_cache (sólo para compatibilidad con
+// otras queries existentes). La lectura del cache se hace ahora por query_hash.
 // ---------------------------------------------------------------------------
-
-async function readLegacyCache(
-  companyDomain: string | null,
-  companyLinkedIn: string | null,
-): Promise<EnrichedPerson[]> {
-  const supabase = await createClient()
-
-  let query = supabase.from("apollo_contacts_cache").select("*")
-  if (companyDomain) query = query.eq("company_domain", companyDomain)
-  else if (companyLinkedIn) query = query.eq("company_linkedin_url", companyLinkedIn)
-  else return []
-
-  const thirtyDaysAgo = new Date()
-  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
-  query = query.gte("created_at", thirtyDaysAgo.toISOString())
-
-  const { data: cached } = await query
-  if (!cached) return []
-
-  return cached
-    .filter((c) => c.last_name || c.linkedin_url || c.email)
-    .map((c) => ({
-      apolloId: c.apollo_id || c.id,
-      firstName: c.first_name || null,
-      lastName: c.last_name || null,
-      fullName: c.full_name || [c.first_name, c.last_name].filter(Boolean).join(" ") || "Sin nombre",
-      title: c.title || null,
-      headline: c.headline || null,
-      email: c.email || null,
-      emailStatus: c.email_status || null,
-      linkedinUrl: c.linkedin_url || null,
-      photoUrl: c.profile_picture_url || null,
-      city: c.city || null,
-      state: c.state || null,
-      country: c.country || null,
-      seniority: c.seniority || null,
-      departments: c.departments || [],
-      mobilePhone: c.mobile_phone || null,
-      workPhone: c.phone || null,
-      organizationId: null,
-      enrichmentStatus: "ok" as const,
-      phoneAwaitingWebhook: false,
-    }))
-}
-
-function filterCacheByTitles(cache: EnrichedPerson[], titles: string[]): EnrichedPerson[] {
-  if (titles.length === 0) return cache
-  const lowered = titles.map((t) => t.toLowerCase())
-  return cache.filter((c) => {
-    const cachedTitle = (c.title || "").toLowerCase()
-    if (!cachedTitle) return false
-    return lowered.some((jt) => cachedTitle.includes(jt) || jt.includes(cachedTitle.split(",")[0]))
-  })
-}
 
 async function saveToLegacyCache(
   contacts: EnrichedPerson[],
@@ -402,10 +350,8 @@ export async function searchApolloProspects(
   const normalized = normalizeDomain(company.website)
   const domain = normalized?.primary || null
 
-  // --- 4. Cache legacy hit
-  const fullCache = await readLegacyCache(domain, company.linkedin_url)
-  const cacheForTitles = filterCacheByTitles(fullCache, sanitized.accepted)
-  const queryHash = hashSearchParams({
+  // --- 4. Cache determinístico por query_hash (Fase 2)
+  const searchParams = {
     organizationId,
     domain,
     jobTitles: sanitized.accepted,
@@ -414,7 +360,8 @@ export async function searchApolloProspects(
     departments: options.departments,
     includeSimilarTitles: true,
     useOrganizationLocation: options.useOrganizationLocation ?? false,
-  })
+  }
+  const queryHash = hashSearchParams(searchParams)
 
   let contacts: EnrichedPerson[] = []
   let fromCache = false
@@ -426,10 +373,11 @@ export async function searchApolloProspects(
   let phoneAwaitingCount = 0
   let requestPreview: Record<string, unknown> | null = null
 
-  // --- 5. Llamar Apollo si es necesario
-  //     Usamos cache solo si: (a) hay 3+ resultados relevantes, (b) no se pidio forceRefresh
-  if (!options.forceRefresh && cacheForTitles.length >= 3) {
-    contacts = cacheForTitles
+  const cacheHit = options.forceRefresh ? { hit: false as const } : await readSearchCache(queryHash)
+
+  if (cacheHit.hit) {
+    contacts = cacheHit.contacts
+    totalEntries = cacheHit.totalEntries
     fromCache = true
   } else {
     apolloCalled = true
@@ -506,10 +454,19 @@ export async function searchApolloProspects(
 
     contacts = enriched.filter((p) => p.lastName || p.linkedinUrl || p.email)
 
-    // Persist a cache legacy (compatibilidad)
+    // Persist a cache legacy (compatibilidad) y cache determinístico (Fase 2)
     if (contacts.length > 0) {
       await saveToLegacyCache(contacts, domain, company.linkedin_url, sanitized.accepted)
     }
+
+    // Siempre escribir al cache determinístico, incluso con 0 resultados
+    // (evita reintentar la misma query durante el TTL).
+    await writeSearchCache({
+      queryHash,
+      params: { ...searchParams, companyId: company.id },
+      totalEntries,
+      contacts,
+    })
   }
 
   // --- 7. Persist en user_company_contacts con dedup
