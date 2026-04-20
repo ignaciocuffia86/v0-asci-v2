@@ -54,6 +54,28 @@ export async function POST(request: Request) {
   const workPhone = pickBestPhone(person.phone_numbers, "work")
 
   if (!mobilePhone && !workPhone) {
+    // No hay telefono en el payload: Apollo confirmó que no lo encontró.
+    // Marcamos las filas pending -> not_available para que la UI deje de esperar.
+    const supabaseNoPhone = createAdminClient()
+    let touched = 0
+    if (person.id) {
+      const { count } = await supabaseNoPhone
+        .from("user_company_contacts")
+        .update({ phone_status: "not_available" })
+        .eq("apollo_person_id", person.id)
+        .eq("phone_status", "pending")
+        .select("id", { count: "exact", head: true })
+      touched += count || 0
+    }
+    if (person.linkedin_url) {
+      const { count } = await supabaseNoPhone
+        .from("user_company_contacts")
+        .update({ phone_status: "not_available" })
+        .eq("linkedin_url", person.linkedin_url)
+        .eq("phone_status", "pending")
+        .select("id", { count: "exact", head: true })
+      touched += count || 0
+    }
     await logApolloCall({
       endpoint: "webhook:phone",
       userId: null,
@@ -61,15 +83,17 @@ export async function POST(request: Request) {
       responseStatus: 204,
       latencyMs: Date.now() - start,
       errorMessage: "No phone data in payload",
+      responseCount: touched,
       extraMetadata: { apollo_id: person.id || null },
     })
-    return NextResponse.json({ ok: true, message: "No phone data to update" })
+    return NextResponse.json({ ok: true, message: "No phone data available", updated: touched })
   }
 
   const supabase = createAdminClient()
   const phoneUpdate = {
     mobile_phone: mobilePhone,
     phone: workPhone || mobilePhone,
+    phone_status: "received" as const,
   }
   const cacheUpdate = {
     ...phoneUpdate,
@@ -100,7 +124,8 @@ export async function POST(request: Request) {
   }
 
   // Propagar a user_company_contacts de todos los usuarios.
-  // Captura tanto null como string vacio ("") en mobile_phone.
+  // Ahora usamos phone_status como indicador: actualizamos todos los que están
+  // pending o not_requested, sin importar si mobile_phone es null o "".
   // Preferimos match por apollo_person_id (key fuerte), fallback a linkedin_url.
   let updatedRows = 0
   if (person.id) {
@@ -108,7 +133,6 @@ export async function POST(request: Request) {
       .from("user_company_contacts")
       .update(phoneUpdate)
       .eq("apollo_person_id", person.id)
-      .or("mobile_phone.is.null,mobile_phone.eq.")
       .select("id", { count: "exact", head: true })
 
     updatedRows += count || 0
@@ -120,7 +144,6 @@ export async function POST(request: Request) {
       .update(phoneUpdate)
       .eq("linkedin_url", linkedinForPropagation)
       .is("apollo_person_id", null) // sólo los que no matchearon por apollo_person_id
-      .or("mobile_phone.is.null,mobile_phone.eq.")
       .select("id", { count: "exact", head: true })
 
     updatedRows += count || 0

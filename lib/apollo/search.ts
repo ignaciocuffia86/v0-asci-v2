@@ -53,7 +53,13 @@ export async function searchPeople(opts: SearchPeopleOpts): Promise<SearchPeople
 
   if (opts.jobTitles.length > 0) {
     base.person_titles = opts.jobTitles
-    base.include_similar_titles = opts.includeSimilarTitles ?? true
+    // NO activamos include_similar_titles por default: expande demasiado y trae
+    // falsos positivos (ej: "IT Manager" -> "Key Account Manager" por tokenizar
+    // "Manager" como keyword). Se activa explicito via params cuando el usuario
+    // lo pide desde la UI.
+    if (opts.includeSimilarTitles === true) {
+      base.include_similar_titles = true
+    }
   }
 
   if (opts.seniorities && opts.seniorities.length > 0) {

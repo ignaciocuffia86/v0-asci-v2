@@ -36,6 +36,8 @@ import {
   removeProspect,
   restoreProspect,
   getRemovedProspects,
+  pollPhoneStatus,
+  requestPhoneReveal,
   type ApolloSearchStats,
 } from "@/app/actions/apollo"
 import Link from "next/link"
@@ -209,6 +211,8 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
   const [revealEmail, setRevealEmail] = useState(true)
   const [revealPhone, setRevealPhone] = useState(false)
   const [useOrganizationLocation, setUseOrganizationLocation] = useState(false)
+  // Default OFF: evita falsos positivos ("IT Manager" -> "Key Account Manager")
+  const [includeSimilarTitles, setIncludeSimilarTitles] = useState(false)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [showDebugPayload, setShowDebugPayload] = useState(false)
 
@@ -218,6 +222,9 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
 
   // Copiar al portapapeles
   const [copiedId, setCopiedId] = useState<string | null>(null)
+
+  // UX: pedido de teléfono por prospecto (opt-in, cache warmers)
+  const [requestingPhoneIds, setRequestingPhoneIds] = useState<Set<string>>(new Set())
 
   const copyToClipboard = async (text: string, id: string) => {
     await navigator.clipboard.writeText(text)
@@ -249,6 +256,38 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
   useEffect(() => {
     loadData()
   }, [loadData])
+
+  // Polling de phone_status: mientras haya prospectos con status "pending",
+  // polleamos cada 10s. Al primer ciclo sin pendings detenemos el interval.
+  useEffect(() => {
+    const hasPending = prospects.some((p) => p.phone_status === "pending")
+    if (!hasPending) return
+
+    const interval = setInterval(async () => {
+      const statuses = await pollPhoneStatus(bookmarkId)
+      setProspects((prev) =>
+        prev.map((p) => {
+          const fresh = statuses.find((s) => s.id === p.id)
+          if (!fresh) return p
+          // Sólo actualizamos si hubo cambio efectivo en estado o teléfono
+          if (
+            fresh.phone_status === p.phone_status &&
+            fresh.mobile_phone === p.mobile_phone &&
+            fresh.phone === p.phone
+          )
+            return p
+          return {
+            ...p,
+            phone_status: fresh.phone_status,
+            mobile_phone: fresh.mobile_phone,
+            phone: fresh.phone,
+          }
+        }),
+      )
+    }, 10_000)
+
+    return () => clearInterval(interval)
+  }, [prospects, bookmarkId])
 
   // Toggle selección de job title
   const toggleJobTitle = (title: string) => {
@@ -316,6 +355,7 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
           revealEmail,
           revealPhone,
           useOrganizationLocation,
+          includeSimilarTitles,
         },
       )
 
@@ -347,6 +387,43 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
       }
     }
     setRemovingId(null)
+  }
+
+  // Pide teléfono a Apollo para un prospecto existente (cache warmer).
+  // Marca inmediato el estado "pending" y dispara la call; el webhook o el
+  // polling van a resolver el estado final.
+  const handleRequestPhone = async (prospectId: string) => {
+    setRequestingPhoneIds((prev) => new Set(prev).add(prospectId))
+    // Optimistic: mostramos pending ya mismo
+    setProspects((prev) =>
+      prev.map((p) => (p.id === prospectId ? { ...p, phone_status: "pending" } : p)),
+    )
+    try {
+      await requestPhoneReveal([prospectId])
+      // Refrescamos por si Apollo devolvió el teléfono inline
+      const statuses = await pollPhoneStatus(bookmarkId)
+      setProspects((prev) =>
+        prev.map((p) => {
+          const fresh = statuses.find((s) => s.id === p.id)
+          return fresh
+            ? {
+                ...p,
+                phone_status: fresh.phone_status,
+                mobile_phone: fresh.mobile_phone,
+                phone: fresh.phone,
+              }
+            : p
+        }),
+      )
+    } catch (err) {
+      console.error("[v0] handleRequestPhone failed", err)
+    } finally {
+      setRequestingPhoneIds((prev) => {
+        const next = new Set(prev)
+        next.delete(prospectId)
+        return next
+      })
+    }
   }
 
   const handleRestoreProspect = async (prospectId: string) => {
@@ -643,6 +720,22 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
                     id="use-org-location"
                     checked={useOrganizationLocation}
                     onCheckedChange={setUseOrganizationLocation}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex-1">
+                    <label htmlFor="similar-titles" className="text-sm font-medium">
+                      Incluir cargos similares
+                    </label>
+                    <p className="text-xs text-muted-foreground">
+                      Expande los cargos seleccionados a variantes parecidas. Desactivado trae
+                      resultados más precisos (recomendado). Activar sólo si faltan resultados.
+                    </p>
+                  </div>
+                  <Switch
+                    id="similar-titles"
+                    checked={includeSimilarTitles}
+                    onCheckedChange={setIncludeSimilarTitles}
                   />
                 </div>
               </div>
@@ -1014,32 +1107,99 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
                         </Tooltip>
                       )}
 
-                      {/* Teléfono */}
-                      {(prospect.mobile_phone || prospect.phone) && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-8 gap-1.5 bg-transparent"
-                              onClick={() =>
-                                copyToClipboard(prospect.mobile_phone || prospect.phone!, `phone-${prospect.id}`)
-                              }
-                            >
-                              {copiedId === `phone-${prospect.id}` ? (
-                                <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
-                              ) : (
-                                <Phone className="h-3.5 w-3.5" />
-                              )}
-                              Tel
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>{prospect.mobile_phone || prospect.phone}</p>
-                            <p className="text-xs text-muted-foreground">Click para copiar</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      )}
+                      {/* Teléfono — estado visible en lugar de ocultar */}
+                      {(() => {
+                        const hasPhone = !!(prospect.mobile_phone || prospect.phone)
+                        const status = (prospect.phone_status as string | null) ?? null
+                        if (hasPhone) {
+                          return (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 gap-1.5 bg-transparent"
+                                  onClick={() =>
+                                    copyToClipboard(prospect.mobile_phone || prospect.phone!, `phone-${prospect.id}`)
+                                  }
+                                >
+                                  {copiedId === `phone-${prospect.id}` ? (
+                                    <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+                                  ) : (
+                                    <Phone className="h-3.5 w-3.5" />
+                                  )}
+                                  Tel
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>{prospect.mobile_phone || prospect.phone}</p>
+                                <p className="text-xs text-muted-foreground">Click para copiar</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          )
+                        }
+                        if (status === "pending") {
+                          return (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 gap-1.5 bg-transparent text-muted-foreground"
+                                  disabled
+                                >
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  Solicitando...
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>Apollo está procesando el teléfono.</p>
+                                <p className="text-xs text-muted-foreground">Suele tardar entre 30s y 2 min.</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          )
+                        }
+                        if (status === "not_available") {
+                          return (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="inline-flex h-8 items-center gap-1.5 rounded-md border border-dashed px-2 text-xs text-muted-foreground">
+                                  <Phone className="h-3.5 w-3.5" />
+                                  Sin teléfono
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                Apollo no tiene teléfono registrado para este contacto.
+                              </TooltipContent>
+                            </Tooltip>
+                          )
+                        }
+                        // not_requested o null legacy: mostrar CTA para pedirlo
+                        return (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-8 gap-1.5 bg-transparent"
+                                onClick={() => handleRequestPhone(prospect.id)}
+                                disabled={requestingPhoneIds.has(prospect.id)}
+                              >
+                                {requestingPhoneIds.has(prospect.id) ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <Phone className="h-3.5 w-3.5" />
+                                )}
+                                Pedir teléfono
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>Consulta Apollo por el teléfono de este prospecto.</p>
+                              <p className="text-xs text-muted-foreground">Consume 1 crédito Apollo.</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        )
+                      })()}
                     </div>
                   </CardContent>
                 </Card>

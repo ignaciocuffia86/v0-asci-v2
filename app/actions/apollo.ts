@@ -2,7 +2,6 @@
 
 import { createClient } from "@/lib/supabase/server"
 import { createAdminClient } from "@/lib/supabase/admin"
-import { revalidatePath } from "next/cache"
 import { generateGeminiContent } from "@/lib/ai-service"
 import { resolveCompanyOrganizationId } from "@/lib/apollo/organizations"
 import { searchPeople } from "@/lib/apollo/search"
@@ -38,6 +37,7 @@ export type ApolloSearchOptions = {
   revealPhone?: boolean
   revealEmail?: boolean
   useOrganizationLocation?: boolean
+  includeSimilarTitles?: boolean
   seniorities?: string[]
   departments?: string[]
   forceRefresh?: boolean
@@ -359,7 +359,8 @@ export async function searchApolloProspects(
     country: countryFilter ?? null,
     seniorities: options.seniorities,
     departments: options.departments,
-    includeSimilarTitles: true,
+    // Default OFF: la UI lo expone como toggle avanzado. Evita falsos positivos.
+    includeSimilarTitles: options.includeSimilarTitles === true,
     useOrganizationLocation: options.useOrganizationLocation ?? false,
   }
   const queryHash = hashSearchParams(searchParams)
@@ -389,7 +390,7 @@ export async function searchApolloProspects(
       country: countryFilter ?? null,
       seniorities: options.seniorities,
       departments: options.departments,
-      includeSimilarTitles: true,
+      includeSimilarTitles: options.includeSimilarTitles === true,
       useOrganizationLocation: options.useOrganizationLocation ?? false,
       userId: user.id,
       bookmarkId,
@@ -499,6 +500,16 @@ export async function searchApolloProspects(
       continue
     }
 
+    // phone_status: reflejo el estado del teléfono para que la UI sepa qué mostrar
+    // - received: vino inline en el enrichment
+    // - pending: se pidió a Apollo pero volverá por webhook (o ya pedimos hoy)
+    // - not_requested: no se pidió reveal
+    const phoneStatus: string = contact.mobilePhone
+      ? "received"
+      : contact.phoneAwaitingWebhook
+        ? "pending"
+        : "not_requested"
+
     const { error } = await supabase.from("user_company_contacts").insert({
       user_id: user.id,
       company_id: company.id,
@@ -513,6 +524,7 @@ export async function searchApolloProspects(
       email_status: contact.emailStatus,
       phone: contact.workPhone,
       mobile_phone: contact.mobilePhone,
+      phone_status: phoneStatus,
       linkedin_url: contact.linkedinUrl,
       profile_picture_url: contact.photoUrl,
       city: contact.city,
@@ -545,7 +557,8 @@ export async function searchApolloProspects(
     recordTitleSuccess(sanitized.accepted, totalEntries).catch(() => {})
   }
 
-  revalidatePath(`/bookmarks/${bookmarkId}`)
+  // No hacemos revalidatePath aca: el cliente llama loadData() via server action
+  // y recarga la lista sin causar un full refresh del RSC (mejor UX).
 
   return {
     success: true,
@@ -659,6 +672,134 @@ export async function getRemovedProspects(bookmarkId: string) {
     .order("created_at", { ascending: false })
 
   return data || []
+}
+
+/**
+ * Poll liviano del estado de teléfonos.
+ * Devuelve SÓLO las filas que cambiaron de estado o tienen teléfono,
+ * para que la UI refresque incremental sin recargar todo.
+ */
+export async function pollPhoneStatus(
+  bookmarkId: string,
+): Promise<Array<{ id: string; phone_status: string | null; mobile_phone: string | null; phone: string | null }>> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  if (!user) return []
+
+  const { data: bookmark } = await supabase.from("bookmarks").select("company_id").eq("id", bookmarkId).single()
+  if (!bookmark) return []
+
+  const { data } = await supabase
+    .from("user_company_contacts")
+    .select("id, phone_status, mobile_phone, phone")
+    .eq("company_id", bookmark.company_id)
+    .eq("user_id", user.id)
+    .eq("is_decision_maker", true)
+
+  return data || []
+}
+
+/**
+ * Pide teléfonos a Apollo para prospectos existentes que aún no lo tienen.
+ * Útil para filas viejas del cache (pre phone_status) o que quedaron pending.
+ * Marca phone_status = 'pending' y dispara la llamada a people/match con webhook.
+ */
+export async function requestPhoneReveal(
+  prospectIds: string[],
+): Promise<{ success: boolean; requested: number; error?: string }> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  if (!user) return { success: false, requested: 0, error: "No autorizado" }
+  if (!prospectIds || prospectIds.length === 0) return { success: true, requested: 0 }
+
+  const apiKey = process.env.APOLLO_API_KEY
+  if (!apiKey) return { success: false, requested: 0, error: "APOLLO_API_KEY no configurado" }
+
+  // Traer prospectos del usuario (seguridad: sólo los suyos)
+  const { data: prospects } = await supabase
+    .from("user_company_contacts")
+    .select("id, apollo_person_id, linkedin_url, first_name, last_name, full_name, email")
+    .in("id", prospectIds)
+    .eq("user_id", user.id)
+
+  if (!prospects || prospects.length === 0) {
+    return { success: false, requested: 0, error: "No se encontraron prospectos" }
+  }
+
+  // Marcamos pending inmediatamente para que la UI muestre "Solicitando..."
+  await supabase
+    .from("user_company_contacts")
+    .update({ phone_status: "pending" })
+    .in(
+      "id",
+      prospects.map((p) => p.id),
+    )
+
+  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://asci.bigua.lat"
+  const admin = createAdminClient()
+  let requested = 0
+
+  for (const p of prospects) {
+    try {
+      const matchBody: Record<string, unknown> = {
+        reveal_phone_number: true,
+        webhook_url: `${baseUrl}/api/webhooks/apollo`,
+      }
+      if (p.apollo_person_id) matchBody.id = p.apollo_person_id
+      else if (p.linkedin_url) matchBody.linkedin_url = p.linkedin_url
+      else if (p.email) matchBody.email = p.email
+      else if (p.first_name && p.last_name) {
+        matchBody.first_name = p.first_name
+        matchBody.last_name = p.last_name
+      } else continue
+
+      const res = await fetch("https://api.apollo.io/api/v1/people/match", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "Cache-Control": "no-cache",
+        },
+        body: JSON.stringify(matchBody),
+      })
+
+      // Si Apollo devuelve el telefono inline, lo guardamos ya.
+      if (res.ok) {
+        const data = await res.json()
+        const person = data.person
+        if (person) {
+          const inlineMobile = person.mobile_phone || null
+          const phoneNumbers = person.phone_numbers as Array<{ type?: string; sanitized_number?: string }> | undefined
+          const mobileFromArr = phoneNumbers?.find(
+            (n) => n.type === "mobile" || n.type === "Mobile",
+          )?.sanitized_number
+          const workFromArr = phoneNumbers?.find((n) => n.type === "work")?.sanitized_number
+          const best = inlineMobile || mobileFromArr || workFromArr || null
+          if (best) {
+            await admin
+              .from("user_company_contacts")
+              .update({
+                mobile_phone: best,
+                phone: best,
+                phone_status: "received",
+              })
+              .eq("id", p.id)
+          }
+        }
+      }
+      requested++
+    } catch (err) {
+      console.error("[v0] requestPhoneReveal error for prospect", p.id, err)
+    }
+  }
+
+  return { success: true, requested }
 }
 
 export async function getContactsForIcebreaker(bookmarkId: string) {
