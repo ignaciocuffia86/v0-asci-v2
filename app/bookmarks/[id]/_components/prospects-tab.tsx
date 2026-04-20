@@ -262,25 +262,49 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
     loadData()
   }, [loadData])
 
-  // Polling de phone_status: mientras haya prospectos con status "pending",
-  // polleamos cada 10s. Al primer ciclo sin pendings detenemos el interval.
+  // Polling de phone_status: mientras haya pendings, polleamos cada 10s.
+  // - Primer poll a los 3s (para capturar respuestas inline rápidas del webhook).
+  // - Timeout duro a los 3 min: si sigue pending, lo marcamos para que el usuario
+  //   pueda reintentar, y cortamos el polling (evita "Solicitando..." eterno).
+  // Usamos una ref para el ID de la pending set así no re-iniciamos el interval
+  // en cada render de prospects.
+  const hasPending = prospects.some((p) => p.phone_status === "pending")
   useEffect(() => {
-    const hasPending = prospects.some((p) => p.phone_status === "pending")
     if (!hasPending) return
 
-    const interval = setInterval(async () => {
+    let stopped = false
+    const startedAt = Date.now()
+    const MAX_MS = 3 * 60 * 1000
+
+    const tick = async () => {
+      if (stopped) return
       const statuses = await pollPhoneStatus(bookmarkId)
+      if (stopped) return
+
+      const now = Date.now()
+      const elapsed = now - startedAt
+
       setProspects((prev) =>
         prev.map((p) => {
           const fresh = statuses.find((s) => s.id === p.id)
-          if (!fresh) return p
-          // Sólo actualizamos si hubo cambio efectivo en estado o teléfono
+          if (!fresh) {
+            // Timeout: si sigue pending tras MAX_MS, cortamos visualmente
+            if (p.phone_status === "pending" && elapsed > MAX_MS) {
+              return { ...p, phone_status: "not_requested" }
+            }
+            return p
+          }
           if (
             fresh.phone_status === p.phone_status &&
             fresh.mobile_phone === p.mobile_phone &&
             fresh.phone === p.phone
-          )
+          ) {
+            // Si la DB sigue pending tras MAX_MS, cortamos local para la UI
+            if (fresh.phone_status === "pending" && elapsed > MAX_MS) {
+              return { ...p, phone_status: "not_requested" }
+            }
             return p
+          }
           return {
             ...p,
             phone_status: fresh.phone_status,
@@ -289,10 +313,17 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
           }
         }),
       )
-    }, 10_000)
+    }
 
-    return () => clearInterval(interval)
-  }, [prospects, bookmarkId])
+    const firstPoll = setTimeout(tick, 3_000)
+    const interval = setInterval(tick, 10_000)
+
+    return () => {
+      stopped = true
+      clearTimeout(firstPoll)
+      clearInterval(interval)
+    }
+  }, [hasPending, bookmarkId])
 
   // Toggle selección de job title
   const toggleJobTitle = (title: string) => {

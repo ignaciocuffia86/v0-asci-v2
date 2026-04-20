@@ -769,33 +769,51 @@ export async function requestPhoneReveal(
         body: JSON.stringify(matchBody),
       })
 
-      // Si Apollo devuelve el telefono inline, lo guardamos ya.
       if (res.ok) {
         const data = await res.json()
         const person = data.person
-        if (person) {
-          const inlineMobile = person.mobile_phone || null
-          const phoneNumbers = person.phone_numbers as Array<{ type?: string; sanitized_number?: string }> | undefined
-          const mobileFromArr = phoneNumbers?.find(
-            (n) => n.type === "mobile" || n.type === "Mobile",
-          )?.sanitized_number
-          const workFromArr = phoneNumbers?.find((n) => n.type === "work")?.sanitized_number
-          const best = inlineMobile || mobileFromArr || workFromArr || null
-          if (best) {
-            await admin
-              .from("user_company_contacts")
-              .update({
-                mobile_phone: best,
-                phone: best,
-                phone_status: "received",
-              })
-              .eq("id", p.id)
-          }
+        const inlineMobile = person?.mobile_phone || null
+        const phoneNumbers = person?.phone_numbers as
+          | Array<{ type?: string; sanitized_number?: string }>
+          | undefined
+        const mobileFromArr = phoneNumbers?.find(
+          (n) => n.type === "mobile" || n.type === "Mobile",
+        )?.sanitized_number
+        const workFromArr = phoneNumbers?.find((n) => n.type === "work")?.sanitized_number
+        const best = inlineMobile || mobileFromArr || workFromArr || null
+
+        if (best) {
+          // Apollo respondió con el teléfono inline
+          await admin
+            .from("user_company_contacts")
+            .update({ mobile_phone: best, phone: best, phone_status: "received" })
+            .eq("id", p.id)
+        } else if (phoneNumbers !== undefined) {
+          // Apollo respondió OK pero sin phone_numbers válidos: no va a llegar por webhook.
+          // Marcamos not_available para que la UI deje de mostrar "Solicitando..."
+          await admin
+            .from("user_company_contacts")
+            .update({ phone_status: "not_available" })
+            .eq("id", p.id)
         }
+        // Si phone_numbers es undefined (Apollo no devolvió el campo), el webhook
+        // es quien completará: mantenemos phone_status = "pending".
+      } else {
+        // Error HTTP de Apollo (429, 5xx, etc): devolvemos el estado a not_requested
+        // para que el usuario pueda reintentar sin quedar trabado en "Solicitando...".
+        await admin
+          .from("user_company_contacts")
+          .update({ phone_status: "not_requested" })
+          .eq("id", p.id)
       }
       requested++
     } catch (err) {
       console.error("[v0] requestPhoneReveal error for prospect", p.id, err)
+      // Error de red: rollback a not_requested
+      await admin
+        .from("user_company_contacts")
+        .update({ phone_status: "not_requested" })
+        .eq("id", p.id)
     }
   }
 

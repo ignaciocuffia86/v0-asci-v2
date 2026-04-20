@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useParams, useRouter } from "next/navigation"
+import { useParams, useRouter, useSearchParams } from "next/navigation"
 import { createClient } from "@/lib/supabase/client"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
@@ -50,6 +50,25 @@ import { SlidersHorizontal, Filter } from "lucide-react"
 export default function BookmarkWorkspacePage() {
   const params = useParams()
   const router = useRouter()
+  const searchParams = useSearchParams()
+
+  // Tab persistente via ?tab=... para sobrevivir a refresh sin cambiar de ruta.
+  const VALID_TABS = ["overview", "jobpostings", "intelligence", "strategy", "prospects", "icebreakers"] as const
+  type TabValue = (typeof VALID_TABS)[number]
+  const rawTab = searchParams?.get("tab")
+  const initialTab: TabValue = (VALID_TABS as readonly string[]).includes(rawTab || "")
+    ? (rawTab as TabValue)
+    : "overview"
+  const [activeTab, setActiveTab] = useState<TabValue>(initialTab)
+
+  const handleTabChange = (value: string) => {
+    setActiveTab(value as TabValue)
+    // Actualizamos la URL sin disparar una navegación (evita el refresh/reload del server component).
+    const sp = new URLSearchParams(Array.from(searchParams?.entries() || []))
+    sp.set("tab", value)
+    const newUrl = `${window.location.pathname}?${sp.toString()}`
+    window.history.replaceState(null, "", newUrl)
+  }
   const bookmarkId = params.id as string
   const [bookmark, setBookmark] = useState<any>(null)
   const [company, setCompany] = useState<any>(null)
@@ -386,7 +405,7 @@ export default function BookmarkWorkspacePage() {
 
       {/* Main Content */}
       <main className="flex-1 p-4 md:p-6 overflow-auto">
-        <Tabs defaultValue="overview" className="space-y-4 md:space-y-6">
+        <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-4 md:space-y-6">
           <TabsList className="bg-muted/50 p-1 flex-wrap h-auto gap-1" data-onboarding="workspace-tabs">
             <TabsTrigger value="overview" className="gap-1.5 text-xs md:text-sm">
               <Building2 className="h-3.5 w-3.5 md:h-4 md:w-4" />
