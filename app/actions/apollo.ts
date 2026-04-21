@@ -816,20 +816,37 @@ export async function requestPhoneReveal(
         const workFromArr = phoneNumbers?.find((n) => n.type === "work")?.sanitized_number
         const best = inlineMobile || mobileFromArr || workFromArr || null
 
-        // Apollo devuelve flags importantes en el response:
-        // - `phone_numbers` array con entries que tienen `status` ("verified", "pending", etc)
-        // - flags como `revealed_for_current_team` y el plan de la cuenta
-        // - `warnings` o `errors` a nivel top-level
-        // Si hay phone_numbers con status "pending" -> esperamos webhook.
-        // Si phone_numbers esta vacio y NO hay warnings -> Apollo no tiene el dato.
-        const hasPendingReveal = phoneNumbers?.some(
-          (n) => n.status === "pending" || n.status === "requested" || n.status === "processing",
-        )
+        // IMPORTANTE: Apollo devuelve el status real del reveal en `phone_enrichment`,
+        // NO en person.phone_numbers. Logs previos confirman top-level keys:
+        // ["person", "phone_enrichment", "request_id"].
+        // phone_enrichment puede traer: { status, error_message, request_id, ... }
+        // Estados comunes que hemos visto documentados:
+        //   - "queued" / "pending" / "processing" -> webhook va a llegar
+        //   - "success" -> telefono ya esta en person.phone_numbers
+        //   - "failed" / "no_data" / "not_found" -> no hay telefono, no habra webhook
+        const phoneEnrichment = data.phone_enrichment as
+          | { status?: string; error_message?: string; request_id?: string; [k: string]: unknown }
+          | undefined
+        const enrichmentStatus = phoneEnrichment?.status?.toLowerCase() ?? null
+        const requestId = data.request_id ?? phoneEnrichment?.request_id ?? null
+
+        const pendingStatuses = ["queued", "pending", "processing", "requested", "in_progress"]
+        const terminalFailStatuses = ["failed", "no_data", "not_found", "unavailable", "error"]
+
+        const isPendingFromEnrichment =
+          enrichmentStatus !== null && pendingStatuses.includes(enrichmentStatus)
+        const isTerminalFailFromEnrichment =
+          enrichmentStatus !== null && terminalFailStatuses.includes(enrichmentStatus)
+        const hasPendingReveal =
+          isPendingFromEnrichment ||
+          !!phoneNumbers?.some(
+            (n) => n.status === "pending" || n.status === "requested" || n.status === "processing",
+          )
+
         const warnings = data.warnings || data.warning || null
         const credits = data.credits_used || data.credits_consumed || null
 
-        // Log estructurado a apollo_api_calls + dump del response top-level
-        // (sin el person completo, solo meta) para diagnostico post-mortem.
+        // Log con TODO el phone_enrichment raw para poder post-mortem
         await logApolloCall({
           endpoint: "people/match:phone",
           userId: user.id,
@@ -843,12 +860,19 @@ export async function requestPhoneReveal(
             inline_phone: best,
             phone_numbers_returned: phoneNumbers?.length ?? 0,
             phone_numbers_statuses: phoneNumbers?.map((n) => n.status ?? null) ?? [],
-            has_pending_reveal: hasPendingReveal ?? false,
+            // NUEVO: dump del phone_enrichment completo — esto nos dice que paso realmente
+            phone_enrichment: phoneEnrichment ?? null,
+            enrichment_status: enrichmentStatus,
+            enrichment_error: phoneEnrichment?.error_message ?? null,
+            apollo_request_id: requestId,
+            has_pending_reveal: hasPendingReveal,
+            is_terminal_fail: isTerminalFailFromEnrichment,
             warnings,
             credits,
             webhook_url_sent: matchBody.webhook_url,
-            // Keys top-level para ver si hay algo que no estamos interpretando
             response_top_keys: Object.keys(data),
+            // Keys del phone_enrichment para descubrir shape real sin loggear PII
+            phone_enrichment_keys: phoneEnrichment ? Object.keys(phoneEnrichment) : [],
           },
         })
 
@@ -860,16 +884,21 @@ export async function requestPhoneReveal(
             .eq("id", p.id)
           results.push({ id: p.id, status: "received", phone: best })
         } else if (hasPendingReveal) {
-          // Apollo confirmo que esta procesando y mandara webhook
+          // Apollo va a mandar webhook. Guardamos request_id para poder correlacionar.
+          if (requestId) {
+            await admin
+              .from("user_company_contacts")
+              .update({ apollo_request_id: requestId })
+              .eq("id", p.id)
+          }
           results.push({
             id: p.id,
             status: "pending",
             phone: null,
             message: "Apollo esta procesando el telefono. Puede tardar unos minutos.",
           })
-        } else {
-          // 200 OK con phone_numbers vacio y sin pending: Apollo no tiene el dato.
-          // Marcamos not_available para que la UI lo muestre claramente.
+        } else if (isTerminalFailFromEnrichment) {
+          // Apollo confirmo explicitamente que no hay telefono para este contacto
           await admin
             .from("user_company_contacts")
             .update({ phone_status: "not_available" })
@@ -878,7 +907,19 @@ export async function requestPhoneReveal(
             id: p.id,
             status: "not_available",
             phone: null,
-            message: "Apollo no tiene el telefono registrado para este contacto.",
+            message:
+              phoneEnrichment?.error_message ||
+              `Apollo no tiene telefono (${enrichmentStatus}).`,
+          })
+        } else {
+          // Respuesta ambigua: 200 OK, phone_numbers vacio y enrichment sin status conocido.
+          // NO asumimos "no hay" — lo dejamos pending para que el usuario reintente y
+          // el admin pueda ver el metadata logueado (response_top_keys, phone_enrichment_keys).
+          results.push({
+            id: p.id,
+            status: "pending",
+            phone: null,
+            message: `Respuesta sin datos claros de Apollo (status=${enrichmentStatus ?? "null"}). Reintentando si llega webhook.`,
           })
         }
       } else {
