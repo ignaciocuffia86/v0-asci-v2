@@ -281,9 +281,23 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
 
     const tick = async () => {
       if (stopped) return
-      // IMPORTANTE: usamos fetch() contra un route handler, NO una server action.
-      // Las server actions de Next.js disparan router.refresh() implicito que
-      // causa un "refresh" visible del tab. fetch() a un API route no lo hace.
+      // Paso 1: polleamos directo a Apollo (respaldo del webhook). Si Apollo
+      // devuelve el telefono, esto actualiza la DB. Asi no dependemos solo
+      // del webhook que puede fallar por red/firewall/DNS/etc.
+      try {
+        await fetch(
+          `/api/apollo/poll-apollo-enrichment?bookmarkId=${encodeURIComponent(bookmarkId)}`,
+          { cache: "no-store" },
+        )
+      } catch (err) {
+        console.error("[v0] pollApolloEnrichment failed", err)
+      }
+      if (stopped) return
+
+      // Paso 2: re-leemos el estado actualizado desde nuestra DB.
+      // IMPORTANTE: fetch() contra un route handler, NO una server action —
+      // las server actions disparan router.refresh() implicito que causa
+      // un "refresh" visible del tab.
       let statuses: Array<{
         id: string
         phone_status: string | null

@@ -825,10 +825,14 @@ export async function requestPhoneReveal(
         //   - "success" -> telefono ya esta en person.phone_numbers
         //   - "failed" / "no_data" / "not_found" -> no hay telefono, no habra webhook
         const phoneEnrichment = data.phone_enrichment as
-          | { status?: string; error_message?: string; request_id?: string; [k: string]: unknown }
+          | { status?: string; error_message?: string; message?: string; request_id?: string; [k: string]: unknown }
           | undefined
         const enrichmentStatus = phoneEnrichment?.status?.toLowerCase() ?? null
-        const requestId = data.request_id ?? phoneEnrichment?.request_id ?? null
+        // IMPORTANTE: el request_id util para pollear esta DENTRO de phone_enrichment,
+        // no en data.request_id (que es un id de request generico). Ejemplo real del log:
+        //   data.request_id: "-1713660131470514000"     <- no sirve para pollear
+        //   phone_enrichment.request_id: "69e6dd65ccbea5001df8aaf6"  <- este si
+        const requestId = phoneEnrichment?.request_id ?? data.request_id ?? null
 
         const pendingStatuses = ["queued", "pending", "processing", "requested", "in_progress"]
         const terminalFailStatuses = ["failed", "no_data", "not_found", "unavailable", "error"]
