@@ -787,9 +787,13 @@ export async function requestPhoneReveal(
       matchBody.last_name = p.last_name
     } else continue
 
-    // Construir URL con query params URL-encoded como hace la doc oficial
+    // Construir URL con query params URL-encoded como hace la doc oficial.
+    // IMPORTANTE: `run_waterfall_phone=true` es REQUERIDO para que Apollo
+    // dispare el webhook de delivery asincrono. Sin este flag, el response
+    // queda en "pending" pero el webhook nunca llega (confirmado en docs).
     const qs = new URLSearchParams({
       reveal_phone_number: "true",
+      run_waterfall_phone: "true",
       webhook_url: webhookUrl,
     }).toString()
     const apolloUrl = `https://api.apollo.io/api/v1/people/match?${qs}`

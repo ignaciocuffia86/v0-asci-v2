@@ -93,6 +93,8 @@ export async function enrichPerson(
     requestBody: phoneBody,
     queryParams: {
       reveal_phone_number: "true",
+      // REQUERIDO para que Apollo dispare el webhook de delivery asincrono
+      run_waterfall_phone: "true",
       webhook_url: opts.webhookUrl || undefined,
     },
     creditsEstimated: 1,
