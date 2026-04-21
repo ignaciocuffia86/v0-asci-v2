@@ -499,6 +499,14 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
         toast.success("Telefono recibido", {
           description: prospectResult.phone || undefined,
         })
+      } else if (prospectResult?.status === "not_available") {
+        // Apollo confirmo que no tiene el dato — respuesta final, no esperamos webhook
+        toast.warning("Sin telefono disponible", {
+          description:
+            prospectResult.message ||
+            "Apollo no tiene el telefono registrado para este contacto.",
+          duration: 5000,
+        })
       } else if (prospectResult?.status === "pending") {
         toast.info("Solicitud enviada", {
           description:

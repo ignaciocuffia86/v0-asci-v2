@@ -712,7 +712,11 @@ export async function pollPhoneStatus(
  */
 export type PhoneRevealResult = {
   id: string
-  status: "received" | "pending" | "error"
+  // "received" cuando Apollo devolvio el telefono inline (hay phone)
+  // "not_available" cuando Apollo confirmo que no lo tiene (phone=null, message explica)
+  // "pending" cuando Apollo va a mandar por webhook
+  // "error" cuando hubo un fallo HTTP o de red
+  status: "received" | "not_available" | "pending" | "error"
   phone: string | null
   message?: string
 }
@@ -804,7 +808,7 @@ export async function requestPhoneReveal(
         const person = data.person
         const inlineMobile = person?.mobile_phone || null
         const phoneNumbers = person?.phone_numbers as
-          | Array<{ type?: string; sanitized_number?: string }>
+          | Array<{ type?: string; sanitized_number?: string; status?: string }>
           | undefined
         const mobileFromArr = phoneNumbers?.find(
           (n) => n.type === "mobile" || n.type === "Mobile",
@@ -812,7 +816,20 @@ export async function requestPhoneReveal(
         const workFromArr = phoneNumbers?.find((n) => n.type === "work")?.sanitized_number
         const best = inlineMobile || mobileFromArr || workFromArr || null
 
-        // Log estructurado a apollo_api_calls para diagnostico
+        // Apollo devuelve flags importantes en el response:
+        // - `phone_numbers` array con entries que tienen `status` ("verified", "pending", etc)
+        // - flags como `revealed_for_current_team` y el plan de la cuenta
+        // - `warnings` o `errors` a nivel top-level
+        // Si hay phone_numbers con status "pending" -> esperamos webhook.
+        // Si phone_numbers esta vacio y NO hay warnings -> Apollo no tiene el dato.
+        const hasPendingReveal = phoneNumbers?.some(
+          (n) => n.status === "pending" || n.status === "requested" || n.status === "processing",
+        )
+        const warnings = data.warnings || data.warning || null
+        const credits = data.credits_used || data.credits_consumed || null
+
+        // Log estructurado a apollo_api_calls + dump del response top-level
+        // (sin el person completo, solo meta) para diagnostico post-mortem.
         await logApolloCall({
           endpoint: "people/match:phone",
           userId: user.id,
@@ -825,7 +842,13 @@ export async function requestPhoneReveal(
             apollo_person_id: p.apollo_person_id,
             inline_phone: best,
             phone_numbers_returned: phoneNumbers?.length ?? 0,
+            phone_numbers_statuses: phoneNumbers?.map((n) => n.status ?? null) ?? [],
+            has_pending_reveal: hasPendingReveal ?? false,
+            warnings,
+            credits,
             webhook_url_sent: matchBody.webhook_url,
+            // Keys top-level para ver si hay algo que no estamos interpretando
+            response_top_keys: Object.keys(data),
           },
         })
 
@@ -836,13 +859,26 @@ export async function requestPhoneReveal(
             .update({ mobile_phone: best, phone: best, phone_status: "received" })
             .eq("id", p.id)
           results.push({ id: p.id, status: "received", phone: best })
-        } else {
-          // Sin telefono inline: Apollo completara por webhook (o timeout lo resetea)
+        } else if (hasPendingReveal) {
+          // Apollo confirmo que esta procesando y mandara webhook
           results.push({
             id: p.id,
             status: "pending",
             phone: null,
             message: "Apollo esta procesando el telefono. Puede tardar unos minutos.",
+          })
+        } else {
+          // 200 OK con phone_numbers vacio y sin pending: Apollo no tiene el dato.
+          // Marcamos not_available para que la UI lo muestre claramente.
+          await admin
+            .from("user_company_contacts")
+            .update({ phone_status: "not_available" })
+            .eq("id", p.id)
+          results.push({
+            id: p.id,
+            status: "not_available",
+            phone: null,
+            message: "Apollo no tiene el telefono registrado para este contacto.",
           })
         }
       } else {
