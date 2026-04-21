@@ -28,6 +28,7 @@ import {
   AlertCircle,
   Info,
   Code,
+  Copy,
 } from "lucide-react"
 import {
   getBookmarkSearchContext,
@@ -1194,42 +1195,62 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
                         </Tooltip>
                       )}
 
-                      {/* Email */}
-                      {prospect.email && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-8 gap-1.5 bg-transparent"
-                              onClick={() => copyToClipboard(prospect.email!, `email-${prospect.id}`)}
-                            >
-                              {copiedId === `email-${prospect.id}` ? (
-                                <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
-                              ) : (
-                                <Mail className="h-3.5 w-3.5" />
-                              )}
-                              Email
-                              {prospect.email_status === "verified" && (
-                                <CheckCircle2 className="h-3 w-3 text-green-500" />
-                              )}
-                              {prospect.email_status === "guessed" && (
-                                <AlertCircle className="h-3 w-3 text-amber-500" />
-                              )}
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>{prospect.email}</p>
-                            <p className="text-xs text-muted-foreground">
-                              {prospect.email_status === "verified"
-                                ? "Email verificado"
-                                : prospect.email_status === "guessed"
-                                  ? "Email estimado"
-                                  : "Click para copiar"}
-                            </p>
-                          </TooltipContent>
-                        </Tooltip>
-                      )}
+                      {/* Email — visible con estado de verificacion y click para copiar.
+                         Apollo devuelve el email priorizando corporativo (work_email);
+                         email_status posibles: "verified" | "extrapolated" | otros. */}
+                      {prospect.email && (() => {
+                        const isVerified = prospect.email_status === "verified"
+                        const isExtrapolated =
+                          prospect.email_status === "extrapolated" ||
+                          prospect.email_status === "guessed"
+                        const isCopied = copiedId === `email-${prospect.id}`
+                        return (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  copyToClipboard(prospect.email!, `email-${prospect.id}`)
+                                }
+                                className="inline-flex h-8 items-center gap-2 rounded-md border border-border bg-background px-2.5 text-sm transition-colors hover:bg-muted"
+                                aria-label={`Copiar email ${prospect.email}`}
+                              >
+                                <Mail className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                <span className="max-w-[240px] truncate font-mono text-xs">
+                                  {prospect.email}
+                                </span>
+                                {isVerified && (
+                                  <span className="inline-flex items-center gap-1 rounded-sm bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-400">
+                                    <CheckCircle2 className="h-2.5 w-2.5" />
+                                    Verificado
+                                  </span>
+                                )}
+                                {isExtrapolated && (
+                                  <span className="inline-flex items-center gap-1 rounded-sm bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">
+                                    <AlertCircle className="h-2.5 w-2.5" />
+                                    Estimado
+                                  </span>
+                                )}
+                                {isCopied ? (
+                                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
+                                ) : (
+                                  <Copy className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                )}
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p className="font-mono text-xs">{prospect.email}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {isVerified
+                                  ? "Email corporativo verificado por Apollo"
+                                  : isExtrapolated
+                                    ? "Email extrapolado (no verificado) — usar con precaucion"
+                                    : "Click para copiar"}
+                              </p>
+                            </TooltipContent>
+                          </Tooltip>
+                        )
+                      })()}
 
                       {/* Teléfono — estado visible en lugar de ocultar */}
                       {(() => {
