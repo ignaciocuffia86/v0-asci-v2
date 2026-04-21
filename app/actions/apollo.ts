@@ -12,6 +12,7 @@ import { hashSearchParams } from "@/lib/apollo/query-hash"
 import { readSearchCache, writeSearchCache } from "@/lib/apollo/search-cache"
 import { recordTitleObservations, recordTitleSuccess } from "@/lib/apollo/title-catalog"
 import { logApolloCall } from "@/lib/apollo/logger"
+import { getApolloWebhookUrl } from "@/lib/apollo/webhook-url"
 
 // ---------------------------------------------------------------------------
 // Tipos expuestos a la UI
@@ -428,15 +429,7 @@ export async function searchApolloProspects(
     requestPreview = searchRes.requestBody
 
     // --- 6. Enrichment con opt-in de reveals
-    const webhookUrl = (() => {
-      const base =
-        process.env.NEXT_PUBLIC_APP_URL ||
-        (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ||
-        "https://asci.bigua.lat"
-      // URL raw en el JSON body. Apollo URL-encode aplica solo cuando va como
-      // query param en la URL del request, no en el body.
-      return `${base.replace(/\/$/, "")}/api/webhooks/apollo`
-    })()
+    const webhookUrl = getApolloWebhookUrl()
 
     const enriched = await enrichMany(
       searchRes.people,
@@ -760,17 +753,19 @@ export async function requestPhoneReveal(
       prospects.map((p) => p.id),
     )
 
-  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://asci.bigua.lat"
   const admin = createAdminClient()
   let requested = 0
 
   // IMPORTANTE: La doc oficial de Apollo muestra que el webhook_url (junto
   // con reveal_phone_number) DEBE pasarse como query param URL-encoded en la
   // URL del POST, NO en el JSON body. Si va en el body, Apollo procesa la
-  // llamada pero jamas dispara el webhook — que es exactamente el bug que
-  // veniamos viendo. Ejemplo oficial:
+  // llamada pero jamas dispara el webhook.
+  // Ejemplo oficial:
   //   POST /api/v1/people/match?reveal_phone_number=true&webhook_url=https%3A%2F%2F...
-  const webhookUrl = `${baseUrl}/api/webhooks/apollo`
+  //
+  // Para debuggear casos donde el webhook no llega, seteá APOLLO_WEBHOOK_URL_OVERRIDE
+  // (ej. una URL de webhook.site) para aislar si el problema es Apollo o nuestro handler.
+  const webhookUrl = getApolloWebhookUrl()
 
   // Resultados por prospecto para devolver al cliente y hacer feedback claro
   const results: Array<{
