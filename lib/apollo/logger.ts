@@ -48,6 +48,12 @@ export async function logApolloCall(entry: ApolloCallLog): Promise<void> {
 
   try {
     const supabase = createAdminClient()
+    // IMPORTANTE: los nombres de columna abajo matchean el schema REAL de
+    // apollo_api_calls (ver migracion 109 para verlo completo). En particular:
+    //   - `error`                -> NO "error_message"
+    //   - `response_total_entries` -> NO "total_entries"
+    // El logger previamente usaba los nombres wrong y cada insert fallaba en
+    // silencio ("column does not exist"), dejando la tabla 100% vacia.
     const { error } = await supabase.from("apollo_api_calls").insert({
       endpoint: entry.endpoint,
       user_id: entry.userId,
@@ -56,9 +62,9 @@ export async function logApolloCall(entry: ApolloCallLog): Promise<void> {
       request_body: entry.requestBody,
       response_status: entry.responseStatus,
       response_count: entry.responseCount ?? null,
-      total_entries: entry.totalEntries ?? null,
+      response_total_entries: entry.totalEntries ?? null,
       latency_ms: entry.latencyMs,
-      error_message: entry.errorMessage ?? null,
+      error: entry.errorMessage ?? null,
       query_hash: entry.queryHash ?? null,
       credits_estimated: entry.creditsEstimated ?? 0,
       metadata: entry.extraMetadata ?? {},
