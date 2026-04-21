@@ -32,6 +32,20 @@ export async function GET(
     return NextResponse.json({ error: "Bookmark no encontrado o sin acceso" }, { status: 404 })
   }
 
+  // El RPC devuelve {error: "NO_FILTER"} cuando el bookmark no tiene
+  // filterSignalIds en search_context. En ese caso el export esta bloqueado.
+  const errorPayload = (exportData as { error?: string }).error
+  if (errorPayload === "NO_FILTER") {
+    return NextResponse.json(
+      {
+        error: "FILTER_REQUIRED",
+        message:
+          "Aplicá un filtro de señales antes de exportar. En el tab Resumen seleccioná al menos una señal y volvé a intentar.",
+      },
+      { status: 400 },
+    )
+  }
+
   const data = exportData as BookmarkExportData
   const companyName = data.company?.name || "Export"
 

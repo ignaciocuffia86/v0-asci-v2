@@ -80,13 +80,31 @@ export default function BookmarkWorkspacePage() {
   const [scopeVersion, setScopeVersion] = useState(0)
   const supabase = createClient()
 
+  // Indicamos si el bookmark tiene un filtro de señales aplicado. El export
+  // se bloquea cuando no hay filtro (regla de negocio: evita descargas masivas
+  // sin criterio). Bookmarks legacy sin filterSignalIds quedan tambien bloqueados.
+  const hasFilterApplied = Array.isArray(bookmark?.search_context?.filterSignalIds)
+    && bookmark.search_context.filterSignalIds.length > 0
+
   const handleExportExcel = async () => {
+    if (!hasFilterApplied) {
+      toast.warning("Aplicá un filtro de señales antes de exportar", {
+        description:
+          "Seleccioná al menos una señal en el tab Resumen para acotar el export.",
+        duration: 5000,
+      })
+      return
+    }
     setIsExporting(true)
     try {
       const response = await fetch(`/api/bookmarks/${bookmarkId}/export`)
       if (!response.ok) {
         const error = await response.json()
         console.error("Export error:", error)
+        // Error especifico de filtro requerido (usa el message del server)
+        if (error.error === "FILTER_REQUIRED") {
+          throw new Error(error.message || "Aplicá un filtro antes de exportar.")
+        }
         throw new Error(error.error || "Error al exportar")
       }
       const blob = await response.blob()
@@ -265,14 +283,19 @@ export default function BookmarkWorkspacePage() {
                   size="sm"
                   className="h-7 text-xs px-3 bg-transparent"
                   onClick={handleExportExcel}
-                  disabled={isExporting}
+                  disabled={isExporting || !hasFilterApplied}
+                  title={
+                    !hasFilterApplied
+                      ? "Aplicá un filtro de señales en el tab Resumen para exportar"
+                      : "Descargar Excel con los datos filtrados"
+                  }
                 >
                   {isExporting ? (
                     <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
                   ) : (
                     <Download className="h-3 w-3 mr-1.5" />
                   )}
-                  Exportar
+                  {hasFilterApplied ? "Exportar" : "Exportar (sin filtro)"}
                 </Button>
               </div>
             </div>

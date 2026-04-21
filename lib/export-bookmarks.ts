@@ -52,6 +52,9 @@ export interface BookmarkExportData {
     email: string | null
     email_status: string | null
     linkedin_url: string | null
+    // Apollo separa mobile (revealed) y office phone (directo). Los exponemos
+    // separados para que el usuario pueda preferir el movil si lo tiene.
+    mobile_phone: string | null
     phone: string | null
     seniority: string | null
     is_decision_maker: boolean | null
@@ -188,6 +191,8 @@ export async function generateBookmarkExcel(
   setColumnWidths(prospSheet, [15, 15, 35, 30, 15, 40, 18, 15, 15, 30])
 
   data.prospects.forEach((p) => {
+    // Priorizamos mobile (revealed phone) sobre el office phone
+    const bestPhone = p.mobile_phone || p.phone || ""
     prospSheet.addRow([
       p.first_name,
       p.last_name,
@@ -195,7 +200,7 @@ export async function generateBookmarkExcel(
       p.email || "",
       p.email_status || "",
       p.linkedin_url || "",
-      p.phone || "",
+      bestPhone,
       p.seniority || "",
       p.is_decision_maker ? "Sí" : "No",
       p.departments?.join(", ") || "",
@@ -235,69 +240,6 @@ export async function generateBookmarkExcel(
   return Buffer.from(buffer)
 }
 
-export async function generateBulkBookmarksExcel(
-  bookmarks: Array<{ data: BookmarkExportData; companyName: string }>
-): Promise<Buffer> {
-  const workbook = new ExcelJS.Workbook()
-  workbook.creator = "ASCI"
-  workbook.created = new Date()
-
-  // Summary sheet
-  const summarySheet = workbook.addWorksheet("Resumen")
-  addHeaderRow(summarySheet, [
-    "Empresa",
-    "País",
-    "Industria",
-    "Estado",
-    "Prioridad",
-    "# Empleados c/ Señales",
-    "# Job Postings",
-    "# Prospectos",
-    "Playbook",
-  ])
-  setColumnWidths(summarySheet, [30, 15, 20, 15, 12, 20, 15, 15, 60])
-
-  bookmarks.forEach(({ data }) => {
-    summarySheet.addRow([
-      data.company.name,
-      data.company.country || "",
-      data.company.industry || "",
-      data.bookmark.status,
-      data.bookmark.priority || "",
-      data.employees_with_signals.length,
-      data.job_postings.length,
-      data.prospects.length,
-      truncate(data.strategy?.recommended_pitch, 200) || "",
-    ])
-  })
-
-  // All Prospects sheet (consolidated)
-  const allProspectsSheet = workbook.addWorksheet("Todos los Prospectos")
-  addHeaderRow(allProspectsSheet, [
-    "Empresa",
-    "Nombre",
-    "Apellido",
-    "Cargo",
-    "Email",
-    "LinkedIn",
-    "Decision Maker",
-  ])
-  setColumnWidths(allProspectsSheet, [25, 15, 15, 35, 30, 40, 15])
-
-  bookmarks.forEach(({ data }) => {
-    data.prospects.forEach((p) => {
-      allProspectsSheet.addRow([
-        data.company.name,
-        p.first_name,
-        p.last_name,
-        p.headline || "",
-        p.email || "",
-        p.linkedin_url || "",
-        p.is_decision_maker ? "Sí" : "No",
-      ])
-    })
-  })
-
-  const buffer = await workbook.xlsx.writeBuffer()
-  return Buffer.from(buffer)
-}
+// `generateBulkBookmarksExcel` fue removido junto con el endpoint de bulk export.
+// El export ahora es siempre por bookmark individual y requiere un filtro de
+// señales aplicado para evitar descargar data masiva sin criterio.
