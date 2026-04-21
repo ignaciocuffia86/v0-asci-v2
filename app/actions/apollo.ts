@@ -433,7 +433,9 @@ export async function searchApolloProspects(
         process.env.NEXT_PUBLIC_APP_URL ||
         (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ||
         "https://asci.bigua.lat"
-      return `${base.replace(/\/$/, "")}/api/webhooks/apollo`
+      // Apollo recomienda URL-encoding del webhook_url cuando no se dispara el
+      // webhook (ver docs oficiales de people-enrichment).
+      return encodeURIComponent(`${base.replace(/\/$/, "")}/api/webhooks/apollo`)
     })()
 
     const enriched = await enrichMany(
@@ -746,11 +748,17 @@ export async function requestPhoneReveal(
   const admin = createAdminClient()
   let requested = 0
 
+  // La doc oficial de Apollo recomienda URL-encodear el webhook_url cuando el
+  // webhook no se dispara. Mandamos ambas variantes (Apollo es tolerante a
+  // raw URL tambien), pero preferimos encoded por compat.
+  const rawWebhookUrl = `${baseUrl}/api/webhooks/apollo`
+  const webhookUrlEncoded = encodeURIComponent(rawWebhookUrl)
+
   for (const p of prospects) {
     const startedAt = Date.now()
     const matchBody: Record<string, unknown> = {
       reveal_phone_number: true,
-      webhook_url: `${baseUrl}/api/webhooks/apollo`,
+      webhook_url: webhookUrlEncoded,
     }
     if (p.apollo_person_id) matchBody.id = p.apollo_person_id
     else if (p.linkedin_url) matchBody.linkedin_url = p.linkedin_url

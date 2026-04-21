@@ -7,6 +7,11 @@ export async function updateSession(request: NextRequest) {
     request.nextUrl.pathname.startsWith("/_vercel") ||
     request.nextUrl.pathname.startsWith("/api/cron") ||
     request.nextUrl.pathname.startsWith("/api/sync-users") ||
+    // Webhooks externos (Apollo, etc.): nunca llegan con cookies de usuario.
+    // Si el middleware los intercepta, redirige a /auth/login y el handler
+    // nunca se ejecuta. Este era el motivo por el que el webhook de Apollo
+    // jamas completaba los telefonos: Apollo recibia un 307 y tiraba el POST.
+    request.nextUrl.pathname.startsWith("/api/webhooks/") ||
     request.nextUrl.pathname.match(/\.(ico|png|jpg|jpeg|svg|css|js)$/)
   ) {
     return NextResponse.next()

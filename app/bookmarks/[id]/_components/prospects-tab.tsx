@@ -273,7 +273,10 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
 
     let stopped = false
     const startedAt = Date.now()
-    const MAX_MS = 3 * 60 * 1000
+    // Apollo puede tardar varios minutos en completar el reveal por webhook
+    // (docs oficiales: "It can take several minutes for the phone numbers to
+    // be delivered"). Usamos 5 min como limite generoso antes de cortar la UI.
+    const MAX_MS = 5 * 60 * 1000
 
     const tick = async () => {
       if (stopped) return
