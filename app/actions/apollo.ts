@@ -433,9 +433,9 @@ export async function searchApolloProspects(
         process.env.NEXT_PUBLIC_APP_URL ||
         (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ||
         "https://asci.bigua.lat"
-      // Apollo recomienda URL-encoding del webhook_url cuando no se dispara el
-      // webhook (ver docs oficiales de people-enrichment).
-      return encodeURIComponent(`${base.replace(/\/$/, "")}/api/webhooks/apollo`)
+      // URL raw en el JSON body. Apollo URL-encode aplica solo cuando va como
+      // query param en la URL del request, no en el body.
+      return `${base.replace(/\/$/, "")}/api/webhooks/apollo`
     })()
 
     const enriched = await enrichMany(
@@ -710,9 +710,21 @@ export async function pollPhoneStatus(
  * Útil para filas viejas del cache (pre phone_status) o que quedaron pending.
  * Marca phone_status = 'pending' y dispara la llamada a people/match con webhook.
  */
+export type PhoneRevealResult = {
+  id: string
+  status: "received" | "pending" | "error"
+  phone: string | null
+  message?: string
+}
+
 export async function requestPhoneReveal(
   prospectIds: string[],
-): Promise<{ success: boolean; requested: number; error?: string }> {
+): Promise<{
+  success: boolean
+  requested: number
+  error?: string
+  results?: PhoneRevealResult[]
+}> {
   const supabase = await createClient()
   const {
     data: { user },
@@ -748,17 +760,23 @@ export async function requestPhoneReveal(
   const admin = createAdminClient()
   let requested = 0
 
-  // La doc oficial de Apollo recomienda URL-encodear el webhook_url cuando el
-  // webhook no se dispara. Mandamos ambas variantes (Apollo es tolerante a
-  // raw URL tambien), pero preferimos encoded por compat.
-  const rawWebhookUrl = `${baseUrl}/api/webhooks/apollo`
-  const webhookUrlEncoded = encodeURIComponent(rawWebhookUrl)
+  // URL raw (sin URL-encoding). Apollo recomienda encoding solo cuando el
+  // webhook_url se pasa como query param; en JSON body va tal cual.
+  const webhookUrl = `${baseUrl}/api/webhooks/apollo`
+
+  // Resultados por prospecto para devolver al cliente y hacer feedback claro
+  const results: Array<{
+    id: string
+    status: "received" | "pending" | "error"
+    phone: string | null
+    message?: string
+  }> = []
 
   for (const p of prospects) {
     const startedAt = Date.now()
     const matchBody: Record<string, unknown> = {
       reveal_phone_number: true,
-      webhook_url: webhookUrlEncoded,
+      webhook_url: webhookUrl,
     }
     if (p.apollo_person_id) matchBody.id = p.apollo_person_id
     else if (p.linkedin_url) matchBody.linkedin_url = p.linkedin_url
@@ -817,9 +835,16 @@ export async function requestPhoneReveal(
             .from("user_company_contacts")
             .update({ mobile_phone: best, phone: best, phone_status: "received" })
             .eq("id", p.id)
+          results.push({ id: p.id, status: "received", phone: best })
+        } else {
+          // Sin telefono inline: Apollo completara por webhook (o timeout lo resetea)
+          results.push({
+            id: p.id,
+            status: "pending",
+            phone: null,
+            message: "Apollo esta procesando el telefono. Puede tardar unos minutos.",
+          })
         }
-        // Si phone_numbers viene vacio/undefined, dejamos phone_status = pending.
-        // Apollo va a completar por webhook (o el timeout de 3 min lo limpiara).
       } else {
         const errorText = await res.text().catch(() => "<could not read body>")
         await logApolloCall({
@@ -836,6 +861,12 @@ export async function requestPhoneReveal(
           .from("user_company_contacts")
           .update({ phone_status: "not_requested" })
           .eq("id", p.id)
+        results.push({
+          id: p.id,
+          status: "error",
+          phone: null,
+          message: `Apollo devolvio error ${res.status}`,
+        })
       }
       requested++
     } catch (err) {
@@ -845,10 +876,16 @@ export async function requestPhoneReveal(
         .from("user_company_contacts")
         .update({ phone_status: "not_requested" })
         .eq("id", p.id)
+      results.push({
+        id: p.id,
+        status: "error",
+        phone: null,
+        message: err instanceof Error ? err.message : "Error de red al contactar Apollo",
+      })
     }
   }
 
-  return { success: true, requested }
+  return { success: true, requested, results }
 }
 
 export async function getContactsForIcebreaker(bookmarkId: string) {

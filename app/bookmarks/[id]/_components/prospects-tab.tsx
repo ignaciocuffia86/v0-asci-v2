@@ -40,6 +40,7 @@ import {
   type ApolloSearchStats,
 } from "@/app/actions/apollo"
 import Link from "next/link"
+import { toast } from "sonner"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -449,17 +450,20 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
   }
 
   // Pide teléfono a Apollo para un prospecto existente (cache warmer).
-  // Marca inmediato el estado "pending" y dispara la call; el webhook o el
-  // polling van a resolver el estado final.
+  // Marca inmediato el estado "pending" y dispara la call; el resultado final
+  // se refleja en la UI con un toast especifico segun lo que devuelva Apollo.
   const handleRequestPhone = async (prospectId: string) => {
     setRequestingPhoneIds((prev) => new Set(prev).add(prospectId))
     // Optimistic: mostramos pending ya mismo
     setProspects((prev) =>
       prev.map((p) => (p.id === prospectId ? { ...p, phone_status: "pending" } : p)),
     )
+    const loadingId = toast.loading("Solicitando telefono a Apollo...")
     try {
-      await requestPhoneReveal([prospectId])
-      // Refresh via fetch (no server action) para no causar router.refresh()
+      const result = await requestPhoneReveal([prospectId])
+      const prospectResult = result.results?.find((r) => r.id === prospectId)
+
+      // Refresh via fetch (no server action) para reflejar DB actualizada
       const res = await fetch(
         `/api/apollo/poll-phone-status?bookmarkId=${encodeURIComponent(bookmarkId)}`,
         { cache: "no-store" },
@@ -486,8 +490,35 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
           }),
         )
       }
+
+      // Feedback explicito segun lo que devolvio Apollo
+      toast.dismiss(loadingId)
+      if (!result.success) {
+        toast.error(result.error || "No se pudo solicitar el telefono")
+      } else if (prospectResult?.status === "received") {
+        toast.success("Telefono recibido", {
+          description: prospectResult.phone || undefined,
+        })
+      } else if (prospectResult?.status === "pending") {
+        toast.info("Solicitud enviada", {
+          description:
+            "Apollo esta procesando el telefono. Puede tardar unos minutos. La UI se actualiza sola cuando llegue.",
+          duration: 6000,
+        })
+      } else if (prospectResult?.status === "error") {
+        toast.error("No se pudo obtener el telefono", {
+          description: prospectResult.message || "Apollo devolvio un error. Reintenta en unos segundos.",
+        })
+      } else {
+        // Fallback: no hubo resultado estructurado pero success=true
+        toast.info("Solicitud enviada a Apollo")
+      }
     } catch (err) {
+      toast.dismiss(loadingId)
       console.error("[v0] handleRequestPhone failed", err)
+      toast.error("Error al solicitar el telefono", {
+        description: err instanceof Error ? err.message : "Error desconocido",
+      })
     } finally {
       setRequestingPhoneIds((prev) => {
         const next = new Set(prev)
