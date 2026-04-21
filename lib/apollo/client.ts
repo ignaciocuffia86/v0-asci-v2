@@ -16,6 +16,10 @@ const APOLLO_BASE_URL = "https://api.apollo.io/api/v1"
 export type ApolloRequestOpts = Omit<ApolloCallLog, "responseStatus" | "latencyMs" | "errorMessage"> & {
   endpoint: ApolloEndpoint
   maxRetries?: number
+  // Query params a appender a la URL (URL-encoded). Algunos endpoints de Apollo
+  // esperan flags como `reveal_phone_number` y `webhook_url` en la URL, NO en el
+  // body. Ver docs oficial de /people/match con phone reveal.
+  queryParams?: Record<string, string | number | boolean | undefined | null>
 }
 
 export type ApolloResult<T> =
@@ -71,7 +75,18 @@ export async function apolloRequest<T = unknown>(
   }
 
   const path = endpointToPath(opts.endpoint)
-  const url = `${APOLLO_BASE_URL}${path}`
+  // Agregar query params URL-encoded cuando el endpoint los requiere (ej. phone reveal)
+  let url = `${APOLLO_BASE_URL}${path}`
+  if (opts.queryParams) {
+    const qs = new URLSearchParams()
+    for (const [k, v] of Object.entries(opts.queryParams)) {
+      if (v !== undefined && v !== null) {
+        qs.set(k, String(v))
+      }
+    }
+    const qsString = qs.toString()
+    if (qsString) url += `?${qsString}`
+  }
   const method = opts.method ?? "POST"
   const maxRetries = opts.maxRetries ?? 3
 

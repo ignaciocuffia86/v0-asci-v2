@@ -14,6 +14,7 @@ export type ApolloEndpoint =
   | "people/match"
   | "people/match:phone"
   | "webhook:phone"
+  | "webhook:arrival"
 
 export type ApolloCallLog = {
   endpoint: ApolloEndpoint

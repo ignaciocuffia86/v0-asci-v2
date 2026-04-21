@@ -42,6 +42,31 @@ export async function GET() {
 export async function POST(request: Request) {
   const start = Date.now()
 
+  // INSTRUMENTACION CRITICA: loggeamos la llegada INMEDIATA del POST antes de
+  // cualquier otro procesamiento. Asi en apollo_api_calls vemos 'webhook:arrival'
+  // cada vez que Apollo nos alcanza, aun si despues falla por firma/JSON/shape.
+  // Esto nos permite distinguir "Apollo no me esta llamando" vs "Apollo me
+  // llama pero algo en el handler falla".
+  const clientIp =
+    request.headers.get("x-forwarded-for") ||
+    request.headers.get("x-real-ip") ||
+    "unknown"
+  const userAgent = request.headers.get("user-agent") || "unknown"
+
+  // Log de arrival SIN await para no bloquear la respuesta al webhook
+  logApolloCall({
+    endpoint: "webhook:arrival",
+    userId: null,
+    requestBody: { headers: { ip: clientIp, user_agent: userAgent } },
+    responseStatus: 0,
+    latencyMs: 0,
+    extraMetadata: {
+      client_ip: clientIp,
+      user_agent: userAgent,
+      arrived_at: new Date().toISOString(),
+    },
+  }).catch(() => {})
+
   if (!verifySignature(request)) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 })
   }

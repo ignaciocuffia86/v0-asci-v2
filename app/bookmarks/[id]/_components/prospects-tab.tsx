@@ -282,20 +282,10 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
 
     const tick = async () => {
       if (stopped) return
-      // Paso 1: polleamos directo a Apollo (respaldo del webhook). Si Apollo
-      // devuelve el telefono, esto actualiza la DB. Asi no dependemos solo
-      // del webhook que puede fallar por red/firewall/DNS/etc.
-      try {
-        await fetch(
-          `/api/apollo/poll-apollo-enrichment?bookmarkId=${encodeURIComponent(bookmarkId)}`,
-          { cache: "no-store" },
-        )
-      } catch (err) {
-        console.error("[v0] pollApolloEnrichment failed", err)
-      }
-      if (stopped) return
-
-      // Paso 2: re-leemos el estado actualizado desde nuestra DB.
+      // Apollo solo resuelve el reveal asincrono via webhook — no hay endpoint
+      // de polling publico (confirmado en la doc oficial). Acá solo re-leemos
+      // nuestra DB; el webhook POST handler es el que actualiza phone_status
+      // cuando Apollo nos llama.
       // IMPORTANTE: fetch() contra un route handler, NO una server action —
       // las server actions disparan router.refresh() implicito que causa
       // un "refresh" visible del tab.

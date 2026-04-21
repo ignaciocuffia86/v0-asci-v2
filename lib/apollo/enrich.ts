@@ -77,12 +77,11 @@ export async function enrichPerson(
     }
   }
 
+  // IMPORTANTE: Apollo espera reveal_phone_number y webhook_url como QUERY PARAMS,
+  // NO en el JSON body. Si van en el body, la llamada "funciona" (200 OK) pero
+  // Apollo jamas dispara el webhook. Ver docs oficial con ejemplo curl.
   const phoneBody: Record<string, unknown> = {
     id: person.apolloId,
-    reveal_phone_number: true,
-  }
-  if (opts.webhookUrl) {
-    phoneBody.webhook_url = opts.webhookUrl
   }
 
   const phoneRes = await apolloRequest<{ person?: ApolloPersonRaw }>({
@@ -92,6 +91,10 @@ export async function enrichPerson(
     bookmarkId: opts.bookmarkId,
     companyId: opts.companyId,
     requestBody: phoneBody,
+    queryParams: {
+      reveal_phone_number: "true",
+      webhook_url: opts.webhookUrl || undefined,
+    },
     creditsEstimated: 1,
   })
 

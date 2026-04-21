@@ -764,8 +764,12 @@ export async function requestPhoneReveal(
   const admin = createAdminClient()
   let requested = 0
 
-  // URL raw (sin URL-encoding). Apollo recomienda encoding solo cuando el
-  // webhook_url se pasa como query param; en JSON body va tal cual.
+  // IMPORTANTE: La doc oficial de Apollo muestra que el webhook_url (junto
+  // con reveal_phone_number) DEBE pasarse como query param URL-encoded en la
+  // URL del POST, NO en el JSON body. Si va en el body, Apollo procesa la
+  // llamada pero jamas dispara el webhook — que es exactamente el bug que
+  // veniamos viendo. Ejemplo oficial:
+  //   POST /api/v1/people/match?reveal_phone_number=true&webhook_url=https%3A%2F%2F...
   const webhookUrl = `${baseUrl}/api/webhooks/apollo`
 
   // Resultados por prospecto para devolver al cliente y hacer feedback claro
@@ -778,10 +782,8 @@ export async function requestPhoneReveal(
 
   for (const p of prospects) {
     const startedAt = Date.now()
-    const matchBody: Record<string, unknown> = {
-      reveal_phone_number: true,
-      webhook_url: webhookUrl,
-    }
+    // En el body SOLO van los identificadores; los flags van como query params.
+    const matchBody: Record<string, unknown> = {}
     if (p.apollo_person_id) matchBody.id = p.apollo_person_id
     else if (p.linkedin_url) matchBody.linkedin_url = p.linkedin_url
     else if (p.email) matchBody.email = p.email
@@ -790,8 +792,15 @@ export async function requestPhoneReveal(
       matchBody.last_name = p.last_name
     } else continue
 
+    // Construir URL con query params URL-encoded como hace la doc oficial
+    const qs = new URLSearchParams({
+      reveal_phone_number: "true",
+      webhook_url: webhookUrl,
+    }).toString()
+    const apolloUrl = `https://api.apollo.io/api/v1/people/match?${qs}`
+
     try {
-      const res = await fetch("https://api.apollo.io/api/v1/people/match", {
+      const res = await fetch(apolloUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -854,7 +863,8 @@ export async function requestPhoneReveal(
         await logApolloCall({
           endpoint: "people/match:phone",
           userId: user.id,
-          requestBody: matchBody,
+          // Incluimos la URL completa (con query params) + body para auditoria
+          requestBody: { url: apolloUrl, body: matchBody },
           responseStatus: res.status,
           responseCount: phoneNumbers?.length ?? 0,
           latencyMs,
@@ -864,7 +874,7 @@ export async function requestPhoneReveal(
             inline_phone: best,
             phone_numbers_returned: phoneNumbers?.length ?? 0,
             phone_numbers_statuses: phoneNumbers?.map((n) => n.status ?? null) ?? [],
-            // NUEVO: dump del phone_enrichment completo — esto nos dice que paso realmente
+            // Dump del phone_enrichment completo — esto nos dice que paso realmente
             phone_enrichment: phoneEnrichment ?? null,
             enrichment_status: enrichmentStatus,
             enrichment_error: phoneEnrichment?.error_message ?? null,
@@ -873,9 +883,10 @@ export async function requestPhoneReveal(
             is_terminal_fail: isTerminalFailFromEnrichment,
             warnings,
             credits,
-            webhook_url_sent: matchBody.webhook_url,
+            // Webhook_url ahora va como query param, lo logueamos para auditar
+            webhook_url_sent: webhookUrl,
+            webhook_url_location: "query_param_encoded",
             response_top_keys: Object.keys(data),
-            // Keys del phone_enrichment para descubrir shape real sin loggear PII
             phone_enrichment_keys: phoneEnrichment ? Object.keys(phoneEnrichment) : [],
           },
         })
