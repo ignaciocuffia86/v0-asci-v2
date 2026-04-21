@@ -11,8 +11,6 @@ import { normalizeDomain } from "@/lib/apollo/domain"
 import { hashSearchParams } from "@/lib/apollo/query-hash"
 import { readSearchCache, writeSearchCache } from "@/lib/apollo/search-cache"
 import { recordTitleObservations, recordTitleSuccess } from "@/lib/apollo/title-catalog"
-import { logApolloCall } from "@/lib/apollo/logger"
-import { getApolloWebhookUrl } from "@/lib/apollo/webhook-url"
 
 // ---------------------------------------------------------------------------
 // Tipos expuestos a la UI
@@ -26,7 +24,6 @@ export type ApolloSearchStats = {
   apiReturned: number
   enrichedOk: number
   enrichedFailed: number
-  phoneAwaitingWebhook: number
   saved: number
   skippedDuplicates: number
   organizationNotFound: boolean
@@ -36,7 +33,6 @@ export type ApolloSearchStats = {
 }
 
 export type ApolloSearchOptions = {
-  revealPhone?: boolean
   revealEmail?: boolean
   useOrganizationLocation?: boolean
   includeSimilarTitles?: boolean
@@ -260,6 +256,11 @@ async function saveToLegacyCache(
 
 // ---------------------------------------------------------------------------
 // searchApolloProspects — orquestador principal
+//
+// DEPRECATION NOTE: phone reveal fue removido. Apollo consumia creditos
+// (5 por reveal) pero el webhook de delivery asincrono nunca llegaba pese
+// a probar todas las variantes documentadas. Solo se sigue haciendo
+// enrichment de email + datos basicos.
 // ---------------------------------------------------------------------------
 
 export async function searchApolloProspects(
@@ -316,7 +317,6 @@ export async function searchApolloProspects(
         apiReturned: 0,
         enrichedOk: 0,
         enrichedFailed: 0,
-        phoneAwaitingWebhook: 0,
         saved: 0,
         skippedDuplicates: 0,
         organizationNotFound: false,
@@ -374,7 +374,6 @@ export async function searchApolloProspects(
   let apiReturned = 0
   let enrichedOk = 0
   let enrichedFailed = 0
-  let phoneAwaitingCount = 0
   let requestPreview: Record<string, unknown> | null = null
 
   const cacheHit = options.forceRefresh ? { hit: false as const } : await readSearchCache(queryHash)
@@ -413,7 +412,6 @@ export async function searchApolloProspects(
           apiReturned: 0,
           enrichedOk: 0,
           enrichedFailed: 0,
-          phoneAwaitingWebhook: 0,
           saved: 0,
           skippedDuplicates: 0,
           organizationNotFound: orgResult.status === "not_found",
@@ -428,9 +426,7 @@ export async function searchApolloProspects(
     apiReturned = searchRes.people.length
     requestPreview = searchRes.requestBody
 
-    // --- 6. Enrichment con opt-in de reveals
-    const webhookUrl = getApolloWebhookUrl()
-
+    // --- 6. Enrichment (solo email + datos basicos; phone reveal deprecado)
     const enriched = await enrichMany(
       searchRes.people,
       {
@@ -438,8 +434,6 @@ export async function searchApolloProspects(
         bookmarkId,
         companyId: company.id,
         revealEmail: options.revealEmail ?? true,
-        revealPhone: options.revealPhone ?? false,
-        webhookUrl,
       },
       4,
     )
@@ -447,7 +441,6 @@ export async function searchApolloProspects(
     for (const p of enriched) {
       if (p.enrichmentStatus === "ok") enrichedOk++
       else enrichedFailed++
-      if (p.phoneAwaitingWebhook) phoneAwaitingCount++
     }
 
     contacts = enriched.filter((p) => p.lastName || p.linkedinUrl || p.email)
@@ -496,16 +489,6 @@ export async function searchApolloProspects(
       continue
     }
 
-    // phone_status: reflejo el estado del teléfono para que la UI sepa qué mostrar
-    // - received: vino inline en el enrichment
-    // - pending: se pidió a Apollo pero volverá por webhook (o ya pedimos hoy)
-    // - not_requested: no se pidió reveal
-    const phoneStatus: string = contact.mobilePhone
-      ? "received"
-      : contact.phoneAwaitingWebhook
-        ? "pending"
-        : "not_requested"
-
     const { error } = await supabase.from("user_company_contacts").insert({
       user_id: user.id,
       company_id: company.id,
@@ -520,7 +503,8 @@ export async function searchApolloProspects(
       email_status: contact.emailStatus,
       phone: contact.workPhone,
       mobile_phone: contact.mobilePhone,
-      phone_status: phoneStatus,
+      // phone_status: queda NULL. La columna se mantiene en la DB para no
+      // perder data historica, pero ya no se usa en nuevos flujos.
       linkedin_url: contact.linkedinUrl,
       profile_picture_url: contact.photoUrl,
       city: contact.city,
@@ -553,9 +537,6 @@ export async function searchApolloProspects(
     recordTitleSuccess(sanitized.accepted, totalEntries).catch(() => {})
   }
 
-  // No hacemos revalidatePath aca: el cliente llama loadData() via server action
-  // y recarga la lista sin causar un full refresh del RSC (mejor UX).
-
   return {
     success: true,
     count: saved,
@@ -567,7 +548,6 @@ export async function searchApolloProspects(
       apiReturned,
       enrichedOk,
       enrichedFailed,
-      phoneAwaitingWebhook: phoneAwaitingCount,
       saved,
       skippedDuplicates,
       organizationNotFound: orgResult.status === "not_found",
@@ -668,315 +648,6 @@ export async function getRemovedProspects(bookmarkId: string) {
     .order("created_at", { ascending: false })
 
   return data || []
-}
-
-/**
- * Poll liviano del estado de teléfonos.
- * Devuelve SÓLO las filas que cambiaron de estado o tienen teléfono,
- * para que la UI refresque incremental sin recargar todo.
- */
-export async function pollPhoneStatus(
-  bookmarkId: string,
-): Promise<Array<{ id: string; phone_status: string | null; mobile_phone: string | null; phone: string | null }>> {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (!user) return []
-
-  const { data: bookmark } = await supabase.from("bookmarks").select("company_id").eq("id", bookmarkId).single()
-  if (!bookmark) return []
-
-  const { data } = await supabase
-    .from("user_company_contacts")
-    .select("id, phone_status, mobile_phone, phone")
-    .eq("company_id", bookmark.company_id)
-    .eq("user_id", user.id)
-    .eq("is_decision_maker", true)
-
-  return data || []
-}
-
-/**
- * Pide teléfonos a Apollo para prospectos existentes que aún no lo tienen.
- * Útil para filas viejas del cache (pre phone_status) o que quedaron pending.
- * Marca phone_status = 'pending' y dispara la llamada a people/match con webhook.
- */
-export type PhoneRevealResult = {
-  id: string
-  // "received" cuando Apollo devolvio el telefono inline (hay phone)
-  // "not_available" cuando Apollo confirmo que no lo tiene (phone=null, message explica)
-  // "pending" cuando Apollo va a mandar por webhook
-  // "error" cuando hubo un fallo HTTP o de red
-  status: "received" | "not_available" | "pending" | "error"
-  phone: string | null
-  message?: string
-}
-
-export async function requestPhoneReveal(
-  prospectIds: string[],
-): Promise<{
-  success: boolean
-  requested: number
-  error?: string
-  results?: PhoneRevealResult[]
-}> {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (!user) return { success: false, requested: 0, error: "No autorizado" }
-  if (!prospectIds || prospectIds.length === 0) return { success: true, requested: 0 }
-
-  const apiKey = process.env.APOLLO_API_KEY
-  if (!apiKey) return { success: false, requested: 0, error: "APOLLO_API_KEY no configurado" }
-
-  // Traer prospectos del usuario (seguridad: sólo los suyos)
-  const { data: prospects } = await supabase
-    .from("user_company_contacts")
-    .select("id, apollo_person_id, linkedin_url, first_name, last_name, full_name, email")
-    .in("id", prospectIds)
-    .eq("user_id", user.id)
-
-  if (!prospects || prospects.length === 0) {
-    return { success: false, requested: 0, error: "No se encontraron prospectos" }
-  }
-
-  // Marcamos pending inmediatamente para que la UI muestre "Solicitando..."
-  await supabase
-    .from("user_company_contacts")
-    .update({ phone_status: "pending" })
-    .in(
-      "id",
-      prospects.map((p) => p.id),
-    )
-
-  const admin = createAdminClient()
-  let requested = 0
-
-  // IMPORTANTE: La doc oficial de Apollo muestra que el webhook_url (junto
-  // con reveal_phone_number) DEBE pasarse como query param URL-encoded en la
-  // URL del POST, NO en el JSON body. Si va en el body, Apollo procesa la
-  // llamada pero jamas dispara el webhook.
-  // Ejemplo oficial:
-  //   POST /api/v1/people/match?reveal_phone_number=true&webhook_url=https%3A%2F%2F...
-  //
-  // Para debuggear casos donde el webhook no llega, seteá APOLLO_WEBHOOK_URL_OVERRIDE
-  // (ej. una URL de webhook.site) para aislar si el problema es Apollo o nuestro handler.
-  const webhookUrl = getApolloWebhookUrl()
-
-  // Resultados por prospecto para devolver al cliente y hacer feedback claro
-  const results: Array<{
-    id: string
-    status: "received" | "pending" | "error"
-    phone: string | null
-    message?: string
-  }> = []
-
-  for (const p of prospects) {
-    const startedAt = Date.now()
-    // En el body SOLO van los identificadores; los flags van como query params.
-    const matchBody: Record<string, unknown> = {}
-    if (p.apollo_person_id) matchBody.id = p.apollo_person_id
-    else if (p.linkedin_url) matchBody.linkedin_url = p.linkedin_url
-    else if (p.email) matchBody.email = p.email
-    else if (p.first_name && p.last_name) {
-      matchBody.first_name = p.first_name
-      matchBody.last_name = p.last_name
-    } else continue
-
-    // Construir URL con query params URL-encoded como hace la doc oficial.
-    // IMPORTANTE: `run_waterfall_phone=true` es REQUERIDO para que Apollo
-    // dispare el webhook de delivery asincrono. Sin este flag, el response
-    // queda en "pending" pero el webhook nunca llega (confirmado en docs).
-    const qs = new URLSearchParams({
-      reveal_phone_number: "true",
-      run_waterfall_phone: "true",
-      webhook_url: webhookUrl,
-    }).toString()
-    const apolloUrl = `https://api.apollo.io/api/v1/people/match?${qs}`
-
-    try {
-      const res = await fetch(apolloUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "Cache-Control": "no-cache",
-        },
-        body: JSON.stringify(matchBody),
-      })
-
-      const latencyMs = Date.now() - startedAt
-
-      if (res.ok) {
-        const data = await res.json()
-        const person = data.person
-        const inlineMobile = person?.mobile_phone || null
-        const phoneNumbers = person?.phone_numbers as
-          | Array<{ type?: string; sanitized_number?: string; status?: string }>
-          | undefined
-        const mobileFromArr = phoneNumbers?.find(
-          (n) => n.type === "mobile" || n.type === "Mobile",
-        )?.sanitized_number
-        const workFromArr = phoneNumbers?.find((n) => n.type === "work")?.sanitized_number
-        const best = inlineMobile || mobileFromArr || workFromArr || null
-
-        // IMPORTANTE: Apollo devuelve el status real del reveal en `phone_enrichment`,
-        // NO en person.phone_numbers. Logs previos confirman top-level keys:
-        // ["person", "phone_enrichment", "request_id"].
-        // phone_enrichment puede traer: { status, error_message, request_id, ... }
-        // Estados comunes que hemos visto documentados:
-        //   - "queued" / "pending" / "processing" -> webhook va a llegar
-        //   - "success" -> telefono ya esta en person.phone_numbers
-        //   - "failed" / "no_data" / "not_found" -> no hay telefono, no habra webhook
-        const phoneEnrichment = data.phone_enrichment as
-          | { status?: string; error_message?: string; message?: string; request_id?: string; [k: string]: unknown }
-          | undefined
-        const enrichmentStatus = phoneEnrichment?.status?.toLowerCase() ?? null
-        // IMPORTANTE: el request_id util para pollear esta DENTRO de phone_enrichment,
-        // no en data.request_id (que es un id de request generico). Ejemplo real del log:
-        //   data.request_id: "-1713660131470514000"     <- no sirve para pollear
-        //   phone_enrichment.request_id: "69e6dd65ccbea5001df8aaf6"  <- este si
-        const requestId = phoneEnrichment?.request_id ?? data.request_id ?? null
-
-        const pendingStatuses = ["queued", "pending", "processing", "requested", "in_progress"]
-        const terminalFailStatuses = ["failed", "no_data", "not_found", "unavailable", "error"]
-
-        const isPendingFromEnrichment =
-          enrichmentStatus !== null && pendingStatuses.includes(enrichmentStatus)
-        const isTerminalFailFromEnrichment =
-          enrichmentStatus !== null && terminalFailStatuses.includes(enrichmentStatus)
-        const hasPendingReveal =
-          isPendingFromEnrichment ||
-          !!phoneNumbers?.some(
-            (n) => n.status === "pending" || n.status === "requested" || n.status === "processing",
-          )
-
-        const warnings = data.warnings || data.warning || null
-        const credits = data.credits_used || data.credits_consumed || null
-
-        // Log con TODO el phone_enrichment raw para poder post-mortem
-        await logApolloCall({
-          endpoint: "people/match:phone",
-          userId: user.id,
-          // Incluimos la URL completa (con query params) + body para auditoria
-          requestBody: { url: apolloUrl, body: matchBody },
-          responseStatus: res.status,
-          responseCount: phoneNumbers?.length ?? 0,
-          latencyMs,
-          extraMetadata: {
-            prospect_id: p.id,
-            apollo_person_id: p.apollo_person_id,
-            inline_phone: best,
-            phone_numbers_returned: phoneNumbers?.length ?? 0,
-            phone_numbers_statuses: phoneNumbers?.map((n) => n.status ?? null) ?? [],
-            // Dump del phone_enrichment completo — esto nos dice que paso realmente
-            phone_enrichment: phoneEnrichment ?? null,
-            enrichment_status: enrichmentStatus,
-            enrichment_error: phoneEnrichment?.error_message ?? null,
-            apollo_request_id: requestId,
-            has_pending_reveal: hasPendingReveal,
-            is_terminal_fail: isTerminalFailFromEnrichment,
-            warnings,
-            credits,
-            // Webhook_url ahora va como query param, lo logueamos para auditar
-            webhook_url_sent: webhookUrl,
-            webhook_url_location: "query_param_encoded",
-            response_top_keys: Object.keys(data),
-            phone_enrichment_keys: phoneEnrichment ? Object.keys(phoneEnrichment) : [],
-          },
-        })
-
-        if (best) {
-          // Apollo devolvio el telefono inline: guardamos ya
-          await admin
-            .from("user_company_contacts")
-            .update({ mobile_phone: best, phone: best, phone_status: "received" })
-            .eq("id", p.id)
-          results.push({ id: p.id, status: "received", phone: best })
-        } else if (hasPendingReveal) {
-          // Apollo va a mandar webhook. Guardamos request_id para poder correlacionar.
-          if (requestId) {
-            await admin
-              .from("user_company_contacts")
-              .update({ apollo_request_id: requestId })
-              .eq("id", p.id)
-          }
-          results.push({
-            id: p.id,
-            status: "pending",
-            phone: null,
-            message: "Apollo esta procesando el telefono. Puede tardar unos minutos.",
-          })
-        } else if (isTerminalFailFromEnrichment) {
-          // Apollo confirmo explicitamente que no hay telefono para este contacto
-          await admin
-            .from("user_company_contacts")
-            .update({ phone_status: "not_available" })
-            .eq("id", p.id)
-          results.push({
-            id: p.id,
-            status: "not_available",
-            phone: null,
-            message:
-              phoneEnrichment?.error_message ||
-              `Apollo no tiene telefono (${enrichmentStatus}).`,
-          })
-        } else {
-          // Respuesta ambigua: 200 OK, phone_numbers vacio y enrichment sin status conocido.
-          // NO asumimos "no hay" — lo dejamos pending para que el usuario reintente y
-          // el admin pueda ver el metadata logueado (response_top_keys, phone_enrichment_keys).
-          results.push({
-            id: p.id,
-            status: "pending",
-            phone: null,
-            message: `Respuesta sin datos claros de Apollo (status=${enrichmentStatus ?? "null"}). Reintentando si llega webhook.`,
-          })
-        }
-      } else {
-        const errorText = await res.text().catch(() => "<could not read body>")
-        await logApolloCall({
-          endpoint: "people/match:phone",
-          userId: user.id,
-          requestBody: matchBody,
-          responseStatus: res.status,
-          latencyMs,
-          errorMessage: errorText.slice(0, 500),
-          extraMetadata: { prospect_id: p.id, apollo_person_id: p.apollo_person_id },
-        })
-        // Error HTTP de Apollo: devolvemos a not_requested para reintentar
-        await admin
-          .from("user_company_contacts")
-          .update({ phone_status: "not_requested" })
-          .eq("id", p.id)
-        results.push({
-          id: p.id,
-          status: "error",
-          phone: null,
-          message: `Apollo devolvio error ${res.status}`,
-        })
-      }
-      requested++
-    } catch (err) {
-      console.error("[v0] requestPhoneReveal error for prospect", p.id, err)
-      // Error de red: rollback a not_requested
-      await admin
-        .from("user_company_contacts")
-        .update({ phone_status: "not_requested" })
-        .eq("id", p.id)
-      results.push({
-        id: p.id,
-        status: "error",
-        phone: null,
-        message: err instanceof Error ? err.message : "Error de red al contactar Apollo",
-      })
-    }
-  }
-
-  return { success: true, requested, results }
 }
 
 export async function getContactsForIcebreaker(bookmarkId: string) {

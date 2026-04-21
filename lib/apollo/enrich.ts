@@ -1,18 +1,15 @@
 /**
  * Enrichment de personas via /people/match.
  *
- * Fix del bug de teléfonos:
- *  - Antes: hacíamos dos llamadas, la segunda con `reveal_phone_number` +
- *    `webhook_url`, pero IGNORABAMOS el body de la respuesta. Apollo a veces
- *    devuelve el teléfono inline (cuando lo tiene cacheado) y solo usa webhook
- *    si necesita scraping. Al descartar el body, perdíamos esos teléfonos.
- *  - Ahora: leemos la respuesta del segundo people/match y, si viene
- *    phone_numbers, lo mergeamos con el resultado del primer match.
+ * DEPRECATION: El phone reveal fue removido. Apollo aceptaba el request y
+ * consumia creditos, pero el delivery asincrono (webhook) nunca llegaba a
+ * pesar de agotar todas las variantes documentadas. La feature se quito para
+ * evitar estados pending eternos en la UI y consumo inutil de creditos.
+ * Mantenemos solo el enrichment de email + datos basicos.
  *
- * Opt-in de reveals:
- *  - Los params `revealEmail` y `revealPhone` permiten al caller elegir si
- *    consumir créditos. Default: revealEmail=true, revealPhone=false (antes
- *    era siempre true para ambos).
+ * Si un contacto ya tiene `mobile_phone` o `phone` en DB (por enrichments
+ * previos o por data del search inicial), se siguen mostrando — no borramos
+ * data existente, solo desactivamos el flujo de reveal.
  */
 
 import { apolloRequest } from "./client"
@@ -23,13 +20,10 @@ export type EnrichOptions = {
   bookmarkId: string | null
   companyId: string | null
   revealEmail?: boolean
-  revealPhone?: boolean
-  webhookUrl?: string | null
 }
 
 export type EnrichedPerson = ApolloPersonNormalized & {
   enrichmentStatus: "ok" | "partial" | "failed"
-  phoneAwaitingWebhook: boolean
 }
 
 export async function enrichPerson(
@@ -37,9 +31,7 @@ export async function enrichPerson(
   opts: EnrichOptions,
 ): Promise<EnrichedPerson> {
   const revealEmail = opts.revealEmail ?? true
-  const revealPhone = opts.revealPhone ?? false
 
-  // ---- Llamada principal: datos + email
   const emailBody: Record<string, unknown> = {
     id: person.apolloId,
   }
@@ -68,57 +60,9 @@ export async function enrichPerson(
     }
   }
 
-  // ---- Segunda llamada: phone reveal (opt-in)
-  if (!revealPhone) {
-    return {
-      ...merged,
-      enrichmentStatus: mainOk ? "ok" : "failed",
-      phoneAwaitingWebhook: false,
-    }
-  }
-
-  // IMPORTANTE: Apollo espera reveal_phone_number y webhook_url como QUERY PARAMS,
-  // NO en el JSON body. Si van en el body, la llamada "funciona" (200 OK) pero
-  // Apollo jamas dispara el webhook. Ver docs oficial con ejemplo curl.
-  const phoneBody: Record<string, unknown> = {
-    id: person.apolloId,
-  }
-
-  const phoneRes = await apolloRequest<{ person?: ApolloPersonRaw }>({
-    endpoint: "people/match:phone",
-    method: "POST",
-    userId: opts.userId,
-    bookmarkId: opts.bookmarkId,
-    companyId: opts.companyId,
-    requestBody: phoneBody,
-    queryParams: {
-      reveal_phone_number: "true",
-      // REQUERIDO para que Apollo dispare el webhook de delivery asincrono
-      run_waterfall_phone: "true",
-      webhook_url: opts.webhookUrl || undefined,
-    },
-    creditsEstimated: 1,
-  })
-
-  let phoneAwaiting = true
-  if (phoneRes.ok && phoneRes.data?.person) {
-    // FIX: leer phone_numbers del response sync. Si Apollo tenía el teléfono
-    // cacheado, viene aquí y NO dispara el webhook. Antes lo ignorábamos.
-    const phoneEnriched = normalizePerson(phoneRes.data.person)
-    if (phoneEnriched && (phoneEnriched.mobilePhone || phoneEnriched.workPhone)) {
-      merged = {
-        ...merged,
-        mobilePhone: phoneEnriched.mobilePhone || merged.mobilePhone,
-        workPhone: phoneEnriched.workPhone || merged.workPhone,
-      }
-      phoneAwaiting = false
-    }
-  }
-
   return {
     ...merged,
-    enrichmentStatus: mainOk ? "ok" : "partial",
-    phoneAwaitingWebhook: phoneAwaiting && !merged.mobilePhone,
+    enrichmentStatus: mainOk ? "ok" : "failed",
   }
 }
 

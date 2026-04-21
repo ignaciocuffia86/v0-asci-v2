@@ -166,6 +166,5 @@ function contactRowToEnriched(c: Record<string, unknown>): EnrichedPerson {
     workPhone: (c.phone as string) || null,
     organizationId: null,
     enrichmentStatus: "ok",
-    phoneAwaitingWebhook: false,
   }
 }
