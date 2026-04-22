@@ -3,6 +3,7 @@ import type { Metadata, Viewport } from "next"
 import "./globals.css"
 import { Analytics } from "@vercel/analytics/react"
 import { OnboardingProvider } from "@/components/onboarding/onboarding-provider"
+import { Toaster } from "sonner"
 
 import { Inter, Montserrat as V0_Font_Montserrat, Source_Serif_4 as V0_Font_Source_Serif_4 } from 'next/font/google'
 
@@ -102,6 +103,7 @@ export default function RootLayout({
         <OnboardingProvider>
           {children}
         </OnboardingProvider>
+        <Toaster position="top-right" richColors closeButton />
         <Analytics />
       </body>
     </html>

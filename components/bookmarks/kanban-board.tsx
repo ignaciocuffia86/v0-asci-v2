@@ -10,12 +10,7 @@ import {
   Globe, 
   Linkedin,
   Eye,
-  Download,
-  X,
-  Loader2,
 } from "lucide-react"
-import { Checkbox } from "@/components/ui/checkbox"
-import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { 
   BOOKMARK_STATUS_CONFIG, 
@@ -60,15 +55,11 @@ function KanbanCard({
   isDragging,
   onDragStart,
   onDragEnd,
-  isSelected,
-  onSelectToggle,
 }: { 
   bookmark: BookmarkItem
   isDragging?: boolean
   onDragStart: (e: React.DragEvent, bookmarkId: string) => void
   onDragEnd: () => void
-  isSelected: boolean
-  onSelectToggle: (bookmarkId: string) => void
 }) {
   const company = bookmark.company
 
@@ -88,15 +79,9 @@ function KanbanCard({
       )}
     >
       <CardContent className="p-3 space-y-2">
-        {/* Header with checkbox, drag handle and company name */}
+        {/* Header with drag handle and company name */}
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0 flex-1">
-            <Checkbox
-              checked={isSelected}
-              onCheckedChange={() => onSelectToggle(bookmark.id)}
-              onClick={(e) => e.stopPropagation()}
-              className="flex-shrink-0"
-            />
             <GripVertical className="w-4 h-4 text-muted-foreground/50 flex-shrink-0" />
             {company?.logo_url ? (
               <img 
@@ -223,8 +208,6 @@ function KanbanColumn({
   onDragStart,
   onDragEnd,
   onDrop,
-  selectedIds,
-  onSelectToggle,
 }: { 
   status: BookmarkStatus
   bookmarks: BookmarkItem[]
@@ -234,8 +217,6 @@ function KanbanColumn({
   onDragStart: (e: React.DragEvent, bookmarkId: string) => void
   onDragEnd: () => void
   onDrop: (status: BookmarkStatus) => void
-  selectedIds: Set<string>
-  onSelectToggle: (bookmarkId: string) => void
 }) {
   const config = BOOKMARK_STATUS_CONFIG[status]
   const [isDragOver, setIsDragOver] = useState(false)
@@ -300,8 +281,6 @@ function KanbanColumn({
                 isDragging={draggingId === bookmark.id}
                 onDragStart={onDragStart}
                 onDragEnd={onDragEnd}
-                isSelected={selectedIds.has(bookmark.id)}
-                onSelectToggle={onSelectToggle}
               />
             ))}
             {bookmarks.length > visibleCount && (
@@ -324,55 +303,6 @@ function KanbanColumn({
 export function KanbanBoard({ bookmarks, userId, onStatusChange }: KanbanBoardProps) {
   const statusKeys = Object.keys(BOOKMARK_STATUS_CONFIG) as BookmarkStatus[]
   const [draggingId, setDraggingId] = useState<string | null>(null)
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [isExporting, setIsExporting] = useState(false)
-
-  const handleSelectToggle = (bookmarkId: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(bookmarkId)) {
-        next.delete(bookmarkId)
-      } else {
-        next.add(bookmarkId)
-      }
-      return next
-    })
-  }
-
-  const handleClearSelection = () => {
-    setSelectedIds(new Set())
-  }
-
-  const handleBulkExport = async () => {
-    if (selectedIds.size === 0) return
-    setIsExporting(true)
-    try {
-      const response = await fetch("/api/bookmarks/export", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bookmark_ids: Array.from(selectedIds) }),
-      })
-      if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.error || "Error al exportar")
-      }
-      const blob = await response.blob()
-      const url = window.URL.createObjectURL(blob)
-      const a = document.createElement("a")
-      a.href = url
-      a.download = response.headers.get("Content-Disposition")?.split("filename=")[1]?.replace(/"/g, "") || "export.xlsx"
-      document.body.appendChild(a)
-      a.click()
-      window.URL.revokeObjectURL(url)
-      a.remove()
-      toast.success(`${selectedIds.size} bookmarks exportados`)
-      setSelectedIds(new Set())
-    } catch (err: any) {
-      toast.error(err.message || "Error al exportar")
-    } finally {
-      setIsExporting(false)
-    }
-  }
 
   // Group bookmarks by status - treat null/undefined as 'nuevo'
   const bookmarksByStatus = statusKeys.reduce((acc, status) => {
@@ -438,42 +368,10 @@ export function KanbanBoard({ bookmarks, userId, onStatusChange }: KanbanBoardPr
             onDragStart={handleDragStart}
             onDragEnd={handleDragEnd}
             onDrop={handleDrop}
-            selectedIds={selectedIds}
-            onSelectToggle={handleSelectToggle}
           />
         ))}
       </div>
 
-      {/* Floating action bar for bulk actions */}
-      {selectedIds.size > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-card border shadow-lg rounded-lg px-4 py-3 flex items-center gap-4">
-          <span className="text-sm font-medium">
-            {selectedIds.size} seleccionado{selectedIds.size > 1 ? "s" : ""}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleClearSelection}
-            className="gap-1"
-          >
-            <X className="h-3 w-3" />
-            Limpiar
-          </Button>
-          <Button
-            size="sm"
-            onClick={handleBulkExport}
-            disabled={isExporting}
-            className="gap-1"
-          >
-            {isExporting ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <Download className="h-3 w-3" />
-            )}
-            Exportar Excel
-          </Button>
-        </div>
-      )}
     </div>
   )
 }
