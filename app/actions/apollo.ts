@@ -146,7 +146,9 @@ Devuelve SOLO un JSON valido con este formato exacto:
 }
 
 // ---------------------------------------------------------------------------
-// getBookmarkSearchContext (intacto)
+// getBookmarkSearchContext
+// DEPRECATED: usar getProspectsTabData que consolida en 1 round-trip.
+// Se mantiene por si algún consumer aislado lo usa. No llamar desde código nuevo.
 // ---------------------------------------------------------------------------
 
 export async function getBookmarkSearchContext(bookmarkId: string): Promise<{
@@ -685,5 +687,127 @@ export async function getContactsForIcebreaker(bookmarkId: string) {
       email1_status: p.email_status,
       phone1: p.mobile_phone || p.phone,
     })),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// getProspectsTabData — carga optimizada para el tab de Prospectos.
+//
+// Reemplaza las 3 llamadas secuenciales (getBookmarkSearchContext + getProspects
+// + getRemovedProspects) por 1 sola server action que:
+//   1. Hace UN solo auth.getUser()
+//   2. Resuelve bookmark + company en paralelo con user_company_contacts
+//   3. Trae activos y removidos en un ÚNICO query a user_company_contacts
+//      (filtrando por company + user + is_decision_maker y particionando
+//      en memoria por status — mismo shape de datos, sin round-trip extra)
+//   4. Resuelve los nombres del diccionario (processes/products) en paralelo
+//
+// Resultado: de ~8 queries seriadas a ~3 queries en 2 batches paralelos.
+// ---------------------------------------------------------------------------
+
+export type ProspectsTabData = {
+  context: {
+    technologies: string[]
+    processes: string[]
+    company: { name: string; website?: string; linkedin_url?: string } | null
+  }
+  active: Array<Record<string, unknown>>
+  removed: Array<Record<string, unknown>>
+}
+
+export async function getProspectsTabData(bookmarkId: string): Promise<ProspectsTabData> {
+  const emptyResponse: ProspectsTabData = {
+    context: { technologies: [], processes: [], company: null },
+    active: [],
+    removed: [],
+  }
+
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  if (!user) return emptyResponse
+
+  // Primera consulta: necesitamos company_id y search_context del bookmark
+  // antes de poder pedir todo lo demás (el resto depende de company_id).
+  const { data: bookmark } = await supabase
+    .from("bookmarks")
+    .select("company_id, search_context")
+    .eq("id", bookmarkId)
+    .single()
+
+  if (!bookmark) return emptyResponse
+
+  const searchContext = bookmark.search_context as {
+    filterType?: string
+    filtersUsed?: string[]
+    filterSignalIds?: string[]
+  } | null
+
+  const filterSignalIds = searchContext?.filterSignalIds || []
+  const filterType = searchContext?.filterType || "general"
+  const filtersUsed = searchContext?.filtersUsed || []
+
+  // Dos fetches absolutamente paralelos (no dependen uno del otro):
+  //   - company info
+  //   - user_company_contacts (trae activos + removidos en una sola pasada)
+  // Si hay filter signals, pedimos también el diccionario en paralelo.
+  const needsDictionary =
+    filterSignalIds.length > 0 &&
+    (filterType === "process" || filterType === "technology")
+
+  const dictionaryTable =
+    filterType === "process" ? "dictionary_processes" : "dictionary_products"
+
+  const [companyResult, contactsResult, dictionaryResult] = await Promise.all([
+    supabase
+      .from("companies")
+      .select("name, website, linkedin_url")
+      .eq("id", bookmark.company_id)
+      .single(),
+    supabase
+      .from("user_company_contacts")
+      .select("*")
+      .eq("company_id", bookmark.company_id)
+      .eq("user_id", user.id)
+      .eq("is_decision_maker", true)
+      .order("created_at", { ascending: false }),
+    needsDictionary
+      ? supabase.from(dictionaryTable).select("name").in("id", filterSignalIds)
+      : Promise.resolve({ data: null as { name: string }[] | null }),
+  ])
+
+  // Construir listas de technologies/processes desde el diccionario (o fallback a filtersUsed)
+  let technologies: string[] = []
+  let processes: string[] = []
+
+  if (needsDictionary) {
+    const names = (dictionaryResult.data || []).map((p) => p.name)
+    if (filterType === "process") processes = names.length > 0 ? names : filtersUsed
+    else if (filterType === "technology")
+      technologies = names.length > 0 ? names : filtersUsed
+  } else if (filtersUsed.length > 0) {
+    if (filterType === "process") processes = filtersUsed
+    else if (filterType === "technology") technologies = filtersUsed
+  }
+
+  // Particionar activos vs removidos en memoria — una sola query, 0 round-trips extra.
+  const allContacts = (contactsResult.data || []) as Array<Record<string, unknown> & { status?: string | null }>
+  const active: Array<Record<string, unknown>> = []
+  const removed: Array<Record<string, unknown>> = []
+  for (const row of allContacts) {
+    if (row.status === "removed") removed.push(row)
+    else active.push(row)
+  }
+
+  return {
+    context: {
+      technologies,
+      processes,
+      company: companyResult.data || null,
+    },
+    active,
+    removed,
   }
 }

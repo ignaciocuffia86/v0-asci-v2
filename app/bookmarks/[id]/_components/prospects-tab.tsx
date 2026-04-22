@@ -31,12 +31,10 @@ import {
   Copy,
 } from "lucide-react"
 import {
-  getBookmarkSearchContext,
   searchApolloProspects,
-  getProspects,
   removeProspect,
   restoreProspect,
-  getRemovedProspects,
+  getProspectsTabData,
   type ApolloSearchStats,
 } from "@/app/actions/apollo"
 import Link from "next/link"
@@ -227,26 +225,22 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
     setTimeout(() => setCopiedId(null), 2000)
   }
 
-  // Cargar contexto y prospectos existentes.
-  // silent=true: actualiza la data en background sin toggle del skeleton global
+  // Cargar contexto y prospectos existentes en UN solo round-trip.
+  // silent=true: actualiza la data en background sin toggle del skeleton
   // (para refrescos post-búsqueda o post-acciones puntuales).
   const loadData = useCallback(
     async ({ silent = false }: { silent?: boolean } = {}) => {
       if (!silent) setIsLoading(true)
 
-      // Cargar contexto de busqueda
-      const context = await getBookmarkSearchContext(bookmarkId)
+      // Una sola server action que hace auth + bookmark + company + contacts
+      // + dictionary en 2 batches paralelos (~3 queries en vez de 8 seriadas).
+      const data = await getProspectsTabData(bookmarkId)
 
-      setTechnologies(context.technologies)
-      setProcesses(context.processes)
-      setCompany(context.company)
-
-      // Cargar prospectos existentes
-      const existingProspects = await getProspects(bookmarkId)
-      setProspects(existingProspects)
-
-      const removed = await getRemovedProspects(bookmarkId)
-      setRemovedProspects(removed)
+      setTechnologies(data.context.technologies)
+      setProcesses(data.context.processes)
+      setCompany(data.context.company)
+      setProspects(data.active as Prospect[])
+      setRemovedProspects(data.removed as Prospect[])
 
       if (!silent) setIsLoading(false)
     },
@@ -423,13 +417,9 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
     }
   }
 
-  if (isLoading) {
-    return (
-      <div className="flex justify-center py-12">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-      </div>
-    )
-  }
+  // Nota: NO bloqueamos el render con un spinner global. El formulario (país,
+  // job titles, búsqueda) no depende de la data remota y debe mostrarse de
+  // inmediato. Solo el bloque de "Lista de prospectos" más abajo usa isLoading.
 
   return (
     <div className="space-y-6">
@@ -815,8 +805,15 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
         </Card>
       )}
 
-      {/* Lista de prospectos */}
-      {prospects.length === 0 ? (
+      {/* Lista de prospectos — skeleton granular: solo esta sección espera la data */}
+      {isLoading ? (
+        <Card className="border-dashed">
+          <CardContent className="flex flex-col items-center justify-center py-10 space-y-3 text-center">
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">Cargando prospectos...</p>
+          </CardContent>
+        </Card>
+      ) : prospects.length === 0 ? (
         <Card className="border-dashed">
           <CardContent className="flex flex-col items-center justify-center py-10 space-y-4 text-center">
             <div className="bg-muted p-3 rounded-full">
@@ -915,9 +912,15 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
                         className="mt-1 flex-shrink-0"
                       />
 
-                      {/* Avatar */}
+                      {/* Avatar — loading=lazy evita que el proxy se sature con
+                          requests paralelos cuando hay muchas tarjetas.
+                          decoding=async libera el hilo principal mientras decodifica. */}
                       <Avatar className="h-12 w-12 flex-shrink-0">
-                        <AvatarImage src={proxyImageUrl(prospect.profile_picture_url)} />
+                        <AvatarImage
+                          src={proxyImageUrl(prospect.profile_picture_url)}
+                          loading="lazy"
+                          decoding="async"
+                        />
                         <AvatarFallback>
                           {prospect.first_name?.[0]}
                           {prospect.last_name?.[0]}
