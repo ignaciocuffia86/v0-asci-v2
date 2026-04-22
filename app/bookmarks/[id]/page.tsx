@@ -486,12 +486,17 @@ export default function BookmarkWorkspacePage() {
             <BookmarkStrategy bookmarkId={bookmarkId} companyName={company.name} />
           </TabsContent>
 
-          <TabsContent value="prospects" key={`prospects-${scopeVersion}`} className="m-0 focus-visible:ring-0">
-            <ProspectsTab 
-              bookmarkId={bookmarkId} 
+          {/* No usamos `key={`prospects-${scopeVersion}`}` acá porque eso
+              remontaba el tab entero en cada cambio de scope, provocando loops
+              de fetch. En cambio pasamos scopeVersion como prop; ProspectsTab
+              lo incorpora a la key de SWR y re-fetchea sin desmontar. */}
+          <TabsContent value="prospects" className="m-0 focus-visible:ring-0">
+            <ProspectsTab
+              bookmarkId={bookmarkId}
               companyName={company.name}
               companyWebsite={company.website}
               defaultCountry={countryFilter || company.country || ""}
+              scopeVersion={scopeVersion}
             />
           </TabsContent>
 

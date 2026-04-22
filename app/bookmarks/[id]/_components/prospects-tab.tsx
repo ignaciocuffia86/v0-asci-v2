@@ -1,6 +1,7 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect } from "react"
+import useSWR from "swr"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -34,8 +35,8 @@ import {
   searchApolloProspects,
   removeProspect,
   restoreProspect,
-  getProspectsTabData,
   type ApolloSearchStats,
+  type ProspectsTabData,
 } from "@/app/actions/apollo"
 import Link from "next/link"
 import { toast } from "sonner"
@@ -146,9 +147,27 @@ interface ProspectsTabProps {
   companyName: string
   companyWebsite?: string
   defaultCountry?: string
+  /**
+   * Se incrementa en el padre cuando cambia el scope del bookmark (industrias,
+   * technologies, processes). Lo usamos como parte de la key de SWR para forzar
+   * un re-fetch sin remontar el componente entero (evita el loop de mount).
+   */
+  scopeVersion?: number
 }
 
-export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultCountry }: ProspectsTabProps) {
+const swrFetcher = (url: string) =>
+  fetch(url, { cache: "no-store" }).then((r) => {
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    return r.json() as Promise<ProspectsTabData>
+  })
+
+export function ProspectsTab({
+  bookmarkId,
+  companyName,
+  companyWebsite,
+  defaultCountry,
+  scopeVersion = 0,
+}: ProspectsTabProps) {
   const [prospects, setProspects] = useState<Prospect[]>([])
   const [removedProspects, setRemovedProspects] = useState<Prospect[]>([])
   const [showRemoved, setShowRemoved] = useState(false)
@@ -159,7 +178,7 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [isExporting, setIsExporting] = useState(false)
 
-  const [isLoading, setIsLoading] = useState(true)
+  // isLoading ahora se deriva de SWR (definido más abajo); no hace falta estado local.
   const [isSearching, setIsSearching] = useState(false)
 
   // Map a country name (possibly in Spanish or from DB) to the Apollo English value
@@ -226,48 +245,50 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
     setTimeout(() => setCopiedId(null), 2000)
   }
 
-  // Cargar contexto y prospectos existentes en UN solo round-trip.
-  // silent=true: actualiza la data en background sin toggle del skeleton
-  // (para refrescos post-búsqueda o post-acciones puntuales).
+  // Fetching con SWR: evita el loop que provocaba el patrón fetch-en-useEffect
+  // + remount del TabsContent con key dinámica. SWR deduplica requests, cachea
+  // la respuesta y nos da un `mutate` para revalidar manualmente tras acciones.
   //
-  // IMPORTANTE: try/catch/finally es obligatorio — si la server action tira
-  // (o el build cachea una version vieja sin la funcion), isLoading nunca
-  // vuelve a false y la UI se queda en "Cargando prospectos..." eterno.
-  const loadData = useCallback(
-    async ({ silent = false }: { silent?: boolean } = {}) => {
-      if (!silent) setIsLoading(true)
-      console.log("[v0] prospects-tab loadData start", { bookmarkId, silent })
+  // La key incluye scopeVersion: cuando el padre incrementa scopeVersion por
+  // cambios en el scope del bookmark, SWR re-fetchea sin remontar el tab.
+  const swrKey = bookmarkId
+    ? `/api/bookmarks/${bookmarkId}/prospects-data?v=${scopeVersion}`
+    : null
+  const {
+    data: tabData,
+    error: tabError,
+    isLoading: isLoadingTab,
+    mutate: mutateTab,
+  } = useSWR<ProspectsTabData>(swrKey, swrFetcher, {
+    revalidateOnFocus: false,
+    revalidateOnReconnect: false,
+    dedupingInterval: 10_000,
+    shouldRetryOnError: false,
+  })
 
-      try {
-        // Una sola server action que hace auth + bookmark + company + contacts
-        // + dictionary en 2 batches paralelos (~3 queries en vez de 8 seriadas).
-        const data = await getProspectsTabData(bookmarkId)
-        console.log("[v0] prospects-tab loadData ok", {
-          active: data.active.length,
-          removed: data.removed.length,
-          company: data.context.company?.name,
-        })
-
-        setTechnologies(data.context.technologies)
-        setProcesses(data.context.processes)
-        setCompany(data.context.company)
-        setProspects(data.active as Prospect[])
-        setRemovedProspects(data.removed as Prospect[])
-      } catch (err) {
-        console.error("[v0] prospects-tab loadData failed", err)
-        toast.error("No se pudieron cargar los prospectos", {
-          description: err instanceof Error ? err.message : "Error desconocido",
-        })
-      } finally {
-        if (!silent) setIsLoading(false)
-      }
-    },
-    [bookmarkId],
-  )
-
+  // Sincronizar el estado local con la data remota. Mantenemos los useState
+  // locales para poder hacer updates optimistas en remove/restore sin tener
+  // que revalidar con el server en cada acción.
   useEffect(() => {
-    loadData()
-  }, [loadData])
+    if (!tabData) return
+    setTechnologies(tabData.context.technologies)
+    setProcesses(tabData.context.processes)
+    setCompany(tabData.context.company)
+    setProspects(tabData.active as Prospect[])
+    setRemovedProspects(tabData.removed as Prospect[])
+  }, [tabData])
+
+  // Feedback de error (una vez, no en cada render)
+  useEffect(() => {
+    if (tabError) {
+      console.error("[v0] prospects-tab SWR error", tabError)
+      toast.error("No se pudieron cargar los prospectos", {
+        description: tabError instanceof Error ? tabError.message : "Error desconocido",
+      })
+    }
+  }, [tabError])
+
+  const isLoading = isLoadingTab && !tabData
 
   // Toggle selección de job title
   const toggleJobTitle = (title: string) => {
@@ -343,8 +364,10 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
       }
 
       if (result.success) {
-        // silent: no mostrar el skeleton del tab, el Loader del botón ya indica progreso
-        await loadData({ silent: true })
+        // Revalidamos la data vía SWR. Como ya tenemos `tabData` en cache, SWR
+        // hace la refetch en background SIN togglear el skeleton (isLoadingTab
+        // queda en false mientras haya data previa).
+        await mutateTab()
       } else {
         setLastSearchError(result.error || "No se pudieron encontrar prospectos")
       }
