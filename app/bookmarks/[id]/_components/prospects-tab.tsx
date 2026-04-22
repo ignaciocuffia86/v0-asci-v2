@@ -38,6 +38,7 @@ import {
   type ApolloSearchStats,
 } from "@/app/actions/apollo"
 import Link from "next/link"
+import { toast } from "sonner"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -228,21 +229,38 @@ export function ProspectsTab({ bookmarkId, companyName, companyWebsite, defaultC
   // Cargar contexto y prospectos existentes en UN solo round-trip.
   // silent=true: actualiza la data en background sin toggle del skeleton
   // (para refrescos post-búsqueda o post-acciones puntuales).
+  //
+  // IMPORTANTE: try/catch/finally es obligatorio — si la server action tira
+  // (o el build cachea una version vieja sin la funcion), isLoading nunca
+  // vuelve a false y la UI se queda en "Cargando prospectos..." eterno.
   const loadData = useCallback(
     async ({ silent = false }: { silent?: boolean } = {}) => {
       if (!silent) setIsLoading(true)
+      console.log("[v0] prospects-tab loadData start", { bookmarkId, silent })
 
-      // Una sola server action que hace auth + bookmark + company + contacts
-      // + dictionary en 2 batches paralelos (~3 queries en vez de 8 seriadas).
-      const data = await getProspectsTabData(bookmarkId)
+      try {
+        // Una sola server action que hace auth + bookmark + company + contacts
+        // + dictionary en 2 batches paralelos (~3 queries en vez de 8 seriadas).
+        const data = await getProspectsTabData(bookmarkId)
+        console.log("[v0] prospects-tab loadData ok", {
+          active: data.active.length,
+          removed: data.removed.length,
+          company: data.context.company?.name,
+        })
 
-      setTechnologies(data.context.technologies)
-      setProcesses(data.context.processes)
-      setCompany(data.context.company)
-      setProspects(data.active as Prospect[])
-      setRemovedProspects(data.removed as Prospect[])
-
-      if (!silent) setIsLoading(false)
+        setTechnologies(data.context.technologies)
+        setProcesses(data.context.processes)
+        setCompany(data.context.company)
+        setProspects(data.active as Prospect[])
+        setRemovedProspects(data.removed as Prospect[])
+      } catch (err) {
+        console.error("[v0] prospects-tab loadData failed", err)
+        toast.error("No se pudieron cargar los prospectos", {
+          description: err instanceof Error ? err.message : "Error desconocido",
+        })
+      } finally {
+        if (!silent) setIsLoading(false)
+      }
     },
     [bookmarkId],
   )
