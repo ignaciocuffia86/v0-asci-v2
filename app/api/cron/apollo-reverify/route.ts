@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { apolloRequest } from "@/lib/apollo/client"
-import { parsePerson } from "@/lib/apollo/parsers"
+import { normalizePerson } from "@/lib/apollo/parsers"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 300 // 5 min
@@ -67,7 +67,7 @@ export async function GET(request: Request) {
         continue
       }
 
-      const person = parsePerson(matchResult.data.person as Record<string, unknown>)
+      const person = normalizePerson(matchResult.data.person as Record<string, unknown>)
       if (!person) {
         await supabase
           .from("user_company_contacts")
