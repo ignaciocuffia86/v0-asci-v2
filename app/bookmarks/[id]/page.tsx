@@ -160,8 +160,17 @@ export default function BookmarkWorkspacePage() {
         console.error("Error fetching company:", companyError)
       } else {
         setCompany(companyData)
-        // Default country filter to company's country
-        if (companyData.country) {
+        // Hidratar el country filter:
+        // 1) si el usuario ya eligio uno antes, respetar esa preferencia
+        //    persistida en bookmark.search_context.countryFilter
+        //    (null = "Todos los paises" elegido explicitamente)
+        // 2) si nunca eligio, default al pais de la empresa
+        const persisted = bookmarkData.search_context?.countryFilter
+        const hasPersistedPreference =
+          bookmarkData.search_context && "countryFilter" in bookmarkData.search_context
+        if (hasPersistedPreference) {
+          setCountryFilter(persisted ?? "")
+        } else if (companyData.country) {
           setCountryFilter(companyData.country)
         }
       }
@@ -201,6 +210,28 @@ export default function BookmarkWorkspacePage() {
     if (!error) {
       setBookmark((prev: any) => ({ ...prev, [field]: value }))
     }
+  }
+
+  // Persiste el country filter dentro de bookmark.search_context (jsonb).
+  // Convencion: null = "Todos los paises" elegido explicitamente,
+  // string = pais especifico. La distincion entre null y "no seteado" se
+  // resuelve con la presencia de la key en el objeto.
+  const persistCountryFilter = async (newValue: string) => {
+    setCountryFilter(newValue)
+    const newSearchContext = {
+      ...(bookmark?.search_context || {}),
+      countryFilter: newValue === "" ? null : newValue,
+    }
+    const { error } = await supabase
+      .from("bookmarks")
+      .update({ search_context: newSearchContext, updated_at: new Date().toISOString() })
+      .eq("id", bookmarkId)
+
+    if (error) {
+      console.error("[v0] persistCountryFilter error:", error)
+      return
+    }
+    setBookmark((prev: any) => ({ ...prev, search_context: newSearchContext }))
   }
 
   if (isLoading) {
@@ -354,7 +385,7 @@ export default function BookmarkWorkspacePage() {
               </span>
               <Select
                 value={countryFilter || "_all"}
-                onValueChange={(val) => setCountryFilter(val === "_all" ? "" : val)}
+                onValueChange={(val) => persistCountryFilter(val === "_all" ? "" : val)}
               >
                 <SelectTrigger className="w-[170px] h-9">
                   <SelectValue placeholder="Todos los paises" />
