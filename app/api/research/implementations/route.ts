@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextResponse } from "next/server"
 import { parallelSearch, buildImplementationsSearchParams } from "@/lib/parallel"
-import { structureWithLLM, filterRelevantToCompany } from "@/lib/ai-structurer"
+import { structureWithLLM, filterRelevantToCompany, checkUrlsAlive } from "@/lib/ai-structurer"
 
 const IMPL_CACHE_DAYS = 30 // Refresh at most once per month per company+signal
 const MAX_IMPLEMENTATIONS = 10
@@ -27,6 +27,7 @@ REGLAS DE FORMATO:
 3. Maximo 10 implementaciones. Prioriza calidad sobre cantidad. Mejor 0 items que 1 ruidoso.
 4. Si no hay implementaciones relevantes, devuelve {"implementations":[], "digest": null}
 5. Las fechas deben ser YYYY-MM-DD. Si no hay fecha exacta, intenta inferirla. Si es imposible, usa null.
+6. CADA item DEBE incluir el campo "source_index" (numero entero >=1) que indica de cual "Fuente N" del listado abajo proviene la implementacion. ESTE CAMPO ES OBLIGATORIO. NUNCA inventes URLs ni mezcles fuentes. Si no podes asignar un source_index claro, NO incluyas el item.
 
 EVIDENCE LEVELS:
 - strong: Case study oficial, comunicado de prensa del vendor, announcement oficial
@@ -46,6 +47,7 @@ FORMATO JSON:
 {
   "implementations": [
     {
+      "source_index": 1,
       "title": "string (titulo descriptivo del caso/proyecto)",
       "provider_name": "string (vendor/consultora que implemento)",
       "technology": "string (tecnologia implementada)",
@@ -105,7 +107,7 @@ async function structureImplementationsWithGemini(
 function buildDegradedImplItems(
   excerpts: { url: string; title: string; publish_date: string | null; content: string }[],
 ): GeminiImplResult {
-  const implementations = excerpts.slice(0, 10).map((e) => {
+  const implementations = excerpts.slice(0, 10).map((e, idx) => {
     let hostname: string
     try {
       hostname = new URL(e.url).hostname.replace(/^www\./, "")
@@ -114,6 +116,7 @@ function buildDegradedImplItems(
     }
     const summary = e.content.replace(/\s+/g, " ").trim().slice(0, 240)
     return {
+      source_index: idx + 1,
       title: e.title || hostname,
       provider_name: null,
       technology: null,
@@ -433,14 +436,41 @@ export async function POST(request: Request) {
         console.log(`[v0][impl][guardrail] dropped ${droppedByGuardrail} item(s) sin mencion explicita de "${companyName}"`)
       }
 
-      // Map structured items back to source URLs from Parallel
-      implementations = structured.slice(0, MAX_IMPLEMENTATIONS).map((item: any, idx: number) => {
-        const matchingResult = searchResult.results.find(r =>
-          r.title.toLowerCase().includes((item.title || "").toLowerCase().slice(0, 30)) ||
-          (item.source_name && r.url.toLowerCase().includes(item.source_name.toLowerCase().replace(/\s/g, "")))
-        )
-        const sourceResult = matchingResult || searchResult.results[idx] || searchResult.results[0]
+      // Mapeo deterministico item -> URL via source_index (1-based) + URL liveness
+      // check para descartar links muertos. Mismo patron que en /research/news.
+      const itemsWithSource = structured
+        .slice(0, MAX_IMPLEMENTATIONS)
+        .map((item: any) => {
+          const idx1 = Number(item.source_index)
+          const sourceResult =
+            Number.isFinite(idx1) && idx1 >= 1 && idx1 <= searchResult.results.length
+              ? searchResult.results[idx1 - 1]
+              : null
+          return { item, sourceResult }
+        })
+        .filter((x) => x.sourceResult !== null)
 
+      const droppedNoSource = Math.min(structured.length, MAX_IMPLEMENTATIONS) - itemsWithSource.length
+      if (droppedNoSource > 0) {
+        console.log(`[v0][impl][mapping] dropped ${droppedNoSource} item(s) sin source_index valido`)
+      }
+
+      const candidateUrls = itemsWithSource.map((x) => x.sourceResult!.url)
+      const aliveUrls = await checkUrlsAlive(candidateUrls, { context: "impl" })
+      const aliveItems = itemsWithSource.filter((x) => aliveUrls.has(x.sourceResult!.url))
+      const droppedDead = itemsWithSource.length - aliveItems.length
+      if (droppedDead > 0) {
+        console.log(`[v0][impl][mapping] dropped ${droppedDead} item(s) por links muertos`)
+      }
+
+      implementations = aliveItems.map(({ item, sourceResult }) => {
+        const r = sourceResult!
+        let hostname: string
+        try {
+          hostname = new URL(r.url).hostname.replace(/^www\./, "")
+        } catch {
+          hostname = "fuente"
+        }
         return {
           title: item.title,
           provider_name: item.provider_name || "N/A",
@@ -449,9 +479,9 @@ export async function POST(request: Request) {
           summary: item.summary,
           results: item.results || null,
           evidence_level: item.evidence_level || "weak",
-          source_url: sourceResult?.url || "#",
-          source_name: item.source_name || sourceResult?.title || "Desconocido",
-          published_at: sanitizeDate(item.published_at) || sanitizeDate(sourceResult?.publish_date),
+          source_url: r.url,
+          source_name: item.source_name || hostname || r.title || "Desconocido",
+          published_at: sanitizeDate(item.published_at) || sanitizeDate(r.publish_date),
         }
       })
     }

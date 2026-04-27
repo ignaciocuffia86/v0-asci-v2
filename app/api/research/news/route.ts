@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextResponse } from "next/server"
 import { parallelSearch, buildNewsSearchParams } from "@/lib/parallel"
-import { structureWithLLM, filterRelevantToCompany } from "@/lib/ai-structurer"
+import { structureWithLLM, filterRelevantToCompany, checkUrlsAlive } from "@/lib/ai-structurer"
 
 const NEWS_CACHE_DAYS = 30 // Refresh at most once per month
 const MAX_NEWS = 15
@@ -27,6 +27,7 @@ REGLAS DE FORMATO:
 4. Minimo 0, maximo 15 noticias. Prioriza calidad sobre cantidad.
 5. Si no hay noticias relevantes (todas son tangenciales), devuelve {"news":[], "digest": null}
 6. Las fechas deben ser YYYY-MM-DD. Si no hay fecha exacta, intenta inferirla del contexto. Si es imposible, usa null.
+7. CADA item DEBE incluir el campo "source_index" (numero entero >=1) que indica de cual "Fuente N" del listado abajo proviene la noticia. ESTE CAMPO ES OBLIGATORIO. Si una noticia se basa en multiples fuentes, elige la PRIMARIA (la que mas evidencia aporta sobre la empresa). NUNCA inventes URLs ni mezcles fuentes. Si no podes asignar un source_index claro, NO incluyas el item.
 
 CATEGORIAS validas: inversion | transformacion | crecimiento | ejecutivos | desafios | alianzas | regulatorio | ma | innovacion
 
@@ -41,6 +42,7 @@ FORMATO JSON:
 {
   "news": [
     {
+      "source_index": 1,
       "title": "string (titulo descriptivo de la noticia)",
       "summary": "string (analisis de 150-250 chars de por que es relevante para ventas B2B)",
       "source_name": "string (nombre del medio/sitio)",
@@ -91,7 +93,7 @@ async function structureNewsWithGemini(
 function buildDegradedNewsItems(
   excerpts: { url: string; title: string; publish_date: string | null; content: string }[],
 ): GeminiNewsResult {
-  const news = excerpts.slice(0, 12).map((e) => {
+  const news = excerpts.slice(0, 12).map((e, idx) => {
     let hostname: string
     try {
       hostname = new URL(e.url).hostname.replace(/^www\./, "")
@@ -100,6 +102,7 @@ function buildDegradedNewsItems(
     }
     const summary = e.content.replace(/\s+/g, " ").trim().slice(0, 240)
     return {
+      source_index: idx + 1,
       title: e.title || hostname,
       summary: summary || null,
       source_name: hostname,
@@ -344,20 +347,51 @@ export async function POST(request: Request) {
         console.log(`[v0][news][guardrail] dropped ${droppedByGuardrail} item(s) sin mencion explicita de "${companyName}"`)
       }
 
-      // Map structured items back to source URLs from Parallel
-      newsItems = structured.map((item: any, idx: number) => {
-        const matchingResult = searchResult.results.find(r =>
-          r.title.toLowerCase().includes((item.title || "").toLowerCase().slice(0, 30)) ||
-          (item.source_name && r.url.toLowerCase().includes(item.source_name.toLowerCase().replace(/\s/g, "")))
-        )
-        const sourceResult = matchingResult || searchResult.results[idx] || searchResult.results[0]
+      // Mapeo deterministico item -> URL via source_index (1-based) que el LLM
+      // debe devolver explicitamente. Esto elimina el matching fragil por titulo
+      // que producia mismatches (ej: item "X" terminaba con URL de un articulo
+      // aleman tangencial). Items sin source_index valido se descartan.
+      const itemsWithSource = structured
+        .map((item: any) => {
+          const idx1 = Number(item.source_index)
+          const sourceResult =
+            Number.isFinite(idx1) && idx1 >= 1 && idx1 <= searchResult.results.length
+              ? searchResult.results[idx1 - 1]
+              : null
+          return { item, sourceResult }
+        })
+        .filter((x) => x.sourceResult !== null)
 
+      const droppedNoSource = structured.length - itemsWithSource.length
+      if (droppedNoSource > 0) {
+        console.log(`[v0][news][mapping] dropped ${droppedNoSource} item(s) sin source_index valido`)
+      }
+
+      // Liveness check: HEAD a las URLs candidatas en paralelo. Descartamos las
+      // que devuelven 404/410 o tienen errores de DNS (links muertos que Parallel
+      // tenia indexados pero ya no existen).
+      const candidateUrls = itemsWithSource.map((x) => x.sourceResult!.url)
+      const aliveUrls = await checkUrlsAlive(candidateUrls, { context: "news" })
+      const aliveItems = itemsWithSource.filter((x) => aliveUrls.has(x.sourceResult!.url))
+      const droppedDead = itemsWithSource.length - aliveItems.length
+      if (droppedDead > 0) {
+        console.log(`[v0][news][mapping] dropped ${droppedDead} item(s) por links muertos`)
+      }
+
+      newsItems = aliveItems.map(({ item, sourceResult }) => {
+        const r = sourceResult!
+        let hostname: string
+        try {
+          hostname = new URL(r.url).hostname.replace(/^www\./, "")
+        } catch {
+          hostname = "fuente"
+        }
         return {
           title: item.title,
           summary: item.summary,
-          source_url: sourceResult?.url || "#",
-          source_name: item.source_name || sourceResult?.title || "Desconocido",
-          published_at: sanitizeDate(item.published_at) || sanitizeDate(sourceResult?.publish_date),
+          source_url: r.url,
+          source_name: item.source_name || hostname || r.title || "Desconocido",
+          published_at: sanitizeDate(item.published_at) || sanitizeDate(r.publish_date),
           category: item.category || categorizeNews((item.title || "") + " " + (item.summary || "")),
         }
       })

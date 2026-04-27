@@ -156,3 +156,79 @@ function backoffMs(attempt: number): number {
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
+
+/**
+ * Verifica liveness de una lista de URLs en paralelo (HEAD request con timeout).
+ * Devuelve un Set con las URLs que respondieron < 400 (o 405 Method Not Allowed,
+ * porque algunos sitios bloquean HEAD pero la URL si existe).
+ *
+ * Esto descarta URLs muertas (404, 410, DNS errors) que Parallel a veces tiene
+ * indexadas pero que ya no existen, evitando publicar items con links rotos.
+ *
+ * NOTA: si el HEAD falla por motivos no concluyentes (timeout, 403, network),
+ * SE CONSIDERA VALIDA por defecto para no descartar fuentes legitimas que solo
+ * bloquean bots. Solo descartamos en errores claros de "el recurso no existe".
+ */
+export async function checkUrlsAlive(
+  urls: string[],
+  { timeoutMs = 3500, context = "urls" }: { timeoutMs?: number; context?: string } = {},
+): Promise<Set<string>> {
+  const unique = Array.from(new Set(urls))
+  const results = await Promise.all(
+    unique.map(async (url) => {
+      // Sanity: si la URL es invalida, descartar de una.
+      try {
+        new URL(url)
+      } catch {
+        return { url, alive: false, reason: "invalid_url" }
+      }
+
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), timeoutMs)
+      try {
+        const res = await fetch(url, {
+          method: "HEAD",
+          redirect: "follow",
+          signal: controller.signal,
+          // Identificarse como navegador para evitar bloqueos baratos
+          headers: {
+            "user-agent":
+              "Mozilla/5.0 (compatible; v0-link-validator/1.0; +https://vercel.com)",
+          },
+        })
+        clearTimeout(timer)
+
+        // 4xx claros de "no existe" -> descartar.
+        if (res.status === 404 || res.status === 410) {
+          return { url, alive: false, reason: `status_${res.status}` }
+        }
+        // 405 (HEAD no soportado) o cualquier otro -> aceptar (la URL existe, solo no responde a HEAD)
+        return { url, alive: true, reason: `status_${res.status}` }
+      } catch (err) {
+        clearTimeout(timer)
+        const msg = String((err as Error)?.message ?? err)
+        // DNS no resuelve -> descartar.
+        if (
+          msg.includes("ENOTFOUND") ||
+          msg.includes("getaddrinfo") ||
+          msg.includes("EAI_AGAIN")
+        ) {
+          return { url, alive: false, reason: "dns_error" }
+        }
+        // Timeout / network reset -> aceptar por defecto (no podemos saber).
+        return { url, alive: true, reason: "network_error_assume_alive" }
+      }
+    }),
+  )
+
+  const dead = results.filter((r) => !r.alive)
+  if (dead.length > 0) {
+    console.log(
+      `[v0][${context}][url-check] dead ${dead.length}/${results.length}: ${dead
+        .map((d) => `${d.reason}=${d.url}`)
+        .join(" | ")}`,
+    )
+  }
+
+  return new Set(results.filter((r) => r.alive).map((r) => r.url))
+}
