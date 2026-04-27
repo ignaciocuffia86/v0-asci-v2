@@ -211,6 +211,30 @@ C. Si tenes dudas, EXCLUI el item. Mejor 0 hallazgos que 1 ruidoso.
 D. El "title" y "summary" DEBEN mencionar el nombre de la empresa objetivo.
 E. NO inventes URLs ni proveedores. Si un dato no esta en los excerpts, no lo pongas.
 
+REGLAS ANTI-OBVIEDAD (CRITICAS - causa principal de mala calidad):
+F. RECHAZAR hallazgos que solo afirmen la EXISTENCIA de un area / equipo / departamento sin tecnologia concreta.
+   Ejemplos PROHIBIDOS: "tiene departamento de seguridad", "cuenta con un equipo de IT", "posee area de sistemas",
+   "dispone de infraestructura tecnologica", "maneja datos de clientes". Toda empresa mediana tiene esto;
+   no aporta valor a un vendedor B2B.
+G. RECHAZAR hallazgos genericos del tipo "usa internet", "tiene sitio web", "vende online", "usa email",
+   "procesa pagos con tarjeta", "tiene sistema de gestion" sin nombrar el vendor/producto especifico.
+H. CADA hallazgo VALIDO debe identificar al menos UNA de estas evidencias concretas:
+   - Nombre del vendor/producto especifico (ej. "Microsoft Dynamics 365", "Salesforce Sales Cloud", "AWS RDS")
+   - Numero de licencias / usuarios / nodos / volumen
+   - Fecha o version de implementacion / migracion / upgrade
+   - Resultado cuantificado (% reduccion, $ ahorro, X horas, etc.)
+   - Nombre del partner / consultora que ejecuto
+   - Caso de exito, comunicado oficial o licitacion publica con titulo identificable
+   Si NO podes citar ninguna de estas, NO incluyas el hallazgo.
+
+REGLAS SOBRE LINKEDIN (CRITICAS):
+I. Los perfiles PERSONALES de LinkedIn (linkedin.com/in/...) NO son evidencia valida de tecnologia que usa la empresa.
+   Que alguien tenga el cargo "CISO at Empresa X" o "Salesforce Admin at Empresa X" en su perfil personal NO es prueba
+   de que la empresa "tenga un area de ciberseguridad" o "use Salesforce". RECHAZAR estos excerpts.
+J. SI son fuente valida: avisos de empleo de la empresa (linkedin.com/jobs/, careers pages, computrabajo, etc.) que
+   listan stack tecnologico requerido. En ese caso clasificar como "inferencia" porque el aviso pide la skill pero no
+   confirma uso productivo. El evidence_detail debe citar el texto del aviso.
+
 REGLAS DE CLASIFICACION:
 1. Cada hallazgo debe asignarse a exactamente UN micro-agente de la siguiente lista (usa el slug exacto):
    - bi_analytics: BI, analytics, data warehouses, lakes, dashboards
@@ -374,16 +398,36 @@ export async function runTechRadar(input: {
     console.log(`[v0][tech-radar][guardrail] dropped ${beforeRelevance - relevantFindings.length} sin mencion explicita`)
   }
 
+  // Paso 4b: anti-obviedad. Descartar findings genericos cuyo "valor" sea solo
+  // afirmar que la empresa tiene un area/departamento/equipo, o que usa categorias
+  // de tecnologia sin nombrar producto especifico. Estos son los "fake insights"
+  // tipicos que produce el LLM cuando se basa en perfiles personales de LinkedIn.
+  const nonObviousFindings = relevantFindings.filter((f) => isNonObviousFinding(f))
+  if (nonObviousFindings.length !== relevantFindings.length) {
+    console.log(
+      `[v0][tech-radar][anti-obviedad] dropped ${relevantFindings.length - nonObviousFindings.length} obviedades`,
+    )
+  }
+
   // Paso 5: mapear source_index -> URL real, validar micro_agent y evidence_level
   type Mapped = { item: any; primary: FlatExcerpt; supportingExcerpts: FlatExcerpt[] }
   const mapped: Mapped[] = []
   const validAgents = new Set<string>(MICRO_AGENTS)
   const validLevels = new Set<EvidenceLevel>(["directa", "convergente", "inferencia", "sin_evidencia"])
+  let droppedByLinkedInProfile = 0
 
-  for (const item of relevantFindings) {
+  for (const item of nonObviousFindings) {
     const idx1 = Number(item.source_index)
     if (!Number.isFinite(idx1) || idx1 < 1 || idx1 > truncated.length) continue
     const primary = truncated[idx1 - 1]
+
+    // Anti-LinkedIn-personal: si la fuente PRIMARIA es un perfil personal de LinkedIn,
+    // descartamos. Job postings (linkedin.com/jobs/...) o paginas de empresa
+    // (linkedin.com/company/...) si son validas.
+    if (isPersonalLinkedInProfile(primary.url)) {
+      droppedByLinkedInProfile++
+      continue
+    }
 
     const agent = String(item.micro_agent ?? "").toLowerCase()
     if (!validAgents.has(agent)) continue
@@ -397,12 +441,18 @@ export async function runTechRadar(input: {
           .map((n: any) => Number(n))
           .filter((n: number) => Number.isFinite(n) && n >= 1 && n <= truncated.length && n !== idx1)
       : []
-    const supportingExcerpts = supportingIdx.map((n: number) => truncated[n - 1])
+    // Filtramos tambien los supporting que sean perfiles personales
+    const supportingExcerpts = supportingIdx
+      .map((n: number) => truncated[n - 1])
+      .filter((e: FlatExcerpt) => !isPersonalLinkedInProfile(e.url))
 
     mapped.push({ item, primary, supportingExcerpts })
   }
 
-  console.log(`[v0][tech-radar][mapping] ${mapped.length}/${relevantFindings.length} hallazgos validos`)
+  if (droppedByLinkedInProfile > 0) {
+    console.log(`[v0][tech-radar][anti-linkedin] dropped ${droppedByLinkedInProfile} con fuente primaria = perfil personal`)
+  }
+  console.log(`[v0][tech-radar][mapping] ${mapped.length}/${nonObviousFindings.length} hallazgos validos`)
 
   if (mapped.length === 0) {
     return { findings: [], digest, bundle_stats: bundleStats, ai_provider: aiProvider }
@@ -444,6 +494,85 @@ export async function runTechRadar(input: {
   })
 
   return { findings, digest, bundle_stats: bundleStats, ai_provider: aiProvider }
+}
+
+// ── Anti-obviedad ──────────────────────────────────────────────────────
+/**
+ * Patrones de "fake insight" tipicos cuando el LLM se basa en perfiles
+ * personales o pagina corporativa generica.
+ *
+ * El finding se RECHAZA si su title+summary matchea alguno de estos patrones
+ * Y NO incluye al menos una evidencia concreta (vendor especifico, numero,
+ * fecha de implementacion, etc.).
+ */
+const OBVIOUS_PATTERNS: RegExp[] = [
+  // "tiene/posee/cuenta con un departamento/equipo/area/division de X"
+  /\b(tiene|posee|cuenta\s+con|dispone\s+de|opera|maneja|mantiene)\s+(un|una|el|la|su|sus|los|las)?\s*(departamento|equipo|area|área|division|división|sector|grupo)\s+de\b/i,
+  // "tiene infraestructura/sistema/plataforma" sin nombrar producto
+  /\b(tiene|posee|cuenta\s+con)\s+(un|una|sus?)\s*(infraestructura|sistema|plataforma|solucion|solución|capacidad|recursos)\s+(tecnologic|de\s+gestion|de\s+gestión|propia|robusta|moderna)/i,
+  // genericidades
+  /\b(usa|utiliza|emplea)\s+(internet|email|correo\s+electronico|computadoras|tecnologia)\b/i,
+  /\b(tiene|posee)\s+(sitio\s+web|presencia\s+online|presencia\s+digital|pagina\s+web)\b/i,
+  /\b(invierte|invirtio|invirtió)\s+en\s+(tecnologia|innovacion|innovación|transformacion\s+digital|transformación\s+digital)\b/i,
+  /\b(esta|está)\s+(en|atravesando)\s+(proceso\s+de\s+transformacion|proceso\s+de\s+transformación|transformacion\s+digital|transformación\s+digital)\b/i,
+  // "se preocupa por la seguridad", "prioriza la innovacion"
+  /\b(se\s+preocupa|prioriza|valora|apuesta)\s+(la\s+|por\s+la\s+|el\s+|por\s+el\s+)/i,
+]
+
+/**
+ * Indicios de evidencia concreta. Si el title o summary los contiene, el item
+ * sobrevive aunque haya matcheado un OBVIOUS_PATTERN (porque al menos da algo
+ * accionable junto con la afirmacion generica).
+ */
+const CONCRETE_EVIDENCE_PATTERNS: RegExp[] = [
+  // vendors / productos especificos comunes
+  /\b(SAP|Oracle|Salesforce|Microsoft\s+(Dynamics|Azure|365|Office|Teams)|AWS|Amazon\s+Web|GCP|Google\s+Cloud|Workday|HubSpot|Zendesk|ServiceNow|Snowflake|Databricks|Tableau|PowerBI|Power\s*BI|Looker|Datadog|New\s+Relic|Dynatrace|Splunk|MuleSoft|Boomi|Okta|CrowdStrike|Palo\s+Alto|Fortinet|Cisco|Dell|HP|Lenovo|UiPath|Automation\s+Anywhere|Workato|Slack|GitHub|GitLab|Jenkins|Kubernetes|Docker|MongoDB|PostgreSQL|MySQL|Redis|Kafka|Globant|Accenture|Deloitte|McKinsey|IBM|Capgemini|Genesys|NICE|Twilio|VTEX|Magento|Shopify)\b/i,
+  // numeros con unidad
+  /\b\d+\s*(licencias?|usuarios?|empleados?|tiendas?|sucursales?|nodos?|servidores?|millones?|mil)\b/i,
+  // porcentajes
+  /\b\d+\s*%/,
+  // fechas explicitas
+  /\b(en|desde|durante|hacia)\s+(20\d{2}|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)/i,
+  // dinero
+  /(USD|US\$|U\$S|\$ARS|AR\$|EUR|€)\s*[\d.,]+/i,
+  // referencias a documentos / casos
+  /\b(case\s+study|caso\s+de\s+exito|caso\s+de\s+éxito|comunicado|press\s+release|licitaci[oó]n|RFP|contrato\s+adjudicado)\b/i,
+]
+
+function isNonObviousFinding(item: any): boolean {
+  const text = `${item?.title ?? ""} ${item?.summary ?? ""} ${item?.evidence_detail ?? ""}`.toLowerCase()
+
+  // Si nombra un vendor/numero/fecha/caso concreto, el finding es valido
+  // aun si tambien tiene frases genericas.
+  const hasConcrete = CONCRETE_EVIDENCE_PATTERNS.some((re) => re.test(text))
+  if (hasConcrete) return true
+
+  // Si NO tiene evidencia concreta y matchea algun patron de obviedad: descartar.
+  const isObvious = OBVIOUS_PATTERNS.some((re) => re.test(text))
+  if (isObvious) return false
+
+  // Validacion adicional: si NO matchea ningun OBVIOUS_PATTERN pero TAMPOCO
+  // tiene technology o provider_name, es un item demasiado vago. Lo dejamos
+  // pasar solo si tiene evidence_detail con algo de sustancia (>50 chars).
+  const hasTech = item?.technology && String(item.technology).trim().length >= 3
+  const hasProvider = item?.provider_name && String(item.provider_name).trim().length >= 3
+  const hasEvidenceDetail = item?.evidence_detail && String(item.evidence_detail).trim().length >= 50
+  if (!hasTech && !hasProvider && !hasEvidenceDetail) return false
+
+  return true
+}
+
+/**
+ * Detecta perfiles personales de LinkedIn. Mantiene job postings y company pages.
+ */
+function isPersonalLinkedInProfile(url: string): boolean {
+  try {
+    const u = new URL(url)
+    if (!u.hostname.includes("linkedin.com")) return false
+    return /^\/in\//i.test(u.pathname)
+  } catch {
+    return false
+  }
 }
 
 // ── Date helper local (igual al de los routes) ─────────────────────────
