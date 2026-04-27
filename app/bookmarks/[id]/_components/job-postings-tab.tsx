@@ -178,7 +178,7 @@ export function BookmarkJobPostings({ bookmarkId, countryFilter }: { bookmarkId:
                 >
                   <a href={jp.apply_url} target="_blank" rel="noopener noreferrer">
                     <ExternalLink className="h-3 w-3 mr-1.5" />
-                    Ver Oferta Completa
+                    Ver Publicación
                   </a>
                 </Button>
               )}

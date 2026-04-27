@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState, useDeferredValue } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -14,10 +14,13 @@ import {
   Phone,
   CheckCircle2,
   AlertCircle,
+  Search,
+  X,
 } from "lucide-react"
 import { getBookmarkSmartContext } from "@/app/actions/workspace"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { toast } from "sonner"
 
@@ -47,6 +50,47 @@ type SmartContext = {
 export function BookmarkOverview({ bookmarkId, company, countryFilter, scopeVersion }: { bookmarkId: string; company: any; countryFilter?: string | null; scopeVersion?: number }) {
   const [smartContext, setSmartContext] = useState<SmartContext | null>(null)
   const [loading, setLoading] = useState(true)
+  // Buscador por keyword: filtra las senales por nombre/apellido, cargo y keywords
+  const [searchQuery, setSearchQuery] = useState("")
+  const deferredQuery = useDeferredValue(searchQuery)
+
+  // Filtrado client-side. Match case/diacritic-insensitive sobre nombre+apellido,
+  // cargo (contactRole) y keywords/senales detectadas asociadas al contacto.
+  const normalize = (s: string) =>
+    s
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+
+  const filterContacts = (contacts: GroupedContact[], q: string) => {
+    const trimmed = q.trim()
+    if (!trimmed) return contacts
+    const needle = normalize(trimmed)
+    return contacts.filter((c) => {
+      const haystack = [
+        c.contactName || "",
+        c.contactRole || "",
+        ...(c.keywords || []),
+      ]
+        .map((s) => normalize(String(s)))
+        .join(" | ")
+      return haystack.includes(needle)
+    })
+  }
+
+  const filteredCurrentEmployees = useMemo(
+    () => (smartContext ? filterContacts(smartContext.currentEmployees, deferredQuery) : []),
+    [smartContext, deferredQuery],
+  )
+  const filteredAlumni = useMemo(
+    () => (smartContext ? filterContacts(smartContext.alumni, deferredQuery) : []),
+    [smartContext, deferredQuery],
+  )
+  const totalFiltered = filteredCurrentEmployees.length + filteredAlumni.length
+  const totalUnfiltered = smartContext
+    ? smartContext.currentEmployees.length + smartContext.alumni.length
+    : 0
+  const isSearching = deferredQuery.trim().length > 0
 
   useEffect(() => {
     const fetchContext = async () => {
@@ -240,31 +284,79 @@ export function BookmarkOverview({ bookmarkId, company, countryFilter, scopeVers
                 </span>
               </div>
 
-              {smartContext.currentEmployees.length > 0 && (
+              {/* Buscador por keyword sobre las senales filtradas (cliente-side). */}
+              <div className="flex flex-col gap-1">
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                  <Input
+                    type="search"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Buscar por nombre, apellido, cargo o señal..."
+                    className="h-9 pl-8 pr-9 bg-white dark:bg-slate-900"
+                    aria-label="Buscar dentro de las señales del bookmark"
+                  />
+                  {searchQuery && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
+                      onClick={() => setSearchQuery("")}
+                      aria-label="Limpiar búsqueda"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                </div>
+                {isSearching && (
+                  <p className="text-[11px] text-muted-foreground pl-1">
+                    {totalFiltered === 0
+                      ? "Sin coincidencias"
+                      : `${totalFiltered} de ${totalUnfiltered} señal${totalUnfiltered === 1 ? "" : "es"} coincide${totalFiltered === 1 ? "" : "n"}`}
+                  </p>
+                )}
+              </div>
+
+              {filteredCurrentEmployees.length > 0 && (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2 text-xs font-semibold text-green-700 dark:text-green-400 uppercase tracking-wider">
                     <Users className="h-3.5 w-3.5" />
-                    Empleados Actuales ({smartContext.currentEmployees.length})
+                    Empleados Actuales (
+                    {isSearching
+                      ? `${filteredCurrentEmployees.length}/${smartContext.currentEmployees.length}`
+                      : smartContext.currentEmployees.length}
+                    )
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {smartContext.currentEmployees.map((contact) => (
+                    {filteredCurrentEmployees.map((contact) => (
                       <ContactCard key={contact.contactId} contact={contact} isAlumni={false} />
                     ))}
                   </div>
                 </div>
               )}
 
-              {smartContext.alumni.length > 0 && (
+              {filteredAlumni.length > 0 && (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
                     <GraduationCap className="h-3.5 w-3.5" />
-                    Ex-empleados / Alumni ({smartContext.alumni.length})
+                    Ex-empleados / Alumni (
+                    {isSearching
+                      ? `${filteredAlumni.length}/${smartContext.alumni.length}`
+                      : smartContext.alumni.length}
+                    )
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {smartContext.alumni.map((contact) => (
+                    {filteredAlumni.map((contact) => (
                       <ContactCard key={contact.contactId} contact={contact} isAlumni={true} />
                     ))}
                   </div>
+                </div>
+              )}
+
+              {isSearching && totalFiltered === 0 && (
+                <div className="text-center py-8 text-sm text-muted-foreground bg-white/40 dark:bg-black/20 rounded-lg border border-dashed border-blue-200/60 dark:border-blue-900/40">
+                  <Search className="h-5 w-5 mx-auto mb-2 opacity-50" />
+                  No encontramos coincidencias para <strong className="text-foreground">&quot;{deferredQuery}&quot;</strong> dentro de las señales del bookmark.
                 </div>
               )}
             </div>
