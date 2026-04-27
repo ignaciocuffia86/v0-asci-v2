@@ -24,8 +24,21 @@ export interface BookmarkExportData {
     first_name: string
     last_name: string
     position: string | null
-    email: string | null
     linkedin_url: string | null
+    // Slots de email con tipo (corporativo/personal) y status de validacion
+    email1: string | null
+    email1_type: string | null
+    email1_status: string | null
+    email2: string | null
+    email2_type: string | null
+    email2_status: string | null
+    // Slots de telefono con tipo y status
+    phone1: string | null
+    phone1_type: string | null
+    phone1_status: string | null
+    phone2: string | null
+    phone2_type: string | null
+    phone2_status: string | null
     signal_count: number
     signals: Array<{
       signal_type: string
@@ -131,17 +144,35 @@ export async function generateBookmarkExcel(
   infoRows.forEach((row) => infoSheet.addRow(row))
 
   // Sheet 2: Empleados con Señales
+  // Mostramos cada slot de email y telefono por separado (con su tipo y validez)
+  // para que el usuario pueda priorizar/filtrar en Excel.
   const empSheet = workbook.addWorksheet("Empleados y Señales")
   addHeaderRow(empSheet, [
     "Nombre",
     "Apellido",
     "Cargo",
-    "Email",
+    "Email 1",
+    "Tipo Email 1",
+    "Estado Email 1",
+    "Email 2",
+    "Tipo Email 2",
+    "Estado Email 2",
+    "Teléfono 1",
+    "Tipo Teléfono 1",
+    "Estado Teléfono 1",
+    "Teléfono 2",
+    "Tipo Teléfono 2",
+    "Estado Teléfono 2",
     "LinkedIn",
     "# Señales",
     "Señales (tipo: nombre)",
   ])
-  setColumnWidths(empSheet, [15, 15, 30, 30, 40, 12, 60])
+  setColumnWidths(empSheet, [
+    15, 15, 30,
+    30, 14, 14, 30, 14, 14,
+    18, 14, 14, 18, 14, 14,
+    40, 12, 60,
+  ])
 
   data.employees_with_signals.forEach((emp) => {
     const signalsSummary = emp.signals
@@ -151,7 +182,18 @@ export async function generateBookmarkExcel(
       emp.first_name,
       emp.last_name,
       emp.position || "",
-      emp.email || "",
+      emp.email1 || "",
+      emp.email1_type || "",
+      emp.email1_status || "",
+      emp.email2 || "",
+      emp.email2_type || "",
+      emp.email2_status || "",
+      emp.phone1 || "",
+      emp.phone1_type || "",
+      emp.phone1_status || "",
+      emp.phone2 || "",
+      emp.phone2_type || "",
+      emp.phone2_status || "",
       emp.linkedin_url || "",
       emp.signal_count || 0,
       truncate(signalsSummary, 500),
