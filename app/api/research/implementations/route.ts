@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextResponse } from "next/server"
 import { parallelSearch, buildImplementationsSearchParams } from "@/lib/parallel"
-import { GoogleGenerativeAI } from "@google/generative-ai"
+import { structureWithLLM } from "@/lib/ai-structurer"
 
 const IMPL_CACHE_DAYS = 30 // Refresh at most once per month per company+signal
 const MAX_IMPLEMENTATIONS = 10
@@ -60,12 +60,6 @@ async function structureImplementationsWithGemini(
   companyName: string,
   keywords: string[],
 ): Promise<GeminiImplResult> {
-  const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY
-  if (!apiKey) throw new Error("GOOGLE_GENERATIVE_AI_API_KEY not configured")
-
-  const genAI = new GoogleGenerativeAI(apiKey)
-  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" })
-
   const excerptText = excerpts
     .map(
       (e, i) =>
@@ -77,36 +71,51 @@ async function structureImplementationsWithGemini(
     ? `\nTecnologias/procesos de interes: ${keywords.join(", ")}`
     : ""
 
-  const result = await model.generateContent({
-    contents: [
-      {
-        role: "user",
-        parts: [
-          {
-            text: `${GEMINI_SYSTEM}\n\n---\nEmpresa: "${companyName}"${keywordsCtx}\n\nExcerpts de busqueda web:\n\n${excerptText}\n\nExtrae las implementaciones relevantes en JSON.`,
-          },
-        ],
-      },
-    ],
-    generationConfig: {
-      temperature: 0.2,
-      maxOutputTokens: 4000,
-      responseMimeType: "application/json",
-    },
+  const userPrompt = `Empresa: "${companyName}"${keywordsCtx}\n\nExcerpts de busqueda web:\n\n${excerptText}\n\nExtrae las implementaciones relevantes en JSON.`
+
+  const parsed = await structureWithLLM<{ implementations?: any[]; digest?: string | null }>({
+    systemPrompt: GEMINI_SYSTEM,
+    userPrompt,
+    maxOutputTokens: 4000,
+    temperature: 0.2,
+    context: "impl",
   })
 
-  const text = result.response.text()
-  let parsed: any
-  try {
-    parsed = JSON.parse(text)
-  } catch (parseErr) {
-    console.error("[v0][impl][gemini] JSON parse failed. Raw response (first 500):", text.slice(0, 500))
-    throw parseErr
-  }
   return {
     implementations: parsed.implementations ?? [],
     digest: parsed.digest ?? null,
   }
+}
+
+/**
+ * Fallback degradado para Implementaciones cuando Gemini falla despues de retries.
+ * Publica los excerpts crudos como items "evidencia debil" para que el usuario
+ * vea AL MENOS los resultados de busqueda en lugar del empty state.
+ */
+function buildDegradedImplItems(
+  excerpts: { url: string; title: string; publish_date: string | null; content: string }[],
+): GeminiImplResult {
+  const implementations = excerpts.slice(0, 10).map((e) => {
+    let hostname: string
+    try {
+      hostname = new URL(e.url).hostname.replace(/^www\./, "")
+    } catch {
+      hostname = "fuente"
+    }
+    const summary = e.content.replace(/\s+/g, " ").trim().slice(0, 240)
+    return {
+      title: e.title || hostname,
+      provider_name: null,
+      technology: null,
+      area: null,
+      summary: summary || null,
+      results: null,
+      evidence_level: "weak",
+      source_name: hostname,
+      published_at: e.publish_date,
+    }
+  })
+  return { implementations, digest: null }
 }
 
 // ── Date helpers ────────────────────────────────────────────────────────
@@ -360,57 +369,70 @@ export async function POST(request: Request) {
 
     let implementations: any[] = []
     let geminiDigest: string | null = null
+    let aiProvider = "gemini-2.0-flash"
 
+    // Paso A: llamar a Parallel
+    let parallelResults: Awaited<ReturnType<typeof parallelSearch>> | null = null
     try {
-      const searchResult = await parallelSearch(searchParams)
-      console.log("[v0] Implementations: Parallel returned", searchResult.results.length, "results")
-      if (searchResult.warnings && searchResult.warnings.length > 0) {
-        console.log("[v0][impl][parallel] warnings:", JSON.stringify(searchResult.warnings))
+      parallelResults = await parallelSearch(searchParams)
+      console.log("[v0] Implementations: Parallel returned", parallelResults.results.length, "results")
+      if (parallelResults.warnings && parallelResults.warnings.length > 0) {
+        console.log("[v0][impl][parallel] warnings:", JSON.stringify(parallelResults.warnings))
       }
-      searchResult.results.forEach((r, i) => {
+      parallelResults.results.forEach((r, i) => {
         const excerptChars = r.excerpts.reduce((acc, e) => acc + (e?.length ?? 0), 0)
-        console.log(`[v0][impl][parallel][result ${i + 1}/${searchResult.results.length}] date=${r.publish_date ?? "null"} | chars=${excerptChars} | ${r.url}`)
+        console.log(`[v0][impl][parallel][result ${i + 1}/${parallelResults!.results.length}] date=${r.publish_date ?? "null"} | chars=${excerptChars} | ${r.url}`)
       })
-
-      if (searchResult.results.length > 0) {
-        // Prepare excerpts for Gemini structuring
-        const excerpts = searchResult.results.map(r => ({
-          url: r.url,
-          title: r.title,
-          publish_date: r.publish_date,
-          content: r.excerpts.join("\n"),
-        }))
-
-        // Structure with Gemini
-        console.log("[v0] Implementations: Structuring with Gemini...")
-        const { implementations: structured, digest } = await structureImplementationsWithGemini(excerpts, companyName, keywords)
-        geminiDigest = digest
-        console.log("[v0] Implementations: Gemini structured", structured.length, "items, digest:", digest ? "generated" : "none")
-
-        // Map structured items back to source URLs from Parallel
-        implementations = structured.slice(0, MAX_IMPLEMENTATIONS).map((item: any, idx: number) => {
-          const matchingResult = searchResult.results.find(r =>
-            r.title.toLowerCase().includes((item.title || "").toLowerCase().slice(0, 30)) ||
-            (item.source_name && r.url.toLowerCase().includes(item.source_name.toLowerCase().replace(/\s/g, "")))
-          )
-          const sourceResult = matchingResult || searchResult.results[idx] || searchResult.results[0]
-
-          return {
-            title: item.title,
-            provider_name: item.provider_name || "N/A",
-            technology: item.technology || "N/A",
-            area: item.area || "operaciones",
-            summary: item.summary,
-            results: item.results || null,
-            evidence_level: item.evidence_level || "weak",
-            source_url: sourceResult?.url || "#",
-            source_name: item.source_name || sourceResult?.title || "Desconocido",
-            published_at: sanitizeDate(item.published_at) || sanitizeDate(sourceResult?.publish_date),
-          }
-        })
-      }
     } catch (parallelError) {
       console.error("[v0] Implementations: Parallel search error:", parallelError)
+    }
+
+    // Paso B: estructurar con Gemini via AI Gateway. Si falla, fallback degradado.
+    if (parallelResults && parallelResults.results.length > 0) {
+      const searchResult = parallelResults
+      const excerpts = searchResult.results.map(r => ({
+        url: r.url,
+        title: r.title,
+        publish_date: r.publish_date,
+        content: r.excerpts.join("\n"),
+      }))
+
+      let structured: any[] = []
+      try {
+        console.log("[v0] Implementations: Structuring with AI Gateway (gemini-2.0-flash)...")
+        const result = await structureImplementationsWithGemini(excerpts, companyName, keywords)
+        structured = result.implementations
+        geminiDigest = result.digest
+        console.log("[v0] Implementations: Gemini structured", structured.length, "items, digest:", geminiDigest ? "generated" : "none")
+      } catch (geminiError) {
+        console.error("[v0] Implementations: Gemini structuring failed after retries, using degraded fallback:", geminiError)
+        const degraded = buildDegradedImplItems(excerpts)
+        structured = degraded.implementations
+        geminiDigest = degraded.digest
+        aiProvider = "degraded-fallback"
+      }
+
+      // Map structured items back to source URLs from Parallel
+      implementations = structured.slice(0, MAX_IMPLEMENTATIONS).map((item: any, idx: number) => {
+        const matchingResult = searchResult.results.find(r =>
+          r.title.toLowerCase().includes((item.title || "").toLowerCase().slice(0, 30)) ||
+          (item.source_name && r.url.toLowerCase().includes(item.source_name.toLowerCase().replace(/\s/g, "")))
+        )
+        const sourceResult = matchingResult || searchResult.results[idx] || searchResult.results[0]
+
+        return {
+          title: item.title,
+          provider_name: item.provider_name || "N/A",
+          technology: item.technology || "N/A",
+          area: item.area || "operaciones",
+          summary: item.summary,
+          results: item.results || null,
+          evidence_level: item.evidence_level || "weak",
+          source_url: sourceResult?.url || "#",
+          source_name: item.source_name || sourceResult?.title || "Desconocido",
+          published_at: sanitizeDate(item.published_at) || sanitizeDate(sourceResult?.publish_date),
+        }
+      })
     }
 
     // ── 4. Fallback to old cache if no results ───────────────────────
@@ -451,7 +473,7 @@ export async function POST(request: Request) {
         source_url: item.source_url,
         source_name: item.source_name,
         published_at: item.published_at,
-        ai_provider: "parallel",
+        ai_provider: aiProvider,
         technology: item.technology,
         area: item.area,
         provider_name: item.provider_name,

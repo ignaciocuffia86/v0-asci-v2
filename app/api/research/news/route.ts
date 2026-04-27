@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextResponse } from "next/server"
 import { parallelSearch, buildNewsSearchParams } from "@/lib/parallel"
-import { GoogleGenerativeAI } from "@google/generative-ai"
+import { structureWithLLM } from "@/lib/ai-structurer"
 
 const NEWS_CACHE_DAYS = 30 // Refresh at most once per month
 const MAX_NEWS = 15
@@ -50,12 +50,6 @@ async function structureNewsWithGemini(
   excerpts: { url: string; title: string; publish_date: string | null; content: string }[],
   companyName: string,
 ): Promise<GeminiNewsResult> {
-  const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY
-  if (!apiKey) throw new Error("GOOGLE_GENERATIVE_AI_API_KEY not configured")
-
-  const genAI = new GoogleGenerativeAI(apiKey)
-  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" })
-
   const excerptText = excerpts
     .map(
       (e, i) =>
@@ -63,36 +57,47 @@ async function structureNewsWithGemini(
     )
     .join("\n\n")
 
-  const result = await model.generateContent({
-    contents: [
-      {
-        role: "user",
-        parts: [
-          {
-            text: `${GEMINI_SYSTEM}\n\n---\nEmpresa: "${companyName}"\n\nExcerpts de busqueda web:\n\n${excerptText}\n\nExtrae las noticias relevantes en JSON.`,
-          },
-        ],
-      },
-    ],
-    generationConfig: {
-      temperature: 0.2,
-      maxOutputTokens: 4000,
-      responseMimeType: "application/json",
-    },
+  const userPrompt = `Empresa: "${companyName}"\n\nExcerpts de busqueda web:\n\n${excerptText}\n\nExtrae las noticias relevantes en JSON.`
+
+  const parsed = await structureWithLLM<{ news?: any[]; digest?: string | null }>({
+    systemPrompt: GEMINI_SYSTEM,
+    userPrompt,
+    maxOutputTokens: 4000,
+    temperature: 0.2,
+    context: "news",
   })
 
-  const text = result.response.text()
-  let parsed: any
-  try {
-    parsed = JSON.parse(text)
-  } catch (parseErr) {
-    console.error("[v0][news][gemini] JSON parse failed. Raw response (first 500):", text.slice(0, 500))
-    throw parseErr
-  }
   return {
     news: parsed.news ?? [],
     digest: parsed.digest ?? null,
   }
+}
+
+/**
+ * Fallback degradado: cuando Gemini falla despues de retries, publicamos los
+ * excerpts crudos de Parallel (sin categorizacion ni summary IA) para que el
+ * usuario vea AL MENOS los resultados de la busqueda en lugar del empty state.
+ */
+function buildDegradedNewsItems(
+  excerpts: { url: string; title: string; publish_date: string | null; content: string }[],
+): GeminiNewsResult {
+  const news = excerpts.slice(0, 12).map((e) => {
+    let hostname: string
+    try {
+      hostname = new URL(e.url).hostname.replace(/^www\./, "")
+    } catch {
+      hostname = "fuente"
+    }
+    const summary = e.content.replace(/\s+/g, " ").trim().slice(0, 240)
+    return {
+      title: e.title || hostname,
+      summary: summary || null,
+      source_name: hostname,
+      published_at: e.publish_date,
+      category: null,
+    }
+  })
+  return { news, digest: null }
 }
 
 // ── Date helpers ────────────────────────────────────────────────────────
@@ -274,55 +279,68 @@ export async function POST(request: Request) {
 
     let newsItems: any[] = []
     let geminiDigest: string | null = null
+    let aiProvider = "gemini-2.0-flash"
 
+    // Paso A: llamar a Parallel. Si falla la busqueda, capturamos y caemos a cache vieja.
+    let parallelResults: Awaited<ReturnType<typeof parallelSearch>> | null = null
     try {
-      const searchResult = await parallelSearch(searchParams)
-      console.log("[v0] News: Parallel returned", searchResult.results.length, "results")
-      if (searchResult.warnings && searchResult.warnings.length > 0) {
-        console.log("[v0][news][parallel] warnings:", JSON.stringify(searchResult.warnings))
+      parallelResults = await parallelSearch(searchParams)
+      console.log("[v0] News: Parallel returned", parallelResults.results.length, "results")
+      if (parallelResults.warnings && parallelResults.warnings.length > 0) {
+        console.log("[v0][news][parallel] warnings:", JSON.stringify(parallelResults.warnings))
       }
-      // Loguear cada resultado crudo: url + title + fecha + tama\u00f1o de excerpt
-      searchResult.results.forEach((r, i) => {
+      parallelResults.results.forEach((r, i) => {
         const excerptChars = r.excerpts.reduce((acc, e) => acc + (e?.length ?? 0), 0)
-        console.log(`[v0][news][parallel][result ${i + 1}/${searchResult.results.length}] date=${r.publish_date ?? "null"} | chars=${excerptChars} | ${r.url}`)
+        console.log(`[v0][news][parallel][result ${i + 1}/${parallelResults!.results.length}] date=${r.publish_date ?? "null"} | chars=${excerptChars} | ${r.url}`)
       })
-
-      if (searchResult.results.length > 0) {
-        // Prepare excerpts for Gemini structuring
-        const excerpts = searchResult.results.map(r => ({
-          url: r.url,
-          title: r.title,
-          publish_date: r.publish_date,
-          content: r.excerpts.join("\n"),
-        }))
-
-        // Structure with Gemini
-        console.log("[v0] News: Structuring with Gemini...")
-        const { news: structured, digest } = await structureNewsWithGemini(excerpts, companyName)
-        geminiDigest = digest
-        console.log("[v0] News: Gemini structured", structured.length, "news items, digest:", digest ? "generated" : "none")
-
-        // Map structured items back to source URLs from Parallel
-        newsItems = structured.map((item: any, idx: number) => {
-          // Try to find the best matching source URL
-          const matchingResult = searchResult.results.find(r =>
-            r.title.toLowerCase().includes((item.title || "").toLowerCase().slice(0, 30)) ||
-            (item.source_name && r.url.toLowerCase().includes(item.source_name.toLowerCase().replace(/\s/g, "")))
-          )
-          const sourceResult = matchingResult || searchResult.results[idx] || searchResult.results[0]
-
-          return {
-            title: item.title,
-            summary: item.summary,
-            source_url: sourceResult?.url || "#",
-            source_name: item.source_name || sourceResult?.title || "Desconocido",
-            published_at: sanitizeDate(item.published_at) || sanitizeDate(sourceResult?.publish_date),
-            category: item.category || categorizeNews((item.title || "") + " " + (item.summary || "")),
-          }
-        })
-      }
     } catch (parallelError) {
       console.error("[v0] News: Parallel search error:", parallelError)
+    }
+
+    // Paso B: estructurar con Gemini via AI Gateway. Si falla (rate limit, parse error,
+    // etc.) caemos a fallback degradado que publica los excerpts crudos para que el
+    // usuario vea AL MENOS los resultados de la busqueda.
+    if (parallelResults && parallelResults.results.length > 0) {
+      const searchResult = parallelResults
+      const excerpts = searchResult.results.map(r => ({
+        url: r.url,
+        title: r.title,
+        publish_date: r.publish_date,
+        content: r.excerpts.join("\n"),
+      }))
+
+      let structured: any[] = []
+      try {
+        console.log("[v0] News: Structuring with AI Gateway (gemini-2.0-flash)...")
+        const result = await structureNewsWithGemini(excerpts, companyName)
+        structured = result.news
+        geminiDigest = result.digest
+        console.log("[v0] News: Gemini structured", structured.length, "items, digest:", geminiDigest ? "generated" : "none")
+      } catch (geminiError) {
+        console.error("[v0] News: Gemini structuring failed after retries, using degraded fallback:", geminiError)
+        const degraded = buildDegradedNewsItems(excerpts)
+        structured = degraded.news
+        geminiDigest = degraded.digest
+        aiProvider = "degraded-fallback"
+      }
+
+      // Map structured items back to source URLs from Parallel
+      newsItems = structured.map((item: any, idx: number) => {
+        const matchingResult = searchResult.results.find(r =>
+          r.title.toLowerCase().includes((item.title || "").toLowerCase().slice(0, 30)) ||
+          (item.source_name && r.url.toLowerCase().includes(item.source_name.toLowerCase().replace(/\s/g, "")))
+        )
+        const sourceResult = matchingResult || searchResult.results[idx] || searchResult.results[0]
+
+        return {
+          title: item.title,
+          summary: item.summary,
+          source_url: sourceResult?.url || "#",
+          source_name: item.source_name || sourceResult?.title || "Desconocido",
+          published_at: sanitizeDate(item.published_at) || sanitizeDate(sourceResult?.publish_date),
+          category: item.category || categorizeNews((item.title || "") + " " + (item.summary || "")),
+        }
+      })
     }
 
     // ── 4. Fallback to old cache if no results ───────────────────────
@@ -368,7 +386,7 @@ export async function POST(request: Request) {
         source_name: item.source_name,
         published_at: item.published_at,
         category: item.category,
-        ai_provider: "parallel",
+        ai_provider: aiProvider,
         // Only store digest on the first item as a flag that batch was processed
         digest: idx === 0 ? geminiDigest : null,
         digest_generated_at: idx === 0 && geminiDigest ? new Date().toISOString() : null,
