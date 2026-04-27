@@ -1,123 +1,13 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextResponse } from "next/server"
-import { parallelSearch, buildImplementationsSearchParams } from "@/lib/parallel"
-import { GoogleGenerativeAI } from "@google/generative-ai"
+import { runTechRadar } from "@/lib/tech-radar"
 
 const IMPL_CACHE_DAYS = 30 // Refresh at most once per month per company+signal
-const MAX_IMPLEMENTATIONS = 10
+const MAX_IMPLEMENTATIONS = 40 // limite del Tech Radar v2 (hasta 17 micro-agentes x N hallazgos)
 
-// ── Gemini structuring ─────────────────────────────────────────────────
-const GEMINI_SYSTEM = `Eres un investigador de implementaciones tecnologicas e innovacion empresarial.
-Se te dan excerpts de paginas web sobre proyectos, casos de exito e implementaciones tecnologicas de una empresa.
-Tu tarea es extraer implementaciones y casos de exito relevantes.
-
-REGLAS:
-1. Responde UNICAMENTE con JSON valido (sin markdown, sin texto extra).
-2. Resume con TUS PROPIAS PALABRAS, NO copies texto literal.
-3. Maximo 10 implementaciones. Prioriza calidad y evidencia fuerte.
-4. Si no hay implementaciones relevantes, devuelve {"implementations":[], "digest": null}
-5. Las fechas deben ser YYYY-MM-DD. Si no hay fecha exacta, intenta inferirla. Si es imposible, usa null.
-
-EVIDENCE LEVELS:
-- strong: Case study oficial, comunicado de prensa del vendor, announcement oficial
-- medium: Articulo con fuentes nombradas, LinkedIn post de ejecutivos, industry report
-- weak: Mencion indirecta, partnership announcement, inferencia de uso de tecnologia
-
-AREAS validas: finanzas | ventas | logistica | rrhh | it | ciberseguridad | ecommerce | operaciones
-
-ADEMAS de las implementaciones, genera un "digest" de EXACTAMENTE 1 parrafo (2-4 oraciones) en ESPAÑOL que resuma:
-- Que tecnologias/vendors usa la empresa
-- Que tipo de proyectos ha implementado recientemente
-- Como pueden usar esta info los vendedores para posicionarse
-
-El digest debe responder: "¿Con quien compito si quiero venderle a esta empresa?"
-
-FORMATO JSON:
-{
-  "implementations": [
-    {
-      "title": "string (titulo descriptivo del caso/proyecto)",
-      "provider_name": "string (vendor/consultora que implemento)",
-      "technology": "string (tecnologia implementada)",
-      "area": "string (area de la empresa)",
-      "summary": "string (descripcion del caso en 2-3 oraciones)",
-      "results": "string o null (resultados obtenidos si estan disponibles)",
-      "evidence_level": "strong | medium | weak",
-      "source_name": "string (nombre del medio/sitio)",
-      "published_at": "YYYY-MM-DD o null"
-    }
-  ],
-  "digest": "string (parrafo resumen en ESPAÑOL) o null si no hay implementaciones relevantes"
-}`
-
-interface GeminiImplResult {
-  implementations: any[]
-  digest: string | null
-}
-
-async function structureImplementationsWithGemini(
-  excerpts: { url: string; title: string; publish_date: string | null; content: string }[],
-  companyName: string,
-  keywords: string[],
-): Promise<GeminiImplResult> {
-  const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY
-  if (!apiKey) throw new Error("GOOGLE_GENERATIVE_AI_API_KEY not configured")
-
-  const genAI = new GoogleGenerativeAI(apiKey)
-  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" })
-
-  const excerptText = excerpts
-    .map(
-      (e, i) =>
-        `--- Fuente ${i + 1}: ${e.title} (${e.url}) [fecha: ${e.publish_date || "desconocida"}] ---\n${e.content.slice(0, 5000)}`,
-    )
-    .join("\n\n")
-
-  const keywordsCtx = keywords.length > 0
-    ? `\nTecnologias/procesos de interes: ${keywords.join(", ")}`
-    : ""
-
-  const result = await model.generateContent({
-    contents: [
-      {
-        role: "user",
-        parts: [
-          {
-            text: `${GEMINI_SYSTEM}\n\n---\nEmpresa: "${companyName}"${keywordsCtx}\n\nExcerpts de busqueda web:\n\n${excerptText}\n\nExtrae las implementaciones relevantes en JSON.`,
-          },
-        ],
-      },
-    ],
-    generationConfig: {
-      temperature: 0.2,
-      maxOutputTokens: 4000,
-      responseMimeType: "application/json",
-    },
-  })
-
-  const text = result.response.text()
-  const parsed = JSON.parse(text)
-  return {
-    implementations: parsed.implementations ?? [],
-    digest: parsed.digest ?? null,
-  }
-}
-
-// ── Date helpers ────────────────────────────────────────────────────────
-function sanitizeDate(dateStr: string | null | undefined): string | null {
-  if (!dateStr) return null
-  if (/XX|TBD|unknown/i.test(dateStr)) return null
-
-  const date = new Date(dateStr)
-  if (isNaN(date.getTime())) return null
-
-  const now = new Date()
-  const threeYearsAgo = new Date()
-  threeYearsAgo.setFullYear(threeYearsAgo.getFullYear() - 3)
-
-  if (date > now || date < threeYearsAgo) return null
-  return date.toISOString().split("T")[0]
-}
+// El orquestador completo (Parallel x4 bundles -> Gemini consolidador ->
+// mapping deterministico por source_index -> guardrail relevancia -> liveness
+// check) vive ahora en lib/tech-radar.ts.
 
 // ── Cache helpers (public by company_id, scoped by search_context) ────
 // search_context is a hash of the keywords used for the search, allowing
@@ -138,11 +28,13 @@ async function getRecentCache(supabase: any, companyId: string, searchContext: s
   const cacheDate = new Date()
   cacheDate.setDate(cacheDate.getDate() - IMPL_CACHE_DAYS)
 
-  // Get most recent implementation to determine last search date
+  // Get most recent v2 implementation to determine last search date
+  // (registros v1 viejos no cuentan para el cooldown de refresh)
   const { data: lastImpl } = await supabase
     .from("company_implementations")
     .select("created_at")
     .eq("company_id", companyId)
+    .eq("prompt_version", "v2")
     .order("created_at", { ascending: false })
     .limit(1)
     .single()
@@ -156,11 +48,17 @@ async function getRecentCache(supabase: any, companyId: string, searchContext: s
   const canRefresh = isSuperadmin || daysSinceLastSearch >= IMPL_CACHE_DAYS
   const daysUntilRefresh = canRefresh ? 0 : Math.ceil(IMPL_CACHE_DAYS - daysSinceLastSearch)
 
-  // Check if we have implementations fetched within the cache window for this context
+  console.log("[v0][impl][cache] lastSearchDate:", lastSearchDate, "| daysSinceLastSearch:", Math.round(daysSinceLastSearch), "| canRefresh:", canRefresh, "| isSuperadmin:", isSuperadmin, "| context:", searchContext)
+
+  // Check if we have v2 implementations fetched within the cache window for this context.
+  // IMPORTANTE: filtramos por prompt_version='v2' para que el primer run del nuevo
+  // Tech Radar se ejecute aunque haya registros viejos (v1) en cache, ya que esos
+  // registros viejos no tienen los campos del Tech Radar (micro_agent, evidence_detail, etc.).
   let query = supabase
     .from("company_implementations")
     .select("id")
     .eq("company_id", companyId)
+    .eq("prompt_version", "v2")
     .gte("created_at", cacheDate.toISOString())
     .limit(1)
 
@@ -335,78 +233,44 @@ export async function POST(request: Request) {
       })
     }
 
-    // ── 3. Search with Parallel ──────────────────────────────────────
-    console.log("[v0] Implementations: Searching with Parallel for", companyName)
+    // ── 3. Run Tech Radar (4 bundles Parallel x 1 Gemini consolidador) ─
+    console.log("[v0] Implementations: Running Tech Radar for", companyName)
 
-    const searchParams = buildImplementationsSearchParams({
-      company_name: companyName,
-      industry: company.industry,
-      country: company.country,
+    const radar = await runTechRadar({
+      companyName,
+      country: company.country ?? undefined,
+      industry: company.industry ?? undefined,
       keywords,
     })
 
-    let implementations: any[] = []
+    console.log(
+      "[v0][impl] tech-radar findings:", radar.findings.length,
+      "| ai_provider:", radar.ai_provider,
+      "| bundles:", radar.bundle_stats.map((b) => `${b.bundle}=${b.parallel_results}`).join(" "),
+    )
 
-    try {
-      const searchResult = await parallelSearch(searchParams)
-      console.log("[v0] Implementations: Parallel returned", searchResult.results.length, "results")
-
-      if (searchResult.results.length > 0) {
-        // Prepare excerpts for Gemini structuring
-        const excerpts = searchResult.results.map(r => ({
-          url: r.url,
-          title: r.title,
-          publish_date: r.publish_date,
-          content: r.excerpts.join("\n"),
-        }))
-
-        // Structure with Gemini
-        console.log("[v0] Implementations: Structuring with Gemini...")
-        const { implementations: structured, digest } = await structureImplementationsWithGemini(excerpts, companyName, keywords)
-        console.log("[v0] Implementations: Gemini structured", structured.length, "items, digest:", digest ? "generated" : "none")
-
-        // Map structured items back to source URLs from Parallel
-        implementations = structured.slice(0, MAX_IMPLEMENTATIONS).map((item: any, idx: number) => {
-          const matchingResult = searchResult.results.find(r =>
-            r.title.toLowerCase().includes((item.title || "").toLowerCase().slice(0, 30)) ||
-            (item.source_name && r.url.toLowerCase().includes(item.source_name.toLowerCase().replace(/\s/g, "")))
-          )
-          const sourceResult = matchingResult || searchResult.results[idx] || searchResult.results[0]
-
-          return {
-            title: item.title,
-            provider_name: item.provider_name || "N/A",
-            technology: item.technology || "N/A",
-            area: item.area || "operaciones",
-            summary: item.summary,
-            results: item.results || null,
-            evidence_level: item.evidence_level || "weak",
-            source_url: sourceResult?.url || "#",
-            source_name: item.source_name || sourceResult?.title || "Desconocido",
-            published_at: sanitizeDate(item.published_at) || sanitizeDate(sourceResult?.publish_date),
-          }
-        })
-      }
-    } catch (parallelError) {
-      console.error("[v0] Implementations: Parallel search error:", parallelError)
-    }
+    const findings = radar.findings
+    const radarDigest = radar.digest
+    const aiProvider = radar.ai_provider
 
     // ── 4. Fallback to old cache if no results ───────────────────────
-    if (implementations.length === 0) {
+    if (findings.length === 0) {
+      console.log("[v0][impl][empty] No findings from Tech Radar. Checking old cache...")
       const oldCache = await getAnyCache(supabase, companyId)
       if (oldCache && oldCache.length > 0) {
         console.log("[v0] Implementations: Using old cache -", oldCache.length, "items")
         await registerUserInteractions(supabase, user.id, companyId, oldCache.map((i: any) => i.id))
         return NextResponse.json({ implementations: oldCache, cached: true, provider: "old_cache" })
       }
+      console.log("[v0][impl][empty] No old cache either. Returning provider=none.")
       return NextResponse.json({ implementations: [], cached: false, provider: "none" })
     }
 
     // ── 5. Deduplicate and save to public cache ──────────────────────
     const seenUrls = new Set<string>()
-    const uniqueItems = implementations.filter(item => {
-      if (seenUrls.has(item.source_url)) return false
-      seenUrls.add(item.source_url)
+    const uniqueFindings = findings.filter((f) => {
+      if (seenUrls.has(f.source_url)) return false
+      seenUrls.add(f.source_url)
       return true
     })
 
@@ -417,28 +281,34 @@ export async function POST(request: Request) {
 
     const existingUrls = new Set(existingImpls?.map((i: any) => i.source_url) || [])
 
-    // We'll use the digest to update all items in this batch
-    const newToInsert = uniqueItems
-      .filter(item => !existingUrls.has(item.source_url))
-      .map((item, idx) => ({
+    // Insert new v2 findings con todos los campos del Tech Radar
+    const newToInsert = uniqueFindings
+      .filter((f) => !existingUrls.has(f.source_url))
+      .map((f, idx) => ({
         company_id: companyId,
-        title: item.title,
-        summary: item.summary,
-        source_url: item.source_url,
-        source_name: item.source_name,
-        published_at: item.published_at,
-        ai_provider: "parallel",
-        technology: item.technology,
-        area: item.area,
-        provider_name: item.provider_name,
-        evidence_level: item.evidence_level,
+        title: f.title,
+        summary: f.summary,
+        source_url: f.source_url,
+        source_name: f.source_name,
+        published_at: f.published_at,
+        ai_provider: aiProvider,
+        technology: f.technology,
+        area: f.area,
+        provider_name: f.provider_name,
+        evidence_level: f.evidence_level,
+        evidence_detail: f.evidence_detail,
+        micro_agent: f.micro_agent,
+        convergent_sources: f.convergent_sources,
+        supporting_source_urls: f.supporting_source_urls,
+        prompt_version: "v2",
+        results: f.results,
         search_context: searchContext,
-        // Only store digest on the first item as a flag that batch was processed
-        digest: idx === 0 ? digest : null,
-        digest_generated_at: idx === 0 && digest ? new Date().toISOString() : null,
+        // Solo guardamos digest en el primer item como flag de batch procesado
+        digest: idx === 0 ? radarDigest : null,
+        digest_generated_at: idx === 0 && radarDigest ? new Date().toISOString() : null,
       }))
 
-    console.log(`[v0] Implementations: Inserting ${newToInsert.length} new items`)
+    console.log(`[v0] Implementations: Inserting ${newToInsert.length} new v2 findings`)
 
     if (newToInsert.length > 0) {
       const { error: insertError } = await supabase

@@ -7,7 +7,7 @@ import {
   getCompanyFilings,
   mapSECFormToDocumentType,
 } from "@/lib/sec-edgar"
-import { GoogleGenerativeAI } from "@google/generative-ai"
+import { structureWithLLM } from "@/lib/ai-structurer"
 
 const DOCS_CACHE_DAYS = 30 // Refresh at most once per month
 const MAX_DOCS = 10
@@ -60,12 +60,6 @@ async function structureDocumentsWithGemini(
   excerpts: { url: string; title: string; content: string; type: string }[],
   companyName: string
 ): Promise<GeminiDocsResult> {
-  const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY
-  if (!apiKey) throw new Error("GOOGLE_GENERATIVE_AI_API_KEY not configured")
-
-  const genAI = new GoogleGenerativeAI(apiKey)
-  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" })
-
   const excerptText = excerpts
     .map(
       (e, i) =>
@@ -73,26 +67,16 @@ async function structureDocumentsWithGemini(
     )
     .join("\n\n")
 
-  const result = await model.generateContent({
-    contents: [
-      {
-        role: "user",
-        parts: [
-          {
-            text: `${GEMINI_SYSTEM}\n\n---\nEmpresa: "${companyName}"\n\nExcerpts de documentos públicos:\n\n${excerptText}\n\nExtrae los hallazgos relevantes en JSON.`,
-          },
-        ],
-      },
-    ],
-    generationConfig: {
-      temperature: 0.2,
-      maxOutputTokens: 6000,
-      responseMimeType: "application/json",
-    },
+  const userPrompt = `Empresa: "${companyName}"\n\nExcerpts de documentos públicos:\n\n${excerptText}\n\nExtrae los hallazgos relevantes en JSON.`
+
+  const parsed = await structureWithLLM<{ findings?: any[]; digest?: string | null }>({
+    systemPrompt: GEMINI_SYSTEM,
+    userPrompt,
+    maxOutputTokens: 6000,
+    temperature: 0.2,
+    context: "docs",
   })
 
-  const text = result.response.text()
-  const parsed = JSON.parse(text)
   return {
     findings: parsed.findings ?? [],
     digest: parsed.digest ?? null,
@@ -425,7 +409,7 @@ export async function POST(request: Request) {
       console.error("[v0] Public Docs: Error inserting:", insertError)
     }
 
-    // ── 7. Return results ────────────────────────────────────────
+    // ── 7. Return results ────────────────────────────���───────────
     const { data: allDocs } = await supabase
       .from("company_public_docs")
       .select("*")

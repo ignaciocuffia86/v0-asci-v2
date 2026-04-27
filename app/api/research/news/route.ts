@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextResponse } from "next/server"
 import { parallelSearch, buildNewsSearchParams } from "@/lib/parallel"
-import { GoogleGenerativeAI } from "@google/generative-ai"
+import { structureWithLLM, filterRelevantToCompany, checkUrlsAlive } from "@/lib/ai-structurer"
 
 const NEWS_CACHE_DAYS = 30 // Refresh at most once per month
 const MAX_NEWS = 15
@@ -10,13 +10,24 @@ const MAX_NEWS = 15
 const GEMINI_SYSTEM = `Eres un analista de inteligencia comercial B2B.
 Se te dan excerpts de paginas web sobre una empresa. Tu tarea es extraer noticias relevantes como senales de compra B2B.
 
-REGLAS:
+REGLAS DE RELEVANCIA (CRITICAS):
+A. La empresa objetivo (te la indico abajo entre comillas) debe ser el SUJETO PRINCIPAL de la noticia.
+B. EXCLUIR cualquier excerpt donde la empresa objetivo solo se mencione:
+   - al pasar como ejemplo o comparacion ("...como Garbarino, Falabella, etc.")
+   - en una lista de empresas de un sector ("...el rubro retail incluye a X, Y, Z")
+   - en un contexto historico tangencial ("...desde la epoca de la quiebra de X")
+   - en publicidad o cross-mencion no relacionada al hecho noticioso
+C. SI tienes dudas sobre si la empresa es el sujeto principal, EXCLUYE el item. Mejor 0 noticias que 1 ruidosa.
+D. El "title" y el "summary" que generes DEBEN mencionar explicitamente el nombre de la empresa objetivo.
+
+REGLAS DE FORMATO:
 1. Responde UNICAMENTE con JSON valido (sin markdown, sin texto extra).
 2. Resume con TUS PROPIAS PALABRAS, NO copies texto literal.
 3. Cada noticia debe tener relevancia para un vendedor B2B.
-4. Minimo 1, maximo 15 noticias. Prioriza calidad.
-5. Si no hay noticias relevantes, devuelve {"news":[], "digest": null}
+4. Minimo 0, maximo 15 noticias. Prioriza calidad sobre cantidad.
+5. Si no hay noticias relevantes (todas son tangenciales), devuelve {"news":[], "digest": null}
 6. Las fechas deben ser YYYY-MM-DD. Si no hay fecha exacta, intenta inferirla del contexto. Si es imposible, usa null.
+7. CADA item DEBE incluir el campo "source_index" (numero entero >=1) que indica de cual "Fuente N" del listado abajo proviene la noticia. ESTE CAMPO ES OBLIGATORIO. Si una noticia se basa en multiples fuentes, elige la PRIMARIA (la que mas evidencia aporta sobre la empresa). NUNCA inventes URLs ni mezcles fuentes. Si no podes asignar un source_index claro, NO incluyas el item.
 
 CATEGORIAS validas: inversion | transformacion | crecimiento | ejecutivos | desafios | alianzas | regulatorio | ma | innovacion
 
@@ -31,6 +42,7 @@ FORMATO JSON:
 {
   "news": [
     {
+      "source_index": 1,
       "title": "string (titulo descriptivo de la noticia)",
       "summary": "string (analisis de 150-250 chars de por que es relevante para ventas B2B)",
       "source_name": "string (nombre del medio/sitio)",
@@ -50,12 +62,6 @@ async function structureNewsWithGemini(
   excerpts: { url: string; title: string; publish_date: string | null; content: string }[],
   companyName: string,
 ): Promise<GeminiNewsResult> {
-  const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY
-  if (!apiKey) throw new Error("GOOGLE_GENERATIVE_AI_API_KEY not configured")
-
-  const genAI = new GoogleGenerativeAI(apiKey)
-  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" })
-
   const excerptText = excerpts
     .map(
       (e, i) =>
@@ -63,30 +69,48 @@ async function structureNewsWithGemini(
     )
     .join("\n\n")
 
-  const result = await model.generateContent({
-    contents: [
-      {
-        role: "user",
-        parts: [
-          {
-            text: `${GEMINI_SYSTEM}\n\n---\nEmpresa: "${companyName}"\n\nExcerpts de busqueda web:\n\n${excerptText}\n\nExtrae las noticias relevantes en JSON.`,
-          },
-        ],
-      },
-    ],
-    generationConfig: {
-      temperature: 0.2,
-      maxOutputTokens: 4000,
-      responseMimeType: "application/json",
-    },
+  const userPrompt = `Empresa: "${companyName}"\n\nExcerpts de busqueda web:\n\n${excerptText}\n\nExtrae las noticias relevantes en JSON.`
+
+  const parsed = await structureWithLLM<{ news?: any[]; digest?: string | null }>({
+    systemPrompt: GEMINI_SYSTEM,
+    userPrompt,
+    maxOutputTokens: 4000,
+    temperature: 0.2,
+    context: "news",
   })
 
-  const text = result.response.text()
-  const parsed = JSON.parse(text)
   return {
     news: parsed.news ?? [],
     digest: parsed.digest ?? null,
   }
+}
+
+/**
+ * Fallback degradado: cuando Gemini falla despues de retries, publicamos los
+ * excerpts crudos de Parallel (sin categorizacion ni summary IA) para que el
+ * usuario vea AL MENOS los resultados de la busqueda en lugar del empty state.
+ */
+function buildDegradedNewsItems(
+  excerpts: { url: string; title: string; publish_date: string | null; content: string }[],
+): GeminiNewsResult {
+  const news = excerpts.slice(0, 12).map((e, idx) => {
+    let hostname: string
+    try {
+      hostname = new URL(e.url).hostname.replace(/^www\./, "")
+    } catch {
+      hostname = "fuente"
+    }
+    const summary = e.content.replace(/\s+/g, " ").trim().slice(0, 240)
+    return {
+      source_index: idx + 1,
+      title: e.title || hostname,
+      summary: summary || null,
+      source_name: hostname,
+      published_at: e.publish_date,
+      category: null,
+    }
+  })
+  return { news, digest: null }
 }
 
 // ── Date helpers ────────────────────────────────────────────────────────
@@ -147,6 +171,8 @@ async function getRecentCache(supabase: any, companyId: string, isSuperadmin: bo
   // Superadmins can always refresh; regular users wait 30 days
   const canRefresh = isSuperadmin || daysSinceLastSearch >= NEWS_CACHE_DAYS
   const daysUntilRefresh = canRefresh ? 0 : Math.ceil(NEWS_CACHE_DAYS - daysSinceLastSearch)
+
+  console.log("[v0][news][cache] lastSearchDate:", lastSearchDate, "| daysSinceLastSearch:", Math.round(daysSinceLastSearch), "| canRefresh:", canRefresh, "| isSuperadmin:", isSuperadmin)
 
   // Check if we have ANY news fetched within the cache window
   const { data: recentFetch } = await supabase
@@ -259,57 +285,128 @@ export async function POST(request: Request) {
       country: company?.country,
     })
 
+    console.log("[v0][news][parallel] objective:", searchParams.objective.slice(0, 200))
+    console.log("[v0][news][parallel] search_queries:", JSON.stringify(searchParams.search_queries))
+    console.log("[v0][news][parallel] source_policy:", JSON.stringify(searchParams.source_policy))
+    console.log("[v0][news][parallel] max_results:", searchParams.max_results, "| company industry/country:", company?.industry, "/", company?.country)
+
     let newsItems: any[] = []
+    let geminiDigest: string | null = null
+    let aiProvider = "gemini-2.0-flash"
 
+    // Paso A: llamar a Parallel. Si falla la busqueda, capturamos y caemos a cache vieja.
+    let parallelResults: Awaited<ReturnType<typeof parallelSearch>> | null = null
     try {
-      const searchResult = await parallelSearch(searchParams)
-      console.log("[v0] News: Parallel returned", searchResult.results.length, "results")
-
-      if (searchResult.results.length > 0) {
-        // Prepare excerpts for Gemini structuring
-        const excerpts = searchResult.results.map(r => ({
-          url: r.url,
-          title: r.title,
-          publish_date: r.publish_date,
-          content: r.excerpts.join("\n"),
-        }))
-
-        // Structure with Gemini
-        console.log("[v0] News: Structuring with Gemini...")
-        const { news: structured, digest } = await structureNewsWithGemini(excerpts, companyName)
-        console.log("[v0] News: Gemini structured", structured.length, "news items, digest:", digest ? "generated" : "none")
-
-        // Map structured items back to source URLs from Parallel
-        newsItems = structured.map((item: any, idx: number) => {
-          // Try to find the best matching source URL
-          const matchingResult = searchResult.results.find(r =>
-            r.title.toLowerCase().includes((item.title || "").toLowerCase().slice(0, 30)) ||
-            (item.source_name && r.url.toLowerCase().includes(item.source_name.toLowerCase().replace(/\s/g, "")))
-          )
-          const sourceResult = matchingResult || searchResult.results[idx] || searchResult.results[0]
-
-          return {
-            title: item.title,
-            summary: item.summary,
-            source_url: sourceResult?.url || "#",
-            source_name: item.source_name || sourceResult?.title || "Desconocido",
-            published_at: sanitizeDate(item.published_at) || sanitizeDate(sourceResult?.publish_date),
-            category: item.category || categorizeNews((item.title || "") + " " + (item.summary || "")),
-          }
-        })
+      parallelResults = await parallelSearch(searchParams)
+      console.log("[v0] News: Parallel returned", parallelResults.results.length, "results")
+      if (parallelResults.warnings && parallelResults.warnings.length > 0) {
+        console.log("[v0][news][parallel] warnings:", JSON.stringify(parallelResults.warnings))
       }
+      parallelResults.results.forEach((r, i) => {
+        const excerptChars = r.excerpts.reduce((acc, e) => acc + (e?.length ?? 0), 0)
+        console.log(`[v0][news][parallel][result ${i + 1}/${parallelResults!.results.length}] date=${r.publish_date ?? "null"} | chars=${excerptChars} | ${r.url}`)
+      })
     } catch (parallelError) {
       console.error("[v0] News: Parallel search error:", parallelError)
     }
 
+    // Paso B: estructurar con Gemini via AI Gateway. Si falla (rate limit, parse error,
+    // etc.) caemos a fallback degradado que publica los excerpts crudos para que el
+    // usuario vea AL MENOS los resultados de la busqueda.
+    if (parallelResults && parallelResults.results.length > 0) {
+      const searchResult = parallelResults
+      const excerpts = searchResult.results.map(r => ({
+        url: r.url,
+        title: r.title,
+        publish_date: r.publish_date,
+        content: r.excerpts.join("\n"),
+      }))
+
+      let structured: any[] = []
+      try {
+        console.log("[v0] News: Structuring with AI Gateway (gemini-2.0-flash)...")
+        const result = await structureNewsWithGemini(excerpts, companyName)
+        structured = result.news
+        geminiDigest = result.digest
+        console.log("[v0] News: Gemini structured", structured.length, "items, digest:", geminiDigest ? "generated" : "none")
+      } catch (geminiError) {
+        console.error("[v0] News: Gemini structuring failed after retries, using degraded fallback:", geminiError)
+        const degraded = buildDegradedNewsItems(excerpts)
+        structured = degraded.news
+        geminiDigest = degraded.digest
+        aiProvider = "degraded-fallback"
+      }
+
+      // Guardrail post-LLM: descartar items que NO mencionan el nombre de la empresa
+      // en title+summary. Atrapa los casos donde el modelo (o el fallback degradado)
+      // arrastra una noticia tangencial donde la empresa solo se menciona al pasar.
+      const beforeFilter = structured.length
+      structured = filterRelevantToCompany(structured, companyName, ["title", "summary"])
+      const droppedByGuardrail = beforeFilter - structured.length
+      if (droppedByGuardrail > 0) {
+        console.log(`[v0][news][guardrail] dropped ${droppedByGuardrail} item(s) sin mencion explicita de "${companyName}"`)
+      }
+
+      // Mapeo deterministico item -> URL via source_index (1-based) que el LLM
+      // debe devolver explicitamente. Esto elimina el matching fragil por titulo
+      // que producia mismatches (ej: item "X" terminaba con URL de un articulo
+      // aleman tangencial). Items sin source_index valido se descartan.
+      const itemsWithSource = structured
+        .map((item: any) => {
+          const idx1 = Number(item.source_index)
+          const sourceResult =
+            Number.isFinite(idx1) && idx1 >= 1 && idx1 <= searchResult.results.length
+              ? searchResult.results[idx1 - 1]
+              : null
+          return { item, sourceResult }
+        })
+        .filter((x) => x.sourceResult !== null)
+
+      const droppedNoSource = structured.length - itemsWithSource.length
+      if (droppedNoSource > 0) {
+        console.log(`[v0][news][mapping] dropped ${droppedNoSource} item(s) sin source_index valido`)
+      }
+
+      // Liveness check: HEAD a las URLs candidatas en paralelo. Descartamos las
+      // que devuelven 404/410 o tienen errores de DNS (links muertos que Parallel
+      // tenia indexados pero ya no existen).
+      const candidateUrls = itemsWithSource.map((x) => x.sourceResult!.url)
+      const aliveUrls = await checkUrlsAlive(candidateUrls, { context: "news" })
+      const aliveItems = itemsWithSource.filter((x) => aliveUrls.has(x.sourceResult!.url))
+      const droppedDead = itemsWithSource.length - aliveItems.length
+      if (droppedDead > 0) {
+        console.log(`[v0][news][mapping] dropped ${droppedDead} item(s) por links muertos`)
+      }
+
+      newsItems = aliveItems.map(({ item, sourceResult }) => {
+        const r = sourceResult!
+        let hostname: string
+        try {
+          hostname = new URL(r.url).hostname.replace(/^www\./, "")
+        } catch {
+          hostname = "fuente"
+        }
+        return {
+          title: item.title,
+          summary: item.summary,
+          source_url: r.url,
+          source_name: item.source_name || hostname || r.title || "Desconocido",
+          published_at: sanitizeDate(item.published_at) || sanitizeDate(r.publish_date),
+          category: item.category || categorizeNews((item.title || "") + " " + (item.summary || "")),
+        }
+      })
+    }
+
     // ── 4. Fallback to old cache if no results ───────────────────────
     if (newsItems.length === 0) {
+      console.log("[v0][news][empty] No items after Parallel+Gemini. Checking old cache...")
       const oldCache = await getAnyCache(supabase, companyId)
       if (oldCache && oldCache.length > 0) {
         console.log("[v0] News: Using old cache -", oldCache.length, "items")
         await registerUserInteractions(supabase, user.id, companyId, oldCache.map((n: any) => n.id))
         return NextResponse.json({ success: true, news: oldCache, source: "old_cache" })
       }
+      console.log("[v0][news][empty] No old cache either. Returning source=none.")
       return NextResponse.json({ success: true, news: [], source: "none" })
     }
 
@@ -320,6 +417,7 @@ export async function POST(request: Request) {
       seenUrls.add(item.source_url)
       return true
     })
+    console.log(`[v0][news][filter] structured=${newsItems.length} | unique=${uniqueItems.length} | dropped_dup=${newsItems.length - uniqueItems.length}`)
 
     // Check existing URLs in DB for this company
     const { data: existingNews } = await supabase
@@ -328,6 +426,7 @@ export async function POST(request: Request) {
       .eq("company_id", companyId)
 
     const existingUrls = new Set(existingNews?.map((n: any) => n.source_url) || [])
+    console.log(`[v0][news][filter] existing_in_db=${existingUrls.size}`)
 
     // We'll use the digest to update all items in this batch
     const newToInsert = uniqueItems
@@ -341,10 +440,10 @@ export async function POST(request: Request) {
         source_name: item.source_name,
         published_at: item.published_at,
         category: item.category,
-        ai_provider: "parallel",
+        ai_provider: aiProvider,
         // Only store digest on the first item as a flag that batch was processed
-        digest: idx === 0 ? digest : null,
-        digest_generated_at: idx === 0 && digest ? new Date().toISOString() : null,
+        digest: idx === 0 ? geminiDigest : null,
+        digest_generated_at: idx === 0 && geminiDigest ? new Date().toISOString() : null,
       }))
 
     console.log(`[v0] News: Inserting ${newToInsert.length} new items (${uniqueItems.length - newToInsert.length} duplicates/invalid skipped)`)

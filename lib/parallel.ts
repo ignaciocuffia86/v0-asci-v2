@@ -127,54 +127,57 @@ export function buildImplementationsSearchParams(context: {
     .map(kw => `"${context.company_name}" "${kw}" customer success case study`)
 
   return {
-    objective: `Busco CASOS DE ÉXITO y CUSTOMER SUCCESS STORIES publicados por vendors y consultoras SOBRE la empresa "${context.company_name}"${industryCtx}${countryCtx}.${keywordsCtx} ` +
-      `SOLO busco case studies oficiales publicados en sitios de vendors como: AWS (aws.amazon.com/solutions/case-studies), ` +
-      `Microsoft (customers.microsoft.com), SAP (sap.com/customers), Salesforce (salesforce.com/customer-success-stories), ` +
-      `Oracle, Google Cloud, Accenture, Deloitte, McKinsey, Globant, etc. ` +
-      `NO busco noticias de prensa general - esas van en la pestaña de Noticias. ` +
-      `Quiero saber: qué tecnología implementaron, qué problema resolvieron, qué resultados obtuvieron.`,
+    objective: `Busco EVIDENCIA DE TECNOLOGÍA Y SISTEMAS que utiliza o implementó la empresa "${context.company_name}"${industryCtx}${countryCtx}.${keywordsCtx} ` +
+      `Fuentes válidas (en este orden de preferencia): ` +
+      `(a) Casos de éxito oficiales de vendors (AWS, Microsoft, SAP, Salesforce, Oracle, Google Cloud, Accenture, Deloitte, IBM, Globant, etc.). ` +
+      `(b) Anuncios de partners/consultoras de implementaciones, contratos o licitaciones públicas. ` +
+      `(c) Notas técnicas, blogs corporativos y prensa especializada en tecnología. ` +
+      `(d) PDFs públicos (whitepapers, presentaciones de eventos, conferencias) que mencionen tecnologías que usan. ` +
+      `(e) Avisos de empleo de la empresa que listan stack tecnológico requerido. ` +
+      `Para CADA hallazgo necesito identificar: tecnología/vendor, año aproximado, área del negocio impactada y resultados (si se mencionan). ` +
+      `EXCLUIR noticias generales de la empresa que no involucren tecnología (esas van en la pestaña Noticias).`,
     search_queries: [
-      `"${context.company_name}" customer success story case study`,
-      `"${context.company_name}" cliente caso de éxito implementación`,
-      `"${context.company_name}" AWS Azure Google Cloud customer story`,
-      `"${context.company_name}" SAP Salesforce Oracle customer reference`,
+      `"${context.company_name}" customer success story case study technology implementation`,
+      `"${context.company_name}" caso de éxito cliente implementación tecnología`,
+      `"${context.company_name}" AWS Microsoft Azure Google Cloud SAP Salesforce Oracle`,
+      `"${context.company_name}" partner consultora "implementación" OR "deployment" OR "rollout"`,
+      `"${context.company_name}" jobs careers stack tecnología "requisitos" OR "experiencia en"`,
       ...techQueries,
     ].slice(0, 5), // max 5 queries
-    max_results: 10,
+    max_results: 12,
     source_policy: {
-      // Prioritize vendor/consultant domains
-      include_domains: [
-        "aws.amazon.com",
-        "customers.microsoft.com",
-        "azure.microsoft.com",
-        "cloud.google.com",
-        "sap.com",
-        "salesforce.com",
-        "oracle.com",
-        "accenture.com",
-        "deloitte.com",
-        "mckinsey.com",
-        "globant.com",
-        "ibm.com",
-        "servicenow.com",
-        "snowflake.com",
-        "databricks.com",
-        "tableau.com",
-      ],
-      // Exclude social and news media (news goes to news tab)
+      // No usamos include_domains: con whitelist estricta no devuelve nada para
+      // empresas LATAM mid-market. Confiamos en queries + exclude_domains.
       exclude_domains: [
-        "linkedin.com",
         "facebook.com",
         "twitter.com",
         "x.com",
         "instagram.com",
         "tiktok.com",
         "youtube.com",
+        "reddit.com",
+        "pinterest.com",
+        // Excluir prensa general (va a la pestaña Noticias)
         "reuters.com",
         "bloomberg.com",
         "cnbc.com",
         "forbes.com",
-        "sec.gov", // SEC goes to public docs tab
+        "wsj.com",
+        "ft.com",
+        "infobae.com",
+        "clarin.com",
+        "lanacion.com.ar",
+        "perfil.com",
+        "ambito.com",
+        "ambito.com.ar",
+        "eldiarioar.com",
+        "mdzol.com",
+        "diariohoy.net",
+        "lavoz.com.ar",
+        "pagina12.com.ar",
+        "iprofesional.com",
+        "cronista.com",
+        "sec.gov", // SEC va a la pestaña Documentos
       ],
       after_date: afterDate,
     },
