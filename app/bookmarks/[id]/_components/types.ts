@@ -11,6 +11,7 @@ export interface Implementation {
   source_url: string | null
   source_name: string | null
   published_at: string | null
+  digest: string | null
   created_at: string
 
   // Campos del Tech Radar v2 (migracion 161)

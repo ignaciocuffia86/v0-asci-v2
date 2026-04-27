@@ -8,7 +8,6 @@ import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Newspaper,
-  Briefcase,
   ExternalLink,
   Calendar,
   Trash2,
@@ -17,15 +16,21 @@ import {
   Loader2,
   Sparkles,
   RefreshCw,
-  Building2,
-  Cpu,
-  TrendingUp,
   Clock,
   AlertCircle,
+  Radar,
+  History,
+  ChevronDown,
 } from "lucide-react"
 import { toast } from "sonner"
 import { formatDistanceToNow } from "date-fns"
 import { es } from "date-fns/locale"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import { TechRadarFilters, type EvidenceFilter } from "./tech-radar-filters"
+import { TechRadarFindingCard } from "./tech-radar-finding-card"
+import { LegacyImplCard } from "./legacy-impl-card"
+import { MICRO_AGENTS } from "@/lib/tech-radar"
+import type { Implementation as ImplementationType } from "./types"
 
 interface CompanyNews {
   id: string
@@ -39,21 +44,10 @@ interface CompanyNews {
   created_at: string
 }
 
-interface Implementation {
-  id: string
-  title: string
-  provider_name: string | null
-  technology: string | null
-  area: string | null
-  summary: string | null
-  results: string | null
-  evidence_level: string | null
-  source_url: string | null
-  source_name: string | null
-  published_at: string | null
-  digest: string | null
-  created_at: string
-}
+// Usamos el tipo compartido que ya incluye los campos del Tech Radar v2
+// (micro_agent, evidence_detail, convergent_sources, supporting_source_urls,
+// prompt_version) ademas de los campos legacy.
+type Implementation = ImplementationType
 
 interface IntelligenceTabProps {
   bookmarkId: string
@@ -71,17 +65,6 @@ const CATEGORY_LABELS: Record<string, string> = {
   regulatorio: "Regulatorio",
   ma: "M&A",
   innovacion: "Innovación",
-}
-
-const AREA_LABELS: Record<string, string> = {
-  finanzas: "Finanzas",
-  ventas: "Ventas",
-  logistica: "Logística",
-  rrhh: "RRHH",
-  it: "IT",
-  ciberseguridad: "Ciberseguridad",
-  ecommerce: "eCommerce",
-  operaciones: "Operaciones",
 }
 
 interface CooldownInfo {
@@ -161,7 +144,7 @@ export function IntelligenceTab({ bookmarkId, companyId, companyName }: Intellig
         .eq("company_id", companyId)
         .order("published_at", { ascending: false, nullsFirst: false })
         .order("created_at", { ascending: false })
-        .limit(10)
+        .limit(60)
 
       if (error) throw error
       setImplementations(data || [])
@@ -291,6 +274,48 @@ export function IntelligenceTab({ bookmarkId, companyId, companyName }: Intellig
   const newsDigest = news.find(n => n.digest)?.digest
   const implDigest = implementations.find(i => i.digest)?.digest
 
+  // ── Tech Radar partition + filtros ─────────────────────────────────
+  const [evidenceFilter, setEvidenceFilter] = useState<EvidenceFilter>("todos")
+  const [agentFilter, setAgentFilter] = useState<string | null>(null)
+  const [legacyOpen, setLegacyOpen] = useState(false)
+
+  const v2Findings = implementations.filter((i) => i.prompt_version === "v2")
+  const legacyItems = implementations.filter((i) => i.prompt_version !== "v2")
+
+  // Conteos para los badges del filtro
+  const agentCounts: Record<string, number> = {}
+  for (const a of MICRO_AGENTS) agentCounts[a] = 0
+  for (const f of v2Findings) {
+    if (f.micro_agent && agentCounts[f.micro_agent] !== undefined) {
+      agentCounts[f.micro_agent]++
+    }
+  }
+  const evidenceCounts: Record<EvidenceFilter, number> = {
+    todos: v2Findings.length,
+    directa: v2Findings.filter((f) => f.evidence_level === "directa").length,
+    convergente: v2Findings.filter((f) => f.evidence_level === "convergente").length,
+    inferencia: v2Findings.filter((f) => f.evidence_level === "inferencia").length,
+  }
+
+  // Aplicar filtros activos
+  const filteredFindings = v2Findings.filter((f) => {
+    if (evidenceFilter !== "todos" && f.evidence_level !== evidenceFilter) return false
+    if (agentFilter && f.micro_agent !== agentFilter) return false
+    return true
+  })
+
+  // Ordenar findings: directa primero, despues convergente, despues inferencia.
+  // Dentro de cada nivel, mas reciente primero.
+  const evidenceRank: Record<string, number> = { directa: 0, convergente: 1, inferencia: 2 }
+  const sortedFindings = [...filteredFindings].sort((a, b) => {
+    const rA = evidenceRank[a.evidence_level ?? ""] ?? 99
+    const rB = evidenceRank[b.evidence_level ?? ""] ?? 99
+    if (rA !== rB) return rA - rB
+    const dA = a.published_at ?? a.created_at ?? ""
+    const dB = b.published_at ?? b.created_at ?? ""
+    return dB.localeCompare(dA)
+  })
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -312,8 +337,8 @@ export function IntelligenceTab({ bookmarkId, companyId, companyName }: Intellig
             {hasNews && <Badge variant="secondary" className="ml-1">{news.length}</Badge>}
           </TabsTrigger>
           <TabsTrigger value="implementations" className="gap-2">
-            <Briefcase className="h-4 w-4 text-purple-500" />
-            Casos de Éxito
+            <Radar className="h-4 w-4 text-purple-500" />
+            Tech Radar
             {hasImpl && <Badge variant="secondary" className="ml-1">{implementations.length}</Badge>}
           </TabsTrigger>
         </TabsList>
@@ -548,109 +573,98 @@ export function IntelligenceTab({ bookmarkId, companyId, companyName }: Intellig
             </div>
           </div>
 
-          {/* Implementations List */}
+          {/* Tech Radar findings (v2) + Histórico (v1) */}
           {isLoadingImpl ? (
             <div className="p-8 text-center text-muted-foreground">Cargando...</div>
           ) : implementations.length === 0 ? (
             <Card className="border-dashed">
               <CardContent className="py-12 text-center">
-                <Search className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-                <h3 className="font-medium">Sin casos de éxito registrados</h3>
+                <Radar className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+                <h3 className="font-medium">Sin hallazgos del Tech Radar</h3>
                 <p className="text-sm text-muted-foreground mt-1 mb-4">
-                  Usa la búsqueda con AI para encontrar proyectos de vendors
+                  Ejecutá el Tech Radar con AI para descubrir tecnologías que usa esta empresa
                 </p>
               </CardContent>
             </Card>
           ) : (
-            <div className="space-y-3">
-              {implementations.map((item) => (
-                <Card key={item.id} className="group hover:bg-muted/30 transition-colors">
-                  <CardContent className="py-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          {item.source_url ? (
-                            <a
-                              href={item.source_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="font-medium hover:text-purple-600 hover:underline flex items-center gap-1"
-                            >
-                              {item.title}
-                              <ExternalLink className="h-3.5 w-3.5 opacity-50" />
-                            </a>
-                          ) : (
-                            <h4 className="font-medium">{item.title}</h4>
-                          )}
-                          {item.evidence_level && (
-                            <Badge
-                              variant={item.evidence_level === "strong" ? "default" : "secondary"}
-                              className="text-[10px]"
-                            >
-                              {item.evidence_level === "strong"
-                                ? "Verificado"
-                                : item.evidence_level === "medium"
-                                  ? "Probable"
-                                  : "Inferido"}
-                            </Badge>
-                          )}
-                        </div>
+            <div className="space-y-6">
+              {/* Sección Tech Radar v2 */}
+              {v2Findings.length > 0 && (
+                <div className="space-y-4">
+                  <TechRadarFilters
+                    agentCounts={agentCounts}
+                    evidenceCounts={evidenceCounts}
+                    selectedAgent={agentFilter}
+                    selectedEvidence={evidenceFilter}
+                    onAgentChange={setAgentFilter}
+                    onEvidenceChange={setEvidenceFilter}
+                  />
 
-                        <div className="flex items-center gap-3 mt-1.5 text-sm text-muted-foreground flex-wrap">
-                          {item.provider_name && (
-                            <span className="flex items-center gap-1">
-                              <Building2 className="h-3.5 w-3.5" />
-                              {item.provider_name}
-                            </span>
-                          )}
-                          {item.technology && (
-                            <Badge variant="secondary" className="text-xs">
-                              <Cpu className="h-3 w-3 mr-1" />
-                              {item.technology}
-                            </Badge>
-                          )}
-                          {item.area && (
-                            <Badge variant="outline" className="text-xs">
-                              {AREA_LABELS[item.area] || item.area}
-                            </Badge>
-                          )}
-                          {item.published_at && (
-                            <span className="flex items-center gap-1">
-                              <Calendar className="h-3.5 w-3.5" />
-                              {new Date(item.published_at).toLocaleDateString("es-AR", {
-                                year: "numeric",
-                                month: "short",
-                              })}
-                            </span>
-                          )}
-                        </div>
-
-                        {item.summary && <p className="text-sm text-muted-foreground mt-2 line-clamp-2">{item.summary}</p>}
-
-                        {item.results && (
-                          <div className="mt-2 text-sm">
-                            <span className="flex items-center gap-1 text-green-600 dark:text-green-400 font-medium">
-                              <TrendingUp className="h-3.5 w-3.5" />
-                              {item.results}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-
-                      {isSuperAdmin && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8 text-muted-foreground hover:text-destructive"
-                          onClick={() => handleDeleteImpl(item.id)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      )}
+                  {sortedFindings.length === 0 ? (
+                    <Card className="border-dashed">
+                      <CardContent className="py-8 text-center text-sm text-muted-foreground">
+                        Ningún hallazgo coincide con los filtros activos.
+                      </CardContent>
+                    </Card>
+                  ) : (
+                    <div className="space-y-3">
+                      {sortedFindings.map((finding) => (
+                        <TechRadarFindingCard
+                          key={finding.id}
+                          finding={finding}
+                          isSuperAdmin={isSuperAdmin}
+                          onDelete={handleDeleteImpl}
+                        />
+                      ))}
                     </div>
+                  )}
+                </div>
+              )}
+
+              {/* Caso especial: solo hay legacy, todavía no se corrió Tech Radar */}
+              {v2Findings.length === 0 && legacyItems.length > 0 && (
+                <Card className="border-dashed border-amber-300 bg-amber-50/50 dark:border-amber-800 dark:bg-amber-950/20">
+                  <CardContent className="py-6 text-center">
+                    <Radar className="h-10 w-10 mx-auto text-amber-600 mb-3" />
+                    <h3 className="font-medium">Tech Radar no ejecutado</h3>
+                    <p className="text-sm text-muted-foreground mt-1 max-w-md mx-auto">
+                      Hay registros del motor anterior debajo. Ejecutá el Tech Radar para obtener
+                      hallazgos clasificados por área tecnológica con nivel de evidencia.
+                    </p>
                   </CardContent>
                 </Card>
-              ))}
+              )}
+
+              {/* Sección Histórico (v1) — colapsable */}
+              {legacyItems.length > 0 && (
+                <Collapsible open={legacyOpen} onOpenChange={setLegacyOpen}>
+                  <div className="flex items-center justify-between border-t pt-4">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <History className="h-4 w-4" />
+                      <span>Histórico ({legacyItems.length})</span>
+                      <span className="text-xs">— generados con el motor anterior</span>
+                    </div>
+                    <CollapsibleTrigger asChild>
+                      <Button variant="ghost" size="sm" className="gap-1">
+                        {legacyOpen ? "Ocultar" : "Mostrar"}
+                        <ChevronDown
+                          className={`h-4 w-4 transition-transform ${legacyOpen ? "rotate-180" : ""}`}
+                        />
+                      </Button>
+                    </CollapsibleTrigger>
+                  </div>
+                  <CollapsibleContent className="space-y-3 pt-4">
+                    {legacyItems.map((item) => (
+                      <LegacyImplCard
+                        key={item.id}
+                        item={item}
+                        isSuperAdmin={isSuperAdmin}
+                        onDelete={handleDeleteImpl}
+                      />
+                    ))}
+                  </CollapsibleContent>
+                </Collapsible>
+              )}
             </div>
           )}
         </TabsContent>
