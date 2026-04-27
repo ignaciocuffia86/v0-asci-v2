@@ -547,8 +547,8 @@ export async function runTechRadar(input: {
     console.log(`[v0][tech-radar][mapping] dropped ${mapped.length - aliveMapped.length} por links muertos`)
   }
 
-  // Paso 7: armar output final
-  const findings: TechRadarFinding[] = aliveMapped.map(({ item, primary, supportingExcerpts }) => {
+  // Paso 7: armar output bruto
+  const rawOutput: TechRadarFinding[] = aliveMapped.map(({ item, primary, supportingExcerpts }) => {
     let hostname = "fuente"
     try {
       hostname = new URL(primary.url).hostname.replace(/^www\./, "")
@@ -573,6 +573,16 @@ export async function runTechRadar(input: {
       published_at: sanitizeDate(item.published_at) || sanitizeDate(primary.publish_date),
     }
   })
+
+  // Paso 8: dedup semantico. Colapsa findings que apuntan al mismo evento
+  // pero vienen de fuentes distintas (tipico: misma noticia publicada en
+  // espanol y en ingles, o cubierta por dos medios).
+  const findings = dedupFindings(rawOutput)
+  if (findings.length !== rawOutput.length) {
+    console.log(
+      `[v0][tech-radar][dedup] collapsed ${rawOutput.length - findings.length} duplicados semanticos (${rawOutput.length} -> ${findings.length})`,
+    )
+  }
 
   return { findings, digest, bundle_stats: bundleStats, ai_provider: aiProvider }
 }
@@ -666,6 +676,164 @@ function isPersonalLinkedInProfile(url: string): boolean {
   } catch {
     return false
   }
+}
+
+// ── Dedup semantico (I del relevamiento) ──────────────────────────────
+/**
+ * Normaliza un nombre de tecnologia/proveedor a una forma canonica para
+ * comparacion. Maneja:
+ *  - mayusculas/tildes/puntuacion
+ *  - sinonimos comunes ("aws" === "amazon web services")
+ *  - sufijos de version ("S/4HANA 2023" -> "s/4hana")
+ */
+const VENDOR_ALIASES: Record<string, string> = {
+  "amazon web services": "aws",
+  "aws cloud": "aws",
+  "google cloud platform": "gcp",
+  "google cloud": "gcp",
+  "microsoft azure": "azure",
+  "azure cloud": "azure",
+  "power bi": "powerbi",
+  "ms power bi": "powerbi",
+  "ms powerbi": "powerbi",
+  "office 365": "microsoft 365",
+  "o365": "microsoft 365",
+  "m365": "microsoft 365",
+  "ms 365": "microsoft 365",
+  "salesforce.com": "salesforce",
+  "sap s/4 hana": "sap s/4hana",
+  "sap s4hana": "sap s/4hana",
+  "sap hana": "sap s/4hana",
+  "sap erp": "sap",
+  "oracle ebs": "oracle",
+  "oracle e-business suite": "oracle",
+  "ms dynamics": "microsoft dynamics",
+  "ms dynamics 365": "microsoft dynamics 365",
+  "dynamics 365": "microsoft dynamics 365",
+  "google workspace": "google workspace",
+  "g suite": "google workspace",
+  "github copilot": "copilot",
+  "microsoft copilot": "copilot",
+  "ms copilot": "copilot",
+  "chatgpt": "openai",
+  "chatgpt enterprise": "openai",
+  "openai gpt": "openai",
+}
+
+function normalizeVendor(s: string | null | undefined): string {
+  if (!s) return ""
+  let result = String(s)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s/+-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+  // Remover sufijos de version como "2023", "v12", "version 8"
+  result = result.replace(/\bv?\d{1,4}(\.\d+)?\b/g, "").trim()
+  result = result.replace(/\s+/g, " ").trim()
+  // Aplicar alias
+  if (VENDOR_ALIASES[result]) result = VENDOR_ALIASES[result]
+  return result
+}
+
+const EVIDENCE_RANK: Record<string, number> = {
+  directa: 0,
+  convergente: 1,
+  inferencia: 2,
+  sin_evidencia: 3,
+}
+
+/**
+ * Construye una clave de dedup para un finding. Dos findings con la misma
+ * clave son considerados el mismo evento.
+ *
+ * Estrategia en cascada:
+ *  1. Si tiene technology O provider: clave fuerte = micro_agent + technology + provider
+ *  2. Si solo tiene title: clave de fallback = micro_agent + primeras 60 chars del title normalizado
+ */
+function dedupKey(f: TechRadarFinding): string {
+  const tech = normalizeVendor(f.technology)
+  const provider = normalizeVendor(f.provider_name)
+
+  if (tech || provider) {
+    return `${f.micro_agent}::${tech}::${provider}`
+  }
+
+  // Fallback: title normalizado (primeras 60 chars) — captura cuando dos
+  // articulos cubren el mismo evento pero el LLM no extrajo technology/provider.
+  const titleNorm = String(f.title ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 60)
+  return `${f.micro_agent}::title::${titleNorm}`
+}
+
+/**
+ * Colapsa findings con la misma clave de dedup. Estrategia de merge:
+ *  - El "ganador" es el de mayor evidence_level (directa > convergente > inferencia).
+ *    Empate: el que tenga mas supporting_source_urls; segundo empate: el primero.
+ *  - El ganador absorbe del perdedor: source_url va a supporting_source_urls,
+ *    los supporting_source_urls del perdedor se mergean (dedup).
+ *  - convergent_sources se recalcula como 1 + size(supporting_source_urls).
+ *  - El nivel de evidencia se sube a "convergente" si el ganador era "inferencia"
+ *    pero ahora tiene >=2 fuentes distintas (consenso de 2 fuentes = convergente).
+ */
+function dedupFindings(items: TechRadarFinding[]): TechRadarFinding[] {
+  if (items.length <= 1) return items
+
+  const groups = new Map<string, TechRadarFinding[]>()
+  for (const item of items) {
+    const key = dedupKey(item)
+    const arr = groups.get(key) ?? []
+    arr.push(item)
+    groups.set(key, arr)
+  }
+
+  const result: TechRadarFinding[] = []
+  for (const [, members] of groups) {
+    if (members.length === 1) {
+      result.push(members[0])
+      continue
+    }
+
+    // Elegir ganador
+    members.sort((a, b) => {
+      const ra = EVIDENCE_RANK[a.evidence_level ?? "sin_evidencia"] ?? 99
+      const rb = EVIDENCE_RANK[b.evidence_level ?? "sin_evidencia"] ?? 99
+      if (ra !== rb) return ra - rb
+      return (b.supporting_source_urls?.length ?? 0) - (a.supporting_source_urls?.length ?? 0)
+    })
+
+    const winner = { ...members[0] }
+    const losers = members.slice(1)
+
+    const allSupporting = new Set<string>(winner.supporting_source_urls ?? [])
+    for (const loser of losers) {
+      if (loser.source_url && loser.source_url !== winner.source_url) {
+        allSupporting.add(loser.source_url)
+      }
+      for (const u of loser.supporting_source_urls ?? []) {
+        if (u && u !== winner.source_url) allSupporting.add(u)
+      }
+    }
+
+    winner.supporting_source_urls = Array.from(allSupporting)
+    winner.convergent_sources = 1 + winner.supporting_source_urls.length
+
+    // Si era inferencia y ahora tenemos >=2 fuentes, sube a convergente.
+    if (winner.evidence_level === "inferencia" && winner.convergent_sources >= 2) {
+      winner.evidence_level = "convergente"
+    }
+
+    result.push(winner)
+  }
+
+  return result
 }
 
 // ── Date helper local (igual al de los routes) ─────────────────────────
