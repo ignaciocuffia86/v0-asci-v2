@@ -13,7 +13,12 @@
  */
 
 import { parallelSearch, type ParallelSearchOptions, type ParallelSearchResponse } from "@/lib/parallel"
-import { structureWithLLM, filterRelevantToCompany, checkUrlsAlive } from "@/lib/ai-structurer"
+import {
+  structureWithLLM,
+  filterRelevantToCompany,
+  checkUrlsAlive,
+  companyNameTokens,
+} from "@/lib/ai-structurer"
 
 // Constantes y tipos client-safe viven en lib/tech-radar-constants.ts
 // para no contaminar bundles del cliente con imports server-only.
@@ -202,6 +207,25 @@ J. SI son fuente valida: avisos de empleo de la empresa (linkedin.com/jobs/, car
    listan stack tecnologico requerido. En ese caso clasificar como "inferencia" porque el aviso pide la skill pero no
    confirma uso productivo. El evidence_detail debe citar el texto del aviso.
 
+REGLAS ANTI-CONTAMINACION CRUZADA (CRITICAS - causa frecuente de errores):
+K. Un mismo excerpt PUEDE mencionar a varias empresas. Caso tipico: REPORTES DE SUSTENTABILIDAD / ESG / informes
+   anuales / reportes sectoriales que pertenecen a OTRA empresa pero mencionan a la empresa objetivo como
+   cliente, proveedor, filial, ejemplo o competidor. La tecnologia descrita en ese reporte NO PERTENECE a la
+   empresa objetivo salvo que la oracion sea EXPLICITA (ej. "Arcos Dorados implemento SAP S/4HANA en 2023" SI;
+   "el sector incluyendo Arcos Dorados ha adoptado tecnologias cloud" NO).
+L. Para cada hallazgo, mentalmente respondete: "¿la oracion del excerpt que cito como evidence_detail tiene
+   a {empresa objetivo} como SUJETO de la accion (implementar, contratar, migrar, adoptar, usar)?"
+   - SI: incluir el hallazgo.
+   - NO (la empresa solo se menciona en una lista, comparacion, o como contexto): EXCLUIR.
+M. El campo "evidence_detail" DEBE ser una CITA LITERAL del excerpt (entre 30 y 200 chars) que contenga
+   AL MISMO TIEMPO: (1) el nombre de la empresa objetivo o un fragmento inequivoco de el, y (2) la tecnologia,
+   vendor, partner, fecha, numero o resultado especifico del hallazgo. Si no podes citar una oracion que
+   contenga ambos, NO incluyas el hallazgo.
+N. Si el TITULO de la fuente sugiere que el documento pertenece a OTRA empresa (ej. "Informe Anual Femsa 2024",
+   "Reporte ESG Ambev", "Sustainability Report McDonald's Corporation") y la empresa objetivo solo se menciona
+   en el cuerpo, sube los criterios: el evidence_detail debe ser una oracion donde la empresa objetivo
+   sea SUJETO inequivoco. Si no, EXCLUIR.
+
 REGLAS DE CLASIFICACION:
 1. Cada hallazgo debe asignarse a exactamente UN micro-agente de la siguiente lista (usa el slug exacto):
    - bi_analytics: BI, analytics, data warehouses, lakes, dashboards
@@ -376,6 +400,22 @@ export async function runTechRadar(input: {
     )
   }
 
+  // Paso 4c: anti-contaminacion cruzada. Validar que el evidence_detail mencione
+  // literalmente al nombre de la empresa objetivo. Si la "cita" no contiene
+  // la empresa, es una alucinacion donde el LLM mezclo info de otra empresa
+  // (tipico cuando un excerpt es un reporte ESG que pertenece a otra empresa
+  // pero menciona a la nuestra como cliente/proveedor).
+  const evidenceDetailFiltered = filterRelevantToCompany(
+    nonObviousFindings,
+    companyName,
+    ["evidence_detail"],
+  )
+  if (evidenceDetailFiltered.length !== nonObviousFindings.length) {
+    console.log(
+      `[v0][tech-radar][anti-cross] dropped ${nonObviousFindings.length - evidenceDetailFiltered.length} sin empresa en evidence_detail`,
+    )
+  }
+
   // Paso 5: mapear source_index -> URL real, validar micro_agent y evidence_level
   type Mapped = { item: any; primary: FlatExcerpt; supportingExcerpts: FlatExcerpt[] }
   const mapped: Mapped[] = []
@@ -383,7 +423,9 @@ export async function runTechRadar(input: {
   const validLevels = new Set<EvidenceLevel>(["directa", "convergente", "inferencia", "sin_evidencia"])
   let droppedByLinkedInProfile = 0
 
-  for (const item of nonObviousFindings) {
+  let droppedByCrossCompanyTitle = 0
+
+  for (const item of evidenceDetailFiltered) {
     const idx1 = Number(item.source_index)
     if (!Number.isFinite(idx1) || idx1 < 1 || idx1 > truncated.length) continue
     const primary = truncated[idx1 - 1]
@@ -394,6 +436,19 @@ export async function runTechRadar(input: {
     if (isPersonalLinkedInProfile(primary.url)) {
       droppedByLinkedInProfile++
       continue
+    }
+
+    // Anti-contaminacion cruzada (capa 3): si el TITULO del documento fuente NO
+    // contiene el nombre de la empresa objetivo, exigir que el evidence_detail
+    // mencione la empresa Y al menos una pista de evidencia concreta (tecnologia,
+    // vendor, partner, numero, fecha, %). Cubre los reportes ESG/sectoriales que
+    // pertenecen a otra empresa pero mencionan a la nuestra de pasada.
+    if (!sourceTitleMentionsCompany(primary.title, companyName)) {
+      const detail = String(item.evidence_detail ?? "")
+      if (!hasConcreteEvidenceMarker(detail)) {
+        droppedByCrossCompanyTitle++
+        continue
+      }
     }
 
     const agent = String(item.micro_agent ?? "").toLowerCase()
@@ -419,7 +474,10 @@ export async function runTechRadar(input: {
   if (droppedByLinkedInProfile > 0) {
     console.log(`[v0][tech-radar][anti-linkedin] dropped ${droppedByLinkedInProfile} con fuente primaria = perfil personal`)
   }
-  console.log(`[v0][tech-radar][mapping] ${mapped.length}/${nonObviousFindings.length} hallazgos validos`)
+  if (droppedByCrossCompanyTitle > 0) {
+    console.log(`[v0][tech-radar][anti-cross-title] dropped ${droppedByCrossCompanyTitle} con fuente cuyo titulo no menciona empresa y evidence_detail sin marcador concreto`)
+  }
+  console.log(`[v0][tech-radar][mapping] ${mapped.length}/${evidenceDetailFiltered.length} hallazgos validos`)
 
   if (mapped.length === 0) {
     return { findings: [], digest, bundle_stats: bundleStats, ai_provider: aiProvider }
@@ -527,6 +585,32 @@ function isNonObviousFinding(item: any): boolean {
   if (!hasTech && !hasProvider && !hasEvidenceDetail) return false
 
   return true
+}
+
+/**
+ * Verifica si el TITULO de la fuente menciona el nombre de la empresa objetivo.
+ * Si el titulo NO la menciona, el documento es probablemente sobre otra empresa
+ * (reporte ESG cruzado, articulo sectorial, etc.) y los hallazgos requieren
+ * mayor escrutinio.
+ */
+function sourceTitleMentionsCompany(title: string, companyName: string): boolean {
+  const tokens = companyNameTokens(companyName)
+  if (tokens.length === 0) return true // sin tokens utiles, no podemos juzgar
+  const haystack = String(title ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+  return tokens.some((t) => haystack.includes(t))
+}
+
+/**
+ * Verifica que el evidence_detail tenga al menos un MARCADOR concreto: vendor
+ * conocido, numero, porcentaje, fecha, dinero o referencia a documento.
+ * Reusa los CONCRETE_EVIDENCE_PATTERNS ya definidos para anti-obviedad.
+ */
+function hasConcreteEvidenceMarker(text: string): boolean {
+  if (!text || text.trim().length < 20) return false
+  return CONCRETE_EVIDENCE_PATTERNS.some((re) => re.test(text))
 }
 
 /**
