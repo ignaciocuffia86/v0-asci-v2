@@ -13,12 +13,7 @@
  */
 
 import { parallelSearch, type ParallelSearchOptions, type ParallelSearchResponse } from "@/lib/parallel"
-import {
-  structureWithLLM,
-  filterRelevantToCompany,
-  checkUrlsAlive,
-  companyNameTokens,
-} from "@/lib/ai-structurer"
+import { structureWithLLM, checkUrlsAlive } from "@/lib/ai-structurer"
 
 // Constantes y tipos client-safe viven en lib/tech-radar-constants.ts
 // para no contaminar bundles del cliente con imports server-only.
@@ -99,7 +94,10 @@ function buildBundleParams(bundle: Bundle, companyName: string, country?: string
   const afterDate = threeYearsAgo.toISOString().split("T")[0]
 
   const countryCtx = country ? ` (operaciones en ${country})` : ""
-  const agentLabels = bundle.agents.map((a) => MICRO_AGENT_LABELS[a]).join(", ")
+  const agentLabels =
+    bundle.agents.length > 0
+      ? bundle.agents.map((a) => MICRO_AGENT_LABELS[a]).join(", ")
+      : "cualquier area tecnologica relevante (clasificar segun corresponda)"
 
   return {
     objective:
@@ -302,12 +300,38 @@ export async function runTechRadar(input: {
   country?: string
   industry?: string
   keywords?: string[]
+  /** Aliases adicionales (subsidiarias, marca comercial, nombre corto). */
+  aliases?: string[]
+  /** Ticker de bolsa, si la empresa cotiza. */
+  ticker?: string | null
+  /** Slug de LinkedIn (suele ser un alias estable). */
+  linkedinSlug?: string | null
 }): Promise<TechRadarRunResult> {
-  const { companyName, country, keywords } = input
+  const { companyName, country, keywords, aliases, ticker, linkedinSlug } = input
 
-  // Paso 1: ejecutar 4 bundles en paralelo
-  console.log("[v0][tech-radar] running 4 bundles in parallel for", companyName)
-  const bundlePromises = BUNDLES.map(async (bundle) => {
+  // Construir tokens de match para detectar menciones a la empresa.
+  // Incluye: tokens del nombre legal, nombre sin sufijos legales, primera palabra,
+  // ticker, linkedin slug y aliases provistos por el caller.
+  const matchTokens = buildCompanyMatchTokens({
+    name: companyName,
+    aliases,
+    ticker,
+    linkedinSlug,
+  })
+  console.log(`[v0][tech-radar] match tokens for "${companyName}":`, matchTokens.join(", "))
+
+  // Bundles a ejecutar: los 4 estandar + uno dinamico de "Bookmark signals"
+  // si el bookmark tiene keywords. El bundle dinamico empuja queries muy
+  // especificas que combinan empresa + keyword + verbo de accion (implemento,
+  // migro, contrato, partner). Tipicamente devuelve los hallazgos mas relevantes.
+  const bundlesToRun: Bundle[] = [...BUNDLES]
+  if (keywords && keywords.length > 0) {
+    bundlesToRun.push(buildKeywordsBundle(keywords))
+  }
+
+  // Paso 1: ejecutar bundles en paralelo
+  console.log(`[v0][tech-radar] running ${bundlesToRun.length} bundles in parallel for "${companyName}"`)
+  const bundlePromises = bundlesToRun.map(async (bundle) => {
     const params = buildBundleParams(bundle, companyName, country)
     try {
       const res = await parallelSearch(params)
@@ -382,9 +406,11 @@ export async function runTechRadar(input: {
   const rawFindings = parsed.findings ?? []
   const digest = parsed.digest ?? null
 
-  // Paso 4: guardrail de relevancia (mencion explicita de la empresa)
+  // Paso 4: guardrail de relevancia (mencion explicita de la empresa
+  // en title o summary). Usa matchTokens para reconocer aliases, ticker,
+  // linkedin slug y nombre sin sufijos legales.
   const beforeRelevance = rawFindings.length
-  const relevantFindings = filterRelevantToCompany(rawFindings, companyName, ["title", "summary"])
+  const relevantFindings = filterByCompanyTokens(rawFindings, matchTokens, ["title", "summary"])
   if (rawFindings.length !== relevantFindings.length) {
     console.log(`[v0][tech-radar][guardrail] dropped ${beforeRelevance - relevantFindings.length} sin mencion explicita`)
   }
@@ -400,32 +426,22 @@ export async function runTechRadar(input: {
     )
   }
 
-  // Paso 4c: anti-contaminacion cruzada. Validar que el evidence_detail mencione
-  // literalmente al nombre de la empresa objetivo. Si la "cita" no contiene
-  // la empresa, es una alucinacion donde el LLM mezclo info de otra empresa
-  // (tipico cuando un excerpt es un reporte ESG que pertenece a otra empresa
-  // pero menciona a la nuestra como cliente/proveedor).
-  const evidenceDetailFiltered = filterRelevantToCompany(
-    nonObviousFindings,
-    companyName,
-    ["evidence_detail"],
-  )
-  if (evidenceDetailFiltered.length !== nonObviousFindings.length) {
-    console.log(
-      `[v0][tech-radar][anti-cross] dropped ${nonObviousFindings.length - evidenceDetailFiltered.length} sin empresa en evidence_detail`,
-    )
-  }
+  // NOTA: el filtro previo "anti-cross" sobre evidence_detail era demasiado
+  // estricto y mataba findings legitimos donde el LLM citaba una oracion sin
+  // repetir el nombre exacto de la empresa (ej. "la cadena portuguesa migro
+  // a SAP"). Ahora usamos un DOBLE CHECK en el Paso 5 que combina la cita
+  // y el documento fuente.
 
-  // Paso 5: mapear source_index -> URL real, validar micro_agent y evidence_level
+  // Paso 5: mapear source_index -> URL real, validar micro_agent / evidence_level
+  // y aplicar doble check de pertenencia a la empresa.
   type Mapped = { item: any; primary: FlatExcerpt; supportingExcerpts: FlatExcerpt[] }
   const mapped: Mapped[] = []
   const validAgents = new Set<string>(MICRO_AGENTS)
   const validLevels = new Set<EvidenceLevel>(["directa", "convergente", "inferencia", "sin_evidencia"])
   let droppedByLinkedInProfile = 0
+  let droppedByOrphanFinding = 0 // cuando ni evidence_detail NI fuente mencionan empresa
 
-  let droppedByCrossCompanyTitle = 0
-
-  for (const item of evidenceDetailFiltered) {
+  for (const item of nonObviousFindings) {
     const idx1 = Number(item.source_index)
     if (!Number.isFinite(idx1) || idx1 < 1 || idx1 > truncated.length) continue
     const primary = truncated[idx1 - 1]
@@ -438,15 +454,31 @@ export async function runTechRadar(input: {
       continue
     }
 
-    // Anti-contaminacion cruzada (capa 3): si el TITULO del documento fuente NO
-    // contiene el nombre de la empresa objetivo, exigir que el evidence_detail
-    // mencione la empresa Y al menos una pista de evidencia concreta (tecnologia,
-    // vendor, partner, numero, fecha, %). Cubre los reportes ESG/sectoriales que
-    // pertenecen a otra empresa pero mencionan a la nuestra de pasada.
-    if (!sourceTitleMentionsCompany(primary.title, companyName)) {
-      const detail = String(item.evidence_detail ?? "")
+    // DOBLE CHECK anti-contaminacion cruzada (mas permisivo que la version anterior):
+    // El finding sobrevive si AL MENOS UNA de estas evidencias menciona a la empresa:
+    //   1. evidence_detail (cita literal del LLM)
+    //   2. titulo de la fuente primaria
+    //   3. URL de la fuente primaria (cubre slugs tipo /arcosdorados/...)
+    // Si NINGUNA menciona la empresa, es highly likely que sea un cross-mention.
+    // Como capa adicional: si el documento fuente NO menciona la empresa,
+    // exigimos al menos un marcador concreto (vendor whitelist, numero, fecha).
+    const detail = String(item.evidence_detail ?? "")
+    const mentionsInDetail = textMentionsAnyToken(detail, matchTokens)
+    const mentionsInSourceTitle = textMentionsAnyToken(primary.title ?? "", matchTokens)
+    const mentionsInSourceUrl = textMentionsAnyToken(primary.url ?? "", matchTokens)
+
+    if (!mentionsInDetail && !mentionsInSourceTitle && !mentionsInSourceUrl) {
+      droppedByOrphanFinding++
+      continue
+    }
+
+    // Si la fuente NO es claramente sobre la empresa (ni titulo ni URL la
+    // mencionan), y el LLM solo logro citarla en evidence_detail, exigimos
+    // marcador concreto para evitar alucinaciones. Reportes ESG/sectoriales
+    // que mencionan a la empresa al pasar caen aca.
+    if (!mentionsInSourceTitle && !mentionsInSourceUrl) {
       if (!hasConcreteEvidenceMarker(detail)) {
-        droppedByCrossCompanyTitle++
+        droppedByOrphanFinding++
         continue
       }
     }
@@ -474,10 +506,34 @@ export async function runTechRadar(input: {
   if (droppedByLinkedInProfile > 0) {
     console.log(`[v0][tech-radar][anti-linkedin] dropped ${droppedByLinkedInProfile} con fuente primaria = perfil personal`)
   }
-  if (droppedByCrossCompanyTitle > 0) {
-    console.log(`[v0][tech-radar][anti-cross-title] dropped ${droppedByCrossCompanyTitle} con fuente cuyo titulo no menciona empresa y evidence_detail sin marcador concreto`)
+  if (droppedByOrphanFinding > 0) {
+    console.log(`[v0][tech-radar][anti-orphan] dropped ${droppedByOrphanFinding} sin mencion en detail/title/url o sin marcador concreto cuando la fuente no era clara`)
   }
-  console.log(`[v0][tech-radar][mapping] ${mapped.length}/${evidenceDetailFiltered.length} hallazgos validos`)
+  console.log(`[v0][tech-radar][mapping] ${mapped.length}/${nonObviousFindings.length} hallazgos validos`)
+
+  // Retry con prompt relajado (capa H del relevamiento). Si rawFindings tenia
+  // contenido pero los filtros lo dejaron en 0, le damos a Gemini un segundo
+  // intento con un prompt mas permisivo. Los filtros de codigo (anti-obviedad,
+  // anti-LinkedIn-personal, doble check) siguen aplicandose, asi que el riesgo
+  // de ruido es controlado.
+  if (mapped.length === 0 && rawFindings.length > 0) {
+    console.log(`[v0][tech-radar][retry] rawFindings tenia ${rawFindings.length} items pero todos cayeron por filtros. Reintentando con prompt relajado...`)
+    const retried = await retryWithRelaxedPrompt({
+      userPrompt,
+      truncated,
+      matchTokens,
+      bundleStats,
+      digest,
+      aiProvider,
+    })
+    if (retried.mapped.length > 0) {
+      mapped.push(...retried.mapped)
+      aiProvider = retried.aiProvider
+      console.log(`[v0][tech-radar][retry] recuperados ${retried.mapped.length} findings con prompt relajado`)
+    } else {
+      console.log("[v0][tech-radar][retry] tambien devolvio 0 - rendimos.")
+    }
+  }
 
   if (mapped.length === 0) {
     return { findings: [], digest, bundle_stats: bundleStats, ai_provider: aiProvider }
@@ -550,8 +606,10 @@ const OBVIOUS_PATTERNS: RegExp[] = [
  * accionable junto con la afirmacion generica).
  */
 const CONCRETE_EVIDENCE_PATTERNS: RegExp[] = [
-  // vendors / productos especificos comunes
-  /\b(SAP|Oracle|Salesforce|Microsoft\s+(Dynamics|Azure|365|Office|Teams)|AWS|Amazon\s+Web|GCP|Google\s+Cloud|Workday|HubSpot|Zendesk|ServiceNow|Snowflake|Databricks|Tableau|PowerBI|Power\s*BI|Looker|Datadog|New\s+Relic|Dynatrace|Splunk|MuleSoft|Boomi|Okta|CrowdStrike|Palo\s+Alto|Fortinet|Cisco|Dell|HP|Lenovo|UiPath|Automation\s+Anywhere|Workato|Slack|GitHub|GitLab|Jenkins|Kubernetes|Docker|MongoDB|PostgreSQL|MySQL|Redis|Kafka|Globant|Accenture|Deloitte|McKinsey|IBM|Capgemini|Genesys|NICE|Twilio|VTEX|Magento|Shopify)\b/i,
+  // vendors / productos especificos. Lista ampliada para cubrir el ecosistema
+  // LATAM/Iberia/EEUU completo. Incluye plataformas, suites, RPA, observabilidad,
+  // contact center, identity, MDM, industria, fintech, ecommerce, y consultoras.
+  /\b(SAP(?:\s+(?:S\/4HANA|HANA|Ariba|SuccessFactors|BW|Fiori|Concur|Hybris))?|Oracle(?:\s+(?:Cloud|EBS|NetSuite|Hyperion|Fusion|WMS))?|NetSuite|JD\s+Edwards|Salesforce(?:\s+(?:Sales|Service|Marketing|Commerce|Pardot|Tableau|MuleSoft|Slack))?|Microsoft\s+(?:Dynamics(?:\s+365)?|Azure|365|Office|Teams|Power\s*Apps|Power\s*Automate|Power\s*Platform|Power\s*BI|Fabric|Sentinel|Defender|Intune|Copilot|Viva|SharePoint|Sentinel|Synapse|Purview)|AWS|Amazon\s+(?:Web\s+Services|RDS|S3|EC2|EKS|ECS|Aurora|Redshift|DynamoDB|SageMaker|Lambda|CloudFront|Athena)|GCP|Google\s+(?:Cloud|Workspace|Vertex\s+AI|BigQuery|Looker|Looker\s+Studio|Anthos|Apigee|Firebase)|Workday|SuccessFactors|Bamboo\s*HR|Cornerstone|Workato|Boomi|MuleSoft|Informatica|Talend|Fivetran|dbt|Airbyte|HubSpot|Zendesk|ServiceNow|Freshdesk|Intercom|Genesys|Five9|NICE|Avaya|Twilio|Talkdesk|Snowflake|Databricks|Cloudera|Confluent|Kafka|Tableau|Power\s*BI|PowerBI|Looker|Qlik|MicroStrategy|Sigma|ThoughtSpot|Datadog|New\s+Relic|Dynatrace|Splunk|Grafana|Elastic|ELK|Sumo\s+Logic|AppDynamics|Honeycomb|Sentry|Okta|Auth0|Ping|OneLogin|SailPoint|CyberArk|CrowdStrike|SentinelOne|Palo\s+Alto(?:\s+Networks)?|Fortinet|Check\s+Point|Trellix|McAfee|Symantec|Sophos|Trend\s+Micro|Kaspersky|Bitdefender|Tenable|Qualys|Rapid7|Cisco(?:\s+(?:Meraki|Umbrella|Webex))?|Aruba|Juniper|Dell(?:\s+(?:EMC|VMware|PowerStore))?|HP(?:E)?|Lenovo|NetApp|Pure\s+Storage|VMware|Citrix|Nutanix|UiPath|Automation\s+Anywhere|Blue\s+Prism|Slack|GitHub|GitLab|Bitbucket|Jenkins|CircleCI|Travis|ArgoCD|Jira|Confluence|Atlassian|Asana|Notion|Monday|Trello|Kubernetes|OpenShift|Docker|Rancher|Terraform|Ansible|Puppet|Chef|MongoDB|PostgreSQL|MySQL|MariaDB|Redis|Cassandra|DynamoDB|Couchbase|Elasticsearch|OpenSearch|RabbitMQ|ActiveMQ|Globant|Accenture|Deloitte|McKinsey|BCG|Bain|EY|KPMG|PwC|IBM(?:\s+Consulting)?|Capgemini|TCS|Infosys|Wipro|Cognizant|HCL|NTT\s+Data|Atos|DXC|Stefanini|BairesDev|VTEX|Magento|Shopify|WooCommerce|BigCommerce|Adobe(?:\s+(?:Experience|Commerce|Analytics|Target|Campaign|Sign|Marketo))?|Marketo|Eloqua|Mailchimp|SendGrid|Klaviyo|Braze|Iterable|Veeva|Epic|Cerner|Allscripts|Sage|Infor|Epicor|Adempiere|Odoo|Zoho|Coupa|Ariba|Concur|Stripe|Mercado\s+Pago|MercadoLibre|MercadoLibre\s+Marketplace|PayPal|Square|Adyen|Worldpay|Cybersource|dLocal|Ualá|Modo|Naranja|Visa|Mastercard|American\s+Express|Verifone|Ingenico|Clover|Toast|Aloha|NCR|Olo|Manhattan|Blue\s+Yonder|JDA|Korber|Manhattan\s+Associates|TGW|Dematic|Honeywell|Zebra|RFID|Symbol|Datalogic|AS\/?400|IBM\s+i|iSeries|COBOL|Mainframe|Z\/?OS|GitHub\s+Copilot|ChatGPT(?:\s+Enterprise)?|OpenAI|Anthropic(?:\s+Claude)?|Claude|Gemini|Llama|Mistral|Hugging\s+Face|LangChain|Pinecone|Weaviate|Vertex\s+AI|SageMaker|Bedrock|Azure\s+OpenAI)\b/i,
   // numeros con unidad
   /\b\d+\s*(licencias?|usuarios?|empleados?|tiendas?|sucursales?|nodos?|servidores?|millones?|mil)\b/i,
   // porcentajes
@@ -588,22 +646,6 @@ function isNonObviousFinding(item: any): boolean {
 }
 
 /**
- * Verifica si el TITULO de la fuente menciona el nombre de la empresa objetivo.
- * Si el titulo NO la menciona, el documento es probablemente sobre otra empresa
- * (reporte ESG cruzado, articulo sectorial, etc.) y los hallazgos requieren
- * mayor escrutinio.
- */
-function sourceTitleMentionsCompany(title: string, companyName: string): boolean {
-  const tokens = companyNameTokens(companyName)
-  if (tokens.length === 0) return true // sin tokens utiles, no podemos juzgar
-  const haystack = String(title ?? "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-  return tokens.some((t) => haystack.includes(t))
-}
-
-/**
  * Verifica que el evidence_detail tenga al menos un MARCADOR concreto: vendor
  * conocido, numero, porcentaje, fecha, dinero o referencia a documento.
  * Reusa los CONCRETE_EVIDENCE_PATTERNS ya definidos para anti-obviedad.
@@ -637,4 +679,306 @@ function sanitizeDate(dateStr: string | null | undefined): string | null {
   threeYearsAgo.setFullYear(threeYearsAgo.getFullYear() - 3)
   if (date > now || date < threeYearsAgo) return null
   return date.toISOString().split("T")[0]
+}
+
+// ── Aliases / match tokens (B del relevamiento) ──────────────────────────
+/**
+ * Tira los sufijos legales tipicos del nombre de la empresa.
+ * Ej. "Jeronimo Martins SGPS S.A." → "Jeronimo Martins"
+ */
+const LEGAL_SUFFIX_PATTERNS: RegExp[] = [
+  /\b(s\.?\s*a\.?(?:\s*b\.?)?(?:\s*de\s*c\.?\s*v\.?)?)\b\.?$/i,
+  /\b(s\.?\s*l\.?(?:\s*u\.?)?)\b\.?$/i,
+  /\b(s\.?\s*r\.?\s*l\.?)\b\.?$/i,
+  /\b(s\.?\s*a\.?\s*s\.?)\b\.?$/i,
+  /\b(c\.?\s*a\.?)\b\.?$/i,
+  /\b(ltda?\.?)\b\.?$/i,
+  /\b(inc\.?)\b\.?$/i,
+  /\b(corp(?:oration)?\.?)\b\.?$/i,
+  /\b(co\.?)\b\.?$/i,
+  /\b(plc\.?)\b\.?$/i,
+  /\b(gmbh)\b\.?$/i,
+  /\b(ag)\b\.?$/i,
+  /\b(holdings?)\b\.?$/i,
+  /\b(group)\b\.?$/i,
+  /\b(sgps)\b\.?$/i,
+  /\b(spa)\b\.?$/i,
+  /\b(nv)\b\.?$/i,
+  /\b(bv)\b\.?$/i,
+]
+
+function stripLegalSuffix(name: string): string {
+  let result = String(name ?? "").trim()
+  // Aplicamos hasta 3 veces para sacar combinaciones tipo "X SGPS S.A."
+  for (let i = 0; i < 3; i++) {
+    const before = result
+    for (const re of LEGAL_SUFFIX_PATTERNS) {
+      result = result.replace(re, "").trim()
+      result = result.replace(/[,;]+$/, "").trim()
+    }
+    if (result === before) break
+  }
+  return result
+}
+
+const STOPWORDS_TOKEN = new Set([
+  "the",
+  "and",
+  "for",
+  "with",
+  "from",
+  "que",
+  "del",
+  "los",
+  "las",
+  "una",
+  "uno",
+  "por",
+  "para",
+  "como",
+  "este",
+  "esta",
+  "more",
+  "less",
+  "group",
+  "grupo",
+  "company",
+  "compania",
+  "compañia",
+  "compañía",
+  "holding",
+  "holdings",
+])
+
+function tokenize(text: string): string[] {
+  return String(text ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .split(/\s+/)
+    .filter((t) => t.length >= 4 && !STOPWORDS_TOKEN.has(t))
+}
+
+/**
+ * Construye los tokens que usamos para detectar menciones a la empresa.
+ * Combina:
+ *  - tokens del nombre legal
+ *  - nombre sin sufijos legales
+ *  - primera palabra (si tiene >=4 chars)
+ *  - aliases provistos
+ *  - ticker
+ *  - linkedin slug
+ */
+export function buildCompanyMatchTokens(input: {
+  name: string
+  aliases?: string[]
+  ticker?: string | null
+  linkedinSlug?: string | null
+}): string[] {
+  const tokens = new Set<string>()
+
+  // Nombre completo
+  for (const t of tokenize(input.name)) tokens.add(t)
+
+  // Nombre sin sufijos legales
+  const stripped = stripLegalSuffix(input.name)
+  if (stripped && stripped !== input.name) {
+    for (const t of tokenize(stripped)) tokens.add(t)
+  }
+
+  // Primera palabra (suele ser la mas distintiva: "Jeronimo" en "Jeronimo Martins")
+  const firstWord = stripped.trim().split(/\s+/)[0]
+  if (firstWord) {
+    const norm = firstWord
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+    if (norm.length >= 4 && !STOPWORDS_TOKEN.has(norm)) tokens.add(norm)
+  }
+
+  // Aliases provistos
+  for (const alias of input.aliases ?? []) {
+    for (const t of tokenize(alias)) tokens.add(t)
+  }
+
+  // Ticker (>=3 chars). Lo agregamos como string entero, normalizado.
+  if (input.ticker) {
+    const t = input.ticker.toLowerCase().trim()
+    if (t.length >= 3) tokens.add(t)
+  }
+
+  // LinkedIn slug
+  if (input.linkedinSlug) {
+    const slug = input.linkedinSlug
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9-]/g, "")
+    if (slug.length >= 3) tokens.add(slug)
+  }
+
+  return Array.from(tokens)
+}
+
+/**
+ * True si `text` contiene alguno de los `tokens` (case-insensitive, normalizado).
+ */
+export function textMentionsAnyToken(text: string, tokens: string[]): boolean {
+  if (!text || tokens.length === 0) return false
+  const haystack = String(text)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+  return tokens.some((t) => haystack.includes(t))
+}
+
+/**
+ * Filtra items dejando solo los que mencionan al menos un token de empresa
+ * en alguno de los `fields`. Reemplazo de filterRelevantToCompany cuando
+ * tenemos tokens precomputados (con aliases, ticker, etc.).
+ */
+function filterByCompanyTokens<T>(items: T[], tokens: string[], fields: (keyof T)[]): T[] {
+  if (tokens.length === 0) return items
+  return items.filter((item) =>
+    fields.some((f) => {
+      const v = item[f]
+      return typeof v === "string" && textMentionsAnyToken(v, tokens)
+    }),
+  )
+}
+
+// ── Bundle dinamico de keywords del bookmark (C del relevamiento) ────────
+/**
+ * Cuando el bookmark tiene señales (ej. "ERP", "ciberseguridad"), agregamos
+ * un 5to bundle que combina empresa + keyword + verbos de accion. Estas
+ * queries tienden a traer la evidencia mas accionable.
+ */
+function buildKeywordsBundle(keywords: string[]): Bundle {
+  const top = keywords.slice(0, 5)
+  return {
+    key: "bookmark",
+    label: "Senales del bookmark",
+    agents: [], // dejamos que Gemini clasifique segun corresponda
+    queries: (c) =>
+      top.map(
+        (kw) =>
+          `"${c}" "${kw}" implementación OR migración OR contrato OR partner OR proyecto OR licitación`,
+      ),
+  }
+}
+
+// ── Retry con prompt relajado (H del relevamiento) ───────────────────────
+/**
+ * Prompt mas permisivo: mantiene anti-obviedad y exige cita literal pero
+ * NO requiere que la cita contenga el nombre de la empresa (el filtro de
+ * codigo se encarga de validar que la fuente sea relevante).
+ */
+const TECH_RADAR_SYSTEM_RELAXED = `Eres un investigador de inteligencia tecnologica empresarial.
+Recibis excerpts de paginas web sobre la empresa objetivo y tu output anterior fue rechazado por
+filtros de calidad. Reintenta extrayendo hallazgos manteniendo SOLO estas reglas estrictas:
+
+1. La empresa objetivo (entre comillas) debe ser USUARIA / CLIENTA / IMPLEMENTADORA de la tecnologia.
+2. RECHAZAR hallazgos genericos sin tecnologia concreta (ej. "tiene departamento de IT", "usa internet").
+3. CADA hallazgo debe identificar AL MENOS UNA evidencia: vendor especifico, numero, fecha, % o partner.
+4. NO inventes URLs ni datos. Si no esta en los excerpts, no lo pongas.
+5. evidence_detail: cita literal o cuasi-literal del excerpt (entre 30 y 200 chars). NO necesita repetir
+   el nombre de la empresa textualmente — usa anaforas ("la empresa", "la cadena") si la fuente lo hace.
+6. source_index OBLIGATORIO. NO mezcles fuentes.
+
+Mismo JSON schema:
+{
+  "findings": [
+    {
+      "source_index": <int>,
+      "supporting_source_indexes": [<int>...],
+      "micro_agent": "bi_analytics|cloud|ipaas|ciberseguridad|workplace|devops|erp|ia_rpa|hardware|crm|telco|procurement_it|observabilidad|pagos|logistica|health_it|consultoria",
+      "title": "<string>",
+      "summary": "<string 2-3 oraciones>",
+      "technology": "<string|null>",
+      "provider_name": "<string|null>",
+      "area": "<string|null>",
+      "results": "<string|null>",
+      "evidence_level": "directa|convergente|inferencia",
+      "evidence_detail": "<cita literal>",
+      "source_name": "<string>",
+      "published_at": "<YYYY-MM-DD|null>"
+    }
+  ],
+  "digest": "<string|null>"
+}`
+
+type FlatExcerptForRetry = {
+  bundle_key: string
+  url: string
+  title: string
+  publish_date: string | null
+  content: string
+}
+
+async function retryWithRelaxedPrompt(args: {
+  userPrompt: string
+  truncated: FlatExcerptForRetry[]
+  matchTokens: string[]
+  bundleStats: { bundle: string; parallel_results: number; excerpts_chars: number }[]
+  digest: string | null
+  aiProvider: string
+}): Promise<{ mapped: { item: any; primary: FlatExcerptForRetry; supportingExcerpts: FlatExcerptForRetry[] }[]; aiProvider: string }> {
+  let parsed: { findings?: any[]; digest?: string | null } = { findings: [] }
+  try {
+    parsed = await structureWithLLM<{ findings?: any[]; digest?: string | null }>({
+      systemPrompt: TECH_RADAR_SYSTEM_RELAXED,
+      userPrompt: args.userPrompt,
+      maxOutputTokens: 6000,
+      temperature: 0.3,
+      context: "tech-radar-retry",
+    })
+  } catch (err) {
+    console.error("[v0][tech-radar][retry] gemini relaxed failed:", err)
+    return { mapped: [], aiProvider: "gemini-failed-on-retry" }
+  }
+
+  const rawRetry = parsed.findings ?? []
+  if (rawRetry.length === 0) return { mapped: [], aiProvider: "gemini-2.0-flash-relaxed" }
+
+  // Aplicamos los mismos filtros que en el flow normal:
+  // 1) anti-obviedad (sin cambios)
+  // 2) doble check de pertenencia a la empresa (en mapping loop)
+  const nonObvious = rawRetry.filter((f) => isNonObviousFinding(f))
+
+  const validAgents = new Set<string>(MICRO_AGENTS)
+  const validLevels = new Set<EvidenceLevel>(["directa", "convergente", "inferencia"])
+  const mapped: { item: any; primary: FlatExcerptForRetry; supportingExcerpts: FlatExcerptForRetry[] }[] = []
+
+  for (const item of nonObvious) {
+    const idx1 = Number(item.source_index)
+    if (!Number.isFinite(idx1) || idx1 < 1 || idx1 > args.truncated.length) continue
+    const primary = args.truncated[idx1 - 1]
+    if (isPersonalLinkedInProfile(primary.url)) continue
+
+    const detail = String(item.evidence_detail ?? "")
+    const mentionsInDetail = textMentionsAnyToken(detail, args.matchTokens)
+    const mentionsInSourceTitle = textMentionsAnyToken(primary.title ?? "", args.matchTokens)
+    const mentionsInSourceUrl = textMentionsAnyToken(primary.url ?? "", args.matchTokens)
+    if (!mentionsInDetail && !mentionsInSourceTitle && !mentionsInSourceUrl) continue
+    if (!mentionsInSourceTitle && !mentionsInSourceUrl && !hasConcreteEvidenceMarker(detail)) continue
+
+    const agent = String(item.micro_agent ?? "").toLowerCase()
+    if (!validAgents.has(agent)) continue
+    const level = String(item.evidence_level ?? "").toLowerCase() as EvidenceLevel
+    if (!validLevels.has(level)) continue
+
+    const supportingIdx = Array.isArray(item.supporting_source_indexes)
+      ? item.supporting_source_indexes
+          .map((n: any) => Number(n))
+          .filter((n: number) => Number.isFinite(n) && n >= 1 && n <= args.truncated.length && n !== idx1)
+      : []
+    const supportingExcerpts = supportingIdx
+      .map((n: number) => args.truncated[n - 1])
+      .filter((e: FlatExcerptForRetry) => !isPersonalLinkedInProfile(e.url))
+
+    mapped.push({ item, primary, supportingExcerpts })
+  }
+
+  return { mapped, aiProvider: "gemini-2.0-flash-relaxed" }
 }

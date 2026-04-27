@@ -241,6 +241,10 @@ export async function POST(request: Request) {
       country: company.country ?? undefined,
       industry: company.industry ?? undefined,
       keywords,
+      // Aliases derivados de la fila de companies para mejorar el match
+      // de menciones a la empresa (subsidiarias, ticker, slug LinkedIn).
+      ticker: company.ticker ?? null,
+      linkedinSlug: company.linkedin_slug ?? null,
     })
 
     console.log(
