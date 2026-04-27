@@ -1,71 +1,59 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
 import {
-  ExternalLink,
-  Trash2,
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
+import {
   Building2,
-  Cpu,
-  TrendingUp,
-  Calendar,
   Loader2,
   Sparkles,
   Search,
   RefreshCw,
+  Radar,
+  ChevronDown,
+  History,
 } from "lucide-react"
 import { toast } from "sonner"
+import type { Implementation } from "./types"
+import { TechRadarFindingCard } from "./tech-radar-finding-card"
+import { LegacyImplCard } from "./legacy-impl-card"
+import { TechRadarFilters, type EvidenceFilter } from "./tech-radar-filters"
 
-interface Implementation {
-  id: string
-  title: string
-  provider_name: string | null
-  technology: string | null
-  area: string | null
-  summary: string | null
-  results: string | null
-  evidence_level: string | null
-  source_url: string | null
-  source_name: string | null
-  published_at: string | null
-  created_at: string
-}
-
-interface ImplementationsTabProps {
+interface Props {
   bookmarkId: string
   companyId: string
   companyName: string
 }
 
-const AREA_LABELS: Record<string, string> = {
-  finanzas: "Finanzas",
-  ventas: "Ventas",
-  logistica: "Logística",
-  rrhh: "RRHH",
-  it: "IT",
-  ciberseguridad: "Ciberseguridad",
-  ecommerce: "eCommerce",
-  operaciones: "Operaciones",
-}
-
-export function ImplementationsTab({ bookmarkId, companyId, companyName }: ImplementationsTabProps) {
-  const [implementations, setImplementations] = useState<Implementation[]>([])
+export function ImplementationsTab({ bookmarkId, companyId, companyName }: Props) {
+  const [items, setItems] = useState<Implementation[]>([])
   const [loading, setLoading] = useState(true)
   const [isSearching, setIsSearching] = useState(false)
   const [isRegenerating, setIsRegenerating] = useState(false)
   const [isSuperAdmin, setIsSuperAdmin] = useState(false)
 
+  // Filtros del tab v2
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
+  const [selectedEvidence, setSelectedEvidence] = useState<EvidenceFilter>("todos")
+
+  // Histórico colapsado por default
+  const [historyOpen, setHistoryOpen] = useState(false)
+
   const supabase = createClient()
 
   useEffect(() => {
-    loadImplementations()
-    checkUserRole()
+    void loadItems()
+    void checkUserRole()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companyId])
 
-  const checkUserRole = async () => {
+  async function checkUserRole() {
     const {
       data: { user },
     } = await supabase.auth.getUser()
@@ -75,17 +63,17 @@ export function ImplementationsTab({ bookmarkId, companyId, companyName }: Imple
     }
   }
 
-  async function loadImplementations() {
+  async function loadItems() {
     setLoading(true)
     try {
       const { data } = await supabase
         .from("company_implementations")
         .select("*")
         .eq("company_id", companyId)
-        .order("published_at", { ascending: false, nullsFirst: false })
-        .limit(10)
+        .order("created_at", { ascending: false })
+        .limit(60)
 
-      setImplementations(data || [])
+      setItems((data ?? []) as Implementation[])
     } catch (error) {
       console.error("Error loading implementations:", error)
     } finally {
@@ -93,40 +81,36 @@ export function ImplementationsTab({ bookmarkId, companyId, companyName }: Imple
     }
   }
 
-  const handleSearchImplementations = async (forceRefresh = false) => {
-    if (forceRefresh) {
-      setIsRegenerating(true)
-    } else {
-      setIsSearching(true)
-    }
+  async function handleSearch(forceRefresh: boolean) {
+    if (forceRefresh) setIsRegenerating(true)
+    else setIsSearching(true)
+
     try {
       const response = await fetch("/api/research/implementations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          bookmarkId,
-          companyId,
-          companyName,
-          forceRefresh,
-        }),
+        body: JSON.stringify({ bookmarkId, companyId, companyName, forceRefresh }),
       })
 
       if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.message || "Error al buscar implementaciones")
+        const error = await response.json().catch(() => ({}))
+        throw new Error(error?.message || "Error al ejecutar el Tech Radar")
       }
 
       const result = await response.json()
-      toast.success(`Se encontraron ${result.count || 0} implementaciones${forceRefresh ? " (regenerado)" : ""}`)
+      const count = result?.count ?? result?.implementations?.length ?? 0
+      toast.success(`${count} hallazgos encontrados${forceRefresh ? " (regenerado)" : ""}`)
 
-      if (result.implementations && result.implementations.length > 0) {
-        setImplementations(result.implementations)
+      if (Array.isArray(result?.implementations) && result.implementations.length > 0) {
+        // El endpoint devuelve los items mas recientes; refrescamos full desde DB
+        // para asegurar que incluyamos todos los micro-agentes y sus orderings.
+        await loadItems()
       } else {
-        loadImplementations()
+        await loadItems()
       }
     } catch (error: any) {
-      console.error("Error searching implementations:", error)
-      toast.error(error.message || "Error al buscar implementaciones")
+      console.error("Error running Tech Radar:", error)
+      toast.error(error?.message || "Error al ejecutar el Tech Radar")
     } finally {
       setIsSearching(false)
       setIsRegenerating(false)
@@ -135,22 +119,80 @@ export function ImplementationsTab({ bookmarkId, companyId, companyName }: Imple
 
   async function handleDelete(id: string) {
     if (!isSuperAdmin) {
-      toast.error("Solo administradores pueden eliminar implementaciones")
+      toast.error("Solo administradores pueden eliminar hallazgos")
       return
     }
     try {
       const { error } = await supabase.from("company_implementations").delete().eq("id", id)
-
       if (error) throw error
-
-      setImplementations(implementations.filter((impl) => impl.id !== id))
-      toast.success("Implementación eliminada del cache")
-    } catch (error) {
+      setItems((prev) => prev.filter((it) => it.id !== id))
+      toast.success("Hallazgo eliminado")
+    } catch {
       toast.error("Error al eliminar")
     }
   }
 
-  const hasResults = implementations.length > 0
+  // Particion v2 (Tech Radar) vs v1 (legacy histórico)
+  const { v2Items, legacyItems } = useMemo(() => {
+    const v2: Implementation[] = []
+    const legacy: Implementation[] = []
+    for (const it of items) {
+      if (it.prompt_version === "v2") v2.push(it)
+      else legacy.push(it)
+    }
+    return { v2Items: v2, legacyItems: legacy }
+  }, [items])
+
+  // Conteos para los filtros (siempre sobre el universo v2 completo)
+  const { agentCounts, evidenceCounts } = useMemo(() => {
+    const ac: Record<string, number> = {}
+    const ec: Record<EvidenceFilter, number> = {
+      todos: v2Items.length,
+      directa: 0,
+      convergente: 0,
+      inferencia: 0,
+    }
+    for (const it of v2Items) {
+      if (it.micro_agent) ac[it.micro_agent] = (ac[it.micro_agent] ?? 0) + 1
+      const ev = (it.evidence_level ?? "").toLowerCase()
+      if (ev === "directa" || ev === "convergente" || ev === "inferencia") {
+        ec[ev as EvidenceFilter] += 1
+      }
+    }
+    return { agentCounts: ac, evidenceCounts: ec }
+  }, [v2Items])
+
+  // Items filtrados según selección
+  const filteredV2 = useMemo(() => {
+    return v2Items.filter((it) => {
+      if (selectedAgent && it.micro_agent !== selectedAgent) return false
+      if (selectedEvidence !== "todos") {
+        const ev = (it.evidence_level ?? "").toLowerCase()
+        if (ev !== selectedEvidence) return false
+      }
+      return true
+    })
+  }, [v2Items, selectedAgent, selectedEvidence])
+
+  // Orden por nivel de evidencia (directa > convergente > inferencia) y luego fecha desc
+  const orderedFiltered = useMemo(() => {
+    const evidenceRank: Record<string, number> = {
+      directa: 0,
+      convergente: 1,
+      inferencia: 2,
+    }
+    return [...filteredV2].sort((a, b) => {
+      const ra = evidenceRank[(a.evidence_level ?? "").toLowerCase()] ?? 99
+      const rb = evidenceRank[(b.evidence_level ?? "").toLowerCase()] ?? 99
+      if (ra !== rb) return ra - rb
+      const da = a.published_at ? new Date(a.published_at).getTime() : 0
+      const db = b.published_at ? new Date(b.published_at).getTime() : 0
+      return db - da
+    })
+  }, [filteredV2])
+
+  const hasV2 = v2Items.length > 0
+  const hasLegacy = legacyItems.length > 0
 
   if (loading) {
     return (
@@ -162,176 +204,204 @@ export function ImplementationsTab({ bookmarkId, companyId, companyName }: Imple
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      {/* Header */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 className="text-lg font-semibold flex items-center gap-2">
-            <Building2 className="h-5 w-5 text-purple-600" />
-            Implementaciones en {companyName}
+          <h3 className="flex items-center gap-2 text-lg font-semibold">
+            <Radar className="h-5 w-5 text-primary" />
+            Tech Radar — {companyName}
           </h3>
-          <p className="text-sm text-muted-foreground">Proyectos realizados por otros proveedores en esta empresa</p>
+          <p className="text-sm text-muted-foreground">
+            Tecnologías, vendors y casos de implementación detectados por nuestros 17 micro-agentes
+          </p>
         </div>
         <div className="flex items-center gap-2">
-          {isSuperAdmin && hasResults && (
+          {isSuperAdmin && hasV2 ? (
             <Button
-              onClick={() => handleSearchImplementations(true)}
+              onClick={() => handleSearch(true)}
               disabled={isSearching || isRegenerating}
               variant="outline"
               size="sm"
             >
               {isRegenerating ? (
                 <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Regenerando...
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Regenerando…
                 </>
               ) : (
                 <>
-                  <RefreshCw className="h-4 w-4 mr-2" />
+                  <RefreshCw className="mr-2 h-4 w-4" />
                   Regenerar
                 </>
               )}
             </Button>
-          )}
+          ) : null}
           <Button
-            onClick={() => handleSearchImplementations(false)}
-            disabled={isSearching || isRegenerating || hasResults}
-            variant={hasResults ? "outline" : "default"}
+            onClick={() => handleSearch(false)}
+            disabled={isSearching || isRegenerating || hasV2}
+            variant={hasV2 ? "outline" : "default"}
           >
             {isSearching ? (
               <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                Buscando...
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Escaneando…
               </>
-            ) : hasResults ? (
+            ) : hasV2 ? (
               <>
-                <Sparkles className="h-4 w-4 mr-2 opacity-50" />
-                Búsqueda completada
+                <Sparkles className="mr-2 h-4 w-4 opacity-50" />
+                Escaneo completado
               </>
             ) : (
               <>
-                <Sparkles className="h-4 w-4 mr-2" />
-                Buscar con AI
+                <Sparkles className="mr-2 h-4 w-4" />
+                Ejecutar Tech Radar
               </>
             )}
           </Button>
         </div>
       </div>
 
-      {implementations.length === 0 ? (
+      {/* Empty state — sin v2 ni legacy */}
+      {!hasV2 && !hasLegacy ? (
         <Card className="border-dashed">
           <CardContent className="py-12 text-center">
-            <Search className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-            <h3 className="font-medium">Sin implementaciones registradas</h3>
-            <p className="text-sm text-muted-foreground mt-1 mb-4">
-              Usa la búsqueda con AI para encontrar casos de éxito y proyectos en {companyName}
+            <Search className="mx-auto mb-4 h-12 w-12 text-muted-foreground" />
+            <h3 className="font-medium">Sin hallazgos todavía</h3>
+            <p className="mb-4 mt-1 text-sm text-muted-foreground">
+              Ejecutá el Tech Radar para detectar tecnologías y casos en {companyName}
             </p>
-            <Button onClick={() => handleSearchImplementations(false)} disabled={isSearching}>
+            <Button onClick={() => handleSearch(false)} disabled={isSearching}>
               {isSearching ? (
                 <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Buscando...
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Escaneando…
                 </>
               ) : (
                 <>
-                  <Sparkles className="h-4 w-4 mr-2" />
-                  Buscar implementaciones
+                  <Sparkles className="mr-2 h-4 w-4" />
+                  Ejecutar Tech Radar
                 </>
               )}
             </Button>
           </CardContent>
         </Card>
-      ) : (
-        <div className="space-y-3">
-          {implementations.map((item) => (
-            <Card key={item.id} className="group hover:bg-muted/30 transition-colors">
-              <CardContent className="py-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {item.source_url ? (
-                        <a
-                          href={item.source_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="font-medium hover:text-purple-600 hover:underline flex items-center gap-1"
-                        >
-                          {item.title}
-                          <ExternalLink className="h-3.5 w-3.5 opacity-50" />
-                        </a>
-                      ) : (
-                        <h4 className="font-medium">{item.title}</h4>
-                      )}
-                      {item.evidence_level && (
-                        <Badge
-                          variant={item.evidence_level === "strong" ? "default" : "secondary"}
-                          className="text-[10px]"
-                        >
-                          {item.evidence_level === "strong"
-                            ? "Verificado"
-                            : item.evidence_level === "medium"
-                              ? "Probable"
-                              : "Inferido"}
-                        </Badge>
-                      )}
-                    </div>
+      ) : null}
 
-                    <div className="flex items-center gap-3 mt-1.5 text-sm text-muted-foreground flex-wrap">
-                      {item.provider_name && (
-                        <span className="flex items-center gap-1">
-                          <Building2 className="h-3.5 w-3.5" />
-                          {item.provider_name}
-                        </span>
-                      )}
-                      {item.technology && (
-                        <Badge variant="secondary" className="text-xs">
-                          <Cpu className="h-3 w-3 mr-1" />
-                          {item.technology}
-                        </Badge>
-                      )}
-                      {item.area && (
-                        <Badge variant="outline" className="text-xs">
-                          {AREA_LABELS[item.area] || item.area}
-                        </Badge>
-                      )}
-                      {item.source_name && <span className="text-xs opacity-70">vía {item.source_name}</span>}
-                      {item.published_at && (
-                        <span className="flex items-center gap-1">
-                          <Calendar className="h-3.5 w-3.5" />
-                          {new Date(item.published_at).toLocaleDateString("es-AR", {
-                            year: "numeric",
-                            month: "short",
-                          })}
-                        </span>
-                      )}
-                    </div>
+      {/* Sección v2: Tech Radar */}
+      {hasV2 ? (
+        <section className="space-y-4">
+          <TechRadarFilters
+            agentCounts={agentCounts}
+            evidenceCounts={evidenceCounts}
+            selectedAgent={selectedAgent}
+            selectedEvidence={selectedEvidence}
+            onAgentChange={setSelectedAgent}
+            onEvidenceChange={setSelectedEvidence}
+          />
 
-                    {item.summary && <p className="text-sm text-muted-foreground mt-2 line-clamp-2">{item.summary}</p>}
-
-                    {item.results && (
-                      <div className="mt-2 text-sm">
-                        <span className="flex items-center gap-1 text-green-600 dark:text-green-400 font-medium">
-                          <TrendingUp className="h-3.5 w-3.5" />
-                          {item.results}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-
-                  {isSuperAdmin && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8 text-muted-foreground hover:text-destructive"
-                      onClick={() => handleDelete(item.id)}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  )}
-                </div>
+          {orderedFiltered.length === 0 ? (
+            <Card className="border-dashed">
+              <CardContent className="py-8 text-center">
+                <p className="text-sm text-muted-foreground">
+                  No hay hallazgos que coincidan con los filtros aplicados.
+                </p>
+                <Button
+                  variant="link"
+                  size="sm"
+                  className="mt-2"
+                  onClick={() => {
+                    setSelectedAgent(null)
+                    setSelectedEvidence("todos")
+                  }}
+                >
+                  Limpiar filtros
+                </Button>
               </CardContent>
             </Card>
-          ))}
-        </div>
-      )}
+          ) : (
+            <div className="space-y-3">
+              {orderedFiltered.map((finding) => (
+                <TechRadarFindingCard
+                  key={finding.id}
+                  finding={finding}
+                  isSuperAdmin={isSuperAdmin}
+                  onDelete={handleDelete}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+      ) : null}
+
+      {/* Empty v2 pero hay legacy: aviso para correr el Tech Radar */}
+      {!hasV2 && hasLegacy ? (
+        <Card className="border-dashed bg-muted/20">
+          <CardContent className="py-8 text-center">
+            <Radar className="mx-auto mb-3 h-10 w-10 text-muted-foreground" />
+            <h4 className="font-medium">El Tech Radar nunca corrió para esta empresa</h4>
+            <p className="mb-3 mt-1 text-sm text-muted-foreground">
+              Hay {legacyItems.length} hallazgo{legacyItems.length === 1 ? "" : "s"} histórico
+              {legacyItems.length === 1 ? "" : "s"} más abajo. Ejecutá el escaneo nuevo para
+              clasificarlos por micro-agente y detectar tecnologías más recientes.
+            </p>
+            <Button onClick={() => handleSearch(false)} disabled={isSearching}>
+              {isSearching ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Escaneando…
+                </>
+              ) : (
+                <>
+                  <Sparkles className="mr-2 h-4 w-4" />
+                  Ejecutar Tech Radar
+                </>
+              )}
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {/* Sección legacy v1: histórico colapsable */}
+      {hasLegacy ? (
+        <section>
+          <Collapsible open={historyOpen} onOpenChange={setHistoryOpen}>
+            <CollapsibleTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full justify-between gap-2 text-muted-foreground hover:bg-muted/40"
+              >
+                <span className="inline-flex items-center gap-2">
+                  <History className="h-4 w-4" />
+                  Histórico ({legacyItems.length} hallazgo{legacyItems.length === 1 ? "" : "s"} previo
+                  {legacyItems.length === 1 ? "" : "s"})
+                </span>
+                <ChevronDown
+                  className={`h-4 w-4 transition-transform ${historyOpen ? "rotate-180" : ""}`}
+                />
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="mt-3">
+              <div className="rounded-lg border border-dashed bg-muted/10 p-3">
+                <p className="mb-3 flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Building2 className="h-3 w-3" />
+                  Hallazgos generados con el motor anterior, sin clasificación por micro-agente.
+                </p>
+                <div className="space-y-2">
+                  {legacyItems.map((item) => (
+                    <LegacyImplCard
+                      key={item.id}
+                      item={item}
+                      isSuperAdmin={isSuperAdmin}
+                      onDelete={handleDelete}
+                    />
+                  ))}
+                </div>
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
+        </section>
+      ) : null}
     </div>
   )
 }
