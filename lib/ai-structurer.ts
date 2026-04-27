@@ -1,6 +1,49 @@
 import { generateText } from "ai"
 
 /**
+ * Devuelve los tokens significativos (>=4 chars) del nombre de la empresa,
+ * normalizados sin tildes, en lowercase. Filtra sufijos juridicos comunes
+ * para que "Garbarino S.A." -> ["garbarino"], "Tsoft Latam" -> ["tsoft", "latam"].
+ */
+export function companyNameTokens(name: string): string[] {
+  const stopwords = new Set([
+    "sa", "sas", "srl", "s.a.", "s.a", "s.r.l", "ltd", "ltda", "limited",
+    "inc", "corp", "corporation", "company", "co", "group", "grupo", "holding",
+    "sociedad", "anonima", "anonimo", "holdings",
+  ])
+  return name
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{Letter}\p{Number}\s]/gu, " ")
+    .split(/\s+/)
+    .filter((t) => t.length >= 4 && !stopwords.has(t))
+}
+
+/**
+ * Filtra items que NO mencionan el nombre de la empresa en los campos textuales.
+ * Atrapa los casos donde el LLM se desvio y publico items donde la empresa
+ * solo aparecia tangencialmente en el excerpt fuente.
+ */
+export function filterRelevantToCompany<T extends Record<string, any>>(
+  items: T[],
+  companyName: string,
+  textFields: (keyof T)[],
+): T[] {
+  const tokens = companyNameTokens(companyName)
+  if (tokens.length === 0) return items
+  return items.filter((item) => {
+    const haystack = textFields
+      .map((f) => String(item[f] ?? ""))
+      .join(" ")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+    return tokens.some((t) => haystack.includes(t))
+  })
+}
+
+/**
  * Structured LLM call via Vercel AI Gateway (zero-config Gemini).
  *
  * Uses the AI Gateway by default which has aggregated quota gestionada por la

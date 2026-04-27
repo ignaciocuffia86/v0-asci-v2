@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextResponse } from "next/server"
 import { parallelSearch, buildImplementationsSearchParams } from "@/lib/parallel"
-import { structureWithLLM } from "@/lib/ai-structurer"
+import { structureWithLLM, filterRelevantToCompany } from "@/lib/ai-structurer"
 
 const IMPL_CACHE_DAYS = 30 // Refresh at most once per month per company+signal
 const MAX_IMPLEMENTATIONS = 10
@@ -11,10 +11,20 @@ const GEMINI_SYSTEM = `Eres un investigador de implementaciones tecnologicas e i
 Se te dan excerpts de paginas web sobre proyectos, casos de exito e implementaciones tecnologicas de una empresa.
 Tu tarea es extraer implementaciones y casos de exito relevantes.
 
-REGLAS:
+REGLAS DE RELEVANCIA (CRITICAS):
+A. La empresa objetivo (te la indico abajo entre comillas) debe ser la USUARIA / CLIENTA / IMPLEMENTADORA de la tecnologia descripta.
+B. EXCLUIR cualquier excerpt donde la empresa objetivo solo se mencione:
+   - al pasar como ejemplo o comparacion ("...como Garbarino, Falabella, etc.")
+   - en una lista de empresas de un sector
+   - en contexto historico tangencial sin relacion con tecnologia
+C. SI tienes dudas sobre si la empresa es la usuaria de la tecnologia, EXCLUYE el item.
+D. El "title" y el "summary" que generes DEBEN mencionar explicitamente el nombre de la empresa objetivo.
+E. Si un excerpt es solo una mencion al pasar de la empresa pero el contenido principal es sobre otro cliente o sobre el vendor en abstracto, EXCLUIR.
+
+REGLAS DE FORMATO:
 1. Responde UNICAMENTE con JSON valido (sin markdown, sin texto extra).
 2. Resume con TUS PROPIAS PALABRAS, NO copies texto literal.
-3. Maximo 10 implementaciones. Prioriza calidad y evidencia fuerte.
+3. Maximo 10 implementaciones. Prioriza calidad sobre cantidad. Mejor 0 items que 1 ruidoso.
 4. Si no hay implementaciones relevantes, devuelve {"implementations":[], "digest": null}
 5. Las fechas deben ser YYYY-MM-DD. Si no hay fecha exacta, intenta inferirla. Si es imposible, usa null.
 
@@ -410,6 +420,17 @@ export async function POST(request: Request) {
         structured = degraded.implementations
         geminiDigest = degraded.digest
         aiProvider = "degraded-fallback"
+      }
+
+      // Guardrail post-LLM: descartar items que no mencionan explicitamente el
+      // nombre de la empresa en titulo+summary. Atrapa casos donde el modelo se
+      // desvio y arrastro un caso de exito de OTRA empresa que solo se mencionaba
+      // de paso en el excerpt.
+      const beforeFilter = structured.length
+      structured = filterRelevantToCompany(structured, companyName, ["title", "summary"])
+      const droppedByGuardrail = beforeFilter - structured.length
+      if (droppedByGuardrail > 0) {
+        console.log(`[v0][impl][guardrail] dropped ${droppedByGuardrail} item(s) sin mencion explicita de "${companyName}"`)
       }
 
       // Map structured items back to source URLs from Parallel

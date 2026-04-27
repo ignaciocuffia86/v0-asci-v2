@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextResponse } from "next/server"
 import { parallelSearch, buildNewsSearchParams } from "@/lib/parallel"
-import { structureWithLLM } from "@/lib/ai-structurer"
+import { structureWithLLM, filterRelevantToCompany } from "@/lib/ai-structurer"
 
 const NEWS_CACHE_DAYS = 30 // Refresh at most once per month
 const MAX_NEWS = 15
@@ -10,12 +10,22 @@ const MAX_NEWS = 15
 const GEMINI_SYSTEM = `Eres un analista de inteligencia comercial B2B.
 Se te dan excerpts de paginas web sobre una empresa. Tu tarea es extraer noticias relevantes como senales de compra B2B.
 
-REGLAS:
+REGLAS DE RELEVANCIA (CRITICAS):
+A. La empresa objetivo (te la indico abajo entre comillas) debe ser el SUJETO PRINCIPAL de la noticia.
+B. EXCLUIR cualquier excerpt donde la empresa objetivo solo se mencione:
+   - al pasar como ejemplo o comparacion ("...como Garbarino, Falabella, etc.")
+   - en una lista de empresas de un sector ("...el rubro retail incluye a X, Y, Z")
+   - en un contexto historico tangencial ("...desde la epoca de la quiebra de X")
+   - en publicidad o cross-mencion no relacionada al hecho noticioso
+C. SI tienes dudas sobre si la empresa es el sujeto principal, EXCLUYE el item. Mejor 0 noticias que 1 ruidosa.
+D. El "title" y el "summary" que generes DEBEN mencionar explicitamente el nombre de la empresa objetivo.
+
+REGLAS DE FORMATO:
 1. Responde UNICAMENTE con JSON valido (sin markdown, sin texto extra).
 2. Resume con TUS PROPIAS PALABRAS, NO copies texto literal.
 3. Cada noticia debe tener relevancia para un vendedor B2B.
-4. Minimo 1, maximo 15 noticias. Prioriza calidad.
-5. Si no hay noticias relevantes, devuelve {"news":[], "digest": null}
+4. Minimo 0, maximo 15 noticias. Prioriza calidad sobre cantidad.
+5. Si no hay noticias relevantes (todas son tangenciales), devuelve {"news":[], "digest": null}
 6. Las fechas deben ser YYYY-MM-DD. Si no hay fecha exacta, intenta inferirla del contexto. Si es imposible, usa null.
 
 CATEGORIAS validas: inversion | transformacion | crecimiento | ejecutivos | desafios | alianzas | regulatorio | ma | innovacion
@@ -322,6 +332,16 @@ export async function POST(request: Request) {
         structured = degraded.news
         geminiDigest = degraded.digest
         aiProvider = "degraded-fallback"
+      }
+
+      // Guardrail post-LLM: descartar items que NO mencionan el nombre de la empresa
+      // en title+summary. Atrapa los casos donde el modelo (o el fallback degradado)
+      // arrastra una noticia tangencial donde la empresa solo se menciona al pasar.
+      const beforeFilter = structured.length
+      structured = filterRelevantToCompany(structured, companyName, ["title", "summary"])
+      const droppedByGuardrail = beforeFilter - structured.length
+      if (droppedByGuardrail > 0) {
+        console.log(`[v0][news][guardrail] dropped ${droppedByGuardrail} item(s) sin mencion explicita de "${companyName}"`)
       }
 
       // Map structured items back to source URLs from Parallel
