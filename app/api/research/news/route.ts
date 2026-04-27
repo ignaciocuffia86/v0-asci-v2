@@ -82,7 +82,13 @@ async function structureNewsWithGemini(
   })
 
   const text = result.response.text()
-  const parsed = JSON.parse(text)
+  let parsed: any
+  try {
+    parsed = JSON.parse(text)
+  } catch (parseErr) {
+    console.error("[v0][news][gemini] JSON parse failed. Raw response (first 500):", text.slice(0, 500))
+    throw parseErr
+  }
   return {
     news: parsed.news ?? [],
     digest: parsed.digest ?? null,
@@ -147,6 +153,8 @@ async function getRecentCache(supabase: any, companyId: string, isSuperadmin: bo
   // Superadmins can always refresh; regular users wait 30 days
   const canRefresh = isSuperadmin || daysSinceLastSearch >= NEWS_CACHE_DAYS
   const daysUntilRefresh = canRefresh ? 0 : Math.ceil(NEWS_CACHE_DAYS - daysSinceLastSearch)
+
+  console.log("[v0][news][cache] lastSearchDate:", lastSearchDate, "| daysSinceLastSearch:", Math.round(daysSinceLastSearch), "| canRefresh:", canRefresh, "| isSuperadmin:", isSuperadmin)
 
   // Check if we have ANY news fetched within the cache window
   const { data: recentFetch } = await supabase
@@ -259,11 +267,25 @@ export async function POST(request: Request) {
       country: company?.country,
     })
 
+    console.log("[v0][news][parallel] objective:", searchParams.objective.slice(0, 200))
+    console.log("[v0][news][parallel] search_queries:", JSON.stringify(searchParams.search_queries))
+    console.log("[v0][news][parallel] source_policy:", JSON.stringify(searchParams.source_policy))
+    console.log("[v0][news][parallel] max_results:", searchParams.max_results, "| company industry/country:", company?.industry, "/", company?.country)
+
     let newsItems: any[] = []
+    let geminiDigest: string | null = null
 
     try {
       const searchResult = await parallelSearch(searchParams)
       console.log("[v0] News: Parallel returned", searchResult.results.length, "results")
+      if (searchResult.warnings && searchResult.warnings.length > 0) {
+        console.log("[v0][news][parallel] warnings:", JSON.stringify(searchResult.warnings))
+      }
+      // Loguear cada resultado crudo: url + title + fecha + tama\u00f1o de excerpt
+      searchResult.results.forEach((r, i) => {
+        const excerptChars = r.excerpts.reduce((acc, e) => acc + (e?.length ?? 0), 0)
+        console.log(`[v0][news][parallel][result ${i + 1}/${searchResult.results.length}] date=${r.publish_date ?? "null"} | chars=${excerptChars} | ${r.url}`)
+      })
 
       if (searchResult.results.length > 0) {
         // Prepare excerpts for Gemini structuring
@@ -277,6 +299,7 @@ export async function POST(request: Request) {
         // Structure with Gemini
         console.log("[v0] News: Structuring with Gemini...")
         const { news: structured, digest } = await structureNewsWithGemini(excerpts, companyName)
+        geminiDigest = digest
         console.log("[v0] News: Gemini structured", structured.length, "news items, digest:", digest ? "generated" : "none")
 
         // Map structured items back to source URLs from Parallel
@@ -304,12 +327,14 @@ export async function POST(request: Request) {
 
     // ── 4. Fallback to old cache if no results ───────────────────────
     if (newsItems.length === 0) {
+      console.log("[v0][news][empty] No items after Parallel+Gemini. Checking old cache...")
       const oldCache = await getAnyCache(supabase, companyId)
       if (oldCache && oldCache.length > 0) {
         console.log("[v0] News: Using old cache -", oldCache.length, "items")
         await registerUserInteractions(supabase, user.id, companyId, oldCache.map((n: any) => n.id))
         return NextResponse.json({ success: true, news: oldCache, source: "old_cache" })
       }
+      console.log("[v0][news][empty] No old cache either. Returning source=none.")
       return NextResponse.json({ success: true, news: [], source: "none" })
     }
 
@@ -320,6 +345,7 @@ export async function POST(request: Request) {
       seenUrls.add(item.source_url)
       return true
     })
+    console.log(`[v0][news][filter] structured=${newsItems.length} | unique=${uniqueItems.length} | dropped_dup=${newsItems.length - uniqueItems.length}`)
 
     // Check existing URLs in DB for this company
     const { data: existingNews } = await supabase
@@ -328,6 +354,7 @@ export async function POST(request: Request) {
       .eq("company_id", companyId)
 
     const existingUrls = new Set(existingNews?.map((n: any) => n.source_url) || [])
+    console.log(`[v0][news][filter] existing_in_db=${existingUrls.size}`)
 
     // We'll use the digest to update all items in this batch
     const newToInsert = uniqueItems
@@ -343,8 +370,8 @@ export async function POST(request: Request) {
         category: item.category,
         ai_provider: "parallel",
         // Only store digest on the first item as a flag that batch was processed
-        digest: idx === 0 ? digest : null,
-        digest_generated_at: idx === 0 && digest ? new Date().toISOString() : null,
+        digest: idx === 0 ? geminiDigest : null,
+        digest_generated_at: idx === 0 && geminiDigest ? new Date().toISOString() : null,
       }))
 
     console.log(`[v0] News: Inserting ${newToInsert.length} new items (${uniqueItems.length - newToInsert.length} duplicates/invalid skipped)`)

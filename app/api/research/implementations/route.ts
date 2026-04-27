@@ -96,7 +96,13 @@ async function structureImplementationsWithGemini(
   })
 
   const text = result.response.text()
-  const parsed = JSON.parse(text)
+  let parsed: any
+  try {
+    parsed = JSON.parse(text)
+  } catch (parseErr) {
+    console.error("[v0][impl][gemini] JSON parse failed. Raw response (first 500):", text.slice(0, 500))
+    throw parseErr
+  }
   return {
     implementations: parsed.implementations ?? [],
     digest: parsed.digest ?? null,
@@ -155,6 +161,8 @@ async function getRecentCache(supabase: any, companyId: string, searchContext: s
   // Superadmins can always refresh; regular users wait 30 days
   const canRefresh = isSuperadmin || daysSinceLastSearch >= IMPL_CACHE_DAYS
   const daysUntilRefresh = canRefresh ? 0 : Math.ceil(IMPL_CACHE_DAYS - daysSinceLastSearch)
+
+  console.log("[v0][impl][cache] lastSearchDate:", lastSearchDate, "| daysSinceLastSearch:", Math.round(daysSinceLastSearch), "| canRefresh:", canRefresh, "| isSuperadmin:", isSuperadmin, "| context:", searchContext)
 
   // Check if we have implementations fetched within the cache window for this context
   let query = supabase
@@ -345,11 +353,24 @@ export async function POST(request: Request) {
       keywords,
     })
 
+    console.log("[v0][impl][parallel] objective:", searchParams.objective.slice(0, 200))
+    console.log("[v0][impl][parallel] search_queries:", JSON.stringify(searchParams.search_queries))
+    console.log("[v0][impl][parallel] include_domains count:", searchParams.source_policy?.include_domains?.length ?? 0, "| exclude:", searchParams.source_policy?.exclude_domains?.length ?? 0, "| after_date:", searchParams.source_policy?.after_date)
+    console.log("[v0][impl][parallel] max_results:", searchParams.max_results, "| keywords:", keywords)
+
     let implementations: any[] = []
+    let geminiDigest: string | null = null
 
     try {
       const searchResult = await parallelSearch(searchParams)
       console.log("[v0] Implementations: Parallel returned", searchResult.results.length, "results")
+      if (searchResult.warnings && searchResult.warnings.length > 0) {
+        console.log("[v0][impl][parallel] warnings:", JSON.stringify(searchResult.warnings))
+      }
+      searchResult.results.forEach((r, i) => {
+        const excerptChars = r.excerpts.reduce((acc, e) => acc + (e?.length ?? 0), 0)
+        console.log(`[v0][impl][parallel][result ${i + 1}/${searchResult.results.length}] date=${r.publish_date ?? "null"} | chars=${excerptChars} | ${r.url}`)
+      })
 
       if (searchResult.results.length > 0) {
         // Prepare excerpts for Gemini structuring
@@ -363,6 +384,7 @@ export async function POST(request: Request) {
         // Structure with Gemini
         console.log("[v0] Implementations: Structuring with Gemini...")
         const { implementations: structured, digest } = await structureImplementationsWithGemini(excerpts, companyName, keywords)
+        geminiDigest = digest
         console.log("[v0] Implementations: Gemini structured", structured.length, "items, digest:", digest ? "generated" : "none")
 
         // Map structured items back to source URLs from Parallel
@@ -393,12 +415,14 @@ export async function POST(request: Request) {
 
     // ── 4. Fallback to old cache if no results ───────────────────────
     if (implementations.length === 0) {
+      console.log("[v0][impl][empty] No items after Parallel+Gemini. Checking old cache...")
       const oldCache = await getAnyCache(supabase, companyId)
       if (oldCache && oldCache.length > 0) {
         console.log("[v0] Implementations: Using old cache -", oldCache.length, "items")
         await registerUserInteractions(supabase, user.id, companyId, oldCache.map((i: any) => i.id))
         return NextResponse.json({ implementations: oldCache, cached: true, provider: "old_cache" })
       }
+      console.log("[v0][impl][empty] No old cache either. Returning provider=none.")
       return NextResponse.json({ implementations: [], cached: false, provider: "none" })
     }
 
@@ -434,8 +458,8 @@ export async function POST(request: Request) {
         evidence_level: item.evidence_level,
         search_context: searchContext,
         // Only store digest on the first item as a flag that batch was processed
-        digest: idx === 0 ? digest : null,
-        digest_generated_at: idx === 0 && digest ? new Date().toISOString() : null,
+        digest: idx === 0 ? geminiDigest : null,
+        digest_generated_at: idx === 0 && geminiDigest ? new Date().toISOString() : null,
       }))
 
     console.log(`[v0] Implementations: Inserting ${newToInsert.length} new items`)
