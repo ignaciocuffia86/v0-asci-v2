@@ -1,151 +1,13 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextResponse } from "next/server"
-import { parallelSearch, buildImplementationsSearchParams } from "@/lib/parallel"
-import { structureWithLLM, filterRelevantToCompany, checkUrlsAlive } from "@/lib/ai-structurer"
+import { runTechRadar } from "@/lib/tech-radar"
 
 const IMPL_CACHE_DAYS = 30 // Refresh at most once per month per company+signal
-const MAX_IMPLEMENTATIONS = 10
+const MAX_IMPLEMENTATIONS = 40 // limite del Tech Radar v2 (hasta 17 micro-agentes x N hallazgos)
 
-// ── Gemini structuring ─────────────────────────────────────────────────
-const GEMINI_SYSTEM = `Eres un investigador de implementaciones tecnologicas e innovacion empresarial.
-Se te dan excerpts de paginas web sobre proyectos, casos de exito e implementaciones tecnologicas de una empresa.
-Tu tarea es extraer implementaciones y casos de exito relevantes.
-
-REGLAS DE RELEVANCIA (CRITICAS):
-A. La empresa objetivo (te la indico abajo entre comillas) debe ser la USUARIA / CLIENTA / IMPLEMENTADORA de la tecnologia descripta.
-B. EXCLUIR cualquier excerpt donde la empresa objetivo solo se mencione:
-   - al pasar como ejemplo o comparacion ("...como Garbarino, Falabella, etc.")
-   - en una lista de empresas de un sector
-   - en contexto historico tangencial sin relacion con tecnologia
-C. SI tienes dudas sobre si la empresa es la usuaria de la tecnologia, EXCLUYE el item.
-D. El "title" y el "summary" que generes DEBEN mencionar explicitamente el nombre de la empresa objetivo.
-E. Si un excerpt es solo una mencion al pasar de la empresa pero el contenido principal es sobre otro cliente o sobre el vendor en abstracto, EXCLUIR.
-
-REGLAS DE FORMATO:
-1. Responde UNICAMENTE con JSON valido (sin markdown, sin texto extra).
-2. Resume con TUS PROPIAS PALABRAS, NO copies texto literal.
-3. Maximo 10 implementaciones. Prioriza calidad sobre cantidad. Mejor 0 items que 1 ruidoso.
-4. Si no hay implementaciones relevantes, devuelve {"implementations":[], "digest": null}
-5. Las fechas deben ser YYYY-MM-DD. Si no hay fecha exacta, intenta inferirla. Si es imposible, usa null.
-6. CADA item DEBE incluir el campo "source_index" (numero entero >=1) que indica de cual "Fuente N" del listado abajo proviene la implementacion. ESTE CAMPO ES OBLIGATORIO. NUNCA inventes URLs ni mezcles fuentes. Si no podes asignar un source_index claro, NO incluyas el item.
-
-EVIDENCE LEVELS:
-- strong: Case study oficial, comunicado de prensa del vendor, announcement oficial
-- medium: Articulo con fuentes nombradas, LinkedIn post de ejecutivos, industry report
-- weak: Mencion indirecta, partnership announcement, inferencia de uso de tecnologia
-
-AREAS validas: finanzas | ventas | logistica | rrhh | it | ciberseguridad | ecommerce | operaciones
-
-ADEMAS de las implementaciones, genera un "digest" de EXACTAMENTE 1 parrafo (2-4 oraciones) en ESPAÑOL que resuma:
-- Que tecnologias/vendors usa la empresa
-- Que tipo de proyectos ha implementado recientemente
-- Como pueden usar esta info los vendedores para posicionarse
-
-El digest debe responder: "¿Con quien compito si quiero venderle a esta empresa?"
-
-FORMATO JSON:
-{
-  "implementations": [
-    {
-      "source_index": 1,
-      "title": "string (titulo descriptivo del caso/proyecto)",
-      "provider_name": "string (vendor/consultora que implemento)",
-      "technology": "string (tecnologia implementada)",
-      "area": "string (area de la empresa)",
-      "summary": "string (descripcion del caso en 2-3 oraciones)",
-      "results": "string o null (resultados obtenidos si estan disponibles)",
-      "evidence_level": "strong | medium | weak",
-      "source_name": "string (nombre del medio/sitio)",
-      "published_at": "YYYY-MM-DD o null"
-    }
-  ],
-  "digest": "string (parrafo resumen en ESPAÑOL) o null si no hay implementaciones relevantes"
-}`
-
-interface GeminiImplResult {
-  implementations: any[]
-  digest: string | null
-}
-
-async function structureImplementationsWithGemini(
-  excerpts: { url: string; title: string; publish_date: string | null; content: string }[],
-  companyName: string,
-  keywords: string[],
-): Promise<GeminiImplResult> {
-  const excerptText = excerpts
-    .map(
-      (e, i) =>
-        `--- Fuente ${i + 1}: ${e.title} (${e.url}) [fecha: ${e.publish_date || "desconocida"}] ---\n${e.content.slice(0, 5000)}`,
-    )
-    .join("\n\n")
-
-  const keywordsCtx = keywords.length > 0
-    ? `\nTecnologias/procesos de interes: ${keywords.join(", ")}`
-    : ""
-
-  const userPrompt = `Empresa: "${companyName}"${keywordsCtx}\n\nExcerpts de busqueda web:\n\n${excerptText}\n\nExtrae las implementaciones relevantes en JSON.`
-
-  const parsed = await structureWithLLM<{ implementations?: any[]; digest?: string | null }>({
-    systemPrompt: GEMINI_SYSTEM,
-    userPrompt,
-    maxOutputTokens: 4000,
-    temperature: 0.2,
-    context: "impl",
-  })
-
-  return {
-    implementations: parsed.implementations ?? [],
-    digest: parsed.digest ?? null,
-  }
-}
-
-/**
- * Fallback degradado para Implementaciones cuando Gemini falla despues de retries.
- * Publica los excerpts crudos como items "evidencia debil" para que el usuario
- * vea AL MENOS los resultados de busqueda en lugar del empty state.
- */
-function buildDegradedImplItems(
-  excerpts: { url: string; title: string; publish_date: string | null; content: string }[],
-): GeminiImplResult {
-  const implementations = excerpts.slice(0, 10).map((e, idx) => {
-    let hostname: string
-    try {
-      hostname = new URL(e.url).hostname.replace(/^www\./, "")
-    } catch {
-      hostname = "fuente"
-    }
-    const summary = e.content.replace(/\s+/g, " ").trim().slice(0, 240)
-    return {
-      source_index: idx + 1,
-      title: e.title || hostname,
-      provider_name: null,
-      technology: null,
-      area: null,
-      summary: summary || null,
-      results: null,
-      evidence_level: "weak",
-      source_name: hostname,
-      published_at: e.publish_date,
-    }
-  })
-  return { implementations, digest: null }
-}
-
-// ── Date helpers ────────────────────────────────────────────────────────
-function sanitizeDate(dateStr: string | null | undefined): string | null {
-  if (!dateStr) return null
-  if (/XX|TBD|unknown/i.test(dateStr)) return null
-
-  const date = new Date(dateStr)
-  if (isNaN(date.getTime())) return null
-
-  const now = new Date()
-  const threeYearsAgo = new Date()
-  threeYearsAgo.setFullYear(threeYearsAgo.getFullYear() - 3)
-
-  if (date > now || date < threeYearsAgo) return null
-  return date.toISOString().split("T")[0]
-}
+// El orquestador completo (Parallel x4 bundles -> Gemini consolidador ->
+// mapping deterministico por source_index -> guardrail relevancia -> liveness
+// check) vive ahora en lib/tech-radar.ts.
 
 // ── Cache helpers (public by company_id, scoped by search_context) ────
 // search_context is a hash of the keywords used for the search, allowing
@@ -166,11 +28,13 @@ async function getRecentCache(supabase: any, companyId: string, searchContext: s
   const cacheDate = new Date()
   cacheDate.setDate(cacheDate.getDate() - IMPL_CACHE_DAYS)
 
-  // Get most recent implementation to determine last search date
+  // Get most recent v2 implementation to determine last search date
+  // (registros v1 viejos no cuentan para el cooldown de refresh)
   const { data: lastImpl } = await supabase
     .from("company_implementations")
     .select("created_at")
     .eq("company_id", companyId)
+    .eq("prompt_version", "v2")
     .order("created_at", { ascending: false })
     .limit(1)
     .single()
@@ -186,11 +50,15 @@ async function getRecentCache(supabase: any, companyId: string, searchContext: s
 
   console.log("[v0][impl][cache] lastSearchDate:", lastSearchDate, "| daysSinceLastSearch:", Math.round(daysSinceLastSearch), "| canRefresh:", canRefresh, "| isSuperadmin:", isSuperadmin, "| context:", searchContext)
 
-  // Check if we have implementations fetched within the cache window for this context
+  // Check if we have v2 implementations fetched within the cache window for this context.
+  // IMPORTANTE: filtramos por prompt_version='v2' para que el primer run del nuevo
+  // Tech Radar se ejecute aunque haya registros viejos (v1) en cache, ya que esos
+  // registros viejos no tienen los campos del Tech Radar (micro_agent, evidence_detail, etc.).
   let query = supabase
     .from("company_implementations")
     .select("id")
     .eq("company_id", companyId)
+    .eq("prompt_version", "v2")
     .gte("created_at", cacheDate.toISOString())
     .limit(1)
 
@@ -365,130 +233,29 @@ export async function POST(request: Request) {
       })
     }
 
-    // ── 3. Search with Parallel ──────────────────────────────────────
-    console.log("[v0] Implementations: Searching with Parallel for", companyName)
+    // ── 3. Run Tech Radar (4 bundles Parallel x 1 Gemini consolidador) ─
+    console.log("[v0] Implementations: Running Tech Radar for", companyName)
 
-    const searchParams = buildImplementationsSearchParams({
-      company_name: companyName,
-      industry: company.industry,
-      country: company.country,
+    const radar = await runTechRadar({
+      companyName,
+      country: company.country ?? undefined,
+      industry: company.industry ?? undefined,
       keywords,
     })
 
-    console.log("[v0][impl][parallel] objective:", searchParams.objective.slice(0, 200))
-    console.log("[v0][impl][parallel] search_queries:", JSON.stringify(searchParams.search_queries))
-    console.log("[v0][impl][parallel] include_domains count:", searchParams.source_policy?.include_domains?.length ?? 0, "| exclude:", searchParams.source_policy?.exclude_domains?.length ?? 0, "| after_date:", searchParams.source_policy?.after_date)
-    console.log("[v0][impl][parallel] max_results:", searchParams.max_results, "| keywords:", keywords)
+    console.log(
+      "[v0][impl] tech-radar findings:", radar.findings.length,
+      "| ai_provider:", radar.ai_provider,
+      "| bundles:", radar.bundle_stats.map((b) => `${b.bundle}=${b.parallel_results}`).join(" "),
+    )
 
-    let implementations: any[] = []
-    let geminiDigest: string | null = null
-    let aiProvider = "gemini-2.0-flash"
-
-    // Paso A: llamar a Parallel
-    let parallelResults: Awaited<ReturnType<typeof parallelSearch>> | null = null
-    try {
-      parallelResults = await parallelSearch(searchParams)
-      console.log("[v0] Implementations: Parallel returned", parallelResults.results.length, "results")
-      if (parallelResults.warnings && parallelResults.warnings.length > 0) {
-        console.log("[v0][impl][parallel] warnings:", JSON.stringify(parallelResults.warnings))
-      }
-      parallelResults.results.forEach((r, i) => {
-        const excerptChars = r.excerpts.reduce((acc, e) => acc + (e?.length ?? 0), 0)
-        console.log(`[v0][impl][parallel][result ${i + 1}/${parallelResults!.results.length}] date=${r.publish_date ?? "null"} | chars=${excerptChars} | ${r.url}`)
-      })
-    } catch (parallelError) {
-      console.error("[v0] Implementations: Parallel search error:", parallelError)
-    }
-
-    // Paso B: estructurar con Gemini via AI Gateway. Si falla, fallback degradado.
-    if (parallelResults && parallelResults.results.length > 0) {
-      const searchResult = parallelResults
-      const excerpts = searchResult.results.map(r => ({
-        url: r.url,
-        title: r.title,
-        publish_date: r.publish_date,
-        content: r.excerpts.join("\n"),
-      }))
-
-      let structured: any[] = []
-      try {
-        console.log("[v0] Implementations: Structuring with AI Gateway (gemini-2.0-flash)...")
-        const result = await structureImplementationsWithGemini(excerpts, companyName, keywords)
-        structured = result.implementations
-        geminiDigest = result.digest
-        console.log("[v0] Implementations: Gemini structured", structured.length, "items, digest:", geminiDigest ? "generated" : "none")
-      } catch (geminiError) {
-        console.error("[v0] Implementations: Gemini structuring failed after retries, using degraded fallback:", geminiError)
-        const degraded = buildDegradedImplItems(excerpts)
-        structured = degraded.implementations
-        geminiDigest = degraded.digest
-        aiProvider = "degraded-fallback"
-      }
-
-      // Guardrail post-LLM: descartar items que no mencionan explicitamente el
-      // nombre de la empresa en titulo+summary. Atrapa casos donde el modelo se
-      // desvio y arrastro un caso de exito de OTRA empresa que solo se mencionaba
-      // de paso en el excerpt.
-      const beforeFilter = structured.length
-      structured = filterRelevantToCompany(structured, companyName, ["title", "summary"])
-      const droppedByGuardrail = beforeFilter - structured.length
-      if (droppedByGuardrail > 0) {
-        console.log(`[v0][impl][guardrail] dropped ${droppedByGuardrail} item(s) sin mencion explicita de "${companyName}"`)
-      }
-
-      // Mapeo deterministico item -> URL via source_index (1-based) + URL liveness
-      // check para descartar links muertos. Mismo patron que en /research/news.
-      const itemsWithSource = structured
-        .slice(0, MAX_IMPLEMENTATIONS)
-        .map((item: any) => {
-          const idx1 = Number(item.source_index)
-          const sourceResult =
-            Number.isFinite(idx1) && idx1 >= 1 && idx1 <= searchResult.results.length
-              ? searchResult.results[idx1 - 1]
-              : null
-          return { item, sourceResult }
-        })
-        .filter((x) => x.sourceResult !== null)
-
-      const droppedNoSource = Math.min(structured.length, MAX_IMPLEMENTATIONS) - itemsWithSource.length
-      if (droppedNoSource > 0) {
-        console.log(`[v0][impl][mapping] dropped ${droppedNoSource} item(s) sin source_index valido`)
-      }
-
-      const candidateUrls = itemsWithSource.map((x) => x.sourceResult!.url)
-      const aliveUrls = await checkUrlsAlive(candidateUrls, { context: "impl" })
-      const aliveItems = itemsWithSource.filter((x) => aliveUrls.has(x.sourceResult!.url))
-      const droppedDead = itemsWithSource.length - aliveItems.length
-      if (droppedDead > 0) {
-        console.log(`[v0][impl][mapping] dropped ${droppedDead} item(s) por links muertos`)
-      }
-
-      implementations = aliveItems.map(({ item, sourceResult }) => {
-        const r = sourceResult!
-        let hostname: string
-        try {
-          hostname = new URL(r.url).hostname.replace(/^www\./, "")
-        } catch {
-          hostname = "fuente"
-        }
-        return {
-          title: item.title,
-          provider_name: item.provider_name || "N/A",
-          technology: item.technology || "N/A",
-          area: item.area || "operaciones",
-          summary: item.summary,
-          results: item.results || null,
-          evidence_level: item.evidence_level || "weak",
-          source_url: r.url,
-          source_name: item.source_name || hostname || r.title || "Desconocido",
-          published_at: sanitizeDate(item.published_at) || sanitizeDate(r.publish_date),
-        }
-      })
-    }
+    const findings = radar.findings
+    const radarDigest = radar.digest
+    const aiProvider = radar.ai_provider
 
     // ── 4. Fallback to old cache if no results ───────────────────────
-    if (implementations.length === 0) {
-      console.log("[v0][impl][empty] No items after Parallel+Gemini. Checking old cache...")
+    if (findings.length === 0) {
+      console.log("[v0][impl][empty] No findings from Tech Radar. Checking old cache...")
       const oldCache = await getAnyCache(supabase, companyId)
       if (oldCache && oldCache.length > 0) {
         console.log("[v0] Implementations: Using old cache -", oldCache.length, "items")
@@ -501,9 +268,9 @@ export async function POST(request: Request) {
 
     // ── 5. Deduplicate and save to public cache ──────────────────────
     const seenUrls = new Set<string>()
-    const uniqueItems = implementations.filter(item => {
-      if (seenUrls.has(item.source_url)) return false
-      seenUrls.add(item.source_url)
+    const uniqueFindings = findings.filter((f) => {
+      if (seenUrls.has(f.source_url)) return false
+      seenUrls.add(f.source_url)
       return true
     })
 
@@ -514,28 +281,34 @@ export async function POST(request: Request) {
 
     const existingUrls = new Set(existingImpls?.map((i: any) => i.source_url) || [])
 
-    // We'll use the digest to update all items in this batch
-    const newToInsert = uniqueItems
-      .filter(item => !existingUrls.has(item.source_url))
-      .map((item, idx) => ({
+    // Insert new v2 findings con todos los campos del Tech Radar
+    const newToInsert = uniqueFindings
+      .filter((f) => !existingUrls.has(f.source_url))
+      .map((f, idx) => ({
         company_id: companyId,
-        title: item.title,
-        summary: item.summary,
-        source_url: item.source_url,
-        source_name: item.source_name,
-        published_at: item.published_at,
+        title: f.title,
+        summary: f.summary,
+        source_url: f.source_url,
+        source_name: f.source_name,
+        published_at: f.published_at,
         ai_provider: aiProvider,
-        technology: item.technology,
-        area: item.area,
-        provider_name: item.provider_name,
-        evidence_level: item.evidence_level,
+        technology: f.technology,
+        area: f.area,
+        provider_name: f.provider_name,
+        evidence_level: f.evidence_level,
+        evidence_detail: f.evidence_detail,
+        micro_agent: f.micro_agent,
+        convergent_sources: f.convergent_sources,
+        supporting_source_urls: f.supporting_source_urls,
+        prompt_version: "v2",
+        results: f.results,
         search_context: searchContext,
-        // Only store digest on the first item as a flag that batch was processed
-        digest: idx === 0 ? geminiDigest : null,
-        digest_generated_at: idx === 0 && geminiDigest ? new Date().toISOString() : null,
+        // Solo guardamos digest en el primer item como flag de batch procesado
+        digest: idx === 0 ? radarDigest : null,
+        digest_generated_at: idx === 0 && radarDigest ? new Date().toISOString() : null,
       }))
 
-    console.log(`[v0] Implementations: Inserting ${newToInsert.length} new items`)
+    console.log(`[v0] Implementations: Inserting ${newToInsert.length} new v2 findings`)
 
     if (newToInsert.length > 0) {
       const { error: insertError } = await supabase
