@@ -16,7 +16,7 @@ import {
   ShieldQuestion,
   Quote,
 } from "lucide-react"
-import { MICRO_AGENT_LABELS, type MicroAgent } from "@/lib/tech-radar"
+import { MICRO_AGENT_LABELS, type MicroAgent } from "@/lib/tech-radar-constants"
 import type { Implementation } from "./types"
 
 interface Props {

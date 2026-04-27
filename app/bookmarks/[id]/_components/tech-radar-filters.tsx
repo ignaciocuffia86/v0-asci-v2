@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { MICRO_AGENT_LABELS, type MicroAgent } from "@/lib/tech-radar"
+import { MICRO_AGENT_LABELS, type MicroAgent } from "@/lib/tech-radar-constants"
 
 export type EvidenceFilter = "todos" | "directa" | "convergente" | "inferencia"
 

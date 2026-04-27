@@ -15,51 +15,18 @@
 import { parallelSearch, type ParallelSearchOptions, type ParallelSearchResponse } from "@/lib/parallel"
 import { structureWithLLM, filterRelevantToCompany, checkUrlsAlive } from "@/lib/ai-structurer"
 
-// ── Catalogo de micro-agentes ──────────────────────────────────────────
-export const MICRO_AGENTS = [
-  "bi_analytics",
-  "cloud",
-  "ipaas",
-  "ciberseguridad",
-  "workplace",
-  "devops",
-  "erp",
-  "ia_rpa",
-  "hardware",
-  "crm",
-  "telco",
-  "procurement_it",
-  "observabilidad",
-  "pagos",
-  "logistica",
-  "health_it",
-  "consultoria",
-] as const
+// Constantes y tipos client-safe viven en lib/tech-radar-constants.ts
+// para no contaminar bundles del cliente con imports server-only.
+// Re-exportamos para compatibilidad con codigo del backend que ya los usa.
+import {
+  MICRO_AGENTS,
+  type MicroAgent,
+  MICRO_AGENT_LABELS,
+  type EvidenceLevel,
+} from "@/lib/tech-radar-constants"
 
-export type MicroAgent = (typeof MICRO_AGENTS)[number]
-
-export const MICRO_AGENT_LABELS: Record<MicroAgent, string> = {
-  bi_analytics: "BI / Analytics / Data",
-  cloud: "Cloud / IaaS / PaaS",
-  ipaas: "Integración / APIs / iPaaS",
-  ciberseguridad: "Ciberseguridad",
-  workplace: "Digital Workplace / Colaboración",
-  devops: "Desarrollo / Software / DevOps",
-  erp: "ERP / Gestión Empresarial",
-  ia_rpa: "IA / RPA / Automatización",
-  hardware: "Hardware / Infraestructura",
-  crm: "CRM / Customer Experience",
-  telco: "Telecomunicaciones",
-  procurement_it: "Procurement IT",
-  observabilidad: "Monitoreo / Observabilidad",
-  pagos: "Pagos / Fintech / POS",
-  logistica: "Logística / WMS / RFID",
-  health_it: "Health IT / Salud Digital",
-  consultoria: "Consultoría / Servicios IT",
-}
-
-// Niveles de evidencia segun prompt de Claude (alineado con migracion 161)
-export type EvidenceLevel = "directa" | "convergente" | "inferencia" | "sin_evidencia"
+export { MICRO_AGENTS, MICRO_AGENT_LABELS }
+export type { MicroAgent, EvidenceLevel }
 
 // ── Bundles tematicos ──────────────────────────────────────────────────
 type Bundle = {

@@ -29,7 +29,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { TechRadarFilters, type EvidenceFilter } from "./tech-radar-filters"
 import { TechRadarFindingCard } from "./tech-radar-finding-card"
 import { LegacyImplCard } from "./legacy-impl-card"
-import { MICRO_AGENTS } from "@/lib/tech-radar"
+import { MICRO_AGENTS } from "@/lib/tech-radar-constants"
 import type { Implementation as ImplementationType } from "./types"
 
 interface CompanyNews {
