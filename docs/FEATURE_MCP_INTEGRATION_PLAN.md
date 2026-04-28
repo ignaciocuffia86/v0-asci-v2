@@ -122,8 +122,10 @@ El protocolo MCP tiene tres primitivas. Mapeo lo que tenemos hoy en ASCI a cada 
 | `news.get` | `news:read` | read | Devuelve una noticia individual con texto completo, summary y empresas vinculadas. |
 | `filters.list` | `filters:read` | read | Lista filtros guardados del usuario. |
 | `filters.apply` | `filters:read` | read | Aplica un filtro guardado y devuelve los resultados (empresas matcheadas). |
-| `apollo.search_people` | `apollo:search` | costly | Busca tomadores de decisión en Apollo dado un dominio + filtros (titles, seniority, departments). **Consume créditos Apollo.** |
-| `apollo.get_person` | `apollo:search` | costly | Enriquece un person_id de Apollo. Consume créditos. |
+| `apollo.search_people` | `apollo:search` | costly | Busca tomadores de decisión en Apollo **siempre en el contexto de un `bookmark_id` existente del usuario** (filtros: titles, seniority, departments). El dominio se resuelve internamente desde el bookmark. **Consume créditos Apollo.** |
+| `apollo.get_person` | `apollo:search` | costly | Enriquece un `person_id` de Apollo **dentro del contexto de un `bookmark_id`** del usuario. Consume créditos. |
+
+> **Regla de negocio crítica de Apollo**: la búsqueda de personas solo se permite sobre cuentas que el usuario ya mapeó como bookmark (bookmarks creados manualmente, traídos vía ABM o dados de alta como territorio). Esto evita que un agente, por prompt injection o exploración, ejecute búsquedas Apollo arbitrarias sobre dominios random — protege créditos y mantiene la disciplina del flujo de trabajo. Los tools `apollo.*` rechazan llamadas sin `bookmark_id` con `-32602 invalid params`. Si el `bookmark_id` no pertenece al `user_id` del PAT, devuelven `-32004 not_found`.
 | `contacts.list` | `contacts:read` | read | Lista contactos de un bookmark con sus emails y status. |
 | `contacts.add_to_bookmark` | `contacts:write` | write seguro | Persiste un person de Apollo (search result) como contacto del bookmark. |
 | `icebreakers.list` | `icebreakers:read` | read | Lista icebreakers ya generados para un bookmark/contacto. |
@@ -152,7 +154,7 @@ Pre-armadas para que el cliente las exponga al usuario como "templates".
 | Prompt | Argumentos | Qué hace |
 |---|---|---|
 | `research_bookmark` | `bookmark_id` | Pre-llena el contexto con el bookmark, sus señales, sus noticias, sus docs, y pide al LLM hacer un research profundo. |
-| `find_decision_makers` | `bookmark_id`, `seniority?`, `departments?` | Llama `apollo.search_people` con parámetros del bookmark y devuelve resultados. |
+| `find_decision_makers` | `bookmark_id` (requerido), `seniority?`, `departments?` | Llama `apollo.search_people` con el contexto del bookmark (dominio + cuenta) y devuelve resultados. El `bookmark_id` es obligatorio por la regla de negocio de Apollo. |
 | `draft_outbound_email` | `contact_id`, `tone?` | Genera icebreaker + sugerencia de subject + cuerpo, listo para enviar (no lo manda). |
 
 > Los prompts son opcionales en MCP pero mejoran muchísimo la UX en Claude Desktop, donde aparecen como slash-commands.
@@ -435,25 +437,80 @@ El endpoint único `/mcp` acepta:
 
 ---
 
-## 9. Reuso de servicios existentes
+## 9. Reuso de servicios existentes (revisado contra el código real)
 
-Crítico para no duplicar lógica entre Server Actions de la UI y MCP tools. Refactor previo necesario:
+Crítico para no duplicar lógica entre Server Actions de la UI y MCP tools. **No se requiere refactor mayor ni infraestructura paralela** — el MCP server corre en el mismo proceso de Next.js, importa funciones existentes y las invoca con el `user_id` resuelto del PAT.
 
-1. Hoy mucha lógica vive en `app/actions/*.ts` con `"use server"`. Eso impide invocarla desde un route handler arbitrario sin modificaciones.
-2. **Plan**: extraer la lógica pura a `lib/services/*` (sin `"use server"`, sin acceso a cookies/headers), y dejar los `app/actions/*` como wrappers thin que solo agregan auth-from-cookie + revalidatePath.
-3. El MCP server invoca `lib/services/*` directamente, pasando un `user_id` resuelto del PAT en lugar del de cookie.
+### 9.1 Estado actual del código (medido)
 
-**Servicios a extraer en orden de prioridad** (alineado con tools del MVP):
-- `lib/services/bookmarks.ts` ← desde `app/actions/bookmarks.ts`
-- `lib/services/docs.ts` ← desde acciones de seller/strategy docs
-- `lib/services/signals.ts`
-- `lib/services/news.ts`
-- `lib/services/filters.ts`
-- `lib/services/contacts.ts`
-- `lib/services/apollo.ts` ← desde `app/actions/apollo.ts`
-- `lib/services/icebreakers.ts`
+| Métrica | Valor |
+|---|---|
+| Archivos en `app/actions/` | 15 |
+| Funciones exportadas totales | ~93 |
+| Archivos que llaman `auth.getUser()` o `cookies()` internamente | 8 |
+| Archivos que ya reciben `userId` como parámetro explícito | 7 |
+| Archivos que impactan a tools del MVP | 7 (`bookmarks`, `apollo`, `search`, `search-v2`, `documents`, `dictionary`, `companies`) |
 
-> Esta refactorización es deuda técnica buena: además de habilitar MCP, hace los actions más testeables.
+### 9.2 La directiva `"use server"` no impide importarlas desde un route handler
+
+Verificado en `app/actions/bookmarks.ts` y `app/actions/apollo.ts`: muchas funciones ya tienen la firma `(userId: string, ...)` y son pura lógica. El `"use server"` solo agrega validación extra cuando el cliente las invoca como Server Action; **el route handler `/mcp` puede importarlas y llamarlas como funciones normales sin problemas**.
+
+```ts
+// app/api/mcp/route.ts (futuro)
+import { bookmarkCompany } from "@/app/actions/bookmarks"
+
+const principal = await authenticatePAT(req)
+const result = await bookmarkCompany(principal.userId, companyId, ctx)
+```
+
+### 9.3 Categorías de funciones y cómo se trata cada una
+
+**Categoría A — ya recibe `userId` explícito** (la mayoría de bookmarks, apollo, contacts):
+- **Acción requerida**: ninguna. Se importa directamente desde el route handler MCP.
+
+**Categoría B — resuelve auth internamente con `auth.getUser()`** (parte de `documents`, `workspace`, algunas funciones de búsqueda):
+- **Acción requerida**: refactor mínimo, **aditivo no destructivo**: agregar al lado una función gemela que reciba `userId` como parámetro. La action existente queda como wrapper de 2 líneas.
+- **Ejemplo**:
+  ```ts
+  // app/actions/documents.ts
+  "use server"
+
+  // NUEVO: función reusable
+  export async function listDocumentsForUser(userId: string, bookmarkId: string) {
+    const supabase = await createClient()
+    // ... lógica que antes estaba inline
+  }
+
+  // EXISTENTE: la action sigue funcionando idéntica para la web
+  export async function listDocuments(bookmarkId: string) {
+    const { data: { user } } = await supabase.auth.getUser()
+    return listDocumentsForUser(user!.id, bookmarkId)
+  }
+  ```
+
+### 9.4 Garantía de no-regresión para la web
+
+| Pregunta | Respuesta |
+|---|---|
+| ¿Las actions siguen siendo ejecutables desde la UI normal? | Sí, intactas. Ningún cambio toca el comportamiento web. |
+| ¿`"use server"` se queda? | Sí, en todas. |
+| ¿Los componentes cliente siguen invocándolas igual? | Sí, sin cambios. |
+| ¿Hay infraestructura paralela que mantener? | No. Mismo proceso, mismo deploy, mismo Supabase. |
+| ¿Hay copia de lógica entre MCP y UI? | No. La función de negocio existe una sola vez. |
+
+### 9.5 Trabajo concreto estimado
+
+- **Categoría A (importar tal cual)**: 0 días. Solo escribir el handler MCP que las invoca.
+- **Categoría B (agregar función gemela)**: 2-3 días para los ~8 archivos afectados.
+- Total deuda técnica previa al MCP: **2-3 días de un dev**, no un sprint.
+
+### 9.6 Regla de seguridad obligatoria
+
+Algunas funciones existentes (ej. `bookmarkCompany`) reciben `userId` como parámetro pero **no lo validan contra el usuario autenticado**. Hoy es seguro porque solo las invocan server actions con auth previa. En MCP esto debe blindarse:
+
+> **El `user_id` que llega al servicio debe venir SIEMPRE del `principal` autenticado del PAT, nunca de un argumento del tool.**
+
+Los tools MCP no aceptan `user_id` como argumento. El handler del tool toma `principal.userId` y lo inyecta. Esto se valida con un test E2E de aislamiento entre tenants antes de release.
 
 ---
 
@@ -557,9 +614,11 @@ Lo nuevo que sí se construye en Fase 2:
 ## 16. Checklist pre-launch (MVP)
 
 ### Pre-requisitos de código
-- [ ] Refactor de `app/actions/*` → `lib/services/*` para servicios que tools necesitan.
-- [ ] Confirmar que todos los servicios reciben `user_id` como parámetro explícito (no de cookie).
+- [ ] Identificar funciones de Categoría B (las ~8 que resuelven auth internamente con `auth.getUser()` / `cookies()`).
+- [ ] Para cada Categoría B: agregar función gemela `*ForUser(userId, ...)` reusable. La action existente queda intacta como wrapper.
+- [ ] Auditar que ningún tool MCP acepte `user_id` como argumento (regla de seguridad sección 9.6).
 - [ ] Schema Zod por cada tool, en archivos separados por dominio.
+- [ ] Validación obligatoria de `bookmark_id` ↔ `user_id` en todos los tools `apollo.*` (regla de negocio).
 
 ### Infraestructura
 - [ ] DNS `mcp.bigua.lat` → CNAME Vercel.
@@ -606,13 +665,16 @@ Lo nuevo que sí se construye en Fase 2:
 ## 17. Preguntas abiertas para próximas sesiones
 
 1. **Servicio de scopes UX**: ¿exponemos los 11 scopes individualmente o agrupados (`read:all`, `write:safe`, `costly`)? Los individuales son más seguros pero más confusos.
-2. **Apollo: ¿el agente puede hacer búsquedas que no están atadas a un bookmark?** Hoy la UI siempre asocia. ¿Permitimos `apollo.search_people({ domain })` sin bookmark_id, o forzamos el contexto?
-3. **Icebreakers: ¿el agente puede pedir generación con un strategy doc *distinto* al default del usuario?** Esto le da poder al agente para "probar otro tono" sin tocar la config global.
-4. **Resources vs Tools**: ¿cuáles datos expongo como resource (URI) y cuáles como tool (`*.get`)? Hay overlap. Propuesta: ambos, el cliente elige.
-5. **¿Permitir tokens con `user_id` compartido entre miembros de un workspace?** Hoy no hay concepto fuerte de workspace en ASCI, pero si lo hubiera, un PAT a nivel workspace con scope cross-user sería valioso para integraciones organizacionales. Por ahora descartado.
-6. **Política de retención de `mcp_audit_log`**: ¿90 días en hot, archivado a Blob después? ¿O 30 días y borrado?
-7. **Soporte multi-idioma de descripciones de tools**: las descripciones que ven los agentes están en inglés (estándar) o español (mercado)? Propuesta: inglés para tool names + descriptions (lo que el LLM lee), español en la UI de gestión.
-8. **Notificaciones server→cliente**: ¿hay algún caso donde la plataforma deba "avisarle" al agente activamente? Ej. "se acaba de disparar una señal nueva". El SSE GET soporta esto, pero requiere lógica de fan-out. Probablemente Fase 3.
+2. **Icebreakers: ¿el agente puede pedir generación con un strategy doc *distinto* al default del usuario?** Esto le da poder al agente para "probar otro tono" sin tocar la config global.
+3. **Resources vs Tools**: ¿cuáles datos expongo como resource (URI) y cuáles como tool (`*.get`)? Hay overlap. Propuesta: ambos, el cliente elige.
+4. **¿Permitir tokens con `user_id` compartido entre miembros de un workspace?** Hoy no hay concepto fuerte de workspace en ASCI, pero si lo hubiera, un PAT a nivel workspace con scope cross-user sería valioso para integraciones organizacionales. Por ahora descartado.
+5. **Política de retención de `mcp_audit_log`**: ¿90 días en hot, archivado a Blob después? ¿O 30 días y borrado?
+6. **Soporte multi-idioma de descripciones de tools**: las descripciones que ven los agentes están en inglés (estándar) o español (mercado)? Propuesta: inglés para tool names + descriptions (lo que el LLM lee), español en la UI de gestión.
+7. **Notificaciones server→cliente**: ¿hay algún caso donde la plataforma deba "avisarle" al agente activamente? Ej. "se acaba de disparar una señal nueva". El SSE GET soporta esto, pero requiere lógica de fan-out. Probablemente Fase 3.
+
+> **Resueltas en esta iteración**:
+> - *Apollo siempre con `bookmark_id`*: confirmado por regla de negocio del producto (ABM / territorio / bookmark mapeado). Reflejado en sección 3.1 y 16.
+> - *Refactor `actions → services`*: descartado en favor del enfoque aditivo "función gemela" — sección 9 reescrita con datos reales del repo.
 
 ---
 
@@ -622,7 +684,7 @@ Lo nuevo que sí se construye en Fase 2:
 
 **Qué NO construimos en MVP**: integraciones con Claude.ai web ni ChatGPT (requieren OAuth 2.1, Fase 2). Tampoco envío de correos por MCP (espera al feature de Gmail integration y a un análisis de seguridad específico).
 
-**Costo de implementación estimado**: 2-3 sprints de backend + 1 sprint de UI + 1 sprint de docs públicas y testing con clientes reales. Más el refactor previo `actions → services` que ya era deuda técnica buena.
+**Costo de implementación estimado**: 2-3 sprints de backend + 1 sprint de UI + 1 sprint de docs públicas y testing con clientes reales. La preparación de `app/actions/*` que requiere el MCP es **liviana (2-3 días)**: agregar funciones gemelas `*ForUser(userId, ...)` para las ~8 actions que hoy resuelven auth internamente. Las otras ~7 actions ya reciben `userId` y se reusan tal cual. Cero infraestructura paralela.
 
 **Costo de operación**: bajo. Reusa Vercel, Supabase y AI Gateway existentes. La única dependencia nueva opcional es Upstash Ratelimit (~$0-10/mes en su plan free/starter).
 
