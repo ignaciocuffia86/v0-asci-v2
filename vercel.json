@@ -24,6 +24,10 @@
     {
       "path": "/api/cron/apollo-reverify",
       "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron/refresh-landing-stats",
+      "schedule": "0 5 * * 1"
     }
   ]
 }

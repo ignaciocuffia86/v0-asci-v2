@@ -148,9 +148,19 @@ function StepCard({ number, title, description, index }: { number: number; title
 /* ═══════════════════════════════════════════════════
    MAIN PAGE
    ═══════════════════════════════════════════════════ */
+// Valores de fallback (snapshot manual de la DB al 29-Abr-2026).
+// Si el fetch a /api/landing-stats falla, se muestran estos.
+const STATS_FALLBACK = {
+  contacts_analyzed: 393198,
+  companies_indexed: 398459,
+  technologies_processes: 89,
+  signals_detected: 1091130,
+}
+
 export default function HomePage() {
   const [scrolled, setScrolled] = useState(false)
   const [mobileMenu, setMobileMenu] = useState(false)
+  const [stats, setStats] = useState(STATS_FALLBACK)
   const heroRef = useRef(null)
   const { scrollYProgress } = useScroll({ target: heroRef, offset: ["start start", "end start"] })
   const heroOpacity = useTransform(scrollYProgress, [0, 1], [1, 0])
@@ -160,6 +170,28 @@ export default function HomePage() {
     const onScroll = () => setScrolled(window.scrollY > 20)
     window.addEventListener("scroll", onScroll, { passive: true })
     return () => window.removeEventListener("scroll", onScroll)
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    fetch("/api/landing-stats")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return
+        setStats({
+          contacts_analyzed: data.contacts_analyzed ?? STATS_FALLBACK.contacts_analyzed,
+          companies_indexed: data.companies_indexed ?? STATS_FALLBACK.companies_indexed,
+          technologies_processes:
+            data.technologies_processes ?? STATS_FALLBACK.technologies_processes,
+          signals_detected: data.signals_detected ?? STATS_FALLBACK.signals_detected,
+        })
+      })
+      .catch(() => {
+        // Silencioso: dejamos el fallback. La landing no debe romperse por esto.
+      })
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const navLinks = [
@@ -438,10 +470,10 @@ export default function HomePage() {
         <Section className="py-20" style={{ borderTop: `1px solid ${BORDER}`, borderBottom: `1px solid ${BORDER}` }}>
           <div className="mx-auto max-w-5xl px-6">
             <div className="grid grid-cols-2 gap-10 md:grid-cols-4">
- <AnimatedStat value={217000} suffix="+" label="Contactos Analizados" />
- <AnimatedStat value={239000} suffix="+" label="Empresas Indexadas" />
- <AnimatedStat value={78} suffix="" label="Tecnologias y Procesos" />
- <AnimatedStat value={598000} suffix="+" label="Senales Detectadas" />
+              <AnimatedStat value={stats.contacts_analyzed} suffix="+" label="Contactos Analizados" />
+              <AnimatedStat value={stats.companies_indexed} suffix="+" label="Empresas Indexadas" />
+              <AnimatedStat value={stats.technologies_processes} suffix="" label="Tecnologias y Procesos" />
+              <AnimatedStat value={stats.signals_detected} suffix="+" label="Senales Detectadas" />
             </div>
           </div>
         </Section>
@@ -475,7 +507,7 @@ export default function HomePage() {
 
         {/* ═══════════════════════════════════════
             HOW IT WORKS
-            ═══════════════════════════════════════ */}
+            ═══���═══════════════════════════════════ */}
         <Section id="how-it-works" className="py-24 md:py-32" style={{ borderTop: `1px solid ${BORDER}` }}>
           <div className="mx-auto max-w-5xl px-6">
             <div className="mx-auto mb-16 max-w-2xl text-center">
@@ -501,7 +533,7 @@ export default function HomePage() {
 
         {/* ═══════════════════════════════════════
             WORKSPACE SHOWCASE
-            ═══════════════════════════════════════ */}
+            ═════════════��═════════════════════════ */}
         <Section className="py-24 md:py-32" style={{ borderTop: `1px solid ${BORDER}` }}>
           <div className="mx-auto max-w-6xl px-6">
             <div className="grid grid-cols-1 items-center gap-16 lg:grid-cols-2">
