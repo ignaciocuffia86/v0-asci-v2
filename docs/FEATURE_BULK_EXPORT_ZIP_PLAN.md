@@ -6,6 +6,51 @@
 
 ---
 
+## 0. Pre-requisito crítico: recuperar la base de selección múltiple
+
+> **Hallazgo**: Al verificar el entorno deployado contra el código fuente del repo, los checkboxes por fila, el checkbox "seleccionar todo" y la barra flotante de acciones **no aparecen en la UI de producción**, aunque sí están presentes en el código de la branch de trabajo de este chat (`v0/ignaciocuffia-654f7e91`). El usuario confirmó: "supo estar pero no está más". Esto indica que la base nunca llegó a `main` o fue removida en algún momento.
+
+### 0.1 Evidencia
+
+| Fuente | Estado |
+|---|---|
+| Screenshot de producción (vista Lista) | 7 columnas: Empresa, Estado, Contexto, Prioridad, Notas, Fecha, Acciones. **Sin checkboxes**. **Sin barra flotante**. |
+| `app/bookmarks/page.tsx` en branch `v0/ignaciocuffia-654f7e91` | 8 columnas: la primera es `<TableHead className="w-10">` con `<Checkbox />` (líneas 448-453). Por fila, checkbox en `<TableCell>` (líneas 466-471). Barra flotante con bulk export (líneas 587-624). |
+| Archivos `app/api/bookmarks/export/route.ts` y `lib/export-bookmarks.ts` | Existen en la branch del chat. Estado en `main` por confirmar. |
+
+### 0.2 Implicancia
+
+El feature de "Export ZIP de archivos separados" **no se puede construir directamente sobre `main`** porque le falta la base de selección múltiple sobre la que se apoya (`selectedIds`, `handleSelectToggle`, `handleSelectAll`, barra flotante, endpoint bulk consolidado). Hay dos caminos posibles para recuperarla, y ambos deben resolverse antes de empezar el trabajo nuevo del ZIP:
+
+| Camino | Cuándo aplica | Acción |
+|---|---|---|
+| **A. Merge de la branch del chat a `main`** | Si el código de la branch `v0/ignaciocuffia-654f7e91` sigue siendo válido y no choca con cambios posteriores. | Abrir PR de la branch del chat hacia `main`. Resolver conflictos si los hay. Validar que el deploy preview muestra checkboxes y barra flotante antes de mergear. |
+| **B. Re-implementar la base** | Si la branch del chat divergió mucho de `main` o si hay razones de producto para que la base sea distinta a la que existe ahí. | Replicar en `main` la lógica de checkboxes, barra flotante, endpoints `/api/bookmarks/[id]/export` y `/api/bookmarks/export`, y `lib/export-bookmarks.ts`. Trabajo equivalente al que ya está hecho en la branch — evitable si A es viable. |
+
+### 0.3 Pregunta abierta sobre la causa
+
+No se documenta acá *por qué* la base no está en `main`. Puede ser que el merge nunca se hizo, que hubo un revert intencional (decisión de producto que desconocemos), o un revert accidental durante un rebase/merge conflictivo. **Antes de elegir entre A y B conviene revisar el git log de `main` sobre `app/bookmarks/page.tsx` y `app/api/bookmarks/`** para no repetir el problema. Si fue un revert intencional, hay que entender el motivo antes de re-introducir el feature.
+
+### 0.4 Definición de listo del Pre-requisito #0
+
+- [ ] El git log de `main` revisado y la causa del removal documentada (o confirmada como "merge nunca ocurrido").
+- [ ] Camino A o B elegido y ejecutado.
+- [ ] En el deploy productivo, en la vista Lista, se ven: checkbox en cada fila, checkbox de "seleccionar todo" en el header, y barra flotante con botón "Exportar Excel" cuando hay 1+ seleccionados.
+- [ ] El endpoint `POST /api/bookmarks/export` responde con un `.xlsx` consolidado válido.
+- [ ] Solo después de cumplir lo anterior se inicia el trabajo de las secciones 4-7 de este documento.
+
+### 0.5 Impacto en estimación
+
+La estimación original de **2-3 días para el ZIP nuevo sigue siendo válida**, pero ahora hay un pre-requisito que la antecede:
+
+- Camino A (merge): horas de trabajo, dependiente de cuántos conflictos haya y si hay que justificar/desbloquear el merge a alguien.
+- Camino B (re-implementar): ~2-3 días adicionales (porque es replicar lo que ya está escrito).
+
+**Total optimista (camino A + ZIP)**: ~3-4 días.
+**Total pesimista (camino B + ZIP)**: ~5-6 días.
+
+---
+
 ## 1. Resumen ejecutivo
 
 Permitir que el usuario, desde la vista de lista en `/bookmarks`, seleccione múltiples bookmarks vía checkboxes y descargue un **ZIP** con un Excel individual por cada bookmark, manteniendo el formato exacto del export individual existente (6 hojas por bookmark). En paralelo, se preserva el export consolidado actual (resumen + todos los prospectos en un único `.xlsx`) como segunda opción dentro de un dropdown.
@@ -14,24 +59,24 @@ Permitir que el usuario, desde la vista de lista en `/bookmarks`, seleccione mú
 
 ## 2. Estado actual del código (medido)
 
-Buena parte del feature ya existe. Esta tabla evita reinventar lo construido.
+Esta tabla refleja el estado del código en la branch de este chat (`v0/ignaciocuffia-654f7e91`). El estado en `main` puede ser distinto — ver Pre-requisito #0.
 
-| Pieza | Estado | Archivo |
-|---|---|---|
-| Checkbox por fila en lista | Implementado | `app/bookmarks/page.tsx` |
-| Checkbox "seleccionar todo" en header | Implementado | `app/bookmarks/page.tsx` |
-| Estado `selectedIds: Set<string>` | Implementado | `app/bookmarks/page.tsx` |
-| Barra flotante de acciones | Implementado | `app/bookmarks/page.tsx` |
-| Botón "Exportar Excel" (consolidado) | Implementado | `app/bookmarks/page.tsx` |
-| Endpoint export individual | Implementado | `app/api/bookmarks/[id]/export/route.ts` |
-| Endpoint export bulk consolidado | Implementado | `app/api/bookmarks/export/route.ts` |
-| `generateBookmarkExcel()` (6 hojas) | Implementado | `lib/export-bookmarks.ts` |
-| `generateBulkBookmarksExcel()` (consolidado) | Implementado | `lib/export-bookmarks.ts` |
-| RPC `get_bookmark_export_data` | Implementado | `scripts/135`, `136` |
-| Validación de ownership por `user_id` | Implementado | endpoints actuales |
-| Límite duro de 50 bookmarks | Implementado | endpoint bulk |
+| Pieza | Estado en branch del chat | Estado confirmado en `main` | Archivo |
+|---|---|---|---|
+| Checkbox por fila en lista | Implementado | **Ausente** (confirmado por screenshot) | `app/bookmarks/page.tsx` |
+| Checkbox "seleccionar todo" en header | Implementado | **Ausente** (confirmado por screenshot) | `app/bookmarks/page.tsx` |
+| Estado `selectedIds: Set<string>` | Implementado | Por confirmar | `app/bookmarks/page.tsx` |
+| Barra flotante de acciones | Implementado | **Ausente** (confirmado por screenshot) | `app/bookmarks/page.tsx` |
+| Botón "Exportar Excel" (consolidado) | Implementado | Ausente (depende de barra flotante) | `app/bookmarks/page.tsx` |
+| Endpoint export individual | Implementado | Por confirmar | `app/api/bookmarks/[id]/export/route.ts` |
+| Endpoint export bulk consolidado | Implementado | Por confirmar | `app/api/bookmarks/export/route.ts` |
+| `generateBookmarkExcel()` (6 hojas) | Implementado | Por confirmar | `lib/export-bookmarks.ts` |
+| `generateBulkBookmarksExcel()` (consolidado) | Implementado | Por confirmar | `lib/export-bookmarks.ts` |
+| RPC `get_bookmark_export_data` | Implementado | Probablemente sí (las migraciones suelen llegar a Supabase aunque la UI no se merge) | `scripts/135`, `136` |
+| Validación de ownership por `user_id` | Implementado | Va con los endpoints | endpoints actuales |
+| Límite duro de 50 bookmarks | Implementado | Va con el endpoint bulk | endpoint bulk |
 
-**Lo que falta**: empaquetar N excels en un ZIP, exponerlo como segundo formato y agregar el dropdown en la UI.
+**Lo que falta una vez resuelto el Pre-requisito #0**: empaquetar N excels en un ZIP, exponerlo como segundo formato y agregar el dropdown en la UI.
 
 ---
 
@@ -271,7 +316,14 @@ Para v1 dejamos un toast con spinner indeterminado. **No** mostramos progreso re
 
 ## 11. Checklist pre-launch
 
-### Backend
+### Pre-requisito #0 (bloqueante, ver sección 0)
+- [ ] Revisar git log de `main` sobre `app/bookmarks/page.tsx` y `app/api/bookmarks/` para identificar si la base fue removida y por qué.
+- [ ] Decidir entre camino A (merge de la branch del chat) y camino B (re-implementar).
+- [ ] Ejecutar el camino elegido.
+- [ ] Verificar en deploy productivo que se ven checkboxes, "seleccionar todo" y barra flotante.
+- [ ] Verificar que `POST /api/bookmarks/export` responde correctamente con un `.xlsx` consolidado.
+
+### Backend (solo después del Pre-requisito #0)
 - [ ] Crear endpoint `POST /api/bookmarks/export-zip` con `maxDuration = 60`.
 - [ ] Crear `lib/zip-bookmarks.ts` con la función pura.
 - [ ] Crear `lib/sanitize-filename.ts` con tests unitarios para los caracteres ilegales.
@@ -302,12 +354,15 @@ Para v1 dejamos un toast con spinner indeterminado. **No** mostramos progreso re
 
 | Área | Trabajo |
 |---|---|
-| Backend (endpoint + helpers + tests) | 1–1.5 días |
+| Pre-requisito #0 — Camino A (merge) | horas a 1 día (depende de conflictos y aprobaciones) |
+| Pre-requisito #0 — Camino B (re-implementar base) | 2–3 días |
+| Backend ZIP (endpoint + helpers + tests) | 1–1.5 días |
 | Frontend (dropdown + handler + estados) | 0.5–1 día |
 | QA manual y ajustes | 0.5 día |
-| **Total** | **2–3 días** |
+| **Total optimista (A + ZIP)** | **3–4 días** |
+| **Total pesimista (B + ZIP)** | **5–6 días** |
 
-Es un feature pequeño porque el ~80% del código necesario ya existe en el repo. Lo nuevo es solo el empaquetado y la presentación.
+El feature de ZIP en sí es chico (~2–3 días) porque el código existe en la branch de este chat. La variabilidad la introduce el Pre-requisito #0 según cuán divergidas estén `main` y la branch.
 
 ---
 
