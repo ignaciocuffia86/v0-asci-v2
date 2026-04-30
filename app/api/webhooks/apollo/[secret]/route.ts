@@ -103,41 +103,82 @@ function pickBestPhone(phones: ApolloPhoneNumber[]): { value: string | null; isM
   return { value: value && value.length > 0 ? value : null, isMobile }
 }
 
+// Util para no loggear secrets en plano. Solo nos importa la longitud y
+// los primeros 6 caracteres para poder comparar entre intentos sin exponer
+// el secret completo en la tabla de logs.
+function fingerprint(value: string | null | undefined): string {
+  if (!value) return "<empty>"
+  const str = String(value)
+  return `len=${str.length}:prefix=${str.slice(0, 6)}`
+}
+
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ secret: string }> },
 ) {
   const { secret } = await params
   const expected = process.env.APOLLO_WEBHOOK_SECRET
+  const secretMatches = !!expected && secret === expected
 
-  if (!expected || secret !== expected) {
-    console.warn("[v0][apollo-webhook] reject: secret mismatch")
-    return NextResponse.json({ ok: false }, { status: 401 })
-  }
-
-  let payload: any
+  // Parseamos el body lo antes posible para poder loggearlo SIEMPRE,
+  // incluso cuando el secret no matchea. Antes el handler devolvia 401
+  // antes de loggear, dejando un punto ciego cuando Apollo llegaba con
+  // un secret distinto (env var rotada, encoding de URL, etc.).
+  let payload: any = null
+  let parseError: string | null = null
   try {
     payload = await request.json()
   } catch (err) {
-    console.error("[v0][apollo-webhook] invalid JSON:", err)
-    // Devolvemos 200 igual: si el body es invalido, reintentar no ayuda.
-    return NextResponse.json({ ok: true, ignored: "invalid_json" })
+    parseError = err instanceof Error ? err.message : String(err)
   }
 
-  // Log de arrival INCONDICIONAL: queremos trazabilidad de cualquier cosa
-  // que llegue, sea procesable o no. Util para debug del formato real que
-  // manda Apollo (que la doc no documenta consistentemente).
+  // Log de arrival INCONDICIONAL — esto se ejecuta SIEMPRE, antes de
+  // cualquier validacion. Si Apollo esta llegando con secret invalido,
+  // este log lo va a mostrar y vamos a poder diagnosticarlo.
+  // Captura headers utiles: user-agent, content-type, signature de Apollo.
+  const headerEntries: Record<string, string> = {}
+  for (const [k, v] of request.headers.entries()) {
+    // Skip headers ruidosos / sensibles
+    if (k.startsWith("x-vercel") || k === "cookie" || k === "authorization") continue
+    headerEntries[k] = v
+  }
+
   await logApolloCall({
     endpoint: "webhook:arrival",
     userId: null,
-    requestBody: {},
+    requestBody: { secret_fingerprint: fingerprint(secret) },
     responseBody: payload,
-    responseStatus: 200,
+    responseStatus: secretMatches ? 200 : 401,
     latencyMs: 0,
+    errorMessage: parseError,
     extraMetadata: {
+      secret_matches: secretMatches,
+      expected_secret_fingerprint: fingerprint(expected),
+      received_secret_fingerprint: fingerprint(secret),
+      url_path: new URL(request.url).pathname,
+      method: request.method,
+      content_type: request.headers.get("content-type"),
+      user_agent: request.headers.get("user-agent"),
+      headers: headerEntries,
       payload_top_keys: payload && typeof payload === "object" ? Object.keys(payload) : [],
     },
   })
+
+  // Ahora si validamos secret. Si no matchea, devolvemos 401 (ya quedo
+  // logueado el intento en webhook:arrival con secret_matches=false).
+  if (!secretMatches) {
+    console.warn("[v0][apollo-webhook] reject: secret mismatch", {
+      expected_fp: fingerprint(expected),
+      received_fp: fingerprint(secret),
+    })
+    return NextResponse.json({ ok: false }, { status: 401 })
+  }
+
+  if (parseError) {
+    console.error("[v0][apollo-webhook] invalid JSON:", parseError)
+    // Devolvemos 200 igual: si el body es invalido, reintentar no ayuda.
+    return NextResponse.json({ ok: true, ignored: "invalid_json" })
+  }
 
   const { apollo_person_id, linkedin_url, phones } = extractPhoneInfo(payload)
   console.log("[v0][apollo-webhook] received:", {
