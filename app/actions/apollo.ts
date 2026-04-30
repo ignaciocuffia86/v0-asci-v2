@@ -1069,6 +1069,15 @@ export async function revealProspectPhone(
       waterfall_mode: true,
       contact_id: contact.id,
       identifiers_included: identifiersIncluded,
+      // Loggeamos el webhook_url para poder verificar despues si Apollo lo
+      // podia alcanzar (puede pasar que NEXT_PUBLIC_SITE_URL apunte a un
+      // deployment de Vercel con auth de preview activa).
+      webhook_url_sent: webhookUrl,
+      site_url_source: process.env.NEXT_PUBLIC_SITE_URL
+        ? "NEXT_PUBLIC_SITE_URL"
+        : process.env.VERCEL_URL
+          ? "VERCEL_URL"
+          : "none",
     },
   })
 
