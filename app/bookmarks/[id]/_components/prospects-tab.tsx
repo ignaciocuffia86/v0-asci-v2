@@ -1172,13 +1172,21 @@ export function ProspectsTab({
                       </Tooltip>
                     </div>
 
-                    {/* Acciones */}
+                    {/* Acciones — Orden de UX:
+                        1) LinkedIn (compacto, accion contextual rapida)
+                        2) Telefono (compacto, accion premium con creditos —
+                           debe verse SIEMPRE sin importar largo del email)
+                        3) Email (al final, con `min-w-0 flex-1` para tomar
+                           el espacio restante y truncar elegantemente cuando
+                           es largo, ej. "carlos.gonzalez@jeronimo-martins.com").
+                       Esto evita que un email largo empuje al boton Tel contra
+                       el borde de la card o lo fuerce a otra linea suelta. */}
                     <div className="flex flex-wrap items-center gap-2 mt-4 pt-3 border-t">
-                      {/* LinkedIn */}
+                      {/* 1) LinkedIn */}
                       {prospect.linkedin_url && (
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <Button variant="outline" size="sm" className="h-8 gap-1.5 bg-transparent" asChild>
+                            <Button variant="outline" size="sm" className="h-8 gap-1.5 bg-transparent shrink-0" asChild>
                               <Link href={prospect.linkedin_url} target="_blank">
                                 <Linkedin className="h-3.5 w-3.5 text-[#0077b5]" />
                                 LinkedIn
@@ -1189,67 +1197,10 @@ export function ProspectsTab({
                         </Tooltip>
                       )}
 
-                      {/* Email — visible con estado de verificacion y click para copiar.
-                         Apollo devuelve el email priorizando corporativo (work_email);
-                         email_status posibles: "verified" | "extrapolated" | otros. */}
-                      {prospect.email && (() => {
-                        const isVerified = prospect.email_status === "verified"
-                        const isExtrapolated =
-                          prospect.email_status === "extrapolated" ||
-                          prospect.email_status === "guessed"
-                        const isCopied = copiedId === `email-${prospect.id}`
-                        return (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  copyToClipboard(prospect.email!, `email-${prospect.id}`)
-                                }
-                                className="inline-flex h-8 items-center gap-2 rounded-md border border-border bg-background px-2.5 text-sm transition-colors hover:bg-muted"
-                                aria-label={`Copiar email ${prospect.email}`}
-                              >
-                                <Mail className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                                <span className="max-w-[240px] truncate font-mono text-xs">
-                                  {prospect.email}
-                                </span>
-                                {isVerified && (
-                                  <span className="inline-flex items-center gap-1 rounded-sm bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-400">
-                                    <CheckCircle2 className="h-2.5 w-2.5" />
-                                    Verificado
-                                  </span>
-                                )}
-                                {isExtrapolated && (
-                                  <span className="inline-flex items-center gap-1 rounded-sm bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">
-                                    <AlertCircle className="h-2.5 w-2.5" />
-                                    Estimado
-                                  </span>
-                                )}
-                                {isCopied ? (
-                                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
-                                ) : (
-                                  <Copy className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                                )}
-                              </button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p className="font-mono text-xs">{prospect.email}</p>
-                              <p className="text-xs text-muted-foreground">
-                                {isVerified
-                                  ? "Email corporativo verificado por Apollo"
-                                  : isExtrapolated
-                                    ? "Email extrapolado (no verificado) — usar con precaucion"
-                                    : "Click para copiar"}
-                              </p>
-                            </TooltipContent>
-                          </Tooltip>
-                        )
-                      })()}
-
-                      {/* Telefono: 4 estados.
-                          - received + dato: boton para copiar.
+                      {/* 2) Telefono: 4 estados.
+                          - received + dato: outline + acento verde sutil.
                           - pending: spinner + "Buscando..."
-                          - not_available: gris + boton "Reintentar" (sujeto a cooldown 7d).
+                          - not_available: gris + "Reintentar" (cooldown 7d).
                           - not_requested / null: CTA "Revelar telefono - 5 creditos" */}
                       {(() => {
                         const phoneStatus = prospect.phone_status ?? "not_requested"
@@ -1257,19 +1208,20 @@ export function ProspectsTab({
                         const isLoading = revealingId === prospect.id
 
                         if (phoneStatus === "received" && phoneVal) {
+                          const isCopied = copiedId === `phone-${prospect.id}`
                           return (
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <Button
                                   variant="outline"
                                   size="sm"
-                                  className="h-8 gap-1.5 bg-transparent"
+                                  className="h-8 gap-1.5 shrink-0 border-emerald-500/40 bg-emerald-500/5 text-emerald-700 hover:bg-emerald-500/10 hover:text-emerald-800 dark:text-emerald-400 dark:hover:text-emerald-300"
                                   onClick={() =>
                                     copyToClipboard(phoneVal, `phone-${prospect.id}`)
                                   }
                                 >
-                                  {copiedId === `phone-${prospect.id}` ? (
-                                    <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+                                  {isCopied ? (
+                                    <CheckCircle2 className="h-3.5 w-3.5" />
                                   ) : (
                                     <Phone className="h-3.5 w-3.5" />
                                   )}
@@ -1277,7 +1229,7 @@ export function ProspectsTab({
                                 </Button>
                               </TooltipTrigger>
                               <TooltipContent>
-                                <p>{phoneVal}</p>
+                                <p className="font-mono text-xs">{phoneVal}</p>
                                 <p className="text-xs text-muted-foreground">
                                   Click para copiar
                                 </p>
@@ -1291,7 +1243,7 @@ export function ProspectsTab({
                             <Button
                               variant="outline"
                               size="sm"
-                              className="h-8 gap-1.5 bg-transparent"
+                              className="h-8 gap-1.5 bg-transparent shrink-0"
                               disabled
                             >
                               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1307,7 +1259,7 @@ export function ProspectsTab({
                                 <Button
                                   variant="outline"
                                   size="sm"
-                                  className="h-8 gap-1.5 bg-transparent text-muted-foreground"
+                                  className="h-8 gap-1.5 bg-transparent text-muted-foreground shrink-0"
                                   onClick={() => handleRevealPhone(prospect)}
                                   disabled={!!revealingId}
                                 >
@@ -1332,7 +1284,7 @@ export function ProspectsTab({
                               <Button
                                 variant="outline"
                                 size="sm"
-                                className="h-8 gap-1.5 bg-transparent"
+                                className="h-8 gap-1.5 bg-transparent shrink-0"
                                 onClick={() => handleRevealPhone(prospect)}
                                 disabled={!!revealingId}
                               >
@@ -1347,6 +1299,78 @@ export function ProspectsTab({
                               <p>Pide a Apollo el telefono de este contacto.</p>
                               <p className="text-xs text-muted-foreground">
                                 Costo: 5 creditos. Cooldown: 7 dias.
+                              </p>
+                            </TooltipContent>
+                          </Tooltip>
+                        )
+                      })()}
+
+                      {/* 3) Email — al final, ocupa el espacio restante.
+                         Apollo devuelve el email priorizando corporativo (work_email);
+                         email_status posibles: "verified" | "extrapolated" | otros.
+                         `min-w-0` permite que el truncate funcione dentro de un flex-1.
+                         `max-w-full` previene desbordes en mobile cuando wrapea solo. */}
+                      {prospect.email && (() => {
+                        const isVerified = prospect.email_status === "verified"
+                        const isExtrapolated =
+                          prospect.email_status === "extrapolated" ||
+                          prospect.email_status === "guessed"
+                        const isCopied = copiedId === `email-${prospect.id}`
+                        return (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  copyToClipboard(prospect.email!, `email-${prospect.id}`)
+                                }
+                                className="inline-flex h-8 min-w-0 max-w-full flex-1 basis-[260px] items-center gap-2 rounded-md border border-border bg-background px-2.5 text-sm transition-colors hover:bg-muted"
+                                aria-label={`Copiar email ${prospect.email}`}
+                              >
+                                <Mail className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                <span className="min-w-0 flex-1 truncate text-left font-mono text-xs">
+                                  {prospect.email}
+                                </span>
+                                {isVerified && (
+                                  <span className="hidden shrink-0 items-center gap-1 rounded-sm bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 sm:inline-flex dark:text-emerald-400">
+                                    <CheckCircle2 className="h-2.5 w-2.5" />
+                                    Verificado
+                                  </span>
+                                )}
+                                {isExtrapolated && (
+                                  <span className="hidden shrink-0 items-center gap-1 rounded-sm bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 sm:inline-flex dark:text-amber-400">
+                                    <AlertCircle className="h-2.5 w-2.5" />
+                                    Estimado
+                                  </span>
+                                )}
+                                {/* Indicador compacto solo en mobile (cuando se ocultan los badges full) */}
+                                {isVerified && (
+                                  <CheckCircle2
+                                    className="h-3.5 w-3.5 shrink-0 text-emerald-600 sm:hidden"
+                                    aria-label="Verificado"
+                                  />
+                                )}
+                                {isExtrapolated && (
+                                  <AlertCircle
+                                    className="h-3.5 w-3.5 shrink-0 text-amber-600 sm:hidden"
+                                    aria-label="Estimado"
+                                  />
+                                )}
+                                {isCopied ? (
+                                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
+                                ) : (
+                                  <Copy className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                )}
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p className="font-mono text-xs">{prospect.email}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {isVerified
+                                  ? "Email corporativo verificado por Apollo"
+                                  : isExtrapolated
+                                    ? "Email extrapolado (no verificado) — usar con precaucion"
+                                    : "Click para copiar"}
                               </p>
                             </TooltipContent>
                           </Tooltip>
