@@ -11,6 +11,7 @@ import { normalizeDomain } from "@/lib/apollo/domain"
 import { hashSearchParams } from "@/lib/apollo/query-hash"
 import { readSearchCache, writeSearchCache } from "@/lib/apollo/search-cache"
 import { recordTitleObservations, recordTitleSuccess } from "@/lib/apollo/title-catalog"
+import { apolloRequest } from "@/lib/apollo/client"
 
 // ---------------------------------------------------------------------------
 // Tipos expuestos a la UI
@@ -809,5 +810,323 @@ export async function getProspectsTabData(bookmarkId: string): Promise<Prospects
     },
     active,
     removed,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// revealProspectPhone — reveal on-demand de telefono para 1 prospecto
+// ---------------------------------------------------------------------------
+
+export type RevealPhoneResult =
+  | {
+      ok: true
+      status: "received"
+      phone: string
+      isMobile: boolean
+    }
+  | {
+      ok: true
+      status: "pending"
+      message: string
+    }
+  | {
+      ok: false
+      status:
+        | "not_found"
+        | "no_apollo_id"
+        | "already_received"
+        | "cooldown"
+        | "config_error"
+        | "apollo_error"
+      message: string
+      retryAfter?: string // ISO timestamp si es cooldown
+    }
+
+const PHONE_COOLDOWN_DAYS = 7
+
+type ApolloPhoneNumber = {
+  raw_number?: string | null
+  sanitized_number?: string | null
+  type?: string | null
+  status?: string | null
+}
+
+function pickBestPhone(
+  phones: ApolloPhoneNumber[],
+): { value: string | null; isMobile: boolean } {
+  if (!Array.isArray(phones) || phones.length === 0) {
+    return { value: null, isMobile: false }
+  }
+  const score = (p: ApolloPhoneNumber) => {
+    let s = 0
+    const t = (p.type ?? "").toLowerCase()
+    const st = (p.status ?? "").toLowerCase()
+    if (t.includes("mobile")) s += 100
+    if (t.includes("work")) s += 50
+    if (st.includes("verif")) s += 10
+    return s
+  }
+  const sorted = [...phones].sort((a, b) => score(b) - score(a))
+  const best = sorted[0]
+  const value = best.sanitized_number ?? best.raw_number ?? null
+  const isMobile = (best.type ?? "").toLowerCase().includes("mobile")
+  return { value: value && value.length > 0 ? value : null, isMobile }
+}
+
+/**
+ * Pide a Apollo el telefono de un prospecto puntual. Costo: 5 creditos.
+ *
+ * Flujo:
+ *   1. Verifica que el contacto sea del usuario autenticado.
+ *   2. Verifica cooldown (7 dias desde ultimo intento).
+ *   3. Marca phone_status='pending' y phone_requested_at=now().
+ *   4. Llama a /people/match con reveal_phone_number=true&webhook_url=... como
+ *      query params (formato que Apollo requiere para el reveal de phone).
+ *   5. Si Apollo devuelve telefono inline -> persiste y devuelve 'received'.
+ *   6. Si no -> deja 'pending' y espera al webhook async (UI hara polling).
+ */
+export async function revealProspectPhone(
+  prospectId: string,
+): Promise<RevealPhoneResult> {
+  const supabase = await createClient()
+
+  const { data: authData } = await supabase.auth.getUser()
+  const user = authData?.user
+  if (!user) {
+    return { ok: false, status: "not_found", message: "No autenticado" }
+  }
+
+  // 1) Cargamos el contacto y verificamos pertenencia
+  const { data: contact, error: contactError } = await supabase
+    .from("user_company_contacts")
+    .select(
+      "id, user_id, apollo_person_id, linkedin_url, phone, mobile_phone, phone_status, phone_requested_at, bookmark_id, company_id",
+    )
+    .eq("id", prospectId)
+    .eq("user_id", user.id)
+    .maybeSingle()
+
+  if (contactError || !contact) {
+    return {
+      ok: false,
+      status: "not_found",
+      message: "Prospecto no encontrado",
+    }
+  }
+
+  // 2) Si ya tenemos telefono y status received, no hace falta gastar creditos
+  if (
+    contact.phone_status === "received" &&
+    (contact.mobile_phone || contact.phone)
+  ) {
+    return {
+      ok: false,
+      status: "already_received",
+      message: "Ya tenemos el telefono de este contacto",
+    }
+  }
+
+  // 3) Cooldown: 7 dias desde el ultimo intento (sea pending, received o not_available)
+  if (contact.phone_requested_at) {
+    const last = new Date(contact.phone_requested_at).getTime()
+    const cooldownMs = PHONE_COOLDOWN_DAYS * 24 * 60 * 60 * 1000
+    const elapsed = Date.now() - last
+    if (elapsed < cooldownMs) {
+      const retryAfter = new Date(last + cooldownMs).toISOString()
+      const daysLeft = Math.ceil((cooldownMs - elapsed) / (24 * 60 * 60 * 1000))
+      return {
+        ok: false,
+        status: "cooldown",
+        message: `Reintentar en ${daysLeft} dia${daysLeft === 1 ? "" : "s"} (cooldown de ${PHONE_COOLDOWN_DAYS} dias)`,
+        retryAfter,
+      }
+    }
+  }
+
+  // 4) Necesitamos un identificador para Apollo
+  if (!contact.apollo_person_id && !contact.linkedin_url) {
+    return {
+      ok: false,
+      status: "no_apollo_id",
+      message:
+        "Este contacto no tiene identificador de Apollo (re-importarlo desde la busqueda)",
+    }
+  }
+
+  // 5) Construimos webhook URL. Si no hay SITE_URL configurada, abortamos
+  //    antes de gastar creditos.
+  const siteUrl =
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null)
+  const webhookSecret = process.env.APOLLO_WEBHOOK_SECRET
+
+  if (!siteUrl || !webhookSecret) {
+    console.error("[v0][reveal-phone] missing config:", {
+      siteUrl: !!siteUrl,
+      webhookSecret: !!webhookSecret,
+    })
+    return {
+      ok: false,
+      status: "config_error",
+      message:
+        "Falta configurar NEXT_PUBLIC_SITE_URL o APOLLO_WEBHOOK_SECRET en el servidor",
+    }
+  }
+
+  const webhookUrl = `${siteUrl.replace(/\/$/, "")}/api/webhooks/apollo/${webhookSecret}`
+
+  // 6) Marcamos pending ANTES de llamar a Apollo (evita races con doble click)
+  const admin = createAdminClient()
+  const { error: pendingError } = await admin
+    .from("user_company_contacts")
+    .update({
+      phone_status: "pending",
+      phone_requested_at: new Date().toISOString(),
+    })
+    .eq("id", contact.id)
+
+  if (pendingError) {
+    console.error("[v0][reveal-phone] mark pending failed:", pendingError)
+    return {
+      ok: false,
+      status: "apollo_error",
+      message: "Error interno marcando pending",
+    }
+  }
+
+  // 7) Llamamos a Apollo. Body con identificador, query params con flags.
+  const requestBody: Record<string, unknown> = {
+    reveal_personal_emails: false,
+  }
+  if (contact.apollo_person_id) {
+    requestBody.id = contact.apollo_person_id
+  } else {
+    requestBody.linkedin_url = contact.linkedin_url
+  }
+
+  const result = await apolloRequest<{ person?: any }>({
+    endpoint: "people/match:phone",
+    method: "POST",
+    requestBody,
+    queryParams: {
+      reveal_phone_number: true,
+      webhook_url: webhookUrl,
+    },
+    userId: user.id,
+    bookmarkId: contact.bookmark_id ?? undefined,
+    companyId: contact.company_id ?? undefined,
+    creditsEstimated: 5,
+    extraMetadata: { phone_revealed: true, contact_id: contact.id },
+  })
+
+  if (!result.ok) {
+    console.error("[v0][reveal-phone] apollo error:", result.error)
+    // Restauramos el status anterior (not_requested) si Apollo erroreo
+    await admin
+      .from("user_company_contacts")
+      .update({ phone_status: "not_requested" })
+      .eq("id", contact.id)
+    return {
+      ok: false,
+      status: "apollo_error",
+      message: `Apollo respondio ${result.status}: ${result.error.slice(0, 120)}`,
+    }
+  }
+
+  // 8) Procesamos el response: si trae phone_numbers inline, persistimos.
+  const person = (result.data as any)?.person ?? {}
+  const phones = Array.isArray(person.phone_numbers) ? person.phone_numbers : []
+  const { value: bestPhone, isMobile } = pickBestPhone(phones)
+
+  // Loggeamos en apollo_api_calls que hicimos un phone reveal (sync)
+  try {
+    await admin.from("apollo_api_calls").insert({
+      user_id: user.id,
+      bookmark_id: contact.bookmark_id ?? null,
+      endpoint: "people/match:phone",
+      success: true,
+      phone_revealed: true,
+      phone_sync: !!bestPhone,
+      response_summary: bestPhone
+        ? `phone delivered inline (mobile=${isMobile})`
+        : "no phone inline, awaiting webhook",
+    })
+  } catch (logErr) {
+    console.warn("[v0][reveal-phone] log insert failed (non-fatal):", logErr)
+  }
+
+  if (bestPhone) {
+    // Si Apollo devolvio el telefono inline, lo guardamos.
+    // Solo sobreescribimos si el campo destino estaba vacio.
+    const updateColumn = isMobile ? "mobile_phone" : "phone"
+    const currentVal = (contact as any)[updateColumn]
+    const update: Record<string, unknown> = { phone_status: "received" }
+    if (!currentVal || currentVal === "") {
+      update[updateColumn] = bestPhone
+    }
+    await admin.from("user_company_contacts").update(update).eq("id", contact.id)
+
+    // Si tenemos apollo_person_id de la respuesta, lo backfilleamos
+    if (
+      !contact.apollo_person_id &&
+      typeof person.id === "string" &&
+      person.id.length > 0
+    ) {
+      await admin
+        .from("user_company_contacts")
+        .update({ apollo_person_id: person.id })
+        .eq("id", contact.id)
+    }
+
+    return {
+      ok: true,
+      status: "received",
+      phone: bestPhone,
+      isMobile,
+    }
+  }
+
+  // 9) Sin telefono inline: esperamos el webhook async
+  return {
+    ok: true,
+    status: "pending",
+    message:
+      "Apollo esta buscando el telefono. Te lo mostramos cuando lo entreguen (puede tardar).",
+  }
+}
+
+/**
+ * Lee el estado actual del telefono de un prospecto. Lo usa la UI para hacer
+ * polling cuando el reveal quedo en 'pending' (esperando webhook async).
+ */
+export async function getProspectPhoneStatus(prospectId: string): Promise<{
+  ok: boolean
+  phone_status: string | null
+  phone: string | null
+  mobile_phone: string | null
+}> {
+  const supabase = await createClient()
+
+  const { data: authData } = await supabase.auth.getUser()
+  const user = authData?.user
+  if (!user) {
+    return { ok: false, phone_status: null, phone: null, mobile_phone: null }
+  }
+
+  const { data, error } = await supabase
+    .from("user_company_contacts")
+    .select("phone_status, phone, mobile_phone")
+    .eq("id", prospectId)
+    .eq("user_id", user.id)
+    .maybeSingle()
+
+  if (error || !data) {
+    return { ok: false, phone_status: null, phone: null, mobile_phone: null }
+  }
+  return {
+    ok: true,
+    phone_status: data.phone_status ?? null,
+    phone: data.phone ?? null,
+    mobile_phone: data.mobile_phone ?? null,
   }
 }
