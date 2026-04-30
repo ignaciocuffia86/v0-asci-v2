@@ -22,6 +22,11 @@ export type ApolloCallLog = {
   bookmarkId?: string | null
   companyId?: string | null
   requestBody: Record<string, unknown>
+  // responseBody es opcional pero MUY recomendado para diagnostico futuro.
+  // Apollo a veces devuelve 200 con bodies extranios (ej. phone reveal sin
+  // phone_numbers). Sin guardar el body completo, no se puede entender que
+  // paso. Truncamos a 32KB para no inflar la tabla.
+  responseBody?: unknown
   responseStatus: number
   responseCount?: number
   totalEntries?: number
@@ -30,6 +35,24 @@ export type ApolloCallLog = {
   queryHash?: string | null
   creditsEstimated?: number
   extraMetadata?: Record<string, unknown>
+}
+
+// Truncado seguro del response_body para no inflar la tabla.
+// Si el JSON serializado supera el limite, lo cortamos y agregamos meta.
+const MAX_RESPONSE_BYTES = 32 * 1024
+function truncateForLog(body: unknown): unknown {
+  if (body === null || body === undefined) return null
+  try {
+    const json = JSON.stringify(body)
+    if (json.length <= MAX_RESPONSE_BYTES) return body
+    return {
+      _truncated: true,
+      _original_size: json.length,
+      _preview: json.slice(0, MAX_RESPONSE_BYTES),
+    }
+  } catch {
+    return { _truncate_error: "could not stringify" }
+  }
 }
 
 export async function logApolloCall(entry: ApolloCallLog): Promise<void> {
@@ -62,6 +85,7 @@ export async function logApolloCall(entry: ApolloCallLog): Promise<void> {
       company_id: entry.companyId ?? null,
       request_body: entry.requestBody,
       response_status: entry.responseStatus,
+      response_body: truncateForLog(entry.responseBody),
       response_count: entry.responseCount ?? null,
       response_total_entries: entry.totalEntries ?? null,
       latency_ms: entry.latencyMs,

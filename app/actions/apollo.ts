@@ -11,6 +11,7 @@ import { normalizeDomain } from "@/lib/apollo/domain"
 import { hashSearchParams } from "@/lib/apollo/query-hash"
 import { readSearchCache, writeSearchCache } from "@/lib/apollo/search-cache"
 import { recordTitleObservations, recordTitleSuccess } from "@/lib/apollo/title-catalog"
+import { apolloRequest } from "@/lib/apollo/client"
 
 // ---------------------------------------------------------------------------
 // Tipos expuestos a la UI
@@ -810,4 +811,460 @@ export async function getProspectsTabData(bookmarkId: string): Promise<Prospects
     active,
     removed,
   }
+}
+
+// ---------------------------------------------------------------------------
+// revealProspectPhone — reveal on-demand de telefono para 1 prospecto
+// ---------------------------------------------------------------------------
+
+export type RevealPhoneResult =
+  | {
+      ok: true
+      status: "received"
+      phone: string
+      isMobile: boolean
+    }
+  | {
+      ok: true
+      status: "pending"
+      message: string
+      requestId?: string | null
+    }
+  | {
+      ok: true
+      status: "not_available"
+      message: string
+    }
+  | {
+      ok: false
+      status:
+        | "not_found"
+        | "no_apollo_id"
+        | "already_received"
+        | "cooldown"
+        | "config_error"
+        | "apollo_error"
+      message: string
+      retryAfter?: string // ISO timestamp si es cooldown
+    }
+
+const PHONE_COOLDOWN_DAYS = 7
+
+type ApolloPhoneNumber = {
+  raw_number?: string | null
+  sanitized_number?: string | null
+  type?: string | null
+  status?: string | null
+}
+
+function pickBestPhone(
+  phones: ApolloPhoneNumber[],
+): { value: string | null; isMobile: boolean } {
+  if (!Array.isArray(phones) || phones.length === 0) {
+    return { value: null, isMobile: false }
+  }
+  const score = (p: ApolloPhoneNumber) => {
+    let s = 0
+    const t = (p.type ?? "").toLowerCase()
+    const st = (p.status ?? "").toLowerCase()
+    if (t.includes("mobile")) s += 100
+    if (t.includes("work")) s += 50
+    if (st.includes("verif")) s += 10
+    return s
+  }
+  const sorted = [...phones].sort((a, b) => score(b) - score(a))
+  const best = sorted[0]
+  const value = best.sanitized_number ?? best.raw_number ?? null
+  const isMobile = (best.type ?? "").toLowerCase().includes("mobile")
+  return { value: value && value.length > 0 ? value : null, isMobile }
+}
+
+/**
+ * Pide a Apollo el telefono de un prospecto puntual. Costo: 5 creditos.
+ *
+ * Flujo:
+ *   1. Verifica que el contacto sea del usuario autenticado.
+ *   2. Verifica cooldown (7 dias desde ultimo intento).
+ *   3. Marca phone_status='pending' y phone_requested_at=now().
+ *   4. Llama a /people/match con reveal_phone_number=true&webhook_url=... como
+ *      query params (formato que Apollo requiere para el reveal de phone).
+ *   5. Si Apollo devuelve telefono inline -> persiste y devuelve 'received'.
+ *   6. Si no -> deja 'pending' y espera al webhook async (UI hara polling).
+ */
+export async function revealProspectPhone(
+  prospectId: string,
+): Promise<RevealPhoneResult> {
+  const supabase = await createClient()
+
+  const { data: authData } = await supabase.auth.getUser()
+  const user = authData?.user
+  if (!user) {
+    return { ok: false, status: "not_found", message: "No autenticado" }
+  }
+
+  // 1) Cargamos el contacto y verificamos pertenencia.
+  //    Traemos TODOS los identificadores que Apollo soporta. Para waterfall
+  //    enrichment, mientras mas identifiers pasemos en query params mejor
+  //    es el match contra los 3rd party data sources (Prospeo, Icypeas, etc).
+  const { data: contact, error: contactError } = await supabase
+    .from("user_company_contacts")
+    .select(
+      "id, user_id, apollo_person_id, email, linkedin_url, first_name, last_name, phone, mobile_phone, phone_status, phone_requested_at, bookmark_id, company_id",
+    )
+    .eq("id", prospectId)
+    .eq("user_id", user.id)
+    .maybeSingle()
+
+  if (contactError || !contact) {
+    return {
+      ok: false,
+      status: "not_found",
+      message: "Prospecto no encontrado",
+    }
+  }
+
+  // 2) Si ya tenemos telefono y status received, no hace falta gastar creditos
+  if (
+    contact.phone_status === "received" &&
+    (contact.mobile_phone || contact.phone)
+  ) {
+    return {
+      ok: false,
+      status: "already_received",
+      message: "Ya tenemos el telefono de este contacto",
+    }
+  }
+
+  // 3) Cooldown: 7 dias desde el ultimo intento (sea pending, received o not_available)
+  if (contact.phone_requested_at) {
+    const last = new Date(contact.phone_requested_at).getTime()
+    const cooldownMs = PHONE_COOLDOWN_DAYS * 24 * 60 * 60 * 1000
+    const elapsed = Date.now() - last
+    if (elapsed < cooldownMs) {
+      const retryAfter = new Date(last + cooldownMs).toISOString()
+      const daysLeft = Math.ceil((cooldownMs - elapsed) / (24 * 60 * 60 * 1000))
+      return {
+        ok: false,
+        status: "cooldown",
+        message: `Reintentar en ${daysLeft} dia${daysLeft === 1 ? "" : "s"} (cooldown de ${PHONE_COOLDOWN_DAYS} dias)`,
+        retryAfter,
+      }
+    }
+  }
+
+  // 4) Necesitamos identificadores. Para waterfall enrichment Apollo recomienda:
+  //    first_name + last_name + linkedin_url + email (cuanto mas, mejor match).
+  //    Como minimo necesitamos al menos uno de: email, linkedin_url, o
+  //    (first_name + last_name + organization).
+  const c = contact as typeof contact & {
+    email?: string | null
+    first_name?: string | null
+    last_name?: string | null
+  }
+  const hasName = !!(c.first_name && c.last_name)
+  if (!c.email && !c.linkedin_url && !hasName) {
+    return {
+      ok: false,
+      status: "no_apollo_id",
+      message:
+        "Este contacto no tiene identificadores suficientes (email, linkedin_url, o nombre+apellido)",
+    }
+  }
+
+  // 5) Construimos webhook URL. Si no hay SITE_URL configurada, abortamos
+  //    antes de gastar creditos.
+  const siteUrl =
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null)
+  const webhookSecret = process.env.APOLLO_WEBHOOK_SECRET
+
+  if (!siteUrl || !webhookSecret) {
+    console.error("[v0][reveal-phone] missing config:", {
+      siteUrl: !!siteUrl,
+      webhookSecret: !!webhookSecret,
+    })
+    return {
+      ok: false,
+      status: "config_error",
+      message:
+        "Falta configurar NEXT_PUBLIC_SITE_URL o APOLLO_WEBHOOK_SECRET en el servidor",
+    }
+  }
+
+  const webhookUrl = `${siteUrl.replace(/\/$/, "")}/api/webhooks/apollo/${webhookSecret}`
+
+  // 6) Marcamos pending ANTES de llamar a Apollo (evita races con doble click)
+  const admin = createAdminClient()
+  const { error: pendingError } = await admin
+    .from("user_company_contacts")
+    .update({
+      phone_status: "pending",
+      phone_requested_at: new Date().toISOString(),
+    })
+    .eq("id", contact.id)
+
+  if (pendingError) {
+    console.error("[v0][reveal-phone] mark pending failed:", pendingError)
+    return {
+      ok: false,
+      status: "apollo_error",
+      message: "Error interno marcando pending",
+    }
+  }
+
+  // 7) Llamamos a Apollo en modo WATERFALL ENRICHMENT.
+  //    Esto es CRITICO: con `reveal_phone_number=true` solo, Apollo busca en su
+  //    DB propia y si no lo tiene devuelve `phone_enrichment.request_id` que
+  //    exige polling (Apollo NO manda webhook en ese modo). Con `run_waterfall_phone=true`,
+  //    Apollo consulta third-party data sources (Prospeo, Icypeas, etc.) y SI
+  //    entrega via webhook a webhook_url. Confirmado en docs.apollo.io/docs/enrich-phone-and-email-using-data-waterfall
+  //
+  //    TODOS los parametros van como QUERY PARAMS (body vacio). Pasamos todos
+  //    los identifiers que tenemos para mejor match en los data sources.
+  const queryParams: Record<string, string | number | boolean> = {
+    run_waterfall_phone: true,
+    webhook_url: webhookUrl,
+  }
+  const identifiersIncluded: string[] = []
+  if (c.email) {
+    queryParams.email = c.email
+    identifiersIncluded.push("email")
+  }
+  if (c.linkedin_url) {
+    queryParams.linkedin_url = c.linkedin_url
+    identifiersIncluded.push("linkedin_url")
+  }
+  if (c.first_name) {
+    queryParams.first_name = c.first_name
+    identifiersIncluded.push("first_name")
+  }
+  if (c.last_name) {
+    queryParams.last_name = c.last_name
+    identifiersIncluded.push("last_name")
+  }
+  if (c.apollo_person_id) {
+    queryParams.id = c.apollo_person_id
+    identifiersIncluded.push("apollo_person_id")
+  }
+
+  const result = await apolloRequest<{
+    person?: any
+    waterfall?: {
+      status?: "accepted" | "failed" | "partial_accepted"
+      message?: string
+      unprocessed_attributes?: unknown[]
+    } | null
+    request_id?: string | number
+  }>({
+    endpoint: "people/match:phone",
+    method: "POST",
+    requestBody: {}, // VACIO — todo va por query params
+    queryParams,
+    userId: user.id,
+    bookmarkId: contact.bookmark_id ?? undefined,
+    companyId: contact.company_id ?? undefined,
+    creditsEstimated: 5,
+    extraMetadata: {
+      phone_revealed: true,
+      waterfall_mode: true,
+      contact_id: contact.id,
+      identifiers_included: identifiersIncluded,
+      // Loggeamos el webhook_url para poder verificar despues si Apollo lo
+      // podia alcanzar (puede pasar que NEXT_PUBLIC_SITE_URL apunte a un
+      // deployment de Vercel con auth de preview activa).
+      webhook_url_sent: webhookUrl,
+      site_url_source: process.env.NEXT_PUBLIC_SITE_URL
+        ? "NEXT_PUBLIC_SITE_URL"
+        : process.env.VERCEL_URL
+          ? "VERCEL_URL"
+          : "none",
+    },
+  })
+
+  if (!result.ok) {
+    console.error("[v0][reveal-phone] apollo error:", result.error)
+    // Restauramos el status anterior (not_requested) si Apollo erroreo
+    await admin
+      .from("user_company_contacts")
+      .update({ phone_status: "not_requested" })
+      .eq("id", contact.id)
+    return {
+      ok: false,
+      status: "apollo_error",
+      message: `Apollo respondio ${result.status}: ${result.error.slice(0, 120)}`,
+    }
+  }
+
+  // 8) Procesamos el response del modo waterfall. Casos posibles:
+  //    a) waterfall.status === 'accepted'        -> webhook llegara con datos
+  //    b) waterfall.status === 'partial_accepted' -> webhook llegara, parcial
+  //    c) waterfall.status === 'failed'           -> error claro al usuario
+  //    d) `person.phone_numbers` ya vacio sin waterfall -> Apollo no acepto el match
+  //
+  //    apolloRequest ya guardo el response completo en apollo_api_calls.response_body
+  //    con `endpoint: "people/match:phone"` para diagnostico.
+  const responseData = result.data as {
+    person?: any
+    waterfall?: {
+      status?: "accepted" | "failed" | "partial_accepted"
+      message?: string
+    } | null
+    request_id?: string | number
+  }
+  const person = responseData?.person ?? {}
+  const waterfall = responseData?.waterfall ?? null
+
+  // Backfill apollo_person_id si la respuesta lo trae (util para que el webhook
+  // matchee por id en vez de linkedin_url).
+  if (
+    !contact.apollo_person_id &&
+    typeof person.id === "string" &&
+    person.id.length > 0
+  ) {
+    await admin
+      .from("user_company_contacts")
+      .update({ apollo_person_id: person.id })
+      .eq("id", contact.id)
+  }
+
+  // Caso (a) y (b): waterfall accepted o partial_accepted -> esperar webhook
+  if (
+    waterfall?.status === "accepted" ||
+    waterfall?.status === "partial_accepted"
+  ) {
+    return {
+      ok: true,
+      status: "pending",
+      message:
+        waterfall.message ??
+        "Apollo esta consultando data sources externos. El telefono llegara via webhook en unos minutos.",
+      requestId:
+        responseData.request_id != null
+          ? String(responseData.request_id)
+          : null,
+    }
+  }
+
+  // Caso (c): waterfall failed -> error explicito (no quemar 7d de cooldown)
+  if (waterfall?.status === "failed") {
+    const failMsg = waterfall.message ?? "Waterfall enrichment fallo"
+    const isPermissionError = /permission|not have/i.test(failMsg)
+
+    // Si es error de permisos, restauramos a not_requested para que pueda
+    // reintentar cuando se arregle el plan. Si es otra falla, marcamos
+    // not_available para respetar el cooldown.
+    await admin
+      .from("user_company_contacts")
+      .update({
+        phone_status: isPermissionError ? "not_requested" : "not_available",
+      })
+      .eq("id", contact.id)
+
+    console.error("[v0][reveal-phone] waterfall failed:", {
+      contactId: contact.id,
+      identifiers: identifiersIncluded,
+      message: failMsg,
+    })
+
+    return {
+      ok: false,
+      status: isPermissionError ? "config_error" : "apollo_error",
+      message: isPermissionError
+        ? "Tu plan de Apollo no tiene habilitado Waterfall Enrichment. Contactar soporte de Apollo para activarlo."
+        : `Apollo rechazo el waterfall: ${failMsg.slice(0, 160)}`,
+    }
+  }
+
+  // Caso (d): no hay bloque waterfall en el response. Esto puede pasar si
+  // Apollo aceptamos cierto contrato pero el endpoint cambio. Marcamos
+  // not_available y loggeamos para diagnostico.
+  await admin
+    .from("user_company_contacts")
+    .update({ phone_status: "not_available" })
+    .eq("id", contact.id)
+
+  console.log("[v0][reveal-phone] response sin waterfall block", {
+    contactId: contact.id,
+    identifiers: identifiersIncluded,
+    personIdReturned: person.id ?? null,
+    responseTopKeys: Object.keys(responseData ?? {}),
+  })
+
+  return {
+    ok: true,
+    status: "not_available",
+    message:
+      "Apollo no proceso el waterfall enrichment. Revisar logs en apollo_api_calls.response_body.",
+  }
+}
+
+/**
+ * Lee el estado actual del telefono de un prospecto. Lo usa la UI para hacer
+ * polling cuando el reveal quedo en 'pending' (esperando webhook async).
+ */
+export async function getProspectPhoneStatus(prospectId: string): Promise<{
+  ok: boolean
+  phone_status: string | null
+  phone: string | null
+  mobile_phone: string | null
+}> {
+  const supabase = await createClient()
+
+  const { data: authData } = await supabase.auth.getUser()
+  const user = authData?.user
+  if (!user) {
+    return { ok: false, phone_status: null, phone: null, mobile_phone: null }
+  }
+
+  const { data, error } = await supabase
+    .from("user_company_contacts")
+    .select("phone_status, phone, mobile_phone")
+    .eq("id", prospectId)
+    .eq("user_id", user.id)
+    .maybeSingle()
+
+  if (error || !data) {
+    return { ok: false, phone_status: null, phone: null, mobile_phone: null }
+  }
+  return {
+    ok: true,
+    phone_status: data.phone_status ?? null,
+    phone: data.phone ?? null,
+    mobile_phone: data.mobile_phone ?? null,
+  }
+}
+
+/**
+ * Marca el telefono de un prospecto como `not_available` por timeout: lo
+ * usa la UI cuando el polling se queda en pending demasiado tiempo (Apollo
+ * no entrego webhook a pesar de aceptar el waterfall enrichment). Solo
+ * actualiza si el estado actual sigue siendo 'pending' (no pisa un received
+ * que llego justo en la transicion).
+ */
+export async function markPhoneTimedOut(prospectId: string): Promise<{
+  ok: boolean
+  changed: boolean
+}> {
+  const supabase = await createClient()
+  const { data: authData } = await supabase.auth.getUser()
+  const user = authData?.user
+  if (!user) return { ok: false, changed: false }
+
+  const admin = createAdminClient()
+  // Solo cambiamos si todavia esta en pending (evita race con webhook que
+  // llega justo cuando expira el timeout).
+  const { data, error } = await admin
+    .from("user_company_contacts")
+    .update({ phone_status: "not_available" })
+    .eq("id", prospectId)
+    .eq("user_id", user.id)
+    .eq("phone_status", "pending")
+    .select("id")
+
+  if (error) {
+    console.error("[v0][markPhoneTimedOut] update failed:", error)
+    return { ok: false, changed: false }
+  }
+
+  return { ok: true, changed: (data ?? []).length > 0 }
 }

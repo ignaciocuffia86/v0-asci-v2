@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import useSWR from "swr"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -35,6 +35,9 @@ import {
   searchApolloProspects,
   removeProspect,
   restoreProspect,
+  revealProspectPhone,
+  getProspectPhoneStatus,
+  markPhoneTimedOut,
   type ApolloSearchStats,
   type ProspectsTabData,
 } from "@/app/actions/apollo"
@@ -131,6 +134,9 @@ interface Prospect {
   email_status?: string
   phone?: string
   mobile_phone?: string
+  phone_status?: "not_requested" | "pending" | "received" | "not_available" | null
+  phone_requested_at?: string | null
+  apollo_person_id?: string | null
   linkedin_url?: string
   profile_picture_url?: string
   seniority?: string
@@ -140,7 +146,7 @@ interface Prospect {
   is_decision_maker?: boolean
   created_at?: string
   status?: string
-}
+  }
 
 interface ProspectsTabProps {
   bookmarkId: string
@@ -243,6 +249,163 @@ export function ProspectsTab({
     await navigator.clipboard.writeText(text)
     setCopiedId(id)
     setTimeout(() => setCopiedId(null), 2000)
+  }
+
+  // Estado del reveal de telefono por contacto. revealingId mantiene la card
+  // que esta loading; pollingTimers guarda los intervals por id para limpiar
+  // si el usuario navega antes de que llegue el webhook.
+  const [revealingId, setRevealingId] = useState<string | null>(null)
+  const pollingTimersRef = useRef<Record<string, ReturnType<typeof setInterval>>>({})
+
+  // Limpiar intervals al desmontar
+  useEffect(() => {
+    const timers = pollingTimersRef.current
+    return () => {
+      for (const id of Object.keys(timers)) clearInterval(timers[id])
+    }
+  }, [])
+
+  // Aplica un patch sobre un prospecto en el state local (active list).
+  // Lo usamos para updates optimistas y para reflejar lo que devuelve el
+  // polling sin tener que revalidar todo SWR.
+  const patchProspect = (id: string, patch: Partial<Prospect>) => {
+    setProspects((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, ...patch } : p)),
+    )
+  }
+
+  /**
+   * Inicia un polling cada 5s sobre el status del telefono. Para cuando:
+   *  - Pega 'received'                  -> toast success.
+   *  - Pega 'not_available' (server)    -> toast info.
+   *  - Se cumple el timeout (5 min)     -> marcamos not_available en DB
+   *    via `markPhoneTimedOut` y mostramos toast informando que Apollo
+   *    acepto el waterfall pero no entrego datos. Esto desbloquea al usuario
+   *    en vez de dejarlo en "Buscando..." infinito.
+   */
+  const startPhonePolling = (prospectId: string) => {
+    if (pollingTimersRef.current[prospectId]) return
+    const startedAt = Date.now()
+    // Apollo waterfall enrichment puede tardar varios minutos cuando consulta
+    // proveedores externos. 5 min es un buen balance entre paciencia y UX.
+    const TIMEOUT_MS = 5 * 60 * 1000
+    const POLL_MS = 5_000
+
+    const stop = () => {
+      clearInterval(pollingTimersRef.current[prospectId])
+      delete pollingTimersRef.current[prospectId]
+    }
+
+    pollingTimersRef.current[prospectId] = setInterval(async () => {
+      try {
+        const res = await getProspectPhoneStatus(prospectId)
+        if (!res.ok) return
+        if (res.phone_status === "received") {
+          patchProspect(prospectId, {
+            phone_status: "received",
+            phone: res.phone ?? undefined,
+            mobile_phone: res.mobile_phone ?? undefined,
+          })
+          stop()
+          toast.success("Telefono recibido")
+        } else if (res.phone_status === "not_available") {
+          patchProspect(prospectId, { phone_status: "not_available" })
+          stop()
+          toast.info("Apollo no encontro telefono para este contacto")
+        } else if (Date.now() - startedAt > TIMEOUT_MS) {
+          // Pasaron 5 min sin webhook: Apollo acepto el waterfall pero los
+          // proveedores externos no respondieron a tiempo (o el plan no
+          // tiene waterfall activo). Marcamos not_available en DB para
+          // desbloquear al usuario y respetar el cooldown.
+          stop()
+          const mark = await markPhoneTimedOut(prospectId)
+          if (mark.ok && mark.changed) {
+            patchProspect(prospectId, { phone_status: "not_available" })
+            toast.info("Apollo no entrego el telefono", {
+              description:
+                "El waterfall enrichment fue aceptado pero no llegaron datos en 5 min. Reintenta despues del cooldown.",
+              duration: 8000,
+            })
+          } else {
+            // El estado ya cambio entre el ultimo poll y ahora (race), refrescamos.
+            const fresh = await getProspectPhoneStatus(prospectId)
+            if (fresh.ok && fresh.phone_status) {
+              patchProspect(prospectId, {
+                phone_status: fresh.phone_status as Prospect["phone_status"],
+                phone: fresh.phone ?? undefined,
+                mobile_phone: fresh.mobile_phone ?? undefined,
+              })
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("[v0] phone poll failed:", err)
+      }
+    }, POLL_MS)
+  }
+
+  const handleRevealPhone = async (prospect: Prospect) => {
+    if (revealingId) return // un reveal a la vez para evitar racing
+    setRevealingId(prospect.id)
+    // Optimista: pintamos pending de inmediato
+    patchProspect(prospect.id, { phone_status: "pending" })
+
+    try {
+      const result = await revealProspectPhone(prospect.id)
+      if (!result.ok) {
+        // Revertir si fue cooldown / error
+        patchProspect(prospect.id, {
+          phone_status:
+            result.status === "cooldown"
+              ? "not_available"
+              : prospect.phone_status ?? "not_requested",
+        })
+        if (result.status === "cooldown") {
+          toast.info(result.message)
+        } else if (result.status === "already_received") {
+          toast.info(result.message)
+        } else {
+          toast.error("No se pudo revelar el telefono", {
+            description: result.message,
+          })
+        }
+        return
+      }
+
+      if (result.status === "received") {
+        patchProspect(prospect.id, {
+          phone_status: "received",
+          [result.isMobile ? "mobile_phone" : "phone"]: result.phone,
+        } as Partial<Prospect>)
+        toast.success("Telefono revelado", {
+          description: result.phone,
+        })
+      } else if (result.status === "pending") {
+        // Apollo acepto el waterfall enrichment, polleamos hasta que llegue
+        // el webhook o se cumpla el timeout (5 min).
+        toast.info("Buscando telefono", {
+          description:
+            "Apollo esta consultando proveedores externos. Si no llega en 5 min, te avisamos que no se pudo.",
+          duration: 6000,
+        })
+        startPhonePolling(prospect.id)
+      } else if (result.status === "not_available") {
+        // Apollo respondio 200 pero no tiene telefono para este contacto.
+        // Marcamos not_available directo y damos feedback claro al usuario.
+        patchProspect(prospect.id, { phone_status: "not_available" })
+        toast.info("Apollo no encontro telefono", {
+          description: result.message,
+        })
+      }
+    } catch (err) {
+      console.error("[v0] revealProspectPhone failed:", err)
+      patchProspect(prospect.id, {
+        phone_status: prospect.phone_status ?? "not_requested",
+      })
+      toast.error("Error al pedir el telefono")
+    } finally {
+      setRevealingId(null)
+    }
   }
 
   // Fetching con SWR: evita el loop que provocaba el patrón fetch-en-useEffect
@@ -1083,36 +1246,112 @@ export function ProspectsTab({
                         )
                       })()}
 
-                      {/* Teléfono: solo se muestra si ya tenemos el dato en DB (data historica).
-                          El flujo de reveal fue deprecado — no hay boton "Pedir telefono". */}
-                      {(prospect.mobile_phone || prospect.phone) && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
+                      {/* Telefono: 4 estados.
+                          - received + dato: boton para copiar.
+                          - pending: spinner + "Buscando..."
+                          - not_available: gris + boton "Reintentar" (sujeto a cooldown 7d).
+                          - not_requested / null: CTA "Revelar telefono - 5 creditos" */}
+                      {(() => {
+                        const phoneStatus = prospect.phone_status ?? "not_requested"
+                        const phoneVal = prospect.mobile_phone || prospect.phone || ""
+                        const isLoading = revealingId === prospect.id
+
+                        if (phoneStatus === "received" && phoneVal) {
+                          return (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 gap-1.5 bg-transparent"
+                                  onClick={() =>
+                                    copyToClipboard(phoneVal, `phone-${prospect.id}`)
+                                  }
+                                >
+                                  {copiedId === `phone-${prospect.id}` ? (
+                                    <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+                                  ) : (
+                                    <Phone className="h-3.5 w-3.5" />
+                                  )}
+                                  Tel
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>{phoneVal}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  Click para copiar
+                                </p>
+                              </TooltipContent>
+                            </Tooltip>
+                          )
+                        }
+
+                        if (phoneStatus === "pending" || isLoading) {
+                          return (
                             <Button
                               variant="outline"
                               size="sm"
                               className="h-8 gap-1.5 bg-transparent"
-                              onClick={() =>
-                                copyToClipboard(
-                                  prospect.mobile_phone || prospect.phone!,
-                                  `phone-${prospect.id}`,
-                                )
-                              }
+                              disabled
                             >
-                              {copiedId === `phone-${prospect.id}` ? (
-                                <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
-                              ) : (
-                                <Phone className="h-3.5 w-3.5" />
-                              )}
-                              Tel
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              Buscando...
                             </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>{prospect.mobile_phone || prospect.phone}</p>
-                            <p className="text-xs text-muted-foreground">Click para copiar</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      )}
+                          )
+                        }
+
+                        if (phoneStatus === "not_available") {
+                          return (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 gap-1.5 bg-transparent text-muted-foreground"
+                                  onClick={() => handleRevealPhone(prospect)}
+                                  disabled={!!revealingId}
+                                >
+                                  <Phone className="h-3.5 w-3.5" />
+                                  Reintentar
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>Apollo no encontro telefono en el ultimo intento.</p>
+                                <p className="text-xs text-muted-foreground">
+                                  Reintento sujeto a cooldown de 7 dias. Costo: 5 creditos.
+                                </p>
+                              </TooltipContent>
+                            </Tooltip>
+                          )
+                        }
+
+                        // not_requested o null
+                        return (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-8 gap-1.5 bg-transparent"
+                                onClick={() => handleRevealPhone(prospect)}
+                                disabled={!!revealingId}
+                              >
+                                <Phone className="h-3.5 w-3.5" />
+                                Revelar telefono
+                                <span className="ml-1 text-xs text-muted-foreground">
+                                  5 cred.
+                                </span>
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>Pide a Apollo el telefono de este contacto.</p>
+                              <p className="text-xs text-muted-foreground">
+                                Costo: 5 creditos. Cooldown: 7 dias.
+                              </p>
+                            </TooltipContent>
+                          </Tooltip>
+                        )
+                      })()}
                     </div>
                   </CardContent>
                 </Card>

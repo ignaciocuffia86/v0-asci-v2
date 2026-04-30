@@ -95,28 +95,42 @@ export async function apolloRequest<T = unknown>(
   let lastError = ""
   const start = Date.now()
 
+  // Algunos endpoints (phone reveal) requieren que TODO vaya como query params
+  // y NO se mande body. Si requestBody es undefined o {}, omitimos body para
+  // que Apollo no lo malinterprete.
+  const hasBody =
+    opts.requestBody !== undefined &&
+    opts.requestBody !== null &&
+    !(typeof opts.requestBody === "object" && Object.keys(opts.requestBody as object).length === 0)
+
+  let lastResponseBody: unknown = null
+
   while (attempt < maxRetries) {
     attempt++
     const attemptStart = Date.now()
     try {
-      const res = await fetch(url, {
+      const fetchInit: RequestInit = {
         method,
         headers: {
-          "Content-Type": "application/json",
           "Cache-Control": "no-cache",
           "X-Api-Key": apiKey,
+          ...(hasBody ? { "Content-Type": "application/json" } : {}),
         },
-        body: method === "POST" ? JSON.stringify(opts.requestBody) : undefined,
-      })
+      }
+      if (method === "POST" && hasBody) {
+        fetchInit.body = JSON.stringify(opts.requestBody)
+      }
+      const res = await fetch(url, fetchInit)
 
       const latencyMs = Date.now() - attemptStart
       lastStatus = res.status
 
       if (res.ok) {
         const data = (await res.json()) as T
+        lastResponseBody = data
         const totalLatency = Date.now() - start
 
-        // Log success
+        // Log success con response_body para diagnostico futuro
         await logApolloCall({
           endpoint: opts.endpoint,
           userId: opts.userId,
@@ -124,6 +138,7 @@ export async function apolloRequest<T = unknown>(
           companyId: opts.companyId,
           requestBody: opts.requestBody,
           responseStatus: res.status,
+          responseBody: data,
           responseCount: opts.responseCount,
           totalEntries: opts.totalEntries,
           latencyMs: totalLatency,
@@ -137,6 +152,12 @@ export async function apolloRequest<T = unknown>(
 
       const body = await res.text()
       lastError = body.slice(0, 500)
+      // Intentamos capturar el response como JSON para diagnostico
+      try {
+        lastResponseBody = JSON.parse(body)
+      } catch {
+        lastResponseBody = { raw: body.slice(0, 1000) }
+      }
 
       if (!isRetryable(res.status)) {
         break
@@ -148,6 +169,7 @@ export async function apolloRequest<T = unknown>(
     } catch (err) {
       lastStatus = 0
       lastError = err instanceof Error ? err.message : String(err)
+      lastResponseBody = { fetch_error: lastError }
       const delay = 500 * Math.pow(3, attempt - 1)
       await sleep(delay)
     }
@@ -161,6 +183,7 @@ export async function apolloRequest<T = unknown>(
     companyId: opts.companyId,
     requestBody: opts.requestBody,
     responseStatus: lastStatus,
+    responseBody: lastResponseBody,
     latencyMs: totalLatency,
     errorMessage: lastError,
     queryHash: opts.queryHash,

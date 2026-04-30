@@ -7,18 +7,19 @@ import { getProspectsTabData } from "@/app/actions/apollo"
  * Endpoint dedicado para el tab de Prospectos. Se llama desde el cliente
  * via SWR, que deduplica requests, evita loops por remount y permite
  * revalidaciones controladas con `mutate`.
- *
- * Delega en la server action `getProspectsTabData` que ya consolida todo
- * en un solo round-trip (auth + bookmark + company + contacts + dictionary).
  */
-export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params
+// Forzamos runtime nodejs y dynamic para evitar que turbopack/cache devuelva
+// un 404 fantasma cuando se modifica un modulo importado en profundidad.
+export const dynamic = "force-dynamic"
+export const runtime = "nodejs"
 
+export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await params
     const data = await getProspectsTabData(id)
     return NextResponse.json(data)
   } catch (error) {
-    console.error("[v0] /api/bookmarks/[id]/prospects-data failed", error)
+    console.error("[v0] /api/bookmarks/[id]/prospects-data failed:", error)
     return NextResponse.json(
       {
         error: "Error al cargar prospectos",
