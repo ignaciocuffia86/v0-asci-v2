@@ -1233,3 +1233,38 @@ export async function getProspectPhoneStatus(prospectId: string): Promise<{
     mobile_phone: data.mobile_phone ?? null,
   }
 }
+
+/**
+ * Marca el telefono de un prospecto como `not_available` por timeout: lo
+ * usa la UI cuando el polling se queda en pending demasiado tiempo (Apollo
+ * no entrego webhook a pesar de aceptar el waterfall enrichment). Solo
+ * actualiza si el estado actual sigue siendo 'pending' (no pisa un received
+ * que llego justo en la transicion).
+ */
+export async function markPhoneTimedOut(prospectId: string): Promise<{
+  ok: boolean
+  changed: boolean
+}> {
+  const supabase = await createClient()
+  const { data: authData } = await supabase.auth.getUser()
+  const user = authData?.user
+  if (!user) return { ok: false, changed: false }
+
+  const admin = createAdminClient()
+  // Solo cambiamos si todavia esta en pending (evita race con webhook que
+  // llega justo cuando expira el timeout).
+  const { data, error } = await admin
+    .from("user_company_contacts")
+    .update({ phone_status: "not_available" })
+    .eq("id", prospectId)
+    .eq("user_id", user.id)
+    .eq("phone_status", "pending")
+    .select("id")
+
+  if (error) {
+    console.error("[v0][markPhoneTimedOut] update failed:", error)
+    return { ok: false, changed: false }
+  }
+
+  return { ok: true, changed: (data ?? []).length > 0 }
+}

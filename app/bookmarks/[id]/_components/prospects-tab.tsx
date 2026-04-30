@@ -37,6 +37,7 @@ import {
   restoreProspect,
   revealProspectPhone,
   getProspectPhoneStatus,
+  markPhoneTimedOut,
   type ApolloSearchStats,
   type ProspectsTabData,
 } from "@/app/actions/apollo"
@@ -274,14 +275,26 @@ export function ProspectsTab({
   }
 
   /**
-   * Inicia un polling cada 5s sobre el status del telefono. Para cuando
-   * pega 'received' / 'not_available' o cuando se cumple el timeout (3 min).
+   * Inicia un polling cada 5s sobre el status del telefono. Para cuando:
+   *  - Pega 'received'                  -> toast success.
+   *  - Pega 'not_available' (server)    -> toast info.
+   *  - Se cumple el timeout (5 min)     -> marcamos not_available en DB
+   *    via `markPhoneTimedOut` y mostramos toast informando que Apollo
+   *    acepto el waterfall pero no entrego datos. Esto desbloquea al usuario
+   *    en vez de dejarlo en "Buscando..." infinito.
    */
   const startPhonePolling = (prospectId: string) => {
     if (pollingTimersRef.current[prospectId]) return
     const startedAt = Date.now()
-    const TIMEOUT_MS = 3 * 60 * 1000 // 3 minutos
+    // Apollo waterfall enrichment puede tardar varios minutos cuando consulta
+    // proveedores externos. 5 min es un buen balance entre paciencia y UX.
+    const TIMEOUT_MS = 5 * 60 * 1000
     const POLL_MS = 5_000
+
+    const stop = () => {
+      clearInterval(pollingTimersRef.current[prospectId])
+      delete pollingTimersRef.current[prospectId]
+    }
 
     pollingTimersRef.current[prospectId] = setInterval(async () => {
       try {
@@ -293,21 +306,37 @@ export function ProspectsTab({
             phone: res.phone ?? undefined,
             mobile_phone: res.mobile_phone ?? undefined,
           })
-          clearInterval(pollingTimersRef.current[prospectId])
-          delete pollingTimersRef.current[prospectId]
+          stop()
           toast.success("Telefono recibido")
         } else if (res.phone_status === "not_available") {
           patchProspect(prospectId, { phone_status: "not_available" })
-          clearInterval(pollingTimersRef.current[prospectId])
-          delete pollingTimersRef.current[prospectId]
+          stop()
           toast.info("Apollo no encontro telefono para este contacto")
         } else if (Date.now() - startedAt > TIMEOUT_MS) {
-          // Si pasaron 3 min sin webhook, dejamos de pollear pero NO
-          // marcamos not_available en cliente: el cron se encargara mas
-          // adelante. Solo limpiamos el spinner.
-          patchProspect(prospectId, { phone_status: "pending" })
-          clearInterval(pollingTimersRef.current[prospectId])
-          delete pollingTimersRef.current[prospectId]
+          // Pasaron 5 min sin webhook: Apollo acepto el waterfall pero los
+          // proveedores externos no respondieron a tiempo (o el plan no
+          // tiene waterfall activo). Marcamos not_available en DB para
+          // desbloquear al usuario y respetar el cooldown.
+          stop()
+          const mark = await markPhoneTimedOut(prospectId)
+          if (mark.ok && mark.changed) {
+            patchProspect(prospectId, { phone_status: "not_available" })
+            toast.info("Apollo no entrego el telefono", {
+              description:
+                "El waterfall enrichment fue aceptado pero no llegaron datos en 5 min. Reintenta despues del cooldown.",
+              duration: 8000,
+            })
+          } else {
+            // El estado ya cambio entre el ultimo poll y ahora (race), refrescamos.
+            const fresh = await getProspectPhoneStatus(prospectId)
+            if (fresh.ok && fresh.phone_status) {
+              patchProspect(prospectId, {
+                phone_status: fresh.phone_status as Prospect["phone_status"],
+                phone: fresh.phone ?? undefined,
+                mobile_phone: fresh.mobile_phone ?? undefined,
+              })
+            }
+          }
         }
       } catch (err) {
         console.warn("[v0] phone poll failed:", err)
@@ -352,10 +381,12 @@ export function ProspectsTab({
           description: result.phone,
         })
       } else if (result.status === "pending") {
-        // Apollo esta buscando async, arrancamos polling
+        // Apollo acepto el waterfall enrichment, polleamos hasta que llegue
+        // el webhook o se cumpla el timeout (5 min).
         toast.info("Buscando telefono", {
           description:
-            "Apollo esta procesando. Te avisamos cuando llegue (puede tardar varios minutos).",
+            "Apollo esta consultando proveedores externos. Si no llega en 5 min, te avisamos que no se pudo.",
+          duration: 6000,
         })
         startPhonePolling(prospect.id)
       } else if (result.status === "not_available") {
