@@ -903,12 +903,13 @@ export async function revealProspectPhone(
   }
 
   // 1) Cargamos el contacto y verificamos pertenencia.
-  //    OJO: traemos `email` porque Apollo lo recomienda como identificador
-  //    PRIMARIO para /people/match (mas confiable que id o linkedin_url).
+  //    Traemos TODOS los identificadores que Apollo soporta. Para waterfall
+  //    enrichment, mientras mas identifiers pasemos en query params mejor
+  //    es el match contra los 3rd party data sources (Prospeo, Icypeas, etc).
   const { data: contact, error: contactError } = await supabase
     .from("user_company_contacts")
     .select(
-      "id, user_id, apollo_person_id, email, linkedin_url, phone, mobile_phone, phone_status, phone_requested_at, bookmark_id, company_id",
+      "id, user_id, apollo_person_id, email, linkedin_url, first_name, last_name, phone, mobile_phone, phone_status, phone_requested_at, bookmark_id, company_id",
     )
     .eq("id", prospectId)
     .eq("user_id", user.id)
@@ -951,15 +952,22 @@ export async function revealProspectPhone(
     }
   }
 
-  // 4) Necesitamos un identificador para Apollo. Apollo prefiere email,
-  //    luego apollo_person_id, finalmente linkedin_url.
-  const c = contact as typeof contact & { email?: string | null }
-  if (!c.email && !c.apollo_person_id && !c.linkedin_url) {
+  // 4) Necesitamos identificadores. Para waterfall enrichment Apollo recomienda:
+  //    first_name + last_name + linkedin_url + email (cuanto mas, mejor match).
+  //    Como minimo necesitamos al menos uno de: email, linkedin_url, o
+  //    (first_name + last_name + organization).
+  const c = contact as typeof contact & {
+    email?: string | null
+    first_name?: string | null
+    last_name?: string | null
+  }
+  const hasName = !!(c.first_name && c.last_name)
+  if (!c.email && !c.linkedin_url && !hasName) {
     return {
       ok: false,
       status: "no_apollo_id",
       message:
-        "Este contacto no tiene identificador de Apollo (email, apollo_id o linkedin_url)",
+        "Este contacto no tiene identificadores suficientes (email, linkedin_url, o nombre+apellido)",
     }
   }
 
@@ -1004,38 +1012,49 @@ export async function revealProspectPhone(
     }
   }
 
-  // 7) Llamamos a Apollo. Segun la doc oficial de /people/match (people-enrichment),
-  //    TODOS los parametros (incluido el identificador) deben ir como QUERY PARAMS,
-  //    NO en el body. El body debe estar VACIO. Si mandamos `id` en el body,
-  //    Apollo lo ignora silenciosamente y devuelve 200 con phone_numbers vacio
-  //    (era el bug que veiamos antes).
+  // 7) Llamamos a Apollo en modo WATERFALL ENRICHMENT.
+  //    Esto es CRITICO: con `reveal_phone_number=true` solo, Apollo busca en su
+  //    DB propia y si no lo tiene devuelve `phone_enrichment.request_id` que
+  //    exige polling (Apollo NO manda webhook en ese modo). Con `run_waterfall_phone=true`,
+  //    Apollo consulta third-party data sources (Prospeo, Icypeas, etc.) y SI
+  //    entrega via webhook a webhook_url. Confirmado en docs.apollo.io/docs/enrich-phone-and-email-using-data-waterfall
   //
-  //    Identificador: priorizamos email (recomendado por Apollo), luego
-  //    apollo_person_id, finalmente linkedin_url.
+  //    TODOS los parametros van como QUERY PARAMS (body vacio). Pasamos todos
+  //    los identifiers que tenemos para mejor match en los data sources.
   const queryParams: Record<string, string | number | boolean> = {
-    reveal_phone_number: true,
+    run_waterfall_phone: true,
     webhook_url: webhookUrl,
-    reveal_personal_emails: false,
   }
-  let identifierUsed: "email" | "apollo_person_id" | "linkedin_url"
+  const identifiersIncluded: string[] = []
   if (c.email) {
     queryParams.email = c.email
-    identifierUsed = "email"
-  } else if (c.apollo_person_id) {
+    identifiersIncluded.push("email")
+  }
+  if (c.linkedin_url) {
+    queryParams.linkedin_url = c.linkedin_url
+    identifiersIncluded.push("linkedin_url")
+  }
+  if (c.first_name) {
+    queryParams.first_name = c.first_name
+    identifiersIncluded.push("first_name")
+  }
+  if (c.last_name) {
+    queryParams.last_name = c.last_name
+    identifiersIncluded.push("last_name")
+  }
+  if (c.apollo_person_id) {
     queryParams.id = c.apollo_person_id
-    identifierUsed = "apollo_person_id"
-  } else {
-    queryParams.linkedin_url = c.linkedin_url!
-    identifierUsed = "linkedin_url"
+    identifiersIncluded.push("apollo_person_id")
   }
 
   const result = await apolloRequest<{
     person?: any
-    phone_enrichment?: {
-      status?: string
-      request_id?: string
+    waterfall?: {
+      status?: "accepted" | "failed" | "partial_accepted"
       message?: string
+      unprocessed_attributes?: unknown[]
     } | null
+    request_id?: string | number
   }>({
     endpoint: "people/match:phone",
     method: "POST",
@@ -1047,8 +1066,9 @@ export async function revealProspectPhone(
     creditsEstimated: 5,
     extraMetadata: {
       phone_revealed: true,
+      waterfall_mode: true,
       contact_id: contact.id,
-      identifier_used: identifierUsed,
+      identifiers_included: identifiersIncluded,
     },
   })
 
@@ -1066,87 +1086,97 @@ export async function revealProspectPhone(
     }
   }
 
-  // 8) Procesamos el response. apolloRequest ya loggeo el call con response_body
-  //    completo en apollo_api_calls (no necesitamos insertar a mano).
+  // 8) Procesamos el response del modo waterfall. Casos posibles:
+  //    a) waterfall.status === 'accepted'        -> webhook llegara con datos
+  //    b) waterfall.status === 'partial_accepted' -> webhook llegara, parcial
+  //    c) waterfall.status === 'failed'           -> error claro al usuario
+  //    d) `person.phone_numbers` ya vacio sin waterfall -> Apollo no acepto el match
   //
-  //    El response de /people/match con reveal_phone_number tiene 3 caminos posibles:
-  //    a) `person.phone_numbers` no vacio  -> entrega sync (raro pero pasa).
-  //    b) `phone_enrichment.status === 'pending'` con `request_id` -> async,
-  //       el webhook llegara en minutos.
-  //    c) `phone_numbers` vacio Y sin phone_enrichment -> Apollo no encontro
-  //       telefono para este contacto. NO esperar webhook, marcar not_available.
+  //    apolloRequest ya guardo el response completo en apollo_api_calls.response_body
+  //    con `endpoint: "people/match:phone"` para diagnostico.
   const responseData = result.data as {
     person?: any
-    phone_enrichment?: {
-      status?: string
-      request_id?: string
+    waterfall?: {
+      status?: "accepted" | "failed" | "partial_accepted"
       message?: string
     } | null
+    request_id?: string | number
   }
   const person = responseData?.person ?? {}
-  const phones = Array.isArray(person.phone_numbers) ? person.phone_numbers : []
-  const { value: bestPhone, isMobile } = pickBestPhone(phones)
+  const waterfall = responseData?.waterfall ?? null
 
-  // Caso (a): telefono entregado sync inline
-  if (bestPhone) {
-    const updateColumn = isMobile ? "mobile_phone" : "phone"
-    const currentVal = (contact as any)[updateColumn]
-    const update: Record<string, unknown> = { phone_status: "received" }
-    if (!currentVal || currentVal === "") {
-      update[updateColumn] = bestPhone
-    }
-    await admin.from("user_company_contacts").update(update).eq("id", contact.id)
-
-    // Backfill apollo_person_id si la respuesta lo trae
-    if (
-      !contact.apollo_person_id &&
-      typeof person.id === "string" &&
-      person.id.length > 0
-    ) {
-      await admin
-        .from("user_company_contacts")
-        .update({ apollo_person_id: person.id })
-        .eq("id", contact.id)
-    }
-
-    return {
-      ok: true,
-      status: "received",
-      phone: bestPhone,
-      isMobile,
-    }
+  // Backfill apollo_person_id si la respuesta lo trae (util para que el webhook
+  // matchee por id en vez de linkedin_url).
+  if (
+    !contact.apollo_person_id &&
+    typeof person.id === "string" &&
+    person.id.length > 0
+  ) {
+    await admin
+      .from("user_company_contacts")
+      .update({ apollo_person_id: person.id })
+      .eq("id", contact.id)
   }
 
-  // Caso (b): pending con request_id -> esperar webhook async
-  const enrichment = responseData?.phone_enrichment ?? null
-  const isAsyncPending =
-    enrichment?.status === "pending" && !!enrichment?.request_id
-
-  if (isAsyncPending) {
-    // Guardamos el request_id de Apollo en metadata del contacto. Si el
-    // webhook llega, hace match por apollo_person_id. Si no llega en X minutos,
-    // un cron eventualmente lo barre a not_available.
+  // Caso (a) y (b): waterfall accepted o partial_accepted -> esperar webhook
+  if (
+    waterfall?.status === "accepted" ||
+    waterfall?.status === "partial_accepted"
+  ) {
     return {
       ok: true,
       status: "pending",
       message:
-        "Apollo esta buscando el telefono. Te lo mostramos cuando lo entreguen (puede tardar varios minutos).",
-      requestId: enrichment.request_id,
+        waterfall.message ??
+        "Apollo esta consultando data sources externos. El telefono llegara via webhook en unos minutos.",
+      requestId:
+        responseData.request_id != null
+          ? String(responseData.request_id)
+          : null,
     }
   }
 
-  // Caso (c): Apollo respondio 200 sin telefono y sin request_id.
-  // Esto significa que Apollo no tiene telefono para este contacto.
-  // Marcamos not_available DIRECTO (no dejamos pending infinito) y devolvemos
-  // mensaje claro al usuario para que entienda que paso.
+  // Caso (c): waterfall failed -> error explicito (no quemar 7d de cooldown)
+  if (waterfall?.status === "failed") {
+    const failMsg = waterfall.message ?? "Waterfall enrichment fallo"
+    const isPermissionError = /permission|not have/i.test(failMsg)
+
+    // Si es error de permisos, restauramos a not_requested para que pueda
+    // reintentar cuando se arregle el plan. Si es otra falla, marcamos
+    // not_available para respetar el cooldown.
+    await admin
+      .from("user_company_contacts")
+      .update({
+        phone_status: isPermissionError ? "not_requested" : "not_available",
+      })
+      .eq("id", contact.id)
+
+    console.error("[v0][reveal-phone] waterfall failed:", {
+      contactId: contact.id,
+      identifiers: identifiersIncluded,
+      message: failMsg,
+    })
+
+    return {
+      ok: false,
+      status: isPermissionError ? "config_error" : "apollo_error",
+      message: isPermissionError
+        ? "Tu plan de Apollo no tiene habilitado Waterfall Enrichment. Contactar soporte de Apollo para activarlo."
+        : `Apollo rechazo el waterfall: ${failMsg.slice(0, 160)}`,
+    }
+  }
+
+  // Caso (d): no hay bloque waterfall en el response. Esto puede pasar si
+  // Apollo aceptamos cierto contrato pero el endpoint cambio. Marcamos
+  // not_available y loggeamos para diagnostico.
   await admin
     .from("user_company_contacts")
     .update({ phone_status: "not_available" })
     .eq("id", contact.id)
 
-  console.log("[v0][reveal-phone] Apollo 200 sin telefono ni request_id", {
+  console.log("[v0][reveal-phone] response sin waterfall block", {
     contactId: contact.id,
-    identifierUsed,
+    identifiers: identifiersIncluded,
     personIdReturned: person.id ?? null,
     responseTopKeys: Object.keys(responseData ?? {}),
   })
@@ -1155,7 +1185,7 @@ export async function revealProspectPhone(
     ok: true,
     status: "not_available",
     message:
-      "Apollo no encontro telefono para este contacto. Reintentar pasados 7 dias (Apollo puede actualizar su base).",
+      "Apollo no proceso el waterfall enrichment. Revisar logs en apollo_api_calls.response_body.",
   }
 }
 
