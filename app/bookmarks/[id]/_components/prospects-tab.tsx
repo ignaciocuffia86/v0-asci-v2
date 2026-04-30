@@ -354,9 +354,17 @@ export function ProspectsTab({
       } else if (result.status === "pending") {
         // Apollo esta buscando async, arrancamos polling
         toast.info("Buscando telefono", {
-          description: "Apollo esta procesando. Te avisamos cuando llegue.",
+          description:
+            "Apollo esta procesando. Te avisamos cuando llegue (puede tardar varios minutos).",
         })
         startPhonePolling(prospect.id)
+      } else if (result.status === "not_available") {
+        // Apollo respondio 200 pero no tiene telefono para este contacto.
+        // Marcamos not_available directo y damos feedback claro al usuario.
+        patchProspect(prospect.id, { phone_status: "not_available" })
+        toast.info("Apollo no encontro telefono", {
+          description: result.message,
+        })
       }
     } catch (err) {
       console.error("[v0] revealProspectPhone failed:", err)

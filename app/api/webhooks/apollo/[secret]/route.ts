@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { createAdminClient } from "@/lib/supabase/admin"
+import { logApolloCall } from "@/lib/apollo/logger"
 
 /**
  * Webhook callback de Apollo cuando un /people/match con reveal_phone_number=true
@@ -27,19 +28,49 @@ type ApolloPhoneNumber = {
   status?: string | null
 }
 
+/**
+ * Apollo no documenta un schema unico para el webhook callback. Variantes
+ * observadas en la API:
+ *   1) { person: { id, linkedin_url, phone_numbers: [...] } }   <- /people/match
+ *   2) { people: [{ id, linkedin_url, phone_numbers: [...] }] } <- bulk match
+ *   3) { id, linkedin_url, phone_numbers: [...] }                <- root level
+ * Probamos las 3.
+ */
 function extractPhoneInfo(payload: any): {
   apollo_person_id: string | null
   linkedin_url: string | null
   phones: ApolloPhoneNumber[]
 } {
-  const person = payload?.person ?? payload ?? {}
+  // Si viene como array de people, tomamos el primero (en nuestro flow per-card
+  // siempre mandamos 1 contacto, asi que el array tendra 1 elemento).
+  const person =
+    payload?.person ??
+    (Array.isArray(payload?.people) && payload.people.length > 0
+      ? payload.people[0]
+      : null) ??
+    payload ??
+    {}
   const apollo_person_id =
     typeof person.id === "string" && person.id.length > 0 ? person.id : null
   const linkedin_url =
     typeof person.linkedin_url === "string" && person.linkedin_url.length > 0
       ? person.linkedin_url
       : null
-  const phones = Array.isArray(person.phone_numbers) ? person.phone_numbers : []
+  // Apollo a veces usa raw_number/sanitized_number, otras veces direct strings,
+  // u objetos con type_cd/status_cd (legacy). Normalizamos.
+  const rawPhones = Array.isArray(person.phone_numbers) ? person.phone_numbers : []
+  const phones: ApolloPhoneNumber[] = rawPhones.map((p: any) => {
+    if (typeof p === "string") {
+      return { raw_number: p, sanitized_number: p, type: null, status: null }
+    }
+    return {
+      raw_number: p?.raw_number ?? p?.number ?? null,
+      sanitized_number: p?.sanitized_number ?? p?.number ?? p?.raw_number ?? null,
+      // type_cd es el formato legacy, type es el actual
+      type: p?.type ?? p?.type_cd ?? null,
+      status: p?.status ?? p?.status_cd ?? p?.dnc_status ?? null,
+    }
+  })
   return { apollo_person_id, linkedin_url, phones }
 }
 
@@ -93,11 +124,27 @@ export async function POST(
     return NextResponse.json({ ok: true, ignored: "invalid_json" })
   }
 
+  // Log de arrival INCONDICIONAL: queremos trazabilidad de cualquier cosa
+  // que llegue, sea procesable o no. Util para debug del formato real que
+  // manda Apollo (que la doc no documenta consistentemente).
+  await logApolloCall({
+    endpoint: "webhook:arrival",
+    userId: null,
+    requestBody: {},
+    responseBody: payload,
+    responseStatus: 200,
+    latencyMs: 0,
+    extraMetadata: {
+      payload_top_keys: payload && typeof payload === "object" ? Object.keys(payload) : [],
+    },
+  })
+
   const { apollo_person_id, linkedin_url, phones } = extractPhoneInfo(payload)
   console.log("[v0][apollo-webhook] received:", {
     apollo_person_id,
     linkedin_url,
     phones_count: phones.length,
+    payload_top_keys: Object.keys(payload ?? {}),
   })
 
   if (!apollo_person_id && !linkedin_url) {
@@ -179,13 +226,22 @@ export async function POST(
     return NextResponse.json({ ok: true, ignored: "update_error" })
   }
 
-  // Log en apollo_api_calls para tracking de hit rate sync vs async.
-  await supabase.from("apollo_api_calls").insert({
+  // Log en apollo_api_calls via logger (que conoce el schema real de la
+  // tabla). Antes el insert directo fallaba porque usaba columnas inexistentes
+  // (success, response_summary), dejando los webhooks sin trazabilidad.
+  await logApolloCall({
     endpoint: "webhook:phone",
-    success: true,
-    phone_revealed: true,
-    phone_sync: false,
-    response_summary: `webhook async: ${updates.length} contacts updated, isMobile=${isMobile}`,
+    userId: null,
+    requestBody: { phones_count: phones.length, isMobile },
+    responseBody: payload,
+    responseStatus: 200,
+    latencyMs: 0,
+    extraMetadata: {
+      apollo_person_id,
+      linkedin_url,
+      contacts_updated: updates.length,
+      column_used: updateColumn,
+    },
   })
 
   console.log(

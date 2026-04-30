@@ -828,6 +828,12 @@ export type RevealPhoneResult =
       ok: true
       status: "pending"
       message: string
+      requestId?: string | null
+    }
+  | {
+      ok: true
+      status: "not_available"
+      message: string
     }
   | {
       ok: false
@@ -896,11 +902,13 @@ export async function revealProspectPhone(
     return { ok: false, status: "not_found", message: "No autenticado" }
   }
 
-  // 1) Cargamos el contacto y verificamos pertenencia
+  // 1) Cargamos el contacto y verificamos pertenencia.
+  //    OJO: traemos `email` porque Apollo lo recomienda como identificador
+  //    PRIMARIO para /people/match (mas confiable que id o linkedin_url).
   const { data: contact, error: contactError } = await supabase
     .from("user_company_contacts")
     .select(
-      "id, user_id, apollo_person_id, linkedin_url, phone, mobile_phone, phone_status, phone_requested_at, bookmark_id, company_id",
+      "id, user_id, apollo_person_id, email, linkedin_url, phone, mobile_phone, phone_status, phone_requested_at, bookmark_id, company_id",
     )
     .eq("id", prospectId)
     .eq("user_id", user.id)
@@ -943,13 +951,15 @@ export async function revealProspectPhone(
     }
   }
 
-  // 4) Necesitamos un identificador para Apollo
-  if (!contact.apollo_person_id && !contact.linkedin_url) {
+  // 4) Necesitamos un identificador para Apollo. Apollo prefiere email,
+  //    luego apollo_person_id, finalmente linkedin_url.
+  const c = contact as typeof contact & { email?: string | null }
+  if (!c.email && !c.apollo_person_id && !c.linkedin_url) {
     return {
       ok: false,
       status: "no_apollo_id",
       message:
-        "Este contacto no tiene identificador de Apollo (re-importarlo desde la busqueda)",
+        "Este contacto no tiene identificador de Apollo (email, apollo_id o linkedin_url)",
     }
   }
 
@@ -994,29 +1004,52 @@ export async function revealProspectPhone(
     }
   }
 
-  // 7) Llamamos a Apollo. Body con identificador, query params con flags.
-  const requestBody: Record<string, unknown> = {
+  // 7) Llamamos a Apollo. Segun la doc oficial de /people/match (people-enrichment),
+  //    TODOS los parametros (incluido el identificador) deben ir como QUERY PARAMS,
+  //    NO en el body. El body debe estar VACIO. Si mandamos `id` en el body,
+  //    Apollo lo ignora silenciosamente y devuelve 200 con phone_numbers vacio
+  //    (era el bug que veiamos antes).
+  //
+  //    Identificador: priorizamos email (recomendado por Apollo), luego
+  //    apollo_person_id, finalmente linkedin_url.
+  const queryParams: Record<string, string | number | boolean> = {
+    reveal_phone_number: true,
+    webhook_url: webhookUrl,
     reveal_personal_emails: false,
   }
-  if (contact.apollo_person_id) {
-    requestBody.id = contact.apollo_person_id
+  let identifierUsed: "email" | "apollo_person_id" | "linkedin_url"
+  if (c.email) {
+    queryParams.email = c.email
+    identifierUsed = "email"
+  } else if (c.apollo_person_id) {
+    queryParams.id = c.apollo_person_id
+    identifierUsed = "apollo_person_id"
   } else {
-    requestBody.linkedin_url = contact.linkedin_url
+    queryParams.linkedin_url = c.linkedin_url!
+    identifierUsed = "linkedin_url"
   }
 
-  const result = await apolloRequest<{ person?: any }>({
+  const result = await apolloRequest<{
+    person?: any
+    phone_enrichment?: {
+      status?: string
+      request_id?: string
+      message?: string
+    } | null
+  }>({
     endpoint: "people/match:phone",
     method: "POST",
-    requestBody,
-    queryParams: {
-      reveal_phone_number: true,
-      webhook_url: webhookUrl,
-    },
+    requestBody: {}, // VACIO — todo va por query params
+    queryParams,
     userId: user.id,
     bookmarkId: contact.bookmark_id ?? undefined,
     companyId: contact.company_id ?? undefined,
     creditsEstimated: 5,
-    extraMetadata: { phone_revealed: true, contact_id: contact.id },
+    extraMetadata: {
+      phone_revealed: true,
+      contact_id: contact.id,
+      identifier_used: identifierUsed,
+    },
   })
 
   if (!result.ok) {
@@ -1033,31 +1066,29 @@ export async function revealProspectPhone(
     }
   }
 
-  // 8) Procesamos el response: si trae phone_numbers inline, persistimos.
-  const person = (result.data as any)?.person ?? {}
+  // 8) Procesamos el response. apolloRequest ya loggeo el call con response_body
+  //    completo en apollo_api_calls (no necesitamos insertar a mano).
+  //
+  //    El response de /people/match con reveal_phone_number tiene 3 caminos posibles:
+  //    a) `person.phone_numbers` no vacio  -> entrega sync (raro pero pasa).
+  //    b) `phone_enrichment.status === 'pending'` con `request_id` -> async,
+  //       el webhook llegara en minutos.
+  //    c) `phone_numbers` vacio Y sin phone_enrichment -> Apollo no encontro
+  //       telefono para este contacto. NO esperar webhook, marcar not_available.
+  const responseData = result.data as {
+    person?: any
+    phone_enrichment?: {
+      status?: string
+      request_id?: string
+      message?: string
+    } | null
+  }
+  const person = responseData?.person ?? {}
   const phones = Array.isArray(person.phone_numbers) ? person.phone_numbers : []
   const { value: bestPhone, isMobile } = pickBestPhone(phones)
 
-  // Loggeamos en apollo_api_calls que hicimos un phone reveal (sync)
-  try {
-    await admin.from("apollo_api_calls").insert({
-      user_id: user.id,
-      bookmark_id: contact.bookmark_id ?? null,
-      endpoint: "people/match:phone",
-      success: true,
-      phone_revealed: true,
-      phone_sync: !!bestPhone,
-      response_summary: bestPhone
-        ? `phone delivered inline (mobile=${isMobile})`
-        : "no phone inline, awaiting webhook",
-    })
-  } catch (logErr) {
-    console.warn("[v0][reveal-phone] log insert failed (non-fatal):", logErr)
-  }
-
+  // Caso (a): telefono entregado sync inline
   if (bestPhone) {
-    // Si Apollo devolvio el telefono inline, lo guardamos.
-    // Solo sobreescribimos si el campo destino estaba vacio.
     const updateColumn = isMobile ? "mobile_phone" : "phone"
     const currentVal = (contact as any)[updateColumn]
     const update: Record<string, unknown> = { phone_status: "received" }
@@ -1066,7 +1097,7 @@ export async function revealProspectPhone(
     }
     await admin.from("user_company_contacts").update(update).eq("id", contact.id)
 
-    // Si tenemos apollo_person_id de la respuesta, lo backfilleamos
+    // Backfill apollo_person_id si la respuesta lo trae
     if (
       !contact.apollo_person_id &&
       typeof person.id === "string" &&
@@ -1086,12 +1117,45 @@ export async function revealProspectPhone(
     }
   }
 
-  // 9) Sin telefono inline: esperamos el webhook async
+  // Caso (b): pending con request_id -> esperar webhook async
+  const enrichment = responseData?.phone_enrichment ?? null
+  const isAsyncPending =
+    enrichment?.status === "pending" && !!enrichment?.request_id
+
+  if (isAsyncPending) {
+    // Guardamos el request_id de Apollo en metadata del contacto. Si el
+    // webhook llega, hace match por apollo_person_id. Si no llega en X minutos,
+    // un cron eventualmente lo barre a not_available.
+    return {
+      ok: true,
+      status: "pending",
+      message:
+        "Apollo esta buscando el telefono. Te lo mostramos cuando lo entreguen (puede tardar varios minutos).",
+      requestId: enrichment.request_id,
+    }
+  }
+
+  // Caso (c): Apollo respondio 200 sin telefono y sin request_id.
+  // Esto significa que Apollo no tiene telefono para este contacto.
+  // Marcamos not_available DIRECTO (no dejamos pending infinito) y devolvemos
+  // mensaje claro al usuario para que entienda que paso.
+  await admin
+    .from("user_company_contacts")
+    .update({ phone_status: "not_available" })
+    .eq("id", contact.id)
+
+  console.log("[v0][reveal-phone] Apollo 200 sin telefono ni request_id", {
+    contactId: contact.id,
+    identifierUsed,
+    personIdReturned: person.id ?? null,
+    responseTopKeys: Object.keys(responseData ?? {}),
+  })
+
   return {
     ok: true,
-    status: "pending",
+    status: "not_available",
     message:
-      "Apollo esta buscando el telefono. Te lo mostramos cuando lo entreguen (puede tardar).",
+      "Apollo no encontro telefono para este contacto. Reintentar pasados 7 dias (Apollo puede actualizar su base).",
   }
 }
 
