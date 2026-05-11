@@ -2,13 +2,35 @@
 
 ## Resumen Ejecutivo
 
-Nueva iteración de ASCI como MCP (Model Context Protocol) server que permite a agentes de IA consumir inteligencia de cuentas, gestionar secuencias de outreach y coordinar el envío de emails con aprobación humana. 
+Nueva iteracion de ASCI como MCP (Model Context Protocol) server que permite a agentes de IA consumir inteligencia de cuentas, gestionar secuencias de outreach y coordinar el envio de emails con aprobacion humana.
 
-**Coexistencia en producción:**
-- `asci.bigua.lat` - ASCI v2 actual (producción, usuarios reales)
-- `bot.bigua.lat` - Nueva iteración MCP (beta testing)
+**Coexistencia en produccion:**
+- `asci.bigua.lat` - ASCI v2 actual (produccion, usuarios reales)
+- `bot.bigua.lat` - Nueva iteracion MCP
 
-Ambas aplicaciones comparten la misma base de datos Supabase y un paquete core común.
+Ambas aplicaciones comparten la misma base de datos Supabase pero estan aisladas:
+- **ASCI v2**: Opera sobre schema `public` (tablas existentes)
+- **BOT MCP**: Opera sobre schema `v3` (tablas nuevas) + lectura de `public` para datos compartidos
+
+**Principio rector**: v2 esta en produccion con usuarios reales. v3 no puede generar ningun cambio que afecte v2.
+
+---
+
+## Decisiones de Arquitectura Confirmadas
+
+| Tema | Decision |
+|------|----------|
+| Metadata de bookmarks | Crear `v3.bookmark_metadata` en lugar de modificar `public.bookmarks` |
+| Matching de CSV | Automatico con normalizacion + fuzzy ratio, requiere confirmacion manual |
+| Auto-match | Solo cuando dominio coincide exactamente Y nombre es similar (>85%) |
+| Ambiente | Produccion directa (no hay usuarios actuales en BOT) |
+| Auth MCP | API key vinculada a user_id, todas las operaciones scoped al usuario |
+| Rate limits | Por usuario, 1 API key por usuario |
+| API keys | Una sola key activa por usuario (tiers definen limites) |
+| Integracion Apify | Nuevo desarrollo |
+| Transporte MCP | HTTP Streamable (sin WebSockets) |
+| Real-time dashboard | Supabase Realtime |
+| Notificacion a agentes | Webhooks (HMAC-SHA256 firmados) |
 
 ---
 
@@ -17,7 +39,7 @@ Ambas aplicaciones comparten la misma base de datos Supabase y un paquete core c
 ### Estructura de Repositorios
 
 ```
-Organización GitHub
+Organizacion GitHub
 ├── asci-core/                    # Paquete NPM privado @asci/core
 │   ├── src/
 │   │   ├── db/                   # Cliente Supabase tipado
@@ -32,101 +54,154 @@ Organización GitHub
 └── bigua-bot/                    # NUEVO: MCP Server + Dashboard
     ├── apps/
     │   ├── mcp-server/           # MCP Server (Node.js)
-    │   └── dashboard/            # Next.js - UI de configuración
+    │   └── dashboard/            # Next.js - UI de configuracion
     └── package.json              # Importa @asci/core
 ```
 
 ### Deployments en Vercel
 
-| Proyecto | Dominio | Propósito |
+| Proyecto | Dominio | Proposito |
 |----------|---------|-----------|
-| v0-asci-v2 | asci.bigua.lat | ASCI actual - búsqueda y bookmarks (PROD) |
-| bigua-bot-dashboard | bot.bigua.lat | Dashboard de configuración MCP (BETA) |
+| v0-asci-v2 | asci.bigua.lat | ASCI actual - busqueda y bookmarks (PROD) |
+| bigua-bot-dashboard | bot.bigua.lat | Dashboard de configuracion MCP |
 | bigua-bot-mcp | api.bot.bigua.lat | MCP Server (streamable HTTP) |
 
-### Base de Datos
+### Base de Datos - Estrategia de Schemas
 
-**Decisión: Misma base de Supabase, nuevas tablas**
-
-- Reutilizar tablas existentes: `companies`, `bookmarks`, `signals`, `news`, `contacts`, `documents`, `users`
-- Agregar nuevas tablas para funcionalidad MCP (ver schema abajo)
+```
+Supabase Database
+├── public (schema)               # ASCI v2 - NO MODIFICAR
+│   ├── companies                 # Lectura compartida
+│   ├── bookmarks                 # Lectura compartida  
+│   ├── signals                   # Lectura compartida
+│   ├── news                      # Lectura compartida
+│   ├── contacts                  # Lectura compartida
+│   ├── documents                 # Lectura compartida
+│   └── users                     # Auth compartida
+│
+└── v3 (schema)                   # BOT MCP - Nuevas tablas
+    ├── bookmark_metadata         # Extension de bookmarks (sin FK cross-schema)
+    ├── excluded_accounts         # Blacklist
+    ├── csv_imports               # Tracking de importaciones
+    ├── csv_import_rows           # Filas pendientes de resolver
+    ├── api_keys                  # Autenticacion MCP
+    ├── email_sequences           # Secuencias de outreach
+    ├── email_queue               # Cola de emails pendientes
+    ├── contact_rankings          # Priorizacion A/B/C
+    ├── webhooks                  # Configuracion de webhooks
+    └── user_tiers                # Limites por plan
+```
 
 ---
 
-## Modelo de Datos: Bookmarks = Whitelist (Cuentas Objetivo)
+## Modelo de Datos: Bookmarks = Whitelist
 
-### Decisión Arquitectónica Clave
+### Decision Arquitectonica Clave
 
 **Los bookmarks existentes SON la whitelist de cuentas objetivo.**
 
-- Los usuarios actuales que tienen bookmarks con filtros → esos bookmarks son sus cuentas objetivo (whitelist)
-- Cuando un usuario sube un CSV con nuevas cuentas whitelist → se crean bookmarks automáticamente
-- La blacklist (base instalada / cuentas a no prospectar) es una tabla separada de exclusión
-
-Esto significa:
-1. **No necesitamos tabla `account_lists`** - los bookmarks ya cumplen esa función
-2. **No necesitamos `account_list_items`** - los bookmarks ya hacen el link usuario → company
-3. **Solo agregamos `excluded_accounts`** - para blacklist/base instalada
+- Los usuarios que tienen bookmarks en ASCI -> esos bookmarks son sus cuentas objetivo
+- Cuando un usuario sube un CSV con nuevas cuentas -> se crean bookmarks automaticamente
+- La metadata adicional para MCP vive en `v3.bookmark_metadata` (sin modificar `public.bookmarks`)
+- La blacklist vive en `v3.excluded_accounts`
 
 ---
 
-## Nuevas Tablas de Base de Datos
+## Nuevas Tablas de Base de Datos (Schema v3)
 
-### 1. `excluded_accounts` - Blacklist / Base Instalada (NO prospectar)
+### 1. `v3.bookmark_metadata` - Extension de bookmarks para MCP
+
+**IMPORTANTE**: Esta tabla extiende la funcionalidad de bookmarks SIN modificar la tabla `public.bookmarks`.
 
 ```sql
-CREATE TABLE excluded_accounts (
+CREATE SCHEMA IF NOT EXISTS v3;
+
+CREATE TABLE v3.bookmark_metadata (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  bookmark_id UUID NOT NULL, -- Referencia logica a public.bookmarks(id), sin FK cross-schema
+  user_id UUID NOT NULL,     -- Denormalizado para RLS
+  
+  -- Flags de prospeccion
+  is_target_account BOOLEAN DEFAULT true, -- true = prospectar, false = solo seguimiento
+  
+  -- Tracking de prospeccion
+  last_prospected_at TIMESTAMPTZ,
+  current_sequence_id UUID, -- Referencia logica a v3.email_sequences(id)
+  
+  -- Metadata
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  
+  UNIQUE(bookmark_id)
+);
+
+-- Indice para queries del MCP
+CREATE INDEX idx_bookmark_metadata_target ON v3.bookmark_metadata(user_id, is_target_account) 
+  WHERE is_target_account = true;
+
+-- RLS
+ALTER TABLE v3.bookmark_metadata ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users manage own bookmark metadata" ON v3.bookmark_metadata
+  FOR ALL USING (auth.uid() = user_id);
+
+COMMENT ON TABLE v3.bookmark_metadata IS 
+  'Extension de public.bookmarks para funcionalidad MCP. No modifica la tabla original.';
+```
+
+### 2. `v3.excluded_accounts` - Blacklist / Base Instalada
+
+```sql
+CREATE TABLE v3.excluded_accounts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL,
   
   -- Puede estar vinculada a una company existente o no
-  company_id UUID REFERENCES companies(id), -- NULL si no hay match
+  company_id UUID, -- Referencia logica a public.companies(id), NULL si no hay match
   
-  -- Input del usuario (del CSV de exclusión)
+  -- Input del usuario (del CSV de exclusion)
   original_name TEXT NOT NULL,
   original_domain TEXT,
   
-  -- Match con ASCI (para mostrar info si existe)
+  -- Match con ASCI
   match_status TEXT DEFAULT 'pending' CHECK (match_status IN ('pending', 'matched', 'ambiguous', 'no_match', 'ignored')),
   match_confidence FLOAT,
-  match_candidates JSONB, -- [{company_id, name, score}] para casos ambiguos
+  match_candidates JSONB, -- [{company_id, name, domain, score}] para casos ambiguos
   
-  -- Razón de exclusión
-  exclusion_reason TEXT, -- 'installed_base', 'competitor', 'do_not_contact', 'other'
+  -- Razon de exclusion
+  exclusion_reason TEXT CHECK (exclusion_reason IN ('installed_base', 'competitor', 'do_not_contact', 'other')),
   notes TEXT,
   
   -- Metadata
   created_at TIMESTAMPTZ DEFAULT NOW(),
   matched_at TIMESTAMPTZ,
   
-  -- Índice único: un usuario no puede excluir la misma cuenta dos veces
-  UNIQUE(user_id, COALESCE(company_id, original_name))
+  -- Un usuario no puede excluir la misma cuenta dos veces
+  UNIQUE(user_id, COALESCE(company_id::text, original_name))
 );
 
--- RLS: usuarios solo ven sus propias exclusiones
-ALTER TABLE excluded_accounts ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Users can manage their own exclusions" ON excluded_accounts
+ALTER TABLE v3.excluded_accounts ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users manage own exclusions" ON v3.excluded_accounts
   FOR ALL USING (auth.uid() = user_id);
 ```
 
-### 2. `csv_imports` - Tracking de importaciones de CSV
+### 3. `v3.csv_imports` - Tracking de importaciones
 
 ```sql
-CREATE TABLE csv_imports (
+CREATE TABLE v3.csv_imports (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL,
   
-  -- Tipo de importación
+  -- Tipo de importacion
   import_type TEXT NOT NULL CHECK (import_type IN ('whitelist', 'blacklist')),
   
   -- Archivo original
   file_name TEXT NOT NULL,
   file_url TEXT, -- Vercel Blob URL
   
-  -- Estadísticas
+  -- Estadisticas
   total_rows INTEGER DEFAULT 0,
-  matched_count INTEGER DEFAULT 0,
-  ambiguous_count INTEGER DEFAULT 0,
+  auto_matched_count INTEGER DEFAULT 0,
+  needs_review_count INTEGER DEFAULT 0,
   no_match_count INTEGER DEFAULT 0,
   
   -- Estado
@@ -136,35 +211,18 @@ CREATE TABLE csv_imports (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   completed_at TIMESTAMPTZ
 );
+
+ALTER TABLE v3.csv_imports ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users manage own imports" ON v3.csv_imports
+  FOR ALL USING (auth.uid() = user_id);
 ```
 
-### 3. Migración tabla `bookmarks` existente
+### 4. `v3.csv_import_rows` - Filas del CSV con estado de matching
 
 ```sql
--- Agregar columna para distinguir bookmarks de seguimiento vs prospección activa
-ALTER TABLE bookmarks ADD COLUMN is_target_account BOOLEAN DEFAULT true;
-
--- Agregar columna para tracking de última prospección
-ALTER TABLE bookmarks ADD COLUMN last_prospected_at TIMESTAMPTZ;
-
--- Agregar columna para estado de secuencia actual
-ALTER TABLE bookmarks ADD COLUMN current_sequence_id UUID REFERENCES email_sequences(id);
-
--- Índice para queries del MCP
-CREATE INDEX idx_bookmarks_target_accounts ON bookmarks(user_id, is_target_account) 
-  WHERE is_target_account = true;
-
--- Comentario para documentar
-COMMENT ON COLUMN bookmarks.is_target_account IS 
-  'true = cuenta objetivo para prospectar activamente (whitelist), false = solo seguimiento de señales';
-```
-
-### 4. `csv_import_rows` - Filas pendientes de resolver (ambiguas)
-
-```sql
-CREATE TABLE csv_import_rows (
+CREATE TABLE v3.csv_import_rows (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  import_id UUID REFERENCES csv_imports(id) ON DELETE CASCADE,
+  import_id UUID REFERENCES v3.csv_imports(id) ON DELETE CASCADE,
   
   -- Input del usuario
   original_name TEXT NOT NULL,
@@ -172,198 +230,103 @@ CREATE TABLE csv_import_rows (
   row_number INTEGER,
   
   -- Estado del matching
-  match_status TEXT DEFAULT 'pending' CHECK (match_status IN ('pending', 'matched', 'ambiguous', 'no_match', 'resolved', 'skipped')),
+  match_status TEXT DEFAULT 'pending' CHECK (match_status IN (
+    'pending',      -- Aun no procesado
+    'auto_matched', -- Match automatico (dominio + nombre similar)
+    'needs_review', -- Dominio coincide pero nombre muy diferente
+    'ambiguous',    -- Multiples candidatos posibles
+    'no_match',     -- No se encontro en la base
+    'resolved',     -- Usuario resolvio manualmente
+    'skipped'       -- Usuario decidio ignorar
+  )),
   match_confidence FLOAT,
-  match_candidates JSONB, -- [{company_id, name, domain, score}]
+  match_candidates JSONB, -- [{company_id, name, domain, score, reason}]
   
-  -- Resolución
-  resolved_company_id UUID REFERENCES companies(id),
+  -- Resolucion
+  resolved_company_id UUID, -- Referencia logica a public.companies(id)
   resolved_at TIMESTAMPTZ,
-  resolution_type TEXT, -- 'auto', 'manual', 'skipped', 'new_company'
+  resolution_type TEXT CHECK (resolution_type IN ('auto', 'manual', 'skipped')),
   
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE INDEX idx_csv_import_rows_status ON v3.csv_import_rows(import_id, match_status);
 ```
 
-### 5. `api_keys` - Autenticación MCP
+### 5. `v3.api_keys` - Autenticacion MCP
 
 ```sql
-CREATE TABLE api_keys (
+CREATE TABLE v3.api_keys (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
-  key_hash TEXT NOT NULL, -- SHA256 del key, nunca guardar plaintext
-  key_prefix TEXT NOT NULL, -- Primeros 8 chars para identificación (asci_xxxx)
-  name TEXT NOT NULL, -- "Mi agente Claude", "Cursor", etc.
+  user_id UUID NOT NULL UNIQUE, -- UN usuario = UNA key activa
   
-  -- Permisos y límites
-  scopes TEXT[] DEFAULT ARRAY['read', 'write'], -- Granularidad futura
+  key_hash TEXT NOT NULL,       -- SHA256 del key, nunca plaintext
+  key_prefix TEXT NOT NULL,     -- Primeros 8 chars para identificacion (asci_xxxx)
+  name TEXT NOT NULL,           -- "Mi agente Claude", "Cursor", etc.
+  
+  -- Permisos y limites
+  scopes TEXT[] DEFAULT ARRAY['read', 'write'],
   tier TEXT DEFAULT 'beta' CHECK (tier IN ('beta', 'starter', 'pro', 'enterprise')),
   
-  -- Rate limits según tier
-  rate_limit_day INTEGER, -- Calls por día
-  rate_limit_minute INTEGER, -- Calls por minuto
+  -- Rate limits segun tier (denormalizados para performance)
+  rate_limit_day INTEGER,
+  rate_limit_minute INTEGER,
   
   -- Tracking
   last_used_at TIMESTAMPTZ,
+  total_calls INTEGER DEFAULT 0,
+  
+  -- Auditoria
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  revoked_at TIMESTAMPTZ
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  revoked_at TIMESTAMPTZ,
+  revocation_reason TEXT
 );
+
+ALTER TABLE v3.api_keys ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users manage own api key" ON v3.api_keys
+  FOR ALL USING (auth.uid() = user_id);
 ```
 
----
-
-## Workflow de API Keys (Detalle)
-
-### Generación de API Key (Dashboard MCP)
-
-```
-Usuario en bot.bigua.lat → "Crear API Key"
-                    ↓
-         Ingresa nombre descriptivo
-         (ej: "Claude Desktop", "Cursor Work")
-                    ↓
-         Backend genera key segura:
-         - Formato: asci_live_xxxxxxxxxxxxxxxxxxxx (32 chars random)
-         - SHA256 del key → guardado en DB (key_hash)
-         - Prefix "asci_live_" + primeros 4 chars → guardado (key_prefix)
-                    ↓
-         UI muestra key COMPLETA una única vez
-         con botón "Copiar" y warning
-                    ↓
-         Usuario copia y guarda en su cliente MCP
-```
-
-### Estructura del API Key
-
-```
-asci_live_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
-│    │    │
-│    │    └── 32 caracteres random (crypto secure)
-│    │
-│    └── Ambiente: "live" (producción) o "test" (sandbox)
-│
-└── Prefijo identificador
-```
-
-### Autenticación en el MCP Server
-
-```typescript
-// El agente envía el API key en el header Authorization
-// Formato: Bearer asci_live_xxxxxxxxxxxx
-
-// Middleware de autenticación (api.bot.bigua.lat)
-async function authenticateApiKey(request: Request) {
-  const authHeader = request.headers.get('Authorization');
-  if (!authHeader?.startsWith('Bearer asci_')) {
-    throw new Error('Invalid API key format');
-  }
-  
-  const apiKey = authHeader.replace('Bearer ', '');
-  const keyHash = sha256(apiKey);
-  
-  // Buscar en DB por hash (nunca comparar plaintext)
-  const keyRecord = await db.api_keys
-    .findFirst({ where: { key_hash: keyHash, revoked_at: null } });
-  
-  if (!keyRecord) {
-    throw new Error('Invalid or revoked API key');
-  }
-  
-  // Actualizar last_used_at
-  await db.api_keys.update({
-    where: { id: keyRecord.id },
-    data: { last_used_at: new Date() }
-  });
-  
-  // Verificar rate limits según tier
-  await checkRateLimits(keyRecord);
-  
-  return { userId: keyRecord.user_id, tier: keyRecord.tier };
-}
-```
-
-### UI de Gestión de API Keys (Dashboard)
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  API Keys                                       [+ Nueva Key]   │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Claude Desktop                                                 │
-│  asci_live_a1b2...  •  Creada hace 3 días  •  Usada hace 2h    │
-│  [Ver uso] [Revocar]                                           │
-│                                                                 │
-│  ─────────────────────────────────────────────────────────────  │
-│                                                                 │
-│  Cursor Trabajo                                                 │
-│  asci_live_x9y8...  •  Creada hace 1 semana  •  Nunca usada    │
-│  [Ver uso] [Revocar]                                           │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Configuración del Cliente MCP (Usuario Final)
-
-El usuario configura su cliente MCP (Claude Desktop, Cursor, etc.) con:
-
-```json
-{
-  "mcpServers": {
-    "asci": {
-      "url": "https://api.bot.bigua.lat/mcp",
-      "transport": "streamable-http",
-      "headers": {
-        "Authorization": "Bearer asci_live_xxxxxxxxxxxxxxxxxxxx"
-      }
-    }
-  }
-}
-```
-
-### Rate Limits por Tier
-
-| Tier | Calls/minuto | Calls/día | Emails/día | Cuentas ABM |
-|------|-------------|-----------|------------|-------------|
-| beta | 30 | 500 | 10 | 25 |
-| starter | 60 | 2,000 | 50 | 100 |
-| pro | 120 | 10,000 | 200 | 500 |
-| enterprise | unlimited | unlimited | 1,000 | unlimited |
-
----
-
-### 6. `email_sequences` - Secuencias de outreach por cuenta
+### 6. `v3.email_sequences` - Secuencias de outreach
 
 ```sql
-CREATE TABLE email_sequences (
+CREATE TABLE v3.email_sequences (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
-  company_id UUID REFERENCES companies(id),
-  bookmark_id UUID REFERENCES bookmarks(id),
+  user_id UUID NOT NULL,
+  company_id UUID NOT NULL,    -- Referencia logica a public.companies(id)
+  bookmark_id UUID NOT NULL,   -- Referencia logica a public.bookmarks(id)
   
-  -- Configuración
+  -- Configuracion
   status TEXT DEFAULT 'active' CHECK (status IN ('active', 'paused', 'completed', 'cancelled')),
-  wait_days INTEGER DEFAULT 5, -- Días para esperar respuesta antes de escalar
+  wait_days INTEGER DEFAULT 5, -- Dias para esperar respuesta antes de escalar
   
   -- Tracking
   current_contact_index INTEGER DEFAULT 0, -- 0=A, 1=B, 2=C
+  
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+ALTER TABLE v3.email_sequences ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users manage own sequences" ON v3.email_sequences
+  FOR ALL USING (auth.uid() = user_id);
 ```
 
-### 7. `email_queue` - Cola de emails pendientes de aprobación
+### 7. `v3.email_queue` - Cola de emails pendientes de aprobacion
 
 ```sql
-CREATE TABLE email_queue (
+CREATE TABLE v3.email_queue (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  sequence_id UUID REFERENCES email_sequences(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  sequence_id UUID REFERENCES v3.email_sequences(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL,
   
   -- Contacto destino
-  contact_id UUID REFERENCES contacts(id),
+  contact_id UUID,           -- Referencia logica a public.contacts(id)
   contact_email TEXT NOT NULL,
   contact_name TEXT NOT NULL,
   contact_title TEXT,
+  company_name TEXT NOT NULL,
   
   -- Contenido del email (generado por el agente)
   subject TEXT NOT NULL,
@@ -372,16 +335,16 @@ CREATE TABLE email_queue (
   
   -- Icebreaker y contexto usado
   icebreaker TEXT,
-  context_used JSONB, -- {signals: [...], news: [...], docs: [...]}
+  context_used JSONB, -- {signals: [...], news: [...], documents: [...]}
   
   -- Estado
   status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'sent', 'bounced')),
   
-  -- Edición por el vendedor
+  -- Edicion por el vendedor
   edited_subject TEXT,
   edited_body_html TEXT,
   edited_body_plain TEXT,
-  editor_notes TEXT, -- Notas del vendedor sobre cambios
+  editor_notes TEXT,
   
   -- Timestamps
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -390,72 +353,87 @@ CREATE TABLE email_queue (
   
   -- Tracking de respuesta
   response_received_at TIMESTAMPTZ,
-  response_type TEXT CHECK (response_type IN ('reply', 'bounce', 'none'))
+  response_type TEXT CHECK (response_type IN ('reply', 'bounce', 'out_of_office', 'none'))
 );
+
+ALTER TABLE v3.email_queue ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users manage own email queue" ON v3.email_queue
+  FOR ALL USING (auth.uid() = user_id);
+
+-- Indice para dashboard de aprobacion
+CREATE INDEX idx_email_queue_pending ON v3.email_queue(user_id, status, created_at DESC)
+  WHERE status = 'pending';
 ```
 
-### 8. `contact_rankings` - Priorización A/B/C de decision makers
+### 8. `v3.contact_rankings` - Priorizacion A/B/C de decision makers
 
 ```sql
-CREATE TABLE contact_rankings (
+CREATE TABLE v3.contact_rankings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  company_id UUID REFERENCES companies(id),
-  user_id UUID REFERENCES auth.users(id),
-  
-  -- Contacto de Apollo
-  contact_id UUID REFERENCES contacts(id),
+  company_id UUID NOT NULL,  -- Referencia logica a public.companies(id)
+  user_id UUID NOT NULL,
+  contact_id UUID NOT NULL,  -- Referencia logica a public.contacts(id)
   
   -- Ranking generado por IA
   rank TEXT CHECK (rank IN ('A', 'B', 'C')),
   rank_score FLOAT, -- 0-100
-  rank_reasoning TEXT, -- Explicación de la IA
+  rank_reasoning TEXT,
   
   -- Factores considerados
   factors JSONB, -- {seniority_match: 0.9, department_match: 0.8, doc_relevance: 0.7}
   
   -- Icebreaker personalizado
   icebreaker TEXT,
-  icebreaker_context JSONB, -- Señales/noticias usadas para el icebreaker
+  icebreaker_context JSONB, -- Senales/noticias usadas
   
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   
   UNIQUE(company_id, user_id, contact_id)
 );
+
+ALTER TABLE v3.contact_rankings ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users manage own rankings" ON v3.contact_rankings
+  FOR ALL USING (auth.uid() = user_id);
 ```
 
-### 9. `webhooks` - Configuración de webhooks del usuario
+### 9. `v3.webhooks` - Configuracion de webhooks del usuario
 
 ```sql
-CREATE TABLE webhooks (
+CREATE TABLE v3.webhooks (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL,
   
   url TEXT NOT NULL,
-  secret TEXT NOT NULL, -- Para firmar payloads
+  secret TEXT NOT NULL, -- Para firmar payloads con HMAC-SHA256
   
   -- Eventos suscritos
-  events TEXT[] NOT NULL, -- ['email.approved', 'email.sent', 'sequence.escalated', etc.]
+  events TEXT[] NOT NULL, -- ['email.approved', 'email.sent', 'sequence.escalated']
   
   -- Estado
   active BOOLEAN DEFAULT true,
   last_triggered_at TIMESTAMPTZ,
   failure_count INTEGER DEFAULT 0,
+  last_failure_reason TEXT,
   
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+ALTER TABLE v3.webhooks ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users manage own webhooks" ON v3.webhooks
+  FOR ALL USING (auth.uid() = user_id);
 ```
 
-### 10. `user_tiers` - Límites por plan
+### 10. `v3.user_tiers` - Limites por plan
 
 ```sql
-CREATE TABLE user_tiers (
+CREATE TABLE v3.user_tiers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE UNIQUE,
+  user_id UUID NOT NULL UNIQUE,
   
   tier TEXT DEFAULT 'beta' CHECK (tier IN ('beta', 'starter', 'pro', 'enterprise')),
   
-  -- Límites
+  -- Limites
   max_abm_accounts INTEGER DEFAULT 100,
   max_emails_per_day INTEGER DEFAULT 50,
   max_api_calls_per_day INTEGER DEFAULT 1000,
@@ -469,6 +447,498 @@ CREATE TABLE user_tiers (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+ALTER TABLE v3.user_tiers ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users read own tier" ON v3.user_tiers
+  FOR SELECT USING (auth.uid() = user_id);
+```
+
+---
+
+## Logica de Matching de CSV
+
+### Campos esperados del CSV
+
+```
+company_name (obligatorio)
+domain (opcional pero mejora precision)
+```
+
+### Algoritmo de Matching
+
+```typescript
+// lib/matching/company-matcher.ts
+
+interface MatchResult {
+  status: 'auto_matched' | 'needs_review' | 'ambiguous' | 'no_match';
+  confidence: number;
+  candidates: MatchCandidate[];
+  reason: string;
+}
+
+interface MatchCandidate {
+  company_id: string;
+  name: string;
+  domain: string;
+  score: number;
+  match_type: 'exact_domain' | 'similar_name' | 'fuzzy';
+}
+
+function normalizeCompanyName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/\b(inc|llc|sa|srl|corp|corporation|ltd|gmbh|s\.a\.|s\.r\.l\.)\b/gi, '')
+    .replace(/[^a-z0-9\s]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeDomain(domain: string): string {
+  return domain
+    .toLowerCase()
+    .replace(/^(https?:\/\/)?(www\.)?/, '')
+    .replace(/\/.*$/, '')
+    .trim();
+}
+
+function fuzzyRatio(str1: string, str2: string): number {
+  // Implementar Levenshtein distance normalizado
+  // Retorna 0-1 donde 1 es match exacto
+}
+
+async function matchCompany(
+  csvName: string,
+  csvDomain: string | null,
+  companies: Company[]
+): Promise<MatchResult> {
+  const normalizedCsvName = normalizeCompanyName(csvName);
+  const normalizedCsvDomain = csvDomain ? normalizeDomain(csvDomain) : null;
+  
+  const candidates: MatchCandidate[] = [];
+  
+  for (const company of companies) {
+    const normalizedDbName = normalizeCompanyName(company.name);
+    const normalizedDbDomain = company.domain ? normalizeDomain(company.domain) : null;
+    
+    let score = 0;
+    let matchType: string = 'fuzzy';
+    
+    // Caso 1: Dominio coincide exactamente
+    if (normalizedCsvDomain && normalizedDbDomain && 
+        normalizedCsvDomain === normalizedDbDomain) {
+      
+      const nameRatio = fuzzyRatio(normalizedCsvName, normalizedDbName);
+      
+      if (nameRatio >= 0.85) {
+        // Dominio exacto + nombre similar = AUTO MATCH
+        score = 0.95 + (nameRatio * 0.05);
+        matchType = 'exact_domain';
+      } else {
+        // Dominio exacto pero nombre muy diferente = NEEDS REVIEW
+        score = 0.70 + (nameRatio * 0.20);
+        matchType = 'exact_domain';
+      }
+    }
+    // Caso 2: Solo nombre (sin dominio en CSV)
+    else if (!normalizedCsvDomain) {
+      const nameRatio = fuzzyRatio(normalizedCsvName, normalizedDbName);
+      
+      // Nombre exacto o muy similar
+      if (normalizedCsvName === normalizedDbName) {
+        score = 0.90;
+        matchType = 'similar_name';
+      } else if (nameRatio >= 0.85) {
+        score = 0.70 + (nameRatio * 0.20);
+        matchType = 'similar_name';
+      } else if (nameRatio >= 0.60) {
+        score = 0.40 + (nameRatio * 0.30);
+        matchType = 'fuzzy';
+      }
+    }
+    
+    if (score > 0.40) {
+      candidates.push({
+        company_id: company.id,
+        name: company.name,
+        domain: company.domain || '',
+        score,
+        match_type: matchType as any
+      });
+    }
+  }
+  
+  // Ordenar por score descendente
+  candidates.sort((a, b) => b.score - a.score);
+  
+  // Determinar resultado
+  if (candidates.length === 0) {
+    return {
+      status: 'no_match',
+      confidence: 0,
+      candidates: [],
+      reason: 'No se encontraron empresas similares en la base de datos'
+    };
+  }
+  
+  const topCandidate = candidates[0];
+  
+  // AUTO MATCH: dominio exacto + nombre similar (>85%)
+  if (topCandidate.match_type === 'exact_domain' && topCandidate.score >= 0.95) {
+    return {
+      status: 'auto_matched',
+      confidence: topCandidate.score,
+      candidates: [topCandidate],
+      reason: `Dominio coincide y nombre es similar (${Math.round(topCandidate.score * 100)}%)`
+    };
+  }
+  
+  // NEEDS REVIEW: dominio exacto pero nombre diferente
+  if (topCandidate.match_type === 'exact_domain' && topCandidate.score < 0.95) {
+    return {
+      status: 'needs_review',
+      confidence: topCandidate.score,
+      candidates: candidates.slice(0, 5),
+      reason: 'Dominio coincide pero el nombre es diferente. Posible rebrand o adquisicion?'
+    };
+  }
+  
+  // AMBIGUOUS: multiples candidatos con scores similares
+  const similarCandidates = candidates.filter(c => c.score >= topCandidate.score - 0.15);
+  if (similarCandidates.length > 1) {
+    return {
+      status: 'ambiguous',
+      confidence: topCandidate.score,
+      candidates: similarCandidates.slice(0, 5),
+      reason: `Multiples empresas posibles (${similarCandidates.length} candidatos)`
+    };
+  }
+  
+  // SINGLE CANDIDATE pero sin dominio = needs review
+  if (topCandidate.score >= 0.70) {
+    return {
+      status: 'needs_review',
+      confidence: topCandidate.score,
+      candidates: candidates.slice(0, 5),
+      reason: 'Coincidencia por nombre. Confirmar que es la empresa correcta.'
+    };
+  }
+  
+  // LOW CONFIDENCE
+  return {
+    status: 'ambiguous',
+    confidence: topCandidate.score,
+    candidates: candidates.slice(0, 5),
+    reason: 'Baja confianza en el match. Revisar manualmente.'
+  };
+}
+```
+
+### Matriz de Decision del Matching
+
+| Dominio CSV | Dominio DB | Nombre Ratio | Resultado | Accion |
+|-------------|------------|--------------|-----------|--------|
+| Existe | Coincide | >= 85% | `auto_matched` | Crear bookmark automaticamente |
+| Existe | Coincide | < 85% | `needs_review` | Mostrar para confirmacion (posible rebrand) |
+| Existe | No coincide | - | `ambiguous` | Mostrar candidatos por nombre |
+| No existe | - | >= 85% exacto | `needs_review` | Confirmar empresa correcta |
+| No existe | - | 60-84% | `ambiguous` | Mostrar multiples candidatos |
+| No existe | - | < 60% | `no_match` | No se puede crear, ignorar |
+
+---
+
+## Flujo de Usuario Completo
+
+### Fase 0: Pre-requisitos
+
+El usuario ya tiene cuenta en ASCI (asci.bigua.lat) y posiblemente:
+- Tiene bookmarks de empresas que sigue
+- Tiene documentos de propuesta de valor subidos
+
+### Fase 1: Onboarding en bot.bigua.lat
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Bienvenido a ASCI MCP                                              │
+│                                                                     │
+│  Conecta tu agente de IA para automatizar prospection.              │
+│                                                                     │
+│  Detectamos que ya tienes:                                          │
+│  • 47 empresas en seguimiento (bookmarks)                           │
+│  • 3 documentos de propuesta de valor                               │
+│                                                                     │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │  Paso 1: Define tus cuentas objetivo                        │    │
+│  │                                                             │    │
+│  │  ( ) Usar mis 47 bookmarks actuales como whitelist          │    │
+│  │  ( ) Importar CSV con nuevas cuentas objetivo               │    │
+│  │  ( ) Ambos: bookmarks + CSV adicional                       │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                                                                     │
+│                                              [Continuar ->]         │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Fase 2: Importar CSV de Whitelist (opcional)
+
+**Paso 2.1: Subir archivo**
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Importar Cuentas Objetivo                                          │
+│                                                                     │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │                                                             │    │
+│  │         Arrastra tu CSV aqui o [Seleccionar archivo]        │    │
+│  │                                                             │    │
+│  │         Formato esperado:                                   │    │
+│  │         company_name, domain (opcional)                     │    │
+│  │                                                             │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                                                                     │
+│  [Descargar plantilla CSV]                                          │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Paso 2.2: Procesamiento automatico**
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Procesando target_accounts.csv                                     │
+│                                                                     │
+│  ████████████████████████░░░░░░░░░░░░░░░░░░░░  45%                  │
+│                                                                     │
+│  Analizando fila 45 de 100...                                       │
+│  "Mercado Libre" -> Buscando en base de datos...                    │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Paso 2.3: Resultados del matching**
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Resultados de Importacion                               [Exportar] │
+│                                                                     │
+│  100 filas procesadas                                               │
+│                                                                     │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐   │
+│  │ 72 Auto-matched  │  │ 15 Requieren     │  │ 13 Sin match     │   │
+│  │ ✓ Listos        │  │ revision         │  │                  │   │
+│  └──────────────────┘  └──────────────────┘  └──────────────────┘   │
+│                                                                     │
+│  ─────────────────────────────────────────────────────────────────  │
+│                                                                     │
+│  Requieren revision (15):                                           │
+│                                                                     │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │ CSV: "Globant SA"                                             │  │
+│  │ Dominio CSV: globant.com ✓                                    │  │
+│  │                                                               │  │
+│  │ Match encontrado:                                             │  │
+│  │ • Globant LLC (globant.com) - 78% confianza                   │  │
+│  │                                                               │  │
+│  │ Nota: El dominio coincide pero el nombre legal es diferente.  │  │
+│  │                                                               │  │
+│  │ [Confirmar match]  [Ignorar]                                  │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+│                                                                     │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │ CSV: "Banco Galicia"                                          │  │
+│  │ (sin dominio)                                                 │  │
+│  │                                                               │  │
+│  │ Candidatos encontrados:                                       │  │
+│  │ ○ Banco de Galicia y Buenos Aires SA - 89%                    │  │
+│  │ ○ Grupo Financiero Galicia - 72%                              │  │
+│  │ ○ Galicia Seguros - 65%                                       │  │
+│  │                                                               │  │
+│  │ [Seleccionar]  [Ignorar]                                      │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+│                                                                     │
+│                    [Finalizar importacion]                          │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Fase 3: Configurar Blacklist (opcional)
+
+Mismo flujo que whitelist, pero las empresas se guardan en `v3.excluded_accounts`.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Cuentas a Excluir (Base Instalada / Competidores)                  │
+│                                                                     │
+│  Estas empresas NO apareceran en resultados de busqueda ni en       │
+│  sugerencias del agente.                                            │
+│                                                                     │
+│  [Importar CSV de exclusiones]                                      │
+│                                                                     │
+│  ─── O agregar manualmente ───                                      │
+│                                                                     │
+│  Empresa: [________________________]                                │
+│  Razon:   [Base instalada     ▼]                                    │
+│           [Agregar]                                                 │
+│                                                                     │
+│  Empresas excluidas (23):                                           │
+│  • Accenture (competidor)                                           │
+│  • BBVA (base instalada)                                            │
+│  • ...                                                              │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Fase 4: Generar API Key
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Generar API Key                                                    │
+│                                                                     │
+│  Tu agente de IA necesita una API key para conectarse a ASCI.       │
+│                                                                     │
+│  Nombre de la key: [Claude Desktop____________]                     │
+│                                                                     │
+│  Plan actual: Beta                                                  │
+│  • 60 llamadas/minuto                                               │
+│  • 1,000 llamadas/dia                                               │
+│  • 50 emails/dia                                                    │
+│  • 100 cuentas ABM                                                  │
+│                                                                     │
+│                                           [Generar API Key]         │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Despues de generar:**
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  ! Tu API Key (solo se muestra una vez)                             │
+│                                                                     │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │ asci_live_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0           │  │
+│  │                                                    [Copiar]   │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+│                                                                     │
+│  Guarda esta key en un lugar seguro. No podras verla de nuevo.      │
+│                                                                     │
+│  Configuracion para tu cliente MCP:                                 │
+│                                                                     │
+│  {                                                                  │
+│    "mcpServers": {                                                  │
+│      "asci": {                                                      │
+│        "url": "https://api.bot.bigua.lat/mcp",                      │
+│        "transport": "streamable-http",                              │
+│        "headers": {                                                 │
+│          "Authorization": "Bearer asci_live_a1b2..."                │
+│        }                                                            │
+│      }                                                              │
+│    }                                                                │
+│  }                                                                  │
+│                                                                     │
+│                                              [Entendido, continuar] │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Fase 5: Configurar Webhooks (opcional)
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Webhooks (Opcional)                                                │
+│                                                                     │
+│  Recibe notificaciones cuando ocurran eventos importantes.          │
+│                                                                     │
+│  URL del endpoint: [https://mi-agente.com/webhook____]              │
+│                                                                     │
+│  Eventos a notificar:                                               │
+│  [x] email.approved - Cuando apruebas un email                      │
+│  [x] email.sent - Cuando se envia un email                          │
+│  [x] email.rejected - Cuando rechazas un email                      │
+│  [ ] sequence.escalated - Cuando una secuencia escala a contacto B  │
+│                                                                     │
+│  [Guardar configuracion]                   [Saltar por ahora]       │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Fase 6: Dashboard Principal (Uso Diario)
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  ASCI MCP Dashboard                          [Configuracion] [Exit] │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐            │
+│  │ 3 Pendientes  │  │ 12 Enviados   │  │ 2 Respuestas  │            │
+│  │ de aprobar    │  │ esta semana   │  │ recibidas     │            │
+│  └───────────────┘  └───────────────┘  └───────────────┘            │
+│                                                                     │
+│  ═══════════════════════════════════════════════════════════════    │
+│                                                                     │
+│  Emails Pendientes de Aprobacion                                    │
+│                                                                     │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │ Para: Juan Perez (CTO @ Mercado Libre)              Hace 5m   │  │
+│  │ Asunto: Optimizacion de infraestructura cloud                 │  │
+│  │                                                               │  │
+│  │ Hola Juan, note que estan buscando un Cloud Architect...      │  │
+│  │                                                               │  │
+│  │ Contexto usado:                                               │  │
+│  │ • Senal: Job posting "Cloud Architect" (hace 3 dias)          │  │
+│  │ • Noticia: "ML expande operaciones en Brasil"                 │  │
+│  │ • Doc: "Propuesta Cloud Migration"                            │  │
+│  │                                                               │  │
+│  │ [Ver completo]  [Editar]  [Aprobar ✓]  [Rechazar ✗]           │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+│                                                                     │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │ Para: Maria Garcia (VP Engineering @ Globant)       Hace 20m  │  │
+│  │ ...                                                           │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Fase 7: Flujo del Agente (MCP)
+
+El agente de IA del usuario se conecta y ejecuta:
+
+```
+1. AGENTE: get_bookmarks({ include_signals: true })
+   ASCI: Retorna 47 empresas con resumen de senales
+         (automaticamente excluye las 23 en blacklist)
+
+2. AGENTE: Selecciona "Mercado Libre" por tener senales recientes
+
+3. AGENTE: get_account_intelligence({ company_id: "ml-123" })
+   ASCI: Retorna noticias, job postings, tech radar, senales
+
+4. AGENTE: get_decision_makers({ company_id: "ml-123" })
+   ASCI: Retorna contactos priorizados A/B/C con icebreakers
+         - A: Juan Perez (CTO) - "Note que estan buscando Cloud Architect..."
+         - B: Carlos Lopez (VP Infra) - "Vi que expandieron a Brasil..."
+         - C: Ana Martinez (Dir Eng) - "Felicitaciones por el premio..."
+
+5. AGENTE: Redacta email usando el contexto y icebreaker
+
+6. AGENTE: queue_email_for_approval({
+     company_id: "ml-123",
+     contact_id: "jp-456",
+     subject: "Optimizacion de infraestructura cloud",
+     body_html: "...",
+     body_plain: "...",
+     icebreaker_used: "Note que estan buscando Cloud Architect...",
+     context_used: { signals: [...], news: [...], documents: [...] }
+   })
+   ASCI: { queue_id: "eq-789", status: "queued" }
+
+7. DASHBOARD: Usuario ve notificacion (badge + Supabase Realtime)
+              Revisa email, hace pequeno ajuste, aprueba
+
+8. WEBHOOK -> AGENTE: { event: "email.approved", queue_id: "eq-789" }
+
+9. AGENTE: Envia email via Gmail API
+
+10. AGENTE: (Opcional) Actualiza estado
+    ASCI: Marca email como "sent"
+
+11. (5 dias despues, sin respuesta)
+    ASCI: Marca secuencia para escalar
+    WEBHOOK -> AGENTE: { event: "sequence.escalated", sequence_id: "..." }
+
+12. AGENTE: get_decision_makers({ company_id: "ml-123" })
+    ASCI: Ahora sugiere contacto B con nuevo icebreaker
+
+13. Repite flujo con contacto B...
 ```
 
 ---
@@ -476,14 +946,13 @@ CREATE TABLE user_tiers (
 ## MCP Server - Tools Expuestos
 
 ### 1. `get_bookmarks`
-Lista los bookmarks del usuario (cuentas objetivo / whitelist) con resumen de señales.
-**Nota:** Los bookmarks SON la whitelist. No se devuelven cuentas que estén en `excluded_accounts`.
+Lista los bookmarks del usuario (cuentas objetivo / whitelist) con resumen de senales.
 
 ```typescript
 interface GetBookmarksInput {
-  include_signals?: boolean;  // Incluir resumen de señales
-  has_recent_signals?: boolean; // Filtrar solo con señales recientes
-  industry?: string;          // Filtrar por industria
+  include_signals?: boolean;
+  has_recent_signals?: boolean;
+  industry?: string;
   limit?: number;
   offset?: number;
 }
@@ -505,34 +974,35 @@ interface GetBookmarksOutput {
       tech_changes_count: number;
       last_signal_date: string;
     };
-    // Campos de prospección
-    has_active_sequence: boolean;
-    last_contacted_at: string | null;
-    sequence_status: 'not_started' | 'in_progress' | 'completed' | 'paused' | null;
+    prospection_status: {
+      is_target_account: boolean;
+      has_active_sequence: boolean;
+      last_contacted_at: string | null;
+      sequence_status: 'not_started' | 'in_progress' | 'completed' | 'paused' | null;
+    };
   }>;
   total: number;
   has_more: boolean;
-  // Info útil para el agente
-  excluded_count: number; // Cuántas cuentas tiene en blacklist
+  excluded_count: number;
 }
 ```
 
 ### 2. `get_account_intelligence`
-Obtiene inteligencia completa de una cuenta específica.
+Obtiene inteligencia completa de una cuenta especifica.
 
 ```typescript
 interface GetAccountIntelligenceInput {
   company_id: string;
-  include_news?: boolean;      // Default: true
-  include_signals?: boolean;   // Default: true
-  include_tech_radar?: boolean; // Default: true
-  include_job_postings?: boolean; // Default: true
-  news_limit?: number;         // Default: 10
-  signals_days?: number;       // Señales de los últimos X días
+  include_news?: boolean;
+  include_signals?: boolean;
+  include_tech_radar?: boolean;
+  include_job_postings?: boolean;
+  news_limit?: number;
+  signals_days?: number;
 }
 
 interface GetAccountIntelligenceOutput {
-  company: { /* datos básicos */ };
+  company: { /* datos basicos */ };
   news: Array<{
     title: string;
     summary: string;
@@ -542,7 +1012,7 @@ interface GetAccountIntelligenceOutput {
     relevance_score: number;
   }>;
   signals: Array<{
-    type: string; // 'job_posting', 'tech_adoption', 'expansion', etc.
+    type: string;
     title: string;
     description: string;
     detected_at: string;
@@ -551,7 +1021,7 @@ interface GetAccountIntelligenceOutput {
   tech_radar: {
     current_stack: string[];
     recent_adoptions: string[];
-    potential_needs: string[]; // Inferido de job postings
+    potential_needs: string[];
   };
   job_postings: Array<{
     title: string;
@@ -570,7 +1040,7 @@ Obtiene contactos priorizados (A/B/C) con icebreakers.
 ```typescript
 interface GetDecisionMakersInput {
   company_id: string;
-  refresh?: boolean; // Forzar re-análisis de IA
+  refresh?: boolean;
 }
 
 interface GetDecisionMakersOutput {
@@ -584,35 +1054,35 @@ interface GetDecisionMakersOutput {
       phone?: string;
       linkedin_url?: string;
     };
-    ranking_reasoning: string; // "VP of IT, matches your ICP for cloud solutions..."
-    icebreaker: string; // "Noté que están expandiendo su equipo de data..."
+    ranking_reasoning: string;
+    icebreaker: string;
     icebreaker_context: {
-      based_on: string[]; // ['job_posting:data_engineer', 'news:expansion_latam']
+      based_on: string[];
     };
   }>;
   analysis_date: string;
-  user_documents_used: string[]; // IDs de docs usados para el análisis
+  user_documents_used: string[];
 }
 ```
 
 ### 4. `get_icebreakers`
-Genera icebreakers personalizados para un contacto específico.
+Genera icebreakers personalizados para un contacto especifico.
 
 ```typescript
 interface GetIcebreakersInput {
   company_id: string;
   contact_id: string;
   context?: {
-    meeting_type?: string; // 'cold_email', 'follow_up', 'referral'
-    tone?: string; // 'formal', 'casual', 'consultative'
-    focus_areas?: string[]; // ['cost_reduction', 'innovation', 'compliance']
+    meeting_type?: string;
+    tone?: string;
+    focus_areas?: string[];
   };
 }
 
 interface GetIcebreakersOutput {
   icebreakers: Array<{
     text: string;
-    type: string; // 'news_based', 'job_posting_based', 'tech_based'
+    type: string;
     confidence: number;
     source_signals: string[];
   }>;
@@ -625,41 +1095,41 @@ interface GetIcebreakersOutput {
 ```
 
 ### 5. `get_user_documents`
-Obtiene documentos/propuesta de valor del usuario para contexto.
+Obtiene documentos/propuesta de valor del usuario.
 
 ```typescript
 interface GetUserDocumentsInput {
-  document_ids?: string[]; // Específicos, o todos si vacío
-  include_content?: boolean; // Default: false (solo metadata)
+  document_ids?: string[];
+  include_content?: boolean;
 }
 
 interface GetUserDocumentsOutput {
   documents: Array<{
     id: string;
     name: string;
-    type: string; // 'value_proposition', 'case_study', 'product_sheet'
-    summary: string; // Resumen generado por IA
-    content?: string; // Solo si include_content=true
-    key_points: string[]; // Puntos clave extraídos
-    target_personas: string[]; // 'CTO', 'CFO', etc.
-    industries: string[]; // Industrias relevantes
+    type: string;
+    summary: string;
+    content?: string;
+    key_points: string[];
+    target_personas: string[];
+    industries: string[];
   }>;
 }
 ```
 
 ### 6. `search_accounts`
-Busca cuentas en la base de ASCI. Automáticamente excluye cuentas en la blacklist del usuario.
+Busca cuentas en la base de ASCI. Automaticamente excluye blacklist.
 
 ```typescript
 interface SearchAccountsInput {
-  query: string; // Nombre o dominio
+  query: string;
   filters?: {
     industry?: string;
     employee_range?: { min?: number; max?: number };
     country?: string;
     has_signals?: boolean;
   };
-  include_excluded?: boolean; // Default: false. Si true, incluye cuentas excluidas marcadas
+  include_excluded?: boolean;
   limit?: number;
 }
 
@@ -669,16 +1139,16 @@ interface SearchAccountsOutput {
     name: string;
     domain: string;
     industry: string;
-    match_score: number; // Relevancia del search
-    is_bookmarked: boolean; // Ya está en whitelist/objetivos
-    is_excluded: boolean;   // Está en blacklist (solo si include_excluded=true)
-    exclusion_reason?: string; // 'installed_base', 'competitor', etc.
+    match_score: number;
+    is_bookmarked: boolean;
+    is_excluded: boolean;
+    exclusion_reason?: string;
   }>;
 }
 ```
 
 ### 7. `queue_email_for_approval`
-Encola un email para aprobación del vendedor.
+Encola un email para aprobacion del vendedor.
 
 ```typescript
 interface QueueEmailInput {
@@ -693,14 +1163,14 @@ interface QueueEmailInput {
     news?: string[];
     documents?: string[];
   };
-  sequence_id?: string; // Si es parte de una secuencia existente
+  sequence_id?: string;
 }
 
 interface QueueEmailOutput {
   queue_id: string;
   status: 'queued';
-  approval_url: string; // Deep link al dashboard para aprobar
-  estimated_review_time?: string; // Basado en historial del usuario
+  approval_url: string;
+  estimated_review_time?: string;
 }
 ```
 
@@ -732,376 +1202,134 @@ interface GetEmailStatusOutput {
 
 ---
 
-## Flujo de Usuario Completo
+## Sistema de Webhooks
 
-### Fase 1: Configuración (Dashboard MCP - bot.bigua.lat)
-
-1. **Login** - Usuario se autentica (misma auth de ASCI actual)
-
-2. **Subir documentos** - Si no tiene docs, sube propuesta de valor, casos de éxito
-   - Parser extrae key points, target personas, industrias
-   - IA genera resumen y puntos clave
-
-3. **Gestión de cuentas objetivo (Whitelist = Bookmarks)**
-   
-   **Opción A: Usar bookmarks existentes**
-   - Si el usuario ya tiene bookmarks en ASCI → esos SON sus cuentas objetivo
-   - No necesita hacer nada extra, el MCP ya puede consumirlos
-   
-   **Opción B: Importar CSV de cuentas objetivo**
-   - Sube CSV con columnas: `nombre, dominio (opcional), industria (opcional)`
-   - ASCI hace matching y crea bookmarks automáticamente para las cuentas matched
-   - Dashboard muestra: matched (auto-bookmark), ambiguous (elegir), no_match (crear o ignorar)
-   
-4. **Gestión de exclusiones (Blacklist)**
-   - Usuario puede subir CSV de base instalada / cuentas a no prospectar
-   - Matching contra base de ASCI (mismo flujo)
-   - Estas cuentas se guardan en `excluded_accounts`
-   - El MCP automáticamente las filtra de resultados
-
-5. **Matching de cuentas (para ambos flujos)**
-   - ASCI hace regex match contra base de companies
-   - Estados: `matched` (automático), `ambiguous` (requiere confirmación), `no_match`
-   - Para `ambiguous`: UI muestra opciones, usuario elige la correcta
-   - Para `no_match`: opción de crear company nueva o ignorar
-
-6. **Generar API Key**
-   - Usuario genera key con nombre descriptivo
-   - Se muestra UNA vez, luego solo el prefix
-   - Configurar tier/límites según plan
-
-7. **Configurar webhooks** (opcional)
-   - URL endpoint del agente
-   - Seleccionar eventos: `email.approved`, `email.sent`, `sequence.escalated`
-
-### Fase 2: Uso por Agente (MCP)
-
-1. **Agente consulta bookmarks ABM**
-   ```
-   Tool: get_bookmarks
-   Input: { include_signals: true }
-   ```
-
-2. **Para cada cuenta prioritaria, obtiene inteligencia**
-   ```
-   Tool: get_account_intelligence
-   Input: { company_id: 'xxx', include_news: true, include_job_postings: true }
-   ```
-
-3. **Obtiene decision makers priorizados**
-   ```
-   Tool: get_decision_makers
-   Input: { company_id: 'xxx' }
-   ```
-   - ASCI devuelve contactos A, B, C con icebreakers
-
-4. **Agente redacta email usando contexto**
-   - Usa: docs del usuario, señales, noticias, icebreaker
-   - Personaliza según el contacto y la cuenta
-
-5. **Encola email para aprobación**
-   ```
-   Tool: queue_email_for_approval
-   Input: { company_id, contact_id, subject, body_html, body_plain, context_used }
-   ```
-
-### Fase 3: Aprobación (Dashboard MCP)
-
-1. **Vendedor recibe notificación** (email + badge en dashboard)
-
-2. **Revisa email en cola**
-   - Ve: destinatario, empresa, asunto, cuerpo, contexto usado
-   - Acciones: Aprobar, Editar y aprobar, Rechazar
-
-3. **Si edita**: modifica texto, se guarda versión editada
-
-4. **Al aprobar**: 
-   - Webhook notifica al agente: `email.approved`
-   - Agente envía email via su integración (Gmail)
-
-5. **Tracking de respuesta**:
-   - Usuario marca manualmente si recibió respuesta
-   - O sistema detecta reply si hay integración futura
-
-### Fase 4: Escalamiento de Secuencia
-
-1. **Si pasan X días sin respuesta** (configurable, default 5):
-   - Sistema marca secuencia para escalar
-   - Webhook: `sequence.escalated`
-
-2. **Agente consulta siguiente contacto**
-   ```
-   Tool: get_decision_makers
-   # Devuelve contacto B con nuevo icebreaker (distinto al de A)
-   ```
-
-3. **Repite flujo de email** con contacto B
-   - Mensaje diferente para evitar parecer automatizado
-
----
-
-## Integración con Apify (Job Postings)
-
-### Nuevo desarrollo requerido
+### Formato de Payload
 
 ```typescript
-// lib/apify/linkedin-scraper.ts
-
-interface ApifyJobPostingsInput {
-  linkedin_company_url: string;
-  max_posts: number;
+interface WebhookPayload {
+  event: string;
+  timestamp: string;
+  data: Record<string, any>;
 }
 
-interface ApifyJobPostingsOutput {
-  job_postings: Array<{
-    title: string;
-    department: string;
-    location: string;
-    seniority_level: string;
-    skills: string[];
-    posted_date: string;
-    linkedin_url: string;
-  }>;
-}
+// Header de firma
+// X-ASCI-Signature: sha256=<HMAC-SHA256(payload, secret)>
 ```
 
-### Cron job bimensual
-- Ejecuta cada 2 semanas
-- Itera sobre companies con linkedin_url en bookmarks de usuarios
-- Actualiza tabla `job_postings` (nueva o existente)
-- Genera señales automáticas basadas en patrones
+### Eventos Disponibles
+
+| Evento | Descripcion | Data |
+|--------|-------------|------|
+| `email.queued` | Email encolado para aprobacion | `{ queue_id, company_name, contact_name }` |
+| `email.approved` | Usuario aprobo email | `{ queue_id, was_edited }` |
+| `email.rejected` | Usuario rechazo email | `{ queue_id, reason }` |
+| `email.sent` | Email marcado como enviado | `{ queue_id, sent_at }` |
+| `sequence.escalated` | Secuencia lista para escalar a siguiente contacto | `{ sequence_id, company_id, next_contact_rank }` |
+
+### Reintentos
+
+- 3 reintentos con exponential backoff (1s, 5s, 30s)
+- Despues de 3 fallos, webhook se desactiva
+- Usuario puede reactivar manualmente
 
 ---
 
-## Análisis de IA para Priorización
+## Rate Limits por Tier
 
-### Ubicación: ASCI (no el agente)
-
-```typescript
-// lib/ai/contact-ranker.ts
-
-async function rankDecisionMakers(
-  companyId: string,
-  userId: string,
-  contacts: Contact[],
-  userDocuments: Document[],
-  companySignals: Signal[]
-): Promise<RankedContact[]> {
-  
-  const prompt = `
-    Analiza los siguientes contactos de ${company.name} y priorízalos 
-    según su relevancia para vender los siguientes productos/servicios:
-    
-    DOCUMENTOS DEL VENDEDOR:
-    ${userDocuments.map(d => d.summary).join('\n')}
-    
-    SEÑALES RECIENTES DE LA EMPRESA:
-    ${companySignals.map(s => s.description).join('\n')}
-    
-    CONTACTOS A EVALUAR:
-    ${contacts.map(c => `- ${c.name}, ${c.title}`).join('\n')}
-    
-    Para cada contacto, devuelve:
-    1. Rank (A, B o C)
-    2. Score (0-100)
-    3. Razonamiento (por qué es relevante o no)
-    4. Un icebreaker personalizado basado en las señales
-    
-    Formato JSON...
-  `;
-  
-  // Llamada a OpenAI/Anthropic
-  const result = await ai.generate(prompt);
-  return parseRankingResult(result);
-}
-```
-
----
-
-## Sistema de Notificaciones
-
-### Emails pendientes de aprobación
-
-```typescript
-// Trigger: nuevo email en cola
-// Destino: email del vendedor + badge en dashboard
-
-interface ApprovalNotification {
-  type: 'email_pending_approval';
-  user_id: string;
-  queue_id: string;
-  company_name: string;
-  contact_name: string;
-  subject_preview: string;
-  approval_url: string;
-}
-```
-
-### Canales de notificación (configurable por usuario)
-- **Email**: Resend para enviar notificación
-- **Dashboard**: Badge/contador en header + lista en página principal
-
----
-
-## Paquete @asci/core (Scope Mínimo Viable)
-
-```typescript
-// packages/core/src/index.ts
-
-// 1. Cliente Supabase tipado
-export { createSupabaseClient, createSupabaseAdmin } from './db/client';
-
-// 2. Tipos compartidos
-export type { 
-  Company, 
-  Bookmark,        // Ahora incluye is_target_account
-  Signal, 
-  Contact,
-  Document,
-  ExcludedAccount, // Nueva tabla blacklist
-  CsvImport,       // Tracking de importaciones
-  EmailQueue,
-  EmailSequence,
-  ContactRanking,
-  ApiKey,
-  Webhook,
-  UserTier
-} from './types';
-
-// 3. Utilidades básicas
-export { hashApiKey, verifyApiKey } from './utils/auth';
-export { normalizeCompanyName, matchCompanyByRegex } from './utils/matching';
-```
-
-### Publicación NPM privada
-- GitHub Packages o npm privado
-- Versionado semántico
-- CI/CD para publicar en merge a main
-
----
-
-## Plan de Implementación por Fases
-
-### Fase 0: Setup (1-2 días)
-- [ ] Crear repo `asci-core` con estructura básica
-- [ ] Configurar npm privado (GitHub Packages)
-- [ ] Crear repo `bigua-bot` con Turborepo (apps/mcp-server + apps/dashboard)
-- [ ] Configurar proyectos en Vercel
-
-### Fase 1: Base de datos (2-3 días)
-- [ ] Migrar tabla `bookmarks`: agregar `is_target_account`, `last_prospected_at`, `current_sequence_id`
-- [ ] Crear tabla `excluded_accounts` (blacklist)
-- [ ] Crear tablas `csv_imports` y `csv_import_rows`
-- [ ] Crear tablas `api_keys`, `webhooks`, `user_tiers`
-- [ ] Crear tablas `email_sequences`, `email_queue`, `contact_rankings`
-- [ ] Configurar RLS policies para todas las tablas nuevas
-- [ ] Seed data para testing
-
-### Fase 2: Dashboard MCP - Configuración (1 semana)
-- [ ] Auth (reusar de ASCI actual)
-- [ ] UI para subir/gestionar documentos
-- [ ] UI para ver bookmarks existentes como cuentas objetivo
-- [ ] UI para importar CSV de nuevas cuentas objetivo → crear bookmarks
-- [ ] UI para importar CSV de blacklist → crear excluded_accounts
-- [ ] Parser de CSV con matching regex
-- [ ] UI de matching de cuentas (resolver ambiguos)
-- [ ] Generación de API keys
-- [ ] Configuración de webhooks
-
-### Fase 3: MCP Server - Core (1 semana)
-- [ ] Setup MCP server con `@modelcontextprotocol/sdk`
-- [ ] Configurar transport **streamable HTTP** en `/mcp` endpoint
-- [ ] Middleware de autenticación (API key en header `Authorization: Bearer asci_live_xxx`)
-- [ ] Rate limiting por tier (usando Upstash Redis o similar)
-- [ ] Implementar tools básicos: `get_bookmarks`, `search_accounts`, `get_user_documents`
-- [ ] Health check endpoint en `/health`
-- [ ] Logging y métricas básicas
-
-### Fase 4: MCP Server - Intelligence (1 semana)
-- [ ] `get_account_intelligence`
-- [ ] `get_decision_makers` con ranking de IA
-- [ ] `get_icebreakers`
-- [ ] Integración con Apollo API para contactos
-
-### Fase 5: Sistema de Emails (1 semana)
-- [ ] `queue_email_for_approval`
-- [ ] `get_email_status`
-- [ ] Dashboard: cola de aprobación
-- [ ] Edición de emails
-- [ ] Sistema de webhooks
-- [ ] Notificaciones por email
-
-### Fase 6: Secuencias y Escalamiento (3-4 días)
-- [ ] Lógica de secuencias
-- [ ] Detección de "sin respuesta" (manual inicialmente)
-- [ ] Escalamiento a contacto B/C
-- [ ] Variación de mensajes
-
-### Fase 7: Apify Integration (3-4 días)
-- [ ] Integración con Apify para LinkedIn scraping
-- [ ] Cron job bimensual
-- [ ] Procesamiento y almacenamiento de job postings
-
-### Fase 8: Testing y Beta (1 semana)
-- [ ] Tests E2E del flujo completo
-- [ ] Beta con usuarios seleccionados
-- [ ] Ajustes basados en feedback
-
----
-
-## Límites por Tier
-
-| Tier | Cuentas ABM | Emails/día | API calls/día | API calls/min |
-|------|-------------|------------|---------------|---------------|
-| Beta | 100 | 50 | 1000 | 60 |
-| Starter | 50 | 20 | 500 | 30 |
-| Pro | 200 | 100 | 5000 | 120 |
-| Enterprise | Ilimitado | Ilimitado | Ilimitado | 300 |
+| Tier | Calls/min | Calls/dia | Emails/dia | Cuentas ABM |
+|------|-----------|-----------|------------|-------------|
+| beta | 60 | 1,000 | 50 | 100 |
+| starter | 30 | 500 | 20 | 50 |
+| pro | 120 | 5,000 | 100 | 200 |
+| enterprise | 300 | ilimitado | ilimitado | ilimitado |
 
 ---
 
 ## Consideraciones de Seguridad
 
 1. **API Keys**: Hasheadas con SHA256, nunca en plaintext
-2. **Rate Limiting**: Por tier, con backoff exponencial
-3. **Webhooks**: Firmados con HMAC para verificar origen
-4. **RLS**: Usuarios solo acceden a sus propios datos
-5. **Audit Log**: Registrar todas las acciones del MCP (futuro)
+2. **Rate Limiting**: Por usuario (no por key, ya que es 1:1)
+3. **Webhooks**: Firmados con HMAC-SHA256
+4. **RLS**: Todas las tablas v3 tienen policies por user_id
+5. **No FK cross-schema**: Referencias logicas, no foreign keys entre v3 y public
+6. **Audit futuro**: Preparado para logging de acciones MCP
+
+---
+
+## Plan de Implementacion por Fases
+
+### Fase 0: Setup (1-2 dias)
+- [ ] Crear repo `asci-core` con estructura basica
+- [ ] Configurar npm privado (GitHub Packages)
+- [ ] Crear repo `bigua-bot` con Turborepo
+- [ ] Configurar proyectos en Vercel
+
+### Fase 1: Base de datos (2-3 dias)
+- [ ] Crear schema v3
+- [ ] Crear tabla `v3.bookmark_metadata`
+- [ ] Crear tabla `v3.excluded_accounts`
+- [ ] Crear tablas `v3.csv_imports` y `v3.csv_import_rows`
+- [ ] Crear tabla `v3.api_keys`
+- [ ] Crear tablas `v3.email_sequences`, `v3.email_queue`, `v3.contact_rankings`
+- [ ] Crear tablas `v3.webhooks`, `v3.user_tiers`
+- [ ] Configurar RLS en todas las tablas
+
+### Fase 2: Dashboard MCP - Configuracion (1 semana)
+- [ ] Auth (compartida con ASCI)
+- [ ] Onboarding flow
+- [ ] UI para importar CSV whitelist
+- [ ] Logica de matching con normalizacion + fuzzy
+- [ ] UI de resolucion de matches ambiguos
+- [ ] UI para importar CSV blacklist
+- [ ] Generacion de API keys
+- [ ] Configuracion de webhooks
+
+### Fase 3: MCP Server - Core (1 semana)
+- [ ] Setup MCP server con SDK
+- [ ] Transport HTTP streamable
+- [ ] Middleware de autenticacion
+- [ ] Rate limiting
+- [ ] Tools: `get_bookmarks`, `search_accounts`, `get_user_documents`
+
+### Fase 4: MCP Server - Intelligence (1 semana)
+- [ ] `get_account_intelligence`
+- [ ] `get_decision_makers` con ranking IA
+- [ ] `get_icebreakers`
+- [ ] Integracion Apollo API
+
+### Fase 5: Sistema de Emails (1 semana)
+- [ ] `queue_email_for_approval`
+- [ ] `get_email_status`
+- [ ] Dashboard: cola de aprobacion con Supabase Realtime
+- [ ] Edicion de emails
+- [ ] Sistema de webhooks
+- [ ] Notificaciones por email (Resend)
+
+### Fase 6: Secuencias y Escalamiento (3-4 dias)
+- [ ] Logica de secuencias
+- [ ] Deteccion de "sin respuesta"
+- [ ] Escalamiento automatico
+
+### Fase 7: Apify Integration (3-4 dias)
+- [ ] Integracion Apify para LinkedIn
+- [ ] Cron job bimensual
+- [ ] Procesamiento de job postings
 
 ---
 
 ## Preguntas Resueltas
 
-- **MCP Client**: Multi-cliente (cualquier MCP compatible)
-- **Modelo Whitelist/Blacklist**: 
-  - **Whitelist = Bookmarks**: Los bookmarks existentes son las cuentas objetivo
-  - **Nuevas cuentas whitelist**: Al importar CSV, se crean bookmarks automáticamente
-  - **Blacklist = excluded_accounts**: Tabla separada para cuentas a no prospectar
-- **Core sharing**: NPM package privado @asci/core
-- **Email OAuth**: Delegado al agente (Gmail API)
-- **Match confirmation**: En dashboard web
-- **MCP Auth**: API Key por usuario
-- **Upload format**: CSV/Excel con columnas
-- **Refresh rate**: Mensual manual + bimensual Apify
-- **Approval queue**: Dashboard web + notificación por email
-- **Contact filter**: Análisis en ASCI, ranking A/B/C
-- **Email tracking**: Sin respuesta en X días (configurable, default 5)
-- **Apify**: Nuevo desarrollo
-- **Core scope**: Mínimo viable (tipos + cliente Supabase)
-- **Notifications**: Email + Dashboard
-- **Webhooks**: Sí, para notificar eventos al agente
-- **Limits**: Por tier/plan
-
----
-
-## Migración de Usuarios Existentes
-
-### Usuarios actuales de ASCI con bookmarks:
-
-1. **No requieren migración de datos** - sus bookmarks ya son su whitelist
-2. **Nuevo flag en bookmarks**: Agregar columna `is_target_account BOOLEAN DEFAULT true`
-   - Permite que usuarios marquen bookmarks como "solo seguimiento" vs "prospectar activamente"
-3. **Onboarding MCP**: 
-   - Al acceder por primera vez al dashboard MCP, se les muestra cuántos bookmarks tienen
-   - Pueden generar API key inmediatamente sin configuración adicional
-   - Opcionalmente pueden subir blacklist de base instalada
+| Pregunta | Respuesta |
+|----------|-----------|
+| Modificar public.bookmarks? | NO - usar v3.bookmark_metadata |
+| Matching CSV | Auto (regex + fuzzy >85%) + confirmacion manual |
+| Auto-match condicion | Dominio exacto + nombre similar (>85%) |
+| Ambiente | Produccion directa |
+| Auth MCP | API key -> user_id (scoped) |
+| Keys por usuario | 1 key activa por usuario |
+| Rate limits | Por usuario, segun tier |
+| Integracion Apify | Nuevo desarrollo |
+| MCP transport | HTTP Streamable |
+| Real-time dashboard | Supabase Realtime |
+| Notificacion agentes | Webhooks HMAC-SHA256 |
