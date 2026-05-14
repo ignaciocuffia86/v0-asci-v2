@@ -102,22 +102,61 @@ ASCI v3 es una plataforma de prospecting B2B asistida por IA con tres componente
 
 ### 2.1 Tablas de v2 que v3 lee (NUNCA escribe directamente)
 
-| Tabla | Uso en v3 |
-|-------|----------|
-| `public.companies` | Matching de CSV, display de cuentas, recomendaciones |
-| `public.contacts` | Lectura de señales |
-| `public.signals` | Filtrado por buyer_persona |
-| `public.dictionary_processes` | Inferencia de buyer personas, job titles |
-| `public.dictionary_products` | Idem |
-| `public.dictionary_patterns_cache` | Matching de señales |
-| `public.company_news` | Cache de noticias para digest |
-| `public.company_implementations` | Cache de tech radar |
-| `public.apollo_contacts_cache` | Contactos pre-enriquecidos |
-| `public.job_postings` | Señales de hiring |
+| Tabla | Uso en v3 | Notas |
+|-------|----------|-------|
+| `public.companies` | Matching de CSV, display de cuentas, recomendaciones | Columnas: id, name, normalized_name, domain, linkedin_url, industry, etc. |
+| `public.contacts` | Lectura de señales | Personas con señales detectadas |
+| `public.signals` | Filtrado por buyer_persona | signal_type: 'technology' o 'process', signal_id apunta a dictionary |
+| `public.dictionary_vendors` | Padre de dictionary_products | Proveedores (SAP, Microsoft, etc.) |
+| `public.dictionary_processes` | Inferencia de buyer personas | Columnas: id, name, keywords[], created_at |
+| `public.dictionary_products` | Idem | Columnas: id, vendor_id, name, keywords[], created_at |
+| `public.dictionary_patterns_cache` | Regex pre-compilados para matching | Cache de patrones por diccionario |
+| `public.company_news` | Cache de noticias para digest | **RLS:** Solo visible si user tiene bookmark de la company |
+| `public.company_implementations` | Cache de tech radar | **RLS:** Idem company_news |
+| `public.apollo_contacts_cache` | Contactos pre-enriquecidos | Cache global de Apollo |
+| `public.job_postings` | Señales de hiring | Ofertas de trabajo scrapeadas |
+| `public.user_news_interactions` | Tracking de noticias vistas | Por user_id + news_id |
+| `public.user_implementation_interactions` | Tracking de implementaciones vistas | Por user_id + implementation_id |
+
+**IMPORTANTE — RLS de company_news y company_implementations:**
+
+Estas tablas tienen RLS que solo permite SELECT si el usuario tiene un `bookmark` de esa company:
+
+```sql
+-- Politica actual en v2:
+CREATE POLICY "Anyone can view news for bookmarked companies" ON company_news
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM bookmarks 
+      WHERE bookmarks.company_id = company_news.company_id 
+      AND bookmarks.user_id = auth.uid()
+    )
+  );
+```
+
+En v3 NO hay `bookmarks`, hay `campaign_accounts`. Para que v3 pueda leer el cache:
+
+**Opcion A (recomendada):** Leer desde server-side con `service_role` key (bypasea RLS)
+**Opcion B:** Agregar politica RLS adicional que permita si existe `v3.campaign_accounts`
 
 > Si v3 necesita escribir en tablas de v2 (ej: guardar contacto nuevo de Apollo),
-> lo hace llamando a las RPCs existentes de v2 (`upsert_company`, etc.),
-> nunca con INSERT/UPDATE directo.
+> lo hace llamando a las RPCs existentes de v2, nunca con INSERT/UPDATE directo.
+
+### 2.1.1 RPCs y Funciones de v2 reutilizables
+
+| Funcion | Ubicacion | Uso |
+|---------|-----------|-----|
+| `upsert_company(name, domain, linkedin, industry, ...)` | SQL RPC | Crea o actualiza company |
+| `runTechRadar({ bookmarkId, companyName, ... })` | `lib/tech-radar.ts` | Ejecuta Parallel + Gemini fallback |
+| `searchPeople({ domain, linkedinUrl, jobTitles, ... })` | `lib/apollo/search.ts` | Busca en Apollo API |
+| `enrichPerson(apolloId)` | `lib/apollo/enrich.ts` | Enriquece contacto individual |
+| `enrichMany(apolloIds)` | `lib/apollo/enrich.ts` | Enriquecimiento batch |
+| `apolloRequest(endpoint, params)` | `lib/apollo/client.ts` | Cliente base de Apollo |
+| `normalizeDomain(input)` | `lib/apollo/domain.ts` | Normaliza dominios |
+| `get_company_drawer_data(company_id)` | SQL RPC | Datos para drawer de company |
+| `get_company_signal_summary(company_id)` | SQL RPC | Resumen de señales |
+
+> v3 reutiliza estas funciones directamente. NO las duplica.
 
 ### 2.2 Separacion ETL v2 vs CSV Import v3
 
@@ -193,6 +232,62 @@ CREATE TABLE v3.workspace_documents (
   created_at   TIMESTAMPTZ DEFAULT NOW(),
   updated_at   TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Tags extraidos de los documentos (analogo a document_tags de v2)
+CREATE TABLE v3.workspace_document_tags (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  document_id     UUID NOT NULL REFERENCES v3.workspace_documents(id) ON DELETE CASCADE,
+  workspace_id    UUID NOT NULL REFERENCES v3.workspaces(id) ON DELETE CASCADE,
+  tag_type        TEXT CHECK (tag_type IN ('industry', 'technology', 'process')) NOT NULL,
+  tag_value       TEXT NOT NULL,
+  tag_reference_id UUID,                       -- ID en dictionary_processes o dictionary_products
+  confidence      REAL DEFAULT 0.5,
+  created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Perfil de valor consolidado del workspace (analogo a user_value_profiles de v2)
+CREATE TABLE v3.workspace_value_profiles (
+  id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id       UUID NOT NULL REFERENCES v3.workspaces(id) ON DELETE CASCADE,
+  profile_summary    TEXT,
+  target_industries  JSONB DEFAULT '[]'::jsonb,
+  target_technologies JSONB DEFAULT '[]'::jsonb,
+  target_processes   JSONB DEFAULT '[]'::jsonb,
+  raw_analysis       JSONB,
+  generated_at       TIMESTAMPTZ,
+  created_at         TIMESTAMPTZ DEFAULT NOW(),
+  updated_at         TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (workspace_id)
+);
+
+-- ═══════════════════════════════════════════════════════════
+-- JOB TITLES POR PROCESO/TECNOLOGIA
+-- Pre-laburados en el diccionario. ASCI infiere nuevos con IA.
+-- ═══════════════════════════════════════════════════════════
+
+CREATE TABLE v3.dictionary_job_titles (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  -- Uno de estos dos debe estar presente (o ambos)
+  process_id  UUID REFERENCES public.dictionary_processes(id),
+  product_id  UUID REFERENCES public.dictionary_products(id),
+  
+  job_title   TEXT NOT NULL,                  -- "CTO", "VP Engineering", "Head of IT"
+  seniority   TEXT CHECK (seniority IN (
+    'c_level', 'vp', 'director', 'manager', 'senior', 'individual_contributor'
+  )),
+  
+  -- Metadata
+  is_inferred BOOLEAN DEFAULT false,          -- true = inferido por IA, false = pre-cargado
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  
+  CONSTRAINT at_least_one_reference CHECK (
+    process_id IS NOT NULL OR product_id IS NOT NULL
+  )
+);
+
+-- Indices para busqueda rapida
+CREATE INDEX idx_job_titles_process ON v3.dictionary_job_titles(process_id) WHERE process_id IS NOT NULL;
+CREATE INDEX idx_job_titles_product ON v3.dictionary_job_titles(product_id) WHERE product_id IS NOT NULL;
 
 -- ═══════════════════════════════════════════════════════════
 -- BUYER PERSONAS
@@ -308,6 +403,11 @@ CREATE TABLE v3.campaign_accounts (
 -- ═══════════════════════════════════════════════════════════
 -- DIGEST FILTRADO POR CAMPANA/CUENTA
 -- Capa por encima del cache global de v2, filtrada por buyer_persona
+--
+-- NOTA: En v2 existen user_news_interactions y user_implementation_interactions
+-- que trackean que noticias vio cada usuario. En v3 el tracking es por
+-- campaign_account (last_user_seen_at) en lugar de por user+news individual.
+-- Esto simplifica el modelo para el flujo de campanas.
 -- ═══════════════════════════════════════════════════════════
 
 CREATE TABLE v3.campaign_account_digest (
@@ -315,17 +415,23 @@ CREATE TABLE v3.campaign_account_digest (
   campaign_account_id  UUID REFERENCES v3.campaign_accounts(id) ON DELETE CASCADE UNIQUE,
 
   -- Referencias al cache global de v2 (solo IDs, no duplicamos contenido)
+  -- IMPORTANTE: Para leer company_news y company_implementations desde v3,
+  -- usar service_role key porque las RLS de v2 filtran por bookmarks.
   news_ids             UUID[],              -- IDs de public.company_news
   implementation_ids   UUID[],             -- IDs de public.company_implementations
+  contact_ids          UUID[],             -- IDs de public.apollo_contacts_cache (DMs disponibles)
 
   -- Metadatos del filtrado
   buyer_persona_id     UUID,               -- referencia a v3.buyer_personas
   signal_types_matched TEXT[],             -- señales que matchearon con el buyer_persona
 
+  -- Cargos recomendados (si no hay contactos en cache)
+  recommended_job_titles TEXT[],           -- calculados desde v3.dictionary_job_titles
+
   -- Timeline para badge "NUEVAS"
   last_fetched_at   TIMESTAMPTZ,
   new_items_count   INTEGER DEFAULT 0,
-  last_user_seen_at TIMESTAMPTZ,
+  last_user_seen_at TIMESTAMPTZ,           -- se actualiza cuando el usuario abre el digest
 
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -1161,22 +1267,17 @@ ASCI recomienda cuentas de public.companies que:
 
 ## 12. Buyer Personas — Logica de Inferencia
 
-### Fuente 1: Diccionario pre-laburado (v2)
+### Fuente 1: Diccionario pre-laburado
 
 En `public.dictionary_processes` y `public.dictionary_products` ya existen entradas
-con keywords. Para v3 se extiende el diccionario con job titles por proceso/tecnologia:
+con keywords. Para v3 se extiende el diccionario con job titles por proceso/tecnologia
+en la tabla `v3.dictionary_job_titles` (definida en seccion 2.3).
 
-```sql
--- Ejemplo de extension al diccionario (tabla nueva en v3, no modifica public.*)
-CREATE TABLE v3.dictionary_job_titles (
-  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  dict_type       TEXT CHECK (dict_type IN ('process', 'technology')) NOT NULL,
-  dict_id         UUID NOT NULL,          -- ID en dictionary_processes o dictionary_products
-  job_titles      TEXT[] NOT NULL,        -- ["CTO", "VP Engineering", "Head of IT"]
-  seniority_level TEXT[],                 -- ["C-Level", "VP", "Director"]
-  created_at      TIMESTAMPTZ DEFAULT NOW()
-);
-```
+Estructura de `v3.dictionary_job_titles`:
+- `process_id` o `product_id`: FK a las tablas del diccionario de v2
+- `job_title`: "CTO", "VP Engineering", etc.
+- `seniority`: c_level, vp, director, manager, senior, individual_contributor
+- `is_inferred`: false para pre-cargados, true para inferidos por IA
 
 ### Fuente 2: Inferencia desde docs del workspace
 
@@ -1231,3 +1332,113 @@ TRIGGER_SECRET_KEY         # Trigger.dev autenticacion
 TRIGGER_API_URL            # Trigger.dev endpoint
 BLOB_READ_WRITE_TOKEN      # Vercel Blob para workspace_documents
 ```
+
+---
+
+## 15. Consideraciones de Integracion v2/v3
+
+### 15.1 Puntos criticos verificados
+
+| Verificacion | Estado | Notas |
+|--------------|--------|-------|
+| `public.dictionary_processes` existe | OK | Columnas: id, name, keywords[], created_at |
+| `public.dictionary_products` existe | OK | Columnas: id, vendor_id, name, keywords[], created_at |
+| `public.dictionary_vendors` existe | OK | Padre de dictionary_products |
+| `public.dictionary_patterns_cache` existe | OK | Cache de regex pre-compilados |
+| `public.companies` existe | OK | Tabla principal de empresas |
+| `public.contacts` existe | OK | Personas con senales |
+| `public.signals` existe | OK | Senales detectadas |
+| `public.company_news` existe | OK | Cache de noticias (RLS por bookmark) |
+| `public.company_implementations` existe | OK | Cache de tech radar (RLS por bookmark) |
+| `public.apollo_contacts_cache` existe | OK | Cache de Apollo |
+| `public.job_postings` existe | OK | Ofertas de trabajo |
+| `public.import_batches` existe | OK | ETL de contactos v2 (NO TOCAR) |
+| `public.import_rows` existe | OK | Filas del ETL v2 (NO TOCAR) |
+| `public.bookmarks` existe | OK | Bookmarks de v2 (NO TOCAR) |
+| `public.user_documents` existe | OK | Docs de v2 por user_id (NO TOCAR, v3 usa workspace_documents) |
+| `user_news_interactions` existe | OK | Tracking de noticias vistas |
+| `user_implementation_interactions` existe | OK | Tracking de implementaciones vistas |
+| `upsert_company()` RPC existe | OK | Funcion para crear/actualizar companies |
+| `get_company_drawer_data()` RPC existe | OK | Datos para drawer de company |
+| `runTechRadar()` funcion existe | OK | En lib/tech-radar.ts |
+| `searchPeople()` funcion existe | OK | En lib/apollo/search.ts |
+
+### 15.2 Acciones requeridas para RLS de company_news
+
+Las tablas `company_news` y `company_implementations` tienen RLS que permite SELECT
+solo si el usuario tiene un bookmark de esa company. En v3 NO hay bookmarks.
+
+**Solucion implementada:** Leer desde server-side con `SUPABASE_SERVICE_ROLE_KEY`.
+
+```typescript
+// lib/v3/cache-reader.ts
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
+
+export async function getCompanyNews(companyId: string) {
+  // service_role bypasea RLS
+  const { data } = await supabaseAdmin
+    .from('company_news')
+    .select('*')
+    .eq('company_id', companyId);
+  return data;
+}
+```
+
+### 15.3 Checklist de migracion
+
+**Fase 1: Schema**
+- [ ] Crear schema `v3` en Supabase
+- [ ] Ejecutar script de creacion de tablas v3 (seccion 2.3)
+- [ ] Poblar `v3.dictionary_job_titles` con datos iniciales
+
+**Fase 2: Backend**
+- [ ] Crear `lib/v3/workspace.ts` - manejo de multi-tenant
+- [ ] Crear `lib/v3/csv-matcher.ts` - matching de CSV
+- [ ] Crear `lib/v3/cache-reader.ts` - lectura de cache global con service_role
+- [ ] Integrar Trigger.dev y crear jobs
+- [ ] Crear endpoints MCP en `/app/api/mcp/`
+
+**Fase 3: Frontend**
+- [ ] Dashboard principal con layout de 3 columnas
+- [ ] Selector de campana
+- [ ] Vista de digest por cuenta
+- [ ] Panel de copiloto
+- [ ] UI de matching de CSV
+- [ ] UI de verificacion DKIM/SPF
+
+**Fase 4: Integraciones**
+- [ ] Configurar Vercel Blob para documentos
+- [ ] Configurar Trigger.dev
+- [ ] Configurar webhooks
+
+### 15.4 Funciones de v2 que v3 reutiliza directamente
+
+| Funcion | Path | Uso en v3 |
+|---------|------|-----------|
+| `runTechRadar` | `lib/tech-radar.ts` | Tech radar de cuentas en campanias |
+| `searchPeople` | `lib/apollo/search.ts` | Busqueda en Apollo |
+| `enrichPerson` | `lib/apollo/enrich.ts` | Enriquecimiento de contactos |
+| `enrichMany` | `lib/apollo/enrich.ts` | Enriquecimiento batch |
+| `apolloRequest` | `lib/apollo/client.ts` | Cliente base de Apollo |
+| `normalizeDomain` | `lib/apollo/domain.ts` | Normalizar dominios |
+| `normalizeCompanyName` | RPC SQL | Normalizar nombres de empresas |
+
+### 15.5 Tablas que v3 NUNCA modifica directamente
+
+| Tabla | Razon |
+|-------|-------|
+| `public.bookmarks` | Usado por v2. v3 tiene campaign_accounts |
+| `public.import_batches` | ETL de contactos de v2 |
+| `public.import_rows` | ETL de contactos de v2 |
+| `public.user_documents` | Docs por user_id de v2. v3 tiene workspace_documents |
+| `public.profiles` | Trigger de auth de v2 |
+
+---
+
+*Documento actualizado: 2025-05-14*
+*Version: 2.0 — Cruce verificado con v2*
