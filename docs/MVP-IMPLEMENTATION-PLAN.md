@@ -586,56 +586,178 @@ Componentes:
 **Duracion estimada:** 5-7 dias
 **Dependencia:** Fases 1-6 completas (puede hacerse en paralelo parcialmente)
 
-#### 7.1 Diseno del sistema
+**Referencia obligatoria:** `docs/DESIGN-SYSTEM.md`
 
-Antes de implementar, generar design brief con:
-- Paleta de colores (3-5 colores)
-- Tipografia (max 2 familias)
-- Componentes base (cards, buttons, inputs)
-- Layout de 3 columnas responsive
+#### 7.1 Setup del Design System
 
-#### 7.2 Componentes compartidos v3
+**Archivo a modificar:** `app/globals.css`
+
+Agregar los tokens CSS del Design System (seccion 2.1):
+- Colores semanticos: `--background`, `--foreground`, `--card`, `--primary`, etc.
+- Colores de senales: `--signal-technology`, `--signal-hiring`, `--signal-news`, `--signal-funding`
+- Espaciado y radios
+
+**Archivo a modificar:** `app/layout.tsx`
+
+Configurar tipografia (seccion 2.2):
+- Font principal: Inter (sans)
+- Font mono: JetBrains Mono
+
+**Archivo a modificar:** `tailwind.config.ts` (si existe) o `app/globals.css` (@theme inline para v4)
+
+Extender tema con colores de senales.
+
+#### 7.2 Layout Principal de 3 Columnas
+
+**Referencia:** Design System seccion 3.1
+
+**Archivo a crear:** `app/v3/layout.tsx`
+
+```typescript
+// Layout de 3 columnas:
+// - Sidebar izquierdo (280px fixed) - Lista de cuentas
+// - Main central (flex-1) - Digest
+// - Panel derecho (380px collapsible) - Copilot placeholder
+
+// Mobile: bottom sheet para sidebar, panel derecho oculto
+// Tablet: 2 columnas, copilot en drawer
+```
+
+**Archivos a crear:**
+
+```
+app/v3/_components/
+  layout/
+    sidebar.tsx                         # Ref: Design System 4.1
+    main-content.tsx                    # Contenedor central
+    copilot-panel.tsx                   # Ref: Design System 4.4 (placeholder)
+    mobile-bottom-sheet.tsx             # Para responsive
+```
+
+#### 7.3 Componentes de Cuenta y Senales
+
+**Referencia:** Design System seccion 4
 
 **Archivos a crear:**
 
 ```
 components/v3/
-  page-header.tsx                       # Header con titulo y acciones
-  empty-state.tsx                       # Estado vacio con CTA
-  loading-skeleton.tsx                  # Skeleton para loading
-  company-card.tsx                      # Card de empresa (reusable)
-  signal-badge.tsx                      # Badge de senal/tecnologia
-  contact-card.tsx                      # Card de contacto de Apollo
-  news-card.tsx                         # Card de noticia
-  implementation-card.tsx               # Card de tech radar result
+  account-list-item.tsx                 # Ref: Design System 4.1
+                                        # - Avatar con iniciales
+                                        # - Nombre + industria
+                                        # - Badge de senales nuevas
+                                        # - Indicador de ultima actividad
+  
+  signal-card.tsx                       # Ref: Design System 4.2
+                                        # - Icono por tipo (technology/hiring/news/funding)
+                                        # - Color semantico segun tipo
+                                        # - Titulo + descripcion
+                                        # - Timestamp relativo
+                                        # - Acciones: ver mas, guardar
+  
+  contact-card.tsx                      # Ref: Design System 4.3
+                                        # - Avatar (imagen o iniciales)
+                                        # - Nombre + cargo
+                                        # - Empresa
+                                        # - Email/LinkedIn (si disponible)
+                                        # - Boton de accion
+  
+  news-card.tsx                         # Variante de signal-card para noticias
+  implementation-card.tsx               # Variante para tech radar results
+  signal-badge.tsx                      # Badge pequeno con color por tipo
 ```
 
-#### 7.3 Rutas completas de v3
+#### 7.4 Panel de Digest
+
+**Referencia:** Design System seccion 3.1 (area central)
+
+**Archivos a crear:**
+
+```
+app/v3/_components/
+  digest/
+    digest-panel.tsx                    # Panel completo
+    digest-header.tsx                   # Nombre empresa + stats
+    digest-section.tsx                  # Seccion colapsable (News, Tech, DMs)
+    digest-timeline.tsx                 # Timeline de eventos
+    digest-empty.tsx                    # Estado vacio
+```
+
+#### 7.5 Componentes de Formulario
+
+**Referencia:** Design System seccion 5
+
+Usar shadcn/ui con los patrones del skill:
+- `FieldGroup` + `Field` para formularios
+- `InputGroup` para inputs con botones
+- Validacion con `data-invalid` + `aria-invalid`
+
+**Archivos a crear:**
+
+```
+components/v3/
+  forms/
+    campaign-form.tsx                   # Crear/editar campana
+    csv-upload-form.tsx                 # Upload de CSV
+    search-companies-input.tsx          # Busqueda con autocomplete
+    job-titles-input.tsx                # Input de buyer persona
+```
+
+#### 7.6 Command Palette
+
+**Referencia:** Design System seccion 6.1
+
+**Archivo a crear:** `components/v3/command-palette.tsx`
+
+Usar `Command` de shadcn dentro de `Dialog`:
+- Cmd+K para abrir
+- Buscar cuentas, campanas, acciones
+- Navegacion rapida
+
+#### 7.7 Rutas completas de v3
 
 ```
 app/v3/
-  layout.tsx                            # Layout principal con sidebar
-  page.tsx                              # Dashboard (redirect a campana)
+  layout.tsx                            # Layout 3 columnas (Design System 3.1)
+  page.tsx                              # Redirige a primera campana
   
   onboarding/
-    page.tsx                            # Onboarding inicial
+    page.tsx                            # Wizard de onboarding
     
   docs/
-    page.tsx                            # Gestion de documentos
+    page.tsx                            # Gestion de documentos (blocker)
     
   campaigns/
     page.tsx                            # Lista de campanas
     new/page.tsx                        # Crear campana
     [id]/
       page.tsx                          # Dashboard de campana
-      accounts/page.tsx                 # Lista de cuentas (alternativa)
-      import/page.tsx                   # Import CSV
+      layout.tsx                        # Layout con lista de cuentas en sidebar
+      accounts/
+        [accountId]/page.tsx            # Digest de cuenta especifica
+      import/page.tsx                   # Import CSV + review
       
   settings/
     page.tsx                            # Settings generales
     api-keys/page.tsx                   # Gestion de API keys
     workspace/page.tsx                  # Settings del workspace
 ```
+
+#### 7.8 Estados de Carga y Vacios
+
+**Referencia:** Design System seccion 6.2
+
+**Archivos a crear:**
+
+```
+components/v3/
+  states/
+    loading-skeleton.tsx                # Skeleton animado
+    empty-state.tsx                     # Estado vacio con CTA
+    error-state.tsx                     # Estado de error
+```
+
+Usar `Skeleton` de shadcn, seguir patrones del skill.
 
 ---
 
@@ -733,10 +855,20 @@ Antes de empezar Fase 0:
   - `PARALLEL_API_KEY` (para Tech Radar)
   - `APOLLO_API_KEY` (para Apollo)
   - `GOOGLE_GENERATIVE_AI_API_KEY` (para Gemini)
-- [ ] Definir design system antes de UI (Fase 7)
+- [x] Design System definido - ver `docs/DESIGN-SYSTEM.md`
 - [ ] Revisar que no hay conflictos con rutas existentes de v2
 
 ---
 
+## Documentos de Referencia
+
+| Documento | Contenido |
+|-----------|-----------|
+| `docs/BOT-BIGUA-LAT-ARCHITECTURE.md` | Arquitectura completa, schema SQL, flujos |
+| `docs/DESIGN-SYSTEM.md` | Colores, tipografia, componentes, layouts |
+| `docs/MVP-IMPLEMENTATION-PLAN.md` | Este documento - plan de implementacion |
+
+---
+
 *Documento creado: 2025-05-15*
-*Version: 1.0*
+*Version: 1.1 - Agregadas referencias a Design System*
