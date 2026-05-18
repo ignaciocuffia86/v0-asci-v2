@@ -6,7 +6,7 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
- 
+  // Force rebuild to pick up env vars
 }
 
 export default nextConfig
