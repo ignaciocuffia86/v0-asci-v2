@@ -27,7 +27,8 @@ export async function generateApiKey(name: string): Promise<{
   
   // Get user's workspace and verify they're admin
   const { data: membership } = await supabase
-    .from("v3_workspace_members")
+    .schema("v3")
+    .from("workspace_members")
     .select("workspace_id, role")
     .eq("user_id", user.id)
     .eq("status", "active")
@@ -44,7 +45,8 @@ export async function generateApiKey(name: string): Promise<{
   // Check if workspace already has a key
   const admin = createAdminClient()
   const { data: existingKey } = await admin
-    .from("v3_mcp_api_keys")
+    .schema("v3")
+    .from("mcp_api_keys")
     .select("id")
     .eq("workspace_id", membership.workspace_id)
     .eq("revoked_at", null)
@@ -60,7 +62,8 @@ export async function generateApiKey(name: string): Promise<{
   const keyPrefix = rawKey.substring(0, 12) // "asci_" + 7 chars
   
   const { data: newKey, error } = await admin
-    .from("v3_mcp_api_keys")
+    .schema("v3")
+    .from("mcp_api_keys")
     .insert({
       workspace_id: membership.workspace_id,
       name,
@@ -107,7 +110,8 @@ export async function listApiKeys(): Promise<{
   
   // Get user's workspace
   const { data: membership } = await supabase
-    .from("v3_workspace_members")
+    .schema("v3")
+    .from("workspace_members")
     .select("workspace_id")
     .eq("user_id", user.id)
     .eq("status", "active")
@@ -118,7 +122,8 @@ export async function listApiKeys(): Promise<{
   }
   
   const { data: keys, error } = await supabase
-    .from("v3_mcp_api_keys")
+    .schema("v3")
+    .from("mcp_api_keys")
     .select("id, name, key_prefix, created_at, last_used_at, request_count")
     .eq("workspace_id", membership.workspace_id)
     .is("revoked_at", null)
@@ -148,7 +153,8 @@ export async function revokeApiKey(keyId: string): Promise<{
   
   // Get user's workspace and verify admin
   const { data: membership } = await supabase
-    .from("v3_workspace_members")
+    .schema("v3")
+    .from("workspace_members")
     .select("workspace_id, role")
     .eq("user_id", user.id)
     .eq("status", "active")
@@ -160,7 +166,8 @@ export async function revokeApiKey(keyId: string): Promise<{
   
   const admin = createAdminClient()
   const { error } = await admin
-    .from("v3_mcp_api_keys")
+    .schema("v3")
+    .from("mcp_api_keys")
     .update({ revoked_at: new Date().toISOString() })
     .eq("id", keyId)
     .eq("workspace_id", membership.workspace_id)

@@ -69,7 +69,8 @@ export async function validateMcpRequest(req: NextRequest): Promise<McpAuthResul
   
   // Find the key
   const { data: keyData, error: keyError } = await admin
-    .from("v3_mcp_api_keys")
+    .schema("v3")
+    .from("mcp_api_keys")
     .select("id, workspace_id, rate_limit_per_minute, revoked_at")
     .eq("key_hash", keyHash)
     .single()
@@ -101,7 +102,8 @@ export async function validateMcpRequest(req: NextRequest): Promise<McpAuthResul
   const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString()
   
   const { count: recentRequests } = await admin
-    .from("v3_mcp_request_logs")
+    .schema("v3")
+    .from("mcp_request_logs")
     .select("*", { count: "exact", head: true })
     .eq("api_key_id", keyData.id)
     .gte("created_at", oneMinuteAgo)
@@ -119,7 +121,8 @@ export async function validateMcpRequest(req: NextRequest): Promise<McpAuthResul
   
   // Update last_used_at and request_count
   await admin
-    .from("v3_mcp_api_keys")
+    .schema("v3")
+    .from("mcp_api_keys")
     .update({
       last_used_at: new Date().toISOString(),
       request_count: (keyData as any).request_count + 1 || 1
@@ -147,7 +150,8 @@ export async function logMcpRequest(
   
   // Fire and forget - no await needed for logging
   admin
-    .from("v3_mcp_request_logs")
+    .schema("v3")
+    .from("mcp_request_logs")
     .insert({
       api_key_id: keyId,
       endpoint,

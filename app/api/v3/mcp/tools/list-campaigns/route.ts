@@ -20,7 +20,8 @@ export async function GET(req: NextRequest) {
     
     // Get campaigns for this workspace
     const { data: campaigns, error } = await admin
-      .from("v3_campaigns")
+      .schema("v3")
+      .from("campaigns")
       .select(`
         id,
         name,

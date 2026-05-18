@@ -30,7 +30,8 @@ export async function GET(req: NextRequest) {
     
     // Get campaign account and verify access
     const { data: account } = await admin
-      .from("v3_campaign_accounts")
+      .schema("v3")
+      .from("campaign_accounts")
       .select(`
         id,
         campaign_id,
@@ -39,7 +40,7 @@ export async function GET(req: NextRequest) {
         prospection_status,
         tech_radar_run_at,
         apollo_run_at,
-        v3_campaigns!inner (
+        campaigns!inner (
           workspace_id
         ),
         companies:company_id (
@@ -63,7 +64,7 @@ export async function GET(req: NextRequest) {
     }
     
     // Verify workspace access
-    const campaign = account.v3_campaigns as any
+    const campaign = account.campaigns as any
     if (campaign.workspace_id !== auth.workspaceId) {
       return NextResponse.json(
         mcpError("ACCESS_DENIED", "Access denied to this account", requestId),

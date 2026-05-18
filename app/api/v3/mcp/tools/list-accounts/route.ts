@@ -29,7 +29,8 @@ export async function GET(req: NextRequest) {
     
     // Verify campaign belongs to workspace
     const { data: campaign } = await admin
-      .from("v3_campaigns")
+      .schema("v3")
+      .from("campaigns")
       .select("id")
       .eq("id", campaignId)
       .eq("workspace_id", auth.workspaceId)
@@ -44,7 +45,8 @@ export async function GET(req: NextRequest) {
     
     // Get accounts for this campaign
     const { data: accounts, error } = await admin
-      .from("v3_campaign_accounts")
+      .schema("v3")
+      .from("campaign_accounts")
       .select(`
         id,
         status,

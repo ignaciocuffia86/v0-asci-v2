@@ -31,11 +31,12 @@ export async function POST(req: NextRequest) {
     
     // Verify access to this account
     const { data: account } = await admin
-      .from("v3_campaign_accounts")
+      .schema("v3")
+      .from("campaign_accounts")
       .select(`
         id,
         company_id,
-        v3_campaigns!inner (
+        campaigns!inner (
           workspace_id,
           type
         ),
@@ -56,7 +57,7 @@ export async function POST(req: NextRequest) {
       )
     }
     
-    const campaign = account.v3_campaigns as any
+    const campaign = account.campaigns as any
     if (campaign.workspace_id !== auth.workspaceId) {
       return NextResponse.json(
         mcpError("ACCESS_DENIED", "Access denied to this account", requestId),
