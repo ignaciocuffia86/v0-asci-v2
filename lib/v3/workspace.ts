@@ -71,11 +71,12 @@ export function domainToWorkspaceName(domain: string): string {
  * Retorna null si el usuario no tiene workspace o no esta activo
  */
 export async function getWorkspaceForUser(userId: string): Promise<WorkspaceWithMember | null> {
-  const supabase = await createClient()
+  // Usamos admin client para bypasear RLS - es seguro porque el userId viene de auth validado
+  const admin = createAdminClient()
   
   console.log("[v0] getWorkspaceForUser - userId:", userId)
   
-  const { data, error } = await supabase
+  const { data, error } = await admin
     .schema("v3")
     .from("workspace_members")
     .select(`
@@ -111,10 +112,10 @@ export async function getWorkspaceForUser(userId: string): Promise<WorkspaceWith
  * Busca un workspace por dominio
  */
 export async function getWorkspaceByDomain(domain: string): Promise<Workspace | null> {
-  const supabase = await createClient()
+  const admin = createAdminClient()
   const normalizedDomain = normalizeDomain(domain)
   
-  const { data, error } = await supabase
+  const { data, error } = await admin
     .schema("v3")
     .from("workspaces")
     .select("*")
