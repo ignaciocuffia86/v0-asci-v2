@@ -52,7 +52,7 @@ export default async function AccountPage({ params }: AccountPageProps) {
   
   return (
     <DigestView 
-      campaignAccount={campaignAccount}
+      campaignAccount={campaignAccount as any}
       digest={digest}
       campaignId={campaignId}
     />

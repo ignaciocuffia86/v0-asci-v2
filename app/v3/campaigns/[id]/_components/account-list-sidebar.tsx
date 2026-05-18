@@ -51,8 +51,8 @@ export function AccountListSidebar({ campaignId }: AccountListSidebarProps) {
       setLoading(true)
       try {
         const result = await getCampaignAccounts(campaignId)
-        if (result.accounts) {
-          setAccounts(result.accounts)
+        if (Array.isArray(result)) {
+          setAccounts(result)
         }
         // TODO: Check for pending imports
       } catch (error) {

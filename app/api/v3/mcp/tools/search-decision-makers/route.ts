@@ -91,12 +91,12 @@ export async function POST(req: NextRequest) {
         campaign_account_id,
         job_titles_searched: job_titles,
         contacts_found: result.contacts?.length || 0,
-        contacts: result.contacts?.map(c => ({
-          id: c.id,
-          name: c.name,
+        contacts: result.contacts?.map((c: any) => ({
+          id: c.id || c.apolloId,
+          name: c.name || `${c.firstName || ''} ${c.lastName || ''}`.trim(),
           title: c.title,
           email: c.email,
-          linkedin_url: c.linkedin_url,
+          linkedin_url: c.linkedinUrl,
           seniority: c.seniority
         }))
       }, requestId)

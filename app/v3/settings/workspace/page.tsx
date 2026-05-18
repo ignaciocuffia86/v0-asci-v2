@@ -24,7 +24,7 @@ export default async function WorkspaceSettingsPage() {
   return (
     <WorkspaceSettingsView 
       workspace={workspace}
-      members={members}
+      members={members as any}
       currentUserId={user.id}
       isAdmin={isAdmin}
     />

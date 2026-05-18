@@ -154,8 +154,8 @@ export async function logMcpRequest(
       status_code: statusCode,
       response_time_ms: responseTimeMs
     })
-    .then(() => {}) // Fire and forget
-    .catch(err => console.error("Error logging MCP request:", err))
+    .then(() => {})
+    .catch((err: Error) => console.error("Error logging MCP request:", err))
 }
 
 /**

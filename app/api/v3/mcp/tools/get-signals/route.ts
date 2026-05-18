@@ -34,12 +34,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(
       mcpResponse({
         company_id: companyId,
-        signals: signals.map(s => ({
+        signals: signals.map((s: any) => ({
           id: s.id,
           type: s.signal_type,
-          name: s.dictionary_processes?.name || s.dictionary_products?.name || "Unknown",
-          confidence: s.confidence_score,
-          detected_at: s.detected_at
+          name: s.dictionary_processes?.name || s.dictionary_products?.name || s.name || "Unknown",
+          confidence: s.confidence_score || s.confidence || null,
+          detected_at: s.detected_at || s.created_at
         })),
         total: signals.length
       }, requestId)

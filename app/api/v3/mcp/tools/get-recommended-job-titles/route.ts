@@ -70,7 +70,7 @@ export async function GET(req: NextRequest) {
       mcpResponse({
         campaign_account_id: campaignAccountId,
         company_name: (account.companies as any)?.name,
-        recommended_job_titles: result.jobTitles || [],
+        recommended_job_titles: result.titles || [],
         reasoning: result.reasoning || "Based on detected signals and workspace profile"
       }, requestId)
     )

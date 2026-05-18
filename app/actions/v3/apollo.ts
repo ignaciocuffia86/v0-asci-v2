@@ -112,12 +112,20 @@ export async function getRecommendedJobTitles(
   
   signals?.forEach(signal => {
     if (signal.signal_type === 'technology' && signal.dictionary_products) {
-      const product = signal.dictionary_products as { name: string }
-      if (product.name) technologies.push(product.name)
+      const products = Array.isArray(signal.dictionary_products) 
+        ? signal.dictionary_products 
+        : [signal.dictionary_products]
+      products.forEach((product: { name?: string }) => {
+        if (product.name) technologies.push(product.name)
+      })
     }
     if (signal.signal_type === 'process' && signal.dictionary_processes) {
-      const process = signal.dictionary_processes as { name: string }
-      if (process.name) processes.push(process.name)
+      const procs = Array.isArray(signal.dictionary_processes) 
+        ? signal.dictionary_processes 
+        : [signal.dictionary_processes]
+      procs.forEach((proc: { name?: string }) => {
+        if (proc.name) processes.push(proc.name)
+      })
     }
   })
   
@@ -157,13 +165,20 @@ export async function getRecommendedJobTitles(
   // Filter dictionary titles that match detected signals
   const matchedTitles: string[] = []
   dictTitles?.forEach(dt => {
-    const process = dt.dictionary_processes as { name: string } | null
-    const product = dt.dictionary_products as { name: string } | null
+    const processData = dt.dictionary_processes
+    const productData = dt.dictionary_products
     
-    if (process && processNames.some(p => p.toLowerCase() === process.name?.toLowerCase())) {
+    const processName = Array.isArray(processData) 
+      ? processData[0]?.name 
+      : (processData as { name?: string } | null)?.name
+    const productName = Array.isArray(productData) 
+      ? productData[0]?.name 
+      : (productData as { name?: string } | null)?.name
+    
+    if (processName && processNames.some(p => p.toLowerCase() === processName.toLowerCase())) {
       matchedTitles.push(dt.job_title)
     }
-    if (product && techNames.some(t => t.toLowerCase() === product.name?.toLowerCase())) {
+    if (productName && techNames.some(t => t.toLowerCase() === productName.toLowerCase())) {
       matchedTitles.push(dt.job_title)
     }
   })
@@ -264,10 +279,14 @@ export async function searchDecisionMakers(
     }
   }
   
-  const campaign = account.campaigns as { workspace_id: string }
+  const campaignData = Array.isArray(account.campaigns) ? account.campaigns[0] : account.campaigns
+  const workspaceId = (campaignData as { workspace_id: string })?.workspace_id
   
   try {
-    await requireWorkspaceMember(campaign.workspace_id)
+    const workspace = await requireWorkspace(user.id)
+    if (workspace.id !== workspaceId) {
+      throw new Error('Access denied')
+    }
   } catch {
     return {
       success: false,
@@ -332,6 +351,7 @@ export async function searchDecisionMakers(
     country: options?.country || company.country || undefined,
     seniorities: options?.seniorities,
     userId: user.id,
+    bookmarkId: null,  // v3 no usa bookmarks
     companyId: company.id,
   }
   
@@ -361,26 +381,26 @@ export async function searchDecisionMakers(
   }
   
   // Enrich contacts
-  const apolloIds = searchResult.people.map(p => p.id)
-  const enrichResult = await enrichMany(apolloIds, {
+  const enrichResult = await enrichMany(searchResult.people, {
     userId: user.id,
+    bookmarkId: null,
     companyId: company.id,
   })
   
   // Save to cache
-  const contactsToSave = enrichResult.enriched.map(person => ({
-    apollo_id: person.id,
+  const contactsToSave = enrichResult.map(person => ({
+    apollo_id: person.apolloId,
     company_id: company.id,
-    name: person.name,
-    first_name: person.firstName,
-    last_name: person.lastName,
-    title: person.title,
-    email: person.email,
-    phone: person.phone,
-    linkedin_url: person.linkedinUrl,
-    photo_url: person.photoUrl,
-    seniority: person.seniority,
-    departments: person.departments,
+    name: person.fullName || `${person.firstName || ''} ${person.lastName || ''}`.trim(),
+    first_name: person.firstName || null,
+    last_name: person.lastName || null,
+    title: person.title || null,
+    email: person.email || null,
+    phone: person.mobilePhone || person.corporatePhone || null,
+    linkedin_url: person.linkedinUrl || null,
+    photo_url: person.photoUrl || null,
+    seniority: person.seniority || null,
+    departments: person.departments || null,
     enriched_at: new Date().toISOString(),
   }))
   
@@ -407,10 +427,10 @@ export async function searchDecisionMakers(
     accountId: campaignAccountId,
     companyId: company.id,
     companyName: company.name,
-    contacts: enrichResult.enriched.map(mapEnrichedPerson),
+    contacts: enrichResult.map(mapEnrichedPerson),
     stats: {
       totalFound: searchResult.totalEntries,
-      enriched: enrichResult.enriched.length,
+      enriched: enrichResult.length,
       saved: contactsToSave.length,
       fromCache: false,
     },
@@ -443,18 +463,18 @@ export async function getCachedContacts(
 
 function mapEnrichedPerson(person: EnrichedPerson): ApolloContact {
   return {
-    id: person.id,
-    apolloId: person.id,
-    name: person.name,
-    firstName: person.firstName,
-    lastName: person.lastName,
-    title: person.title,
-    email: person.email,
-    phone: person.phone,
-    linkedinUrl: person.linkedinUrl,
-    photoUrl: person.photoUrl,
-    seniority: person.seniority,
-    departments: person.departments,
+    id: person.apolloId || '',
+    apolloId: person.apolloId || '',
+    name: person.fullName || `${person.firstName || ''} ${person.lastName || ''}`.trim(),
+    firstName: person.firstName || '',
+    lastName: person.lastName || '',
+    title: person.title || '',
+    email: person.email || null,
+    phone: person.mobilePhone || person.corporatePhone || null,
+    linkedinUrl: person.linkedinUrl || null,
+    photoUrl: person.photoUrl || null,
+    seniority: person.seniority || null,
+    departments: person.departments || null,
   }
 }
 

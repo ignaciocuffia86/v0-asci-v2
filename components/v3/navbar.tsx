@@ -21,10 +21,11 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { cn } from "@/lib/utils"
 import { createClient } from "@/lib/supabase/client"
 import { useRouter } from "next/navigation"
+import type { User } from "@supabase/supabase-js"
 
 interface V3NavbarProps {
-  user: {
-    email: string
+  user: User | {
+    email?: string | null
     user_metadata?: {
       full_name?: string
     }

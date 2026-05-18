@@ -34,12 +34,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(
       mcpResponse({
         company_id: companyId,
-        contacts: contacts.map(c => ({
-          id: c.id,
-          name: c.name,
+        contacts: contacts.map((c: any) => ({
+          id: c.id || c.apolloId,
+          name: c.name || `${c.firstName || ''} ${c.lastName || ''}`.trim(),
           title: c.title,
           email: c.email,
-          linkedin_url: c.linkedin_url,
+          linkedin_url: c.linkedinUrl,
           phone: c.phone,
           seniority: c.seniority,
           departments: c.departments

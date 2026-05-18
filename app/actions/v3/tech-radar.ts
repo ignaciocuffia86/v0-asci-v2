@@ -143,7 +143,7 @@ export async function runTechRadarForAccount(
       .schema('v3')
       .from('workspace_value_profiles')
       .select('target_technologies, target_processes')
-      .eq('workspace_id', campaign.workspace_id)
+      .eq('workspace_id', workspaceId)
       .single()
     
     // Extract keywords from value profile

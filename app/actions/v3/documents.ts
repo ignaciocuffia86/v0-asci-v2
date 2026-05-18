@@ -245,12 +245,13 @@ export async function deleteWorkspaceDocument(documentId: string): Promise<{
 }> {
   const supabase = await createClient()
   
-  const canEdit = await requireWorkspaceEditor()
-  if (!canEdit.success) {
-    return { success: false, error: canEdit.error || "Sin permisos" }
+  let workspace
+  try {
+    workspace = await requireWorkspaceEditor()
+  } catch {
+    return { success: false, error: "Sin permisos" }
   }
 
-  const workspace = await getCurrentWorkspace()
   if (!workspace) {
     return { success: false, error: "No hay workspace activo" }
   }

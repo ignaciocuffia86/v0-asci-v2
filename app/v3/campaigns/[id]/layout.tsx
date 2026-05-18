@@ -21,10 +21,10 @@ export default async function CampaignLayout({
   }
   
   // Obtener campanas del workspace
-  const { campaigns } = await getCampaigns()
+  const campaigns = await getCampaigns()
   
   // Verificar que la campana existe
-  const currentCampaign = campaigns?.find(c => c.id === campaignId)
+  const currentCampaign = campaigns?.find((c: any) => c.id === campaignId)
   if (!currentCampaign) {
     redirect("/v3/campaigns")
   }

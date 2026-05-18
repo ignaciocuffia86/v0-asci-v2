@@ -90,9 +90,9 @@ export async function POST(req: NextRequest) {
       mcpResponse({
         campaign_account_id,
         company_name: (account.companies as any)?.name,
-        findings_count: result.findingsCount,
-        news_count: result.newsCount,
-        message: "Tech Radar completed successfully"
+        findings_count: result.findings?.length || 0,
+        success: result.success,
+        message: result.success ? "Tech Radar completed successfully" : (result.error || "Tech Radar failed")
       }, requestId)
     )
   } catch (error) {

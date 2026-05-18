@@ -72,11 +72,14 @@ export async function GET(req: NextRequest) {
     }
     
     // Generate digest
-    const digest = await generateAccountDigest(
-      campaignAccountId,
-      account.company_id,
-      auth.workspaceId!
-    )
+    const digest = await generateAccountDigest(campaignAccountId)
+    
+    if (!digest) {
+      return NextResponse.json(
+        mcpError("NOT_FOUND", "Could not generate digest", requestId),
+        { status: 404 }
+      )
+    }
     
     // Log the request
     const responseTime = Date.now() - startTime
@@ -97,8 +100,7 @@ export async function GET(req: NextRequest) {
           implementations: digest.implementations,
           signals: digest.signals,
           contacts: digest.contacts,
-          recommended_job_titles: digest.recommendedJobTitles,
-          stats: digest.stats
+          recommended_job_titles: digest.recommended_job_titles,
         }
       }, requestId)
     )
