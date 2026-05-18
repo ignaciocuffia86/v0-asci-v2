@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { useRouter } from "next/navigation"
 import { format, formatDistanceToNow } from "date-fns"
 import { es } from "date-fns/locale"
 import { 
@@ -30,6 +31,7 @@ import { Separator } from "@/components/ui/separator"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { cn } from "@/lib/utils"
 import type { CampaignAccountDigest } from "@/lib/v3/digest"
+import { ProspectionActions } from "./prospection-actions"
 
 interface Company {
   id: string
@@ -62,6 +64,7 @@ interface DigestViewProps {
 }
 
 export function DigestView({ campaignAccount, digest, campaignId }: DigestViewProps) {
+  const router = useRouter()
   const [newsOpen, setNewsOpen] = useState(true)
   const [techOpen, setTechOpen] = useState(true)
   const [contactsOpen, setContactsOpen] = useState(true)
@@ -76,11 +79,16 @@ export function DigestView({ campaignAccount, digest, campaignId }: DigestViewPr
   const handleRefreshDigest = async () => {
     setRefreshing(true)
     try {
-      // TODO: Implement refresh digest action
-      await new Promise(resolve => setTimeout(resolve, 1500))
+      // Refresh the page to reload data
+      router.refresh()
+      await new Promise(resolve => setTimeout(resolve, 500))
     } finally {
       setRefreshing(false)
     }
+  }
+  
+  const handleDataRefresh = () => {
+    router.refresh()
   }
   
   return (
@@ -158,6 +166,16 @@ export function DigestView({ campaignAccount, digest, campaignId }: DigestViewPr
         
         {/* Actions */}
         <div className="flex items-center gap-2">
+          {company && (
+            <ProspectionActions
+              campaignAccountId={campaignAccount.id}
+              companyName={company.name}
+              companyId={company.id}
+              techRadarRunAt={campaignAccount.tech_radar_run_at}
+              apolloRunAt={campaignAccount.apollo_run_at}
+              onDataRefresh={handleDataRefresh}
+            />
+          )}
           <Button 
             variant="outline" 
             size="sm" 
@@ -244,16 +262,16 @@ export function DigestView({ campaignAccount, digest, campaignId }: DigestViewPr
                 Ejecuta Tech Radar y Apollo para obtener informacion de esta empresa
               </p>
             </div>
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm">
-                <Cpu className="mr-2 size-4" />
-                Ejecutar Tech Radar
-              </Button>
-              <Button variant="outline" size="sm">
-                <Users className="mr-2 size-4" />
-                Buscar DMs en Apollo
-              </Button>
-            </div>
+            {company && (
+              <ProspectionActions
+                campaignAccountId={campaignAccount.id}
+                companyName={company.name}
+                companyId={company.id}
+                techRadarRunAt={campaignAccount.tech_radar_run_at}
+                apolloRunAt={campaignAccount.apollo_run_at}
+                onDataRefresh={handleDataRefresh}
+              />
+            )}
           </CardContent>
         </Card>
       )}
