@@ -73,6 +73,8 @@ export function domainToWorkspaceName(domain: string): string {
 export async function getWorkspaceForUser(userId: string): Promise<WorkspaceWithMember | null> {
   const supabase = await createClient()
   
+  console.log("[v0] getWorkspaceForUser - userId:", userId)
+  
   const { data, error } = await supabase
     .schema("v3")
     .from("workspace_members")
@@ -83,6 +85,8 @@ export async function getWorkspaceForUser(userId: string): Promise<WorkspaceWith
     .eq("user_id", userId)
     .eq("status", "active")
     .single()
+  
+  console.log("[v0] getWorkspaceForUser - data:", data, "error:", error)
   
   if (error || !data) {
     return null

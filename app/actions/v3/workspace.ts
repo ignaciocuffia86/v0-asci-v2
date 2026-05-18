@@ -48,14 +48,19 @@ export type OnboardingStatus =
 export async function getOnboardingStatus(): Promise<OnboardingStatus> {
   const user = await getCurrentUser()
   
+  console.log("[v0] getOnboardingStatus - user:", user.id, user.email)
+  
   if (!user.email) {
     throw new Error("El usuario no tiene email")
   }
   
   // 1. Verificar si ya tiene workspace activo
   const activeWorkspace = await getWorkspaceForUser(user.id)
+  console.log("[v0] getOnboardingStatus - activeWorkspace:", activeWorkspace)
+  
   if (activeWorkspace) {
     const hasDocuments = await workspaceHasDocuments(activeWorkspace.id)
+    console.log("[v0] getOnboardingStatus - returning active_member")
     return {
       status: "active_member",
       workspace: activeWorkspace,
@@ -66,6 +71,7 @@ export async function getOnboardingStatus(): Promise<OnboardingStatus> {
   // 2. Verificar si existe workspace para su dominio
   const domain = extractDomain(user.email)
   const existingWorkspace = await getWorkspaceByDomain(domain)
+  console.log("[v0] getOnboardingStatus - domain:", domain, "existingWorkspace:", existingWorkspace)
   
   if (existingWorkspace) {
     // Verificar si tiene solicitud pendiente
