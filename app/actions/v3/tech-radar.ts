@@ -3,7 +3,7 @@
 import { createClient } from "@/lib/supabase/server"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { runTechRadar as runTechRadarCore, type TechRadarRunResult } from "@/lib/tech-radar"
-import { requireWorkspaceMember, getWorkspaceContext } from "@/lib/v3/workspace"
+import { requireWorkspace, getWorkspaceContext } from "@/lib/v3/workspace"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -88,9 +88,13 @@ export async function runTechRadarForAccount(
   }
   
   // Verify user has access to this workspace
-  const campaign = account.campaigns as { id: string; workspace_id: string; type: string }
+  const campaignData = Array.isArray(account.campaigns) ? account.campaigns[0] : account.campaigns
+  const workspaceId = (campaignData as { workspace_id: string })?.workspace_id
   try {
-    await requireWorkspaceMember(campaign.workspace_id)
+    const workspace = await requireWorkspace(user.id)
+    if (workspace.id !== workspaceId) {
+      throw new Error('Access denied')
+    }
   } catch {
     return {
       success: false,

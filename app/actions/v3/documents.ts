@@ -175,12 +175,13 @@ export async function createWorkspaceDocument(params: {
   }
 
   // Require editor or admin role
-  const canEdit = await requireWorkspaceEditor()
-  if (!canEdit.success) {
-    return { data: null, error: canEdit.error || "Sin permisos para subir documentos" }
+  let workspace
+  try {
+    workspace = await requireWorkspaceEditor()
+  } catch {
+    return { data: null, error: "Sin permisos para subir documentos" }
   }
 
-  const workspace = await getCurrentWorkspace()
   if (!workspace) {
     return { data: null, error: "No hay workspace activo" }
   }

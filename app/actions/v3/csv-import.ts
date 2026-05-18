@@ -3,7 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { revalidatePath } from "next/cache";
-import { getCurrentWorkspace, requireWorkspaceEditor } from "./workspace";
+import { getCurrentWorkspace, requireWorkspaceEditor } from "@/lib/v3/workspace";
 import { addAccountToCampaign } from "./campaigns";
 
 // Types

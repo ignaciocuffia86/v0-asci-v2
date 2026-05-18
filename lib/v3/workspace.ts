@@ -407,3 +407,81 @@ export async function workspaceHasDocuments(workspaceId: string): Promise<boolea
   
   return (count ?? 0) > 0
 }
+
+/**
+ * Obtiene el workspace del usuario actual (usa auth session)
+ * Convenience wrapper para usar en server components sin pasar userId
+ */
+export async function getCurrentWorkspace(userId?: string): Promise<WorkspaceWithMember | null> {
+  const supabase = await createClient()
+  
+  let uid = userId
+  if (!uid) {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return null
+    uid = user.id
+  }
+  
+  return getWorkspaceForUser(uid)
+}
+
+/**
+ * Requiere que el usuario tenga rol de editor o admin
+ * Shorthand para requireWorkspaceRole con roles de escritura
+ */
+export async function requireWorkspaceEditor(userId?: string): Promise<WorkspaceWithMember> {
+  const supabase = await createClient()
+  let uid = userId
+  if (!uid) {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) throw new Error("NOT_AUTHENTICATED")
+    uid = user.id
+  }
+  return requireWorkspaceRole(uid, ['admin', 'editor'])
+}
+
+/**
+ * Requiere que el usuario sea admin del workspace
+ */
+export async function requireWorkspaceAdmin(userId?: string): Promise<WorkspaceWithMember> {
+  const supabase = await createClient()
+  let uid = userId
+  if (!uid) {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) throw new Error("NOT_AUTHENTICATED")
+    uid = user.id
+  }
+  return requireWorkspaceRole(uid, ['admin'])
+}
+
+/**
+ * Obtiene el contexto completo del workspace para un usuario
+ * Incluye workspace, member, y si tiene documentos
+ */
+export async function getWorkspaceContext(userId?: string): Promise<{
+  workspace: WorkspaceWithMember | null
+  hasDocuments: boolean
+  isOnboarded: boolean
+}> {
+  const supabase = await createClient()
+  let uid = userId
+  if (!uid) {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return { workspace: null, hasDocuments: false, isOnboarded: false }
+    uid = user.id
+  }
+  
+  const workspace = await getWorkspaceForUser(uid)
+  
+  if (!workspace) {
+    return { workspace: null, hasDocuments: false, isOnboarded: false }
+  }
+  
+  const hasDocuments = await workspaceHasDocuments(workspace.id)
+  
+  return {
+    workspace,
+    hasDocuments,
+    isOnboarded: hasDocuments,
+  }
+}

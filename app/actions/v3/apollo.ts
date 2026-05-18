@@ -2,7 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server"
 import { createAdminClient } from "@/lib/supabase/admin"
-import { requireWorkspaceMember } from "@/lib/v3/workspace"
+import { requireWorkspace } from "@/lib/v3/workspace"
 import { searchPeople, type SearchPeopleOpts } from "@/lib/apollo/search"
 import { enrichMany, type EnrichedPerson } from "@/lib/apollo/enrich"
 import { inferJobTitles } from "@/app/actions/apollo"
@@ -83,14 +83,21 @@ export async function getRecommendedJobTitles(
     return { titles: [], reasoning: 'Account not found' }
   }
   
-  const campaign = account.campaigns as { workspace_id: string; buyer_persona_id: string | null }
+  // Extract campaign data safely
+  const campaignData = Array.isArray(account.campaigns) ? account.campaigns[0] : account.campaigns
+  const workspaceId = campaignData?.workspace_id as string
+  const buyerPersonaId = campaignData?.buyer_persona_id as string | null
+  
+  if (!workspaceId) {
+    return { titles: [], reasoning: 'Workspace not found' }
+  }
   
   // Get workspace value profile
   const { data: valueProfile } = await admin
     .schema('v3')
     .from('workspace_value_profiles')
     .select('profile_summary, target_technologies, target_processes')
-    .eq('workspace_id', campaign.workspace_id)
+    .eq('workspace_id', workspaceId)
     .single()
   
   // Get company signals from v2 cache
