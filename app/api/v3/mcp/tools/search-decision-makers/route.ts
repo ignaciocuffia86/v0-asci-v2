@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { validateMcpRequest, logMcpRequest, mcpResponse, mcpError } from "@/lib/v3/mcp-auth"
 import { createAdminClient } from "@/lib/supabase/admin"
-import { searchDecisionMakersForAccount } from "@/app/actions/v3/apollo"
+import { searchDecisionMakers } from "@/app/actions/v3/apollo"
 
 export async function POST(req: NextRequest) {
   const startTime = Date.now()
@@ -73,7 +73,7 @@ export async function POST(req: NextRequest) {
     }
     
     // Run Apollo search
-    const result = await searchDecisionMakersForAccount(campaign_account_id, job_titles)
+    const result = await searchDecisionMakers(campaign_account_id, job_titles)
     
     // Log the request
     const responseTime = Date.now() - startTime

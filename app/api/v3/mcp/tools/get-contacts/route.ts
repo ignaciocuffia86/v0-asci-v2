@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { validateMcpRequest, logMcpRequest, mcpResponse, mcpError } from "@/lib/v3/mcp-auth"
-import { getCompanyContacts } from "@/lib/v3/cache-reader"
+import { getCompanyCachedContacts } from "@/lib/v3/cache-reader"
 
 export async function GET(req: NextRequest) {
   const startTime = Date.now()
@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
   }
   
   try {
-    const contacts = await getCompanyContacts(companyId)
+    const contacts = await getCompanyCachedContacts(companyId)
     
     // Log the request
     const responseTime = Date.now() - startTime
