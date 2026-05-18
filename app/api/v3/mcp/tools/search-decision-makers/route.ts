@@ -1,0 +1,115 @@
+import { NextRequest, NextResponse } from "next/server"
+import { validateMcpRequest, logMcpRequest, mcpResponse, mcpError } from "@/lib/v3/mcp-auth"
+import { createAdminClient } from "@/lib/supabase/admin"
+import { searchDecisionMakersForAccount } from "@/app/actions/v3/apollo"
+
+export async function POST(req: NextRequest) {
+  const startTime = Date.now()
+  const requestId = crypto.randomUUID()
+  
+  // Validate API key
+  const auth = await validateMcpRequest(req)
+  if (!auth.success) {
+    return NextResponse.json(
+      mcpError(auth.error!.code, auth.error!.message, requestId),
+      { status: auth.error!.status }
+    )
+  }
+  
+  try {
+    const body = await req.json()
+    const { campaign_account_id, job_titles } = body
+    
+    if (!campaign_account_id) {
+      return NextResponse.json(
+        mcpError("MISSING_PARAMETER", "campaign_account_id is required", requestId),
+        { status: 400 }
+      )
+    }
+    
+    if (!job_titles || !Array.isArray(job_titles) || job_titles.length === 0) {
+      return NextResponse.json(
+        mcpError("MISSING_PARAMETER", "job_titles array is required", requestId),
+        { status: 400 }
+      )
+    }
+    
+    const admin = createAdminClient()
+    
+    // Verify access to this account
+    const { data: account } = await admin
+      .from("v3_campaign_accounts")
+      .select(`
+        id,
+        v3_campaigns!inner (
+          workspace_id,
+          type
+        )
+      `)
+      .eq("id", campaign_account_id)
+      .single()
+      
+    if (!account) {
+      return NextResponse.json(
+        mcpError("NOT_FOUND", "Campaign account not found", requestId),
+        { status: 404 }
+      )
+    }
+    
+    const campaign = account.v3_campaigns as any
+    if (campaign.workspace_id !== auth.workspaceId) {
+      return NextResponse.json(
+        mcpError("ACCESS_DENIED", "Access denied to this account", requestId),
+        { status: 403 }
+      )
+    }
+    
+    // Check campaign type allows Apollo
+    if (campaign.type === "monitorear") {
+      return NextResponse.json(
+        mcpError("FEATURE_DISABLED", "Apollo search is not available for monitoring campaigns", requestId),
+        { status: 400 }
+      )
+    }
+    
+    // Run Apollo search
+    const result = await searchDecisionMakersForAccount(campaign_account_id, job_titles)
+    
+    // Log the request
+    const responseTime = Date.now() - startTime
+    await logMcpRequest(auth.keyId!, "/api/v3/mcp/tools/search-decision-makers", "POST", result.success ? 200 : 500, responseTime)
+    
+    if (!result.success) {
+      return NextResponse.json(
+        mcpError("APOLLO_SEARCH_FAILED", result.error || "Apollo search failed", requestId),
+        { status: 500 }
+      )
+    }
+    
+    return NextResponse.json(
+      mcpResponse({
+        campaign_account_id,
+        job_titles_searched: job_titles,
+        contacts_found: result.contacts?.length || 0,
+        contacts: result.contacts?.map(c => ({
+          id: c.id,
+          name: c.name,
+          title: c.title,
+          email: c.email,
+          linkedin_url: c.linkedin_url,
+          seniority: c.seniority
+        }))
+      }, requestId)
+    )
+  } catch (error) {
+    console.error("MCP search-decision-makers error:", error)
+    
+    const responseTime = Date.now() - startTime
+    await logMcpRequest(auth.keyId!, "/api/v3/mcp/tools/search-decision-makers", "POST", 500, responseTime)
+    
+    return NextResponse.json(
+      mcpError("INTERNAL_ERROR", "Failed to search decision makers", requestId),
+      { status: 500 }
+    )
+  }
+}
