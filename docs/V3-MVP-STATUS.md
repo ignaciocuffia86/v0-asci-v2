@@ -1,7 +1,7 @@
 # V3 MVP - Status de Implementacion
 
 **Ultima actualizacion:** 2025-05-18
-**Build Status:** Compila (errores de v2 por PARALLEL_API_KEY no afectan v3)
+**Build Status:** 0 errores de tipos en archivos de v3. Build falla por error de v2 (PARALLEL_API_KEY en `/api/research/implementations`) que no afecta a v3.
 
 ---
 
@@ -167,8 +167,31 @@
 2. **Invite Member** - Muestra toast "en desarrollo" (falta action)
 
 ### Menores
-1. **Types** - Algunos errores de TypeScript en archivos de v3 (no bloquean build)
-2. **Date formatting** - Algunas fechas no tienen locale en espanol
+1. **Date formatting** - Algunas fechas no tienen locale en espanol
+
+---
+
+## Type Casts y Placeholders (Deuda Tecnica)
+
+Los siguientes archivos usan `as any` o `as unknown as` para evitar errores de tipos.
+Deben ser corregidos con tipos correctos en iteraciones futuras:
+
+| Archivo | Linea | Descripcion |
+|---------|-------|-------------|
+| `app/v3/campaigns/[id]/_components/account-list-sidebar.tsx` | 55 | `result as unknown as Account[]` - El tipo `CampaignAccount[]` no coincide con `Account[]` local |
+| `app/v3/campaigns/[id]/accounts/[accountId]/page.tsx` | 55 | `campaignAccount as any` - El tipo devuelto por la query no coincide con `DigestViewProps` |
+| `app/v3/settings/workspace/page.tsx` | 27 | `members as any` - El tipo devuelto por `getWorkspaceMembers` no coincide |
+| `app/api/v3/mcp/tools/get-account-digest/route.ts` | 66 | `account.v3_campaigns as any` - Relacion de Supabase no tipada |
+| `app/api/v3/mcp/tools/run-tech-radar/route.ts` | 59, 92 | `v3_campaigns as any`, `companies as any` |
+| `app/api/v3/mcp/tools/search-decision-makers/route.ts` | 59 | `v3_campaigns as any` |
+| `app/api/v3/mcp/tools/get-recommended-job-titles/route.ts` | 54, 72 | `v3_campaigns as any`, `companies as any` |
+| `lib/v3/digest.ts` | 74-75, 255, 259 | `campaigns as any`, `target_processes as any[]` |
+| `lib/v3/mcp-auth.ts` | 125 | `keyData as any` - request_count no tipado |
+
+### Para corregir estos tipos:
+1. Crear tipos en `lib/v3/types.ts` que reflejen exactamente el schema de Supabase v3
+2. Generar tipos con `supabase gen types` para el schema v3
+3. Usar los tipos generados en las queries y componentes
 
 ---
 

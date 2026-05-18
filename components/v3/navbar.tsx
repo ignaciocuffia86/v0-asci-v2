@@ -46,8 +46,8 @@ export function V3Navbar({ user, workspace }: V3NavbarProps) {
   }
   
   const initials = user.user_metadata?.full_name
-    ? user.user_metadata.full_name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2)
-    : user.email.slice(0, 2).toUpperCase()
+    ? user.user_metadata.full_name.split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2)
+    : (user.email || "U").slice(0, 2).toUpperCase()
   
   const navItems = [
     { href: "/v3/campaigns", label: "Campanas", icon: Building2 },

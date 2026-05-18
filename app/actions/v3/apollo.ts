@@ -345,10 +345,11 @@ export async function searchDecisionMakers(
   
   // Search in Apollo
   const searchOpts: SearchPeopleOpts = {
-    domain: company.domain || undefined,
+    organizationId: null,
+    domain: company.domain || null,
     jobTitles: sanitized.accepted,
     maxResults: options?.maxResults || 20,
-    country: options?.country || company.country || undefined,
+    country: options?.country || company.country || null,
     seniorities: options?.seniorities,
     userId: user.id,
     bookmarkId: null,  // v3 no usa bookmarks
@@ -396,7 +397,7 @@ export async function searchDecisionMakers(
     last_name: person.lastName || null,
     title: person.title || null,
     email: person.email || null,
-    phone: person.mobilePhone || person.corporatePhone || null,
+    phone: person.mobilePhone || null,
     linkedin_url: person.linkedinUrl || null,
     photo_url: person.photoUrl || null,
     seniority: person.seniority || null,
@@ -470,7 +471,7 @@ function mapEnrichedPerson(person: EnrichedPerson): ApolloContact {
     lastName: person.lastName || '',
     title: person.title || '',
     email: person.email || null,
-    phone: person.mobilePhone || person.corporatePhone || null,
+    phone: person.mobilePhone || null,
     linkedinUrl: person.linkedinUrl || null,
     photoUrl: person.photoUrl || null,
     seniority: person.seniority || null,

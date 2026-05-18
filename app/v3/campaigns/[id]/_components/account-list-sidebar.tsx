@@ -52,7 +52,7 @@ export function AccountListSidebar({ campaignId }: AccountListSidebarProps) {
       try {
         const result = await getCampaignAccounts(campaignId)
         if (Array.isArray(result)) {
-          setAccounts(result)
+          setAccounts(result as unknown as Account[])
         }
         // TODO: Check for pending imports
       } catch (error) {

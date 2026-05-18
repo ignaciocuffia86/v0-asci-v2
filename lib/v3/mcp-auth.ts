@@ -145,7 +145,8 @@ export async function logMcpRequest(
 ): Promise<void> {
   const admin = createAdminClient()
   
-  await admin
+  // Fire and forget - no await needed for logging
+  admin
     .from("v3_mcp_request_logs")
     .insert({
       api_key_id: keyId,
@@ -154,8 +155,7 @@ export async function logMcpRequest(
       status_code: statusCode,
       response_time_ms: responseTimeMs
     })
-    .then(() => {})
-    .catch((err: Error) => console.error("Error logging MCP request:", err))
+    .then(() => {}, (err: Error) => console.error("Error logging MCP request:", err))
 }
 
 /**
