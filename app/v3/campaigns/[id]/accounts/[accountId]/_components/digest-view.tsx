@@ -57,17 +57,36 @@ interface CampaignAccount {
   companies: Company | null
 }
 
+interface V2Signal {
+  id: string
+  title: string
+  content: string | null
+  signal_type: string
+  created_at: string
+}
+
+interface V2News {
+  id: string
+  title: string
+  summary: string | null
+  source_url: string | null
+  published_at: string | null
+}
+
 interface DigestViewProps {
   campaignAccount: CampaignAccount
   digest: CampaignAccountDigest | null
   campaignId: string
+  v2Signals?: V2Signal[]
+  v2News?: V2News[]
 }
 
-export function DigestView({ campaignAccount, digest, campaignId }: DigestViewProps) {
+export function DigestView({ campaignAccount, digest, campaignId, v2Signals = [], v2News = [] }: DigestViewProps) {
   const router = useRouter()
   const [newsOpen, setNewsOpen] = useState(true)
   const [techOpen, setTechOpen] = useState(true)
   const [contactsOpen, setContactsOpen] = useState(true)
+  const [signalsOpen, setSignalsOpen] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   
   const company = campaignAccount.companies
@@ -75,6 +94,31 @@ export function DigestView({ campaignAccount, digest, campaignId }: DigestViewPr
   const implementations = digest?.implementations || []
   const contacts = digest?.contacts || []
   const signals = digest?.signals || []
+  
+  // Combinar noticias de v3 digest y v2
+  const allNews = [...news, ...v2News.map(n => ({
+    id: n.id,
+    title: n.title,
+    summary: n.summary,
+    source_url: n.source_url,
+    published_at: n.published_at,
+    source_name: null,
+    sentiment: null
+  }))].sort((a, b) => {
+    if (!a.published_at) return 1
+    if (!b.published_at) return -1
+    return new Date(b.published_at).getTime() - new Date(a.published_at).getTime()
+  })
+  
+  // Extraer tipos de señales para el cloud tag
+  const signalTypes = [...new Set(v2Signals.map(s => s.signal_type))].filter(Boolean)
+  
+  // Fecha de última actualización
+  const lastUpdate = [
+    campaignAccount.tech_radar_run_at,
+    campaignAccount.apollo_run_at,
+    ...v2News.map(n => n.published_at).filter(Boolean)
+  ].filter(Boolean).sort().reverse()[0]
   
   const handleRefreshDigest = async () => {
     setRefreshing(true)
@@ -196,6 +240,14 @@ export function DigestView({ campaignAccount, digest, campaignId }: DigestViewPr
         <p className="text-sm text-muted-foreground">{company.description}</p>
       )}
       
+      {/* Last Update Info */}
+      {lastUpdate && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Calendar className="size-3" />
+          <span>Última actualización: {formatDistanceToNow(new Date(lastUpdate), { addSuffix: true, locale: es })}</span>
+        </div>
+      )}
+      
       <Separator />
       
       {/* Stats Bar */}
@@ -206,7 +258,7 @@ export function DigestView({ campaignAccount, digest, campaignId }: DigestViewPr
               <Newspaper className="size-5 text-blue-500" />
             </div>
             <div>
-              <p className="text-2xl font-bold">{news.length}</p>
+              <p className="text-2xl font-bold">{allNews.length}</p>
               <p className="text-xs text-muted-foreground">Noticias</p>
             </div>
           </CardContent>
@@ -219,7 +271,7 @@ export function DigestView({ campaignAccount, digest, campaignId }: DigestViewPr
             </div>
             <div>
               <p className="text-2xl font-bold">{implementations.length}</p>
-              <p className="text-xs text-muted-foreground">Tecnologias</p>
+              <p className="text-xs text-muted-foreground">Tecnologías</p>
             </div>
           </CardContent>
         </Card>
@@ -227,7 +279,7 @@ export function DigestView({ campaignAccount, digest, campaignId }: DigestViewPr
         <Card>
           <CardContent className="flex items-center gap-3 p-4">
             <div className="rounded-lg bg-green-500/10 p-2">
-              <Sparkles className="size-5 text-green-500" />
+              <Users className="size-5 text-green-500" />
             </div>
             <div>
               <p className="text-2xl font-bold">{contacts.length}</p>
@@ -242,42 +294,51 @@ export function DigestView({ campaignAccount, digest, campaignId }: DigestViewPr
               <TrendingUp className="size-5 text-amber-500" />
             </div>
             <div>
-              <p className="text-2xl font-bold">{signals.length}</p>
-              <p className="text-xs text-muted-foreground">Senales</p>
+              <p className="text-2xl font-bold">{v2Signals.length}</p>
+              <p className="text-xs text-muted-foreground">Señales</p>
             </div>
           </CardContent>
         </Card>
       </div>
       
-      {/* Empty State */}
-      {news.length === 0 && implementations.length === 0 && contacts.length === 0 && (
+      {/* Signal Types Cloud Tag */}
+      {signalTypes.length > 0 && (
         <Card>
-          <CardContent className="flex flex-col items-center justify-center gap-4 py-12">
-            <div className="rounded-full bg-muted p-4">
-              <AlertCircle className="size-8 text-muted-foreground" />
+          <CardHeader className="pb-3">
+            <div className="flex items-center gap-2">
+              <TrendingUp className="size-5 text-amber-500" />
+              <CardTitle className="text-base">Tipos de Señales Detectadas</CardTitle>
             </div>
-            <div className="text-center">
-              <h3 className="font-semibold">Sin datos todavia</h3>
-              <p className="text-sm text-muted-foreground">
-                Ejecuta Tech Radar y Apollo para obtener informacion de esta empresa
-              </p>
-            </div>
-            {company && (
-              <ProspectionActions
-                campaignAccountId={campaignAccount.id}
-                companyName={company.name}
-                companyId={company.id}
-                techRadarRunAt={campaignAccount.tech_radar_run_at}
-                apolloRunAt={campaignAccount.apollo_run_at}
-                onDataRefresh={handleDataRefresh}
-              />
-            )}
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-2">
+            {signalTypes.map((type) => (
+              <Badge key={type} variant="secondary" className="text-sm">
+                {type.replace(/_/g, ' ')}
+              </Badge>
+            ))}
           </CardContent>
         </Card>
       )}
       
-      {/* News Section */}
-      {news.length > 0 && (
+      {/* Empty State - Auto trigger search */}
+      {allNews.length === 0 && implementations.length === 0 && contacts.length === 0 && v2Signals.length === 0 && (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center gap-4 py-12">
+            <div className="rounded-full bg-muted p-4">
+              <Loader2 className="size-8 text-muted-foreground animate-spin" />
+            </div>
+            <div className="text-center">
+              <h3 className="font-semibold">Buscando información</h3>
+              <p className="text-sm text-muted-foreground">
+                Estamos recopilando noticias, tecnologías y señales para {company?.name || "esta empresa"}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+      
+      {/* News Timeline Section */}
+      {allNews.length > 0 && (
         <Collapsible open={newsOpen} onOpenChange={setNewsOpen}>
           <Card>
             <CollapsibleTrigger asChild>
@@ -285,8 +346,8 @@ export function DigestView({ campaignAccount, digest, campaignId }: DigestViewPr
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Newspaper className="size-5 text-blue-500" />
-                    <CardTitle className="text-base">Noticias</CardTitle>
-                    <Badge variant="secondary">{news.length}</Badge>
+                    <CardTitle className="text-base">Timeline de Noticias</CardTitle>
+                    <Badge variant="secondary">{allNews.length}</Badge>
                   </div>
                   {newsOpen ? (
                     <ChevronDown className="size-5 text-muted-foreground" />
@@ -297,59 +358,55 @@ export function DigestView({ campaignAccount, digest, campaignId }: DigestViewPr
               </CardHeader>
             </CollapsibleTrigger>
             <CollapsibleContent>
-              <CardContent className="grid gap-3 pt-0">
-                {news.slice(0, 10).map((item) => (
-                  <div 
-                    key={item.id} 
-                    className="flex items-start gap-3 rounded-lg border border-border p-3 hover:bg-accent/30"
-                  >
-                    <div className="flex-1 space-y-1">
-                      <a 
-                        href={item.source_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="font-medium hover:underline"
-                      >
-                        {item.title}
-                      </a>
-                      {item.summary && (
-                        <p className="text-sm text-muted-foreground line-clamp-2">
-                          {item.summary}
-                        </p>
-                      )}
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        {item.source_name && <span>{item.source_name}</span>}
-                        {item.published_at && (
-                          <>
-                            <span>·</span>
-                            <span>
-                              {formatDistanceToNow(new Date(item.published_at), { 
-                                addSuffix: true,
-                                locale: es 
-                              })}
-                            </span>
-                          </>
-                        )}
-                        {item.sentiment && (
-                          <>
-                            <span>·</span>
-                            <Badge variant={
-                              item.sentiment === "positive" ? "default" :
-                              item.sentiment === "negative" ? "destructive" : "secondary"
-                            } className="text-xs">
-                              {item.sentiment}
-                            </Badge>
-                          </>
-                        )}
+              <CardContent className="pt-0">
+                <div className="relative border-l-2 border-border pl-6 space-y-6">
+                  {allNews.slice(0, 15).map((item, index) => (
+                    <div key={item.id} className="relative">
+                      {/* Timeline dot */}
+                      <div className="absolute -left-[31px] size-4 rounded-full bg-blue-500 border-2 border-background" />
+                      
+                      <div className="rounded-lg border border-border p-3 hover:bg-accent/30">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex-1 space-y-1">
+                            <a 
+                              href={item.source_url || '#'}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="font-medium hover:underline"
+                            >
+                              {item.title}
+                            </a>
+                            {item.summary && (
+                              <p className="text-sm text-muted-foreground line-clamp-2">
+                                {item.summary}
+                              </p>
+                            )}
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                              {item.published_at && (
+                                <span>
+                                  {format(new Date(item.published_at), "d MMM yyyy", { locale: es })}
+                                </span>
+                              )}
+                              {item.source_name && (
+                                <>
+                                  <span>·</span>
+                                  <span>{item.source_name}</span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                          {item.source_url && (
+                            <Button variant="ghost" size="icon" className="shrink-0" asChild>
+                              <a href={item.source_url} target="_blank" rel="noopener noreferrer">
+                                <ExternalLink className="size-4" />
+                              </a>
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     </div>
-                    <Button variant="ghost" size="icon" className="shrink-0" asChild>
-                      <a href={item.source_url} target="_blank" rel="noopener noreferrer">
-                        <ExternalLink className="size-4" />
-                      </a>
-                    </Button>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </CardContent>
             </CollapsibleContent>
           </Card>
