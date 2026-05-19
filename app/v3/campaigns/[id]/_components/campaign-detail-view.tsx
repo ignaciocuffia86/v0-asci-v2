@@ -102,18 +102,12 @@ export function CampaignDetailView({
     const addParam = searchParams.get("add");
     const importParam = searchParams.get("import");
     
-    console.log("[v0] CampaignDetailView useEffect - addParam:", addParam, "importParam:", importParam)
-    
     if (addParam === "true") {
-      console.log("[v0] Opening add dialog from URL param")
       setAddDialogOpen(true);
-      // Clean up URL
       router.replace(`/v3/campaigns/${campaign.id}`, { scroll: false });
     }
     if (importParam === "true") {
-      console.log("[v0] Opening import dialog from URL param")
       setCsvDialogOpen(true);
-      // Clean up URL
       router.replace(`/v3/campaigns/${campaign.id}`, { scroll: false });
     }
   }, [searchParams, campaign.id, router]);

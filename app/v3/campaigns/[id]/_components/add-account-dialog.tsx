@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Search, Building2, Globe, Loader2 } from "lucide-react";
 import { searchCompanies, addAccountToCampaign } from "@/app/actions/v3/campaigns";
 import { useDebouncedCallback } from "use-debounce";
+import Image from "next/image";
 
 interface AddAccountDialogProps {
   open: boolean;
@@ -27,6 +28,7 @@ interface SearchResult {
   name: string;
   domain: string | null;
   industry: string | null;
+  logo_url: string | null;
 }
 
 export function AddAccountDialog({
@@ -116,9 +118,19 @@ export function AddAccountDialog({
                     className="flex items-center justify-between p-3 rounded-lg hover:bg-muted transition-colors"
                   >
                     <div className="flex items-center gap-3">
-                      <div className="rounded-lg bg-muted p-2">
-                        <Building2 className="size-4 text-muted-foreground" />
-                      </div>
+                      {company.logo_url ? (
+                        <Image
+                          src={company.logo_url}
+                          alt={company.name}
+                          width={32}
+                          height={32}
+                          className="rounded-lg object-contain bg-white"
+                        />
+                      ) : (
+                        <div className="rounded-lg bg-muted p-2">
+                          <Building2 className="size-4 text-muted-foreground" />
+                        </div>
+                      )}
                       <div>
                         <div className="font-medium">{company.name}</div>
                         <div className="flex items-center gap-2 text-sm text-muted-foreground">

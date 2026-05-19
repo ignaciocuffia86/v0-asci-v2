@@ -45,6 +45,7 @@ export interface CampaignAccount {
     domain: string | null;
     linkedin_url: string | null;
     industry: string | null;
+    logo_url: string | null;
   };
 }
 
@@ -256,11 +257,18 @@ export async function getCampaignAccounts(campaignId: string): Promise<CampaignA
 
   const { data: companies } = await adminClient
     .from("companies")
-    .select("id, name, domain, linkedin_url, industry")
+    .select("id, name, website, linkedin_url, industry, logo_url")
     .in("id", companyIds);
 
-  // Merge
-  const companiesMap = new Map(companies?.map((c) => [c.id, c]) || []);
+  // Merge - map website to domain for UI consistency
+  const companiesMap = new Map(companies?.map((c) => [c.id, { 
+    id: c.id, 
+    name: c.name, 
+    domain: c.website, 
+    linkedin_url: c.linkedin_url, 
+    industry: c.industry,
+    logo_url: c.logo_url
+  }]) || []);
   return accounts.map((account) => ({
     ...account,
     company: companiesMap.get(account.company_id),
@@ -423,16 +431,18 @@ export async function updateAccountStatus(
 
 export async function searchCompanies(
   query: string
-): Promise<{ id: string; name: string; domain: string | null; industry: string | null }[]> {
+): Promise<{ id: string; name: string; domain: string | null; industry: string | null; logo_url: string | null }[]> {
   if (!query || query.length < 2) return [];
 
   const adminClient = createAdminClient();
 
-  // Buscar por nombre, website o normalized_name (igual que v2)
+  // Buscar por nombre, website o normalized_name
+  // Solo traer compañías con linkedin_url (tienen info normalizada/enriquecida)
   const { data, error } = await adminClient
     .from("companies")
-    .select("id, name, website, industry")
+    .select("id, name, website, industry, logo_url, linkedin_url")
     .or(`name.ilike.%${query}%,website.ilike.%${query}%,normalized_name.ilike.%${query}%`)
+    .not("linkedin_url", "is", null)
     .order("name")
     .limit(20);
 
@@ -441,14 +451,13 @@ export async function searchCompanies(
     return [];
   }
 
-  console.log("[v0] searchCompanies query:", query, "results:", data?.length || 0);
-
   // Map website to domain for consistency with UI
   return (data || []).map(c => ({
     id: c.id,
     name: c.name,
     domain: c.website,
-    industry: c.industry
+    industry: c.industry,
+    logo_url: c.logo_url
   }));
 }
 
