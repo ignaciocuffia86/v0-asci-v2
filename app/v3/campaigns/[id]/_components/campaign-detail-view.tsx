@@ -128,11 +128,15 @@ export function CampaignDetailView({
     if (!deleteDialog.account) return;
     setIsDeleting(true);
 
-    await removeAccountFromCampaign(campaign.id, deleteDialog.account.id);
-    router.refresh();
-
-    setIsDeleting(false);
-    setDeleteDialog({ open: false, account: null });
+    try {
+      await removeAccountFromCampaign(campaign.id, deleteDialog.account.id);
+      router.refresh();
+    } catch (error) {
+      console.error("Error removing account:", error);
+    } finally {
+      setIsDeleting(false);
+      setDeleteDialog({ open: false, account: null });
+    }
   };
 
   const pendingImports = csvImports.filter((i) => i.status === "pending_review");
