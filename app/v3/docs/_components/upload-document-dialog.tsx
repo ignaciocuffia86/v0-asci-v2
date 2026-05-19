@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from "react"
 import { useDropzone } from "react-dropzone"
+import { upload } from "@vercel/blob/client"
 import { createWorkspaceDocument } from "@/app/actions/v3/documents"
 import {
   Dialog,
@@ -64,16 +65,17 @@ export function UploadDocumentDialog({
       const fileExt = file.name.split(".").pop()
       const title = file.name.replace(`.${fileExt}`, "")
       
-      // Convert file to base64 for server action
-      const arrayBuffer = await file.arrayBuffer()
-      const base64 = Buffer.from(arrayBuffer).toString('base64')
+      // Upload to Vercel Blob (client-side, bypasses 4.5MB limit)
+      const blob = await upload(file.name, file, {
+        access: "public",
+        handleUploadUrl: "/api/v3/documents/blob-upload",
+      })
 
-      // Create document via server action (handles auth, workspace, and storage)
+      // Create document record via server action
       const result = await createWorkspaceDocument({
         title,
         type: docType,
-        file_data: base64,
-        file_name: file.name,
+        storage_path: blob.url,
         file_size: file.size,
       })
 

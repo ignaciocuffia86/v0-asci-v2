@@ -163,16 +163,14 @@ export async function getDocumentWithTags(documentId: string): Promise<{
 
 /**
  * Create a document record
- * Storage path format: workspaces/{workspace_id}/{doc_id}/{filename}
+ * Storage is handled by Vercel Blob (client-side upload)
  */
 export async function createWorkspaceDocument(params: {
   title: string
   type: "pdf" | "pptx" | "docx" | "url"
   source_url?: string
-  storage_path?: string
+  storage_path?: string  // Vercel Blob URL
   file_size?: number
-  file_data?: string  // base64 encoded file data
-  file_name?: string  // original file name for storage
 }): Promise<{ data: WorkspaceDocument | null; error: string | null }> {
   const admin = createAdminClient()
   const supabase = await createClient()
@@ -227,34 +225,6 @@ export async function createWorkspaceDocument(params: {
     }
   }
 
-  // Handle file upload if file_data is provided
-  let storagePath = params.storage_path
-  if (params.file_data && params.file_name) {
-    const docId = crypto.randomUUID()
-    const sanitizedName = params.file_name
-      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^a-zA-Z0-9._-]/g, "_")
-      .replace(/_+/g, "_")
-    storagePath = `workspaces/${workspace.id}/${docId}/${sanitizedName}`
-    
-    // Decode base64 and upload to storage
-    const fileBuffer = Buffer.from(params.file_data, 'base64')
-    const { error: storageError } = await admin.storage
-      .from("workspace-documents")
-      .upload(storagePath, fileBuffer, {
-        cacheControl: "3600",
-        upsert: false,
-        contentType: params.type === "pdf" ? "application/pdf" 
-          : params.type === "pptx" ? "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-          : params.type === "docx" ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-          : "application/octet-stream"
-      })
-
-    if (storageError) {
-      return { data: null, error: `Error al subir archivo: ${storageError.message}` }
-    }
-  }
-
   const { data, error } = await admin
     .schema("v3")
     .from("workspace_documents")
@@ -264,7 +234,7 @@ export async function createWorkspaceDocument(params: {
       title: params.title,
       type: params.type,
       source_url: params.source_url || null,
-      storage_path: storagePath || null,
+      storage_path: params.storage_path || null,
       file_size: params.file_size || null,
       status: "processing",
     })
