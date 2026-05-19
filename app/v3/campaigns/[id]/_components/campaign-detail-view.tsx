@@ -25,7 +25,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
-  ArrowLeft,
   Plus,
   Upload,
   Search,
@@ -168,14 +167,22 @@ export function CampaignDetailView({
 
   return (
     <div className="flex flex-col gap-6 p-6">
+      {/* Breadcrumb */}
+      <nav className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Link href="/v3/docs" className="hover:text-foreground transition-colors">
+          Documentos
+        </Link>
+        <span>/</span>
+        <Link href="/v3/campaigns" className="hover:text-foreground transition-colors">
+          Campañas
+        </Link>
+        <span>/</span>
+        <span className="text-foreground font-medium">{campaign.name}</span>
+      </nav>
+
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-start gap-4">
-          <Button variant="ghost" size="icon" asChild>
-            <Link href="/v3/campaigns">
-              <ArrowLeft className="size-4" />
-            </Link>
-          </Button>
           <div>
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-semibold tracking-tight">{campaign.name}</h1>

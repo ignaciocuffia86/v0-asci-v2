@@ -292,40 +292,52 @@ function getDefaultJobTitles(): string[] {
 export async function getCampaignAccountsWithDigest(campaignId: string): Promise<any[]> {
   const adminClient = createAdminClient()
   
-  const { data, error } = await adminClient
-    .from('v3.campaign_accounts')
-    .select(`
-      id,
-      company_id,
-      status,
-      prospection_status,
-      tech_radar_run_at,
-      apollo_run_at,
-      added_at,
-      companies:company_id (
-        id,
-        name,
-        domain,
-        industry,
-        linkedin_url,
-        logo_url
-      ),
-      digest:v3.campaign_account_digest (
-        id,
-        new_items_count,
-        last_user_seen_at,
-        signal_types_matched,
-        contact_ids
-      )
-    `)
+  // Get campaign accounts from v3 schema
+  const { data: accounts, error: accountsError } = await adminClient
+    .schema('v3')
+    .from('campaign_accounts')
+    .select('id, company_id, status, prospection_status, tech_radar_run_at, apollo_run_at, added_at')
     .eq('campaign_id', campaignId)
     .eq('status', 'whitelisted')
     .order('added_at', { ascending: false })
   
-  if (error) {
-    console.error('Error fetching campaign accounts with digest:', error)
+  if (accountsError || !accounts) {
+    console.error('Error fetching campaign accounts:', accountsError)
     return []
   }
   
-  return data || []
+  if (accounts.length === 0) return []
+  
+  // Get company data from public schema
+  const companyIds = accounts.map(a => a.company_id)
+  const { data: companies } = await adminClient
+    .from('companies')
+    .select('id, name, website, industry, linkedin_url, logo_url')
+    .in('id', companyIds)
+  
+  const companiesMap = new Map(companies?.map(c => [c.id, {
+    id: c.id,
+    name: c.name,
+    domain: c.website,
+    industry: c.industry,
+    linkedin_url: c.linkedin_url,
+    logo_url: c.logo_url
+  }]) || [])
+  
+  // Get digest data from v3 schema
+  const accountIds = accounts.map(a => a.id)
+  const { data: digests } = await adminClient
+    .schema('v3')
+    .from('campaign_account_digest')
+    .select('campaign_account_id, id, new_items_count, last_user_seen_at, signal_types_matched, contact_ids')
+    .in('campaign_account_id', accountIds)
+  
+  const digestsMap = new Map(digests?.map(d => [d.campaign_account_id, d]) || [])
+  
+  // Merge all data
+  return accounts.map(account => ({
+    ...account,
+    companies: companiesMap.get(account.company_id) || null,
+    digest: digestsMap.get(account.id) ? [digestsMap.get(account.id)] : null
+  }))
 }

@@ -24,7 +24,7 @@ interface Account {
   company_id: string
   status: string
   prospection_status: string | null
-  companies: {
+  company: {
     id: string
     name: string
     domain: string | null
@@ -147,7 +147,7 @@ export function AccountListSidebar({ campaignId, onAddAccount, onImportCsv, refr
       {/* Account List */}
       <div className="flex flex-col gap-0.5 p-2">
         {accounts.map((account) => {
-          const company = account.companies
+          const company = account.company
           const isActive = currentAccountId === account.id
           const hasNewItems = (account.digest?.new_items_count || 0) > 0
           const hasContacts = (account.digest?.contact_ids?.length || 0) > 0
