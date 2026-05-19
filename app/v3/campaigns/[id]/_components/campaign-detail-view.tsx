@@ -2,19 +2,12 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -42,7 +35,10 @@ import {
   Sparkles,
   Building2,
   Globe,
-  ExternalLink,
+  Users,
+  TrendingUp,
+  ChevronRight,
+  Cpu,
 } from "lucide-react";
 import {
   type Campaign,
@@ -52,10 +48,37 @@ import {
 import { type CsvImport } from "@/app/actions/v3/csv-import";
 import { AddAccountDialog } from "./add-account-dialog";
 import { CsvImportDialog } from "./csv-import-dialog";
+import { cn } from "@/lib/utils";
+
+interface AccountWithDigest {
+  id: string;
+  company_id: string;
+  status: string;
+  prospection_status: string | null;
+  tech_radar_run_at: string | null;
+  apollo_run_at: string | null;
+  added_at: string;
+  companies: {
+    id: string;
+    name: string;
+    domain: string | null;
+    industry: string | null;
+    linkedin_url: string | null;
+    logo_url: string | null;
+  } | null;
+  digest: {
+    id: string;
+    new_items_count: number;
+    last_user_seen_at: string | null;
+    signal_types_matched: string[];
+    contact_ids: string[];
+  }[] | null;
+}
 
 interface CampaignDetailViewProps {
   campaign: Campaign;
   accounts: CampaignAccount[];
+  accountsWithDigest: AccountWithDigest[];
   csvImports: CsvImport[];
   initialAddDialogOpen?: boolean;
   initialImportDialogOpen?: boolean;
@@ -68,7 +91,7 @@ const CAMPAIGN_TYPE_CONFIG = {
     color: "bg-blue-500/10 text-blue-500",
   },
   prospectar: {
-    label: "Prospeccion",
+    label: "Prospección",
     icon: Search,
     color: "bg-green-500/10 text-green-500",
   },
@@ -82,6 +105,7 @@ const CAMPAIGN_TYPE_CONFIG = {
 export function CampaignDetailView({
   campaign,
   accounts,
+  accountsWithDigest,
   csvImports,
   initialAddDialogOpen = false,
   initialImportDialogOpen = false,
@@ -115,12 +139,12 @@ export function CampaignDetailView({
   const config = CAMPAIGN_TYPE_CONFIG[campaign.type];
   const Icon = config.icon;
 
-  const filteredAccounts = accounts.filter((account) => {
+  const filteredAccounts = accountsWithDigest.filter((account) => {
     if (!searchQuery) return true;
     const query = searchQuery.toLowerCase();
     return (
-      account.company?.name?.toLowerCase().includes(query) ||
-      account.company?.domain?.toLowerCase().includes(query)
+      account.companies?.name?.toLowerCase().includes(query) ||
+      account.companies?.domain?.toLowerCase().includes(query)
     );
   });
 
@@ -140,6 +164,7 @@ export function CampaignDetailView({
   };
 
   const pendingImports = csvImports.filter((i) => i.status === "pending_review");
+  const hasAccounts = accounts.length > 0;
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -166,16 +191,6 @@ export function CampaignDetailView({
             )}
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => setCsvDialogOpen(true)}>
-            <Upload data-icon="inline-start" />
-            Importar CSV
-          </Button>
-          <Button onClick={() => setAddDialogOpen(true)}>
-            <Plus data-icon="inline-start" />
-            Agregar Cuenta
-          </Button>
-        </div>
       </div>
 
       {/* Pending Imports Alert */}
@@ -187,7 +202,7 @@ export function CampaignDetailView({
                 <Upload className="size-4 text-amber-500" />
               </div>
               <div>
-                <p className="font-medium">Imports pendientes de revision</p>
+                <p className="font-medium">Imports pendientes de revisión</p>
                 <p className="text-sm text-muted-foreground">
                   {pendingImports.length} archivo(s) con matches para revisar
                 </p>
@@ -200,54 +215,37 @@ export function CampaignDetailView({
         </Card>
       )}
 
-      {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Total Cuentas
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{accounts.length}</div>
+      {/* Empty State - No accounts yet */}
+      {!hasAccounts && (
+        <Card className="border-dashed">
+          <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+            <div className="rounded-full bg-muted p-4 mb-4">
+              <Building2 className="size-8 text-muted-foreground" />
+            </div>
+            <h3 className="text-lg font-semibold mb-2">Sin cuentas en esta campaña</h3>
+            <p className="text-sm text-muted-foreground mb-6 max-w-md">
+              Agrega cuentas manualmente buscando empresas, o importa un listado desde CSV para comenzar a monitorear señales y buscar decision makers.
+            </p>
+            <div className="flex gap-3">
+              <Button variant="outline" onClick={() => setCsvDialogOpen(true)}>
+                <Upload className="size-4 mr-2" />
+                Importar CSV
+              </Button>
+              <Button onClick={() => setAddDialogOpen(true)}>
+                <Plus className="size-4 mr-2" />
+                Agregar Cuenta
+              </Button>
+            </div>
           </CardContent>
         </Card>
-        {campaign.enable_tech_radar && (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Tech Radar Completado
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">
-                {accounts.filter((a) => a.tech_radar_run_at).length}
-              </div>
-            </CardContent>
-          </Card>
-        )}
-        {campaign.enable_apollo && (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Con DMs Identificados
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">
-                {accounts.filter((a) => a.apollo_run_at).length}
-              </div>
-            </CardContent>
-          </Card>
-        )}
-      </div>
+      )}
 
-      {/* Accounts Table */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle>Cuentas</CardTitle>
-            <div className="relative w-64">
+      {/* Accounts List - When has accounts */}
+      {hasAccounts && (
+        <>
+          {/* Search */}
+          {accounts.length > 3 && (
+            <div className="relative max-w-sm">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
               <Input
                 placeholder="Buscar cuenta..."
@@ -256,103 +254,27 @@ export function CampaignDetailView({
                 className="pl-9"
               />
             </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {filteredAccounts.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <Building2 className="size-12 text-muted-foreground/50 mb-4" />
-              <h3 className="font-medium mb-1">
-                {accounts.length === 0 ? "Sin cuentas" : "Sin resultados"}
-              </h3>
-              <p className="text-sm text-muted-foreground mb-4">
-                {accounts.length === 0
-                  ? "Agrega cuentas manualmente o importa un CSV"
-                  : "No se encontraron cuentas que coincidan con tu busqueda"}
-              </p>
-              {accounts.length === 0 && (
-                <div className="flex gap-2">
-                  <Button variant="outline" onClick={() => setCsvDialogOpen(true)}>
-                    <Upload data-icon="inline-start" />
-                    Importar CSV
-                  </Button>
-                  <Button onClick={() => setAddDialogOpen(true)}>
-                    <Plus data-icon="inline-start" />
-                    Agregar Cuenta
-                  </Button>
-                </div>
-              )}
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Empresa</TableHead>
-                  <TableHead>Dominio</TableHead>
-                  <TableHead>Industria</TableHead>
-                  <TableHead>Estado</TableHead>
-                  <TableHead className="w-12"></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredAccounts.map((account) => (
-                  <TableRow key={account.id}>
-                    <TableCell>
-                      <div className="font-medium">{account.company?.name || "—"}</div>
-                    </TableCell>
-                    <TableCell>
-                      {account.company?.domain ? (
-                        <a
-                          href={`https://${account.company.domain}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-                        >
-                          <Globe className="size-3" />
-                          {account.company.domain}
-                          <ExternalLink className="size-3" />
-                        </a>
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-muted-foreground">
-                        {account.company?.industry || "—"}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        variant={account.status === "whitelisted" ? "secondary" : "outline"}
-                      >
-                        {account.status === "whitelisted" ? "Activa" : "Blacklist"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon">
-                            <MoreHorizontal className="size-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem
-                            className="text-destructive"
-                            onClick={() => setDeleteDialog({ open: true, account })}
-                          >
-                            <Trash2 data-icon="inline-start" />
-                            Eliminar
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
           )}
-        </CardContent>
-      </Card>
+
+          {/* Account Cards */}
+          <div className="grid gap-4">
+            {filteredAccounts.map((account) => (
+              <AccountCard
+                key={account.id}
+                account={account}
+                campaignId={campaign.id}
+                onDelete={() => setDeleteDialog({ open: true, account: accounts.find(a => a.id === account.id) || null })}
+              />
+            ))}
+          </div>
+
+          {filteredAccounts.length === 0 && searchQuery && (
+            <div className="text-center py-8 text-muted-foreground">
+              No se encontraron cuentas que coincidan con &quot;{searchQuery}&quot;
+            </div>
+          )}
+        </>
+      )}
 
       {/* Dialogs */}
       <AddAccountDialog
@@ -377,7 +299,7 @@ export function CampaignDetailView({
           <AlertDialogHeader>
             <AlertDialogTitle>Eliminar cuenta</AlertDialogTitle>
             <AlertDialogDescription>
-              Estás seguro de eliminar &quot;{deleteDialog.account?.company?.name}&quot; de esta
+              ¿Estás seguro de eliminar &quot;{deleteDialog.account?.company?.name}&quot; de esta
               campaña?
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -394,5 +316,152 @@ export function CampaignDetailView({
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+// Account Card Component
+interface AccountCardProps {
+  account: AccountWithDigest;
+  campaignId: string;
+  onDelete: () => void;
+}
+
+function AccountCard({ account, campaignId, onDelete }: AccountCardProps) {
+  const company = account.companies;
+  const digest = account.digest?.[0]; // Array from Supabase join
+  
+  const hasData = account.tech_radar_run_at || account.apollo_run_at;
+  const contactCount = digest?.contact_ids?.length || 0;
+  const signalCount = digest?.signal_types_matched?.length || 0;
+  const newItems = digest?.new_items_count || 0;
+
+  return (
+    <Card className="group hover:shadow-md transition-shadow">
+      <CardContent className="p-0">
+        <Link 
+          href={`/v3/campaigns/${campaignId}/accounts/${account.id}`}
+          className="block"
+        >
+          <div className="flex items-center gap-4 p-4">
+            {/* Company Logo */}
+            <div className={cn(
+              "flex size-14 shrink-0 items-center justify-center rounded-lg text-xl font-semibold overflow-hidden",
+              "bg-muted"
+            )}>
+              {company?.logo_url ? (
+                <Image
+                  src={company.logo_url}
+                  alt={company.name || ""}
+                  width={56}
+                  height={56}
+                  className="size-14 object-contain bg-white"
+                />
+              ) : (
+                <span className="text-muted-foreground">
+                  {company?.name?.charAt(0).toUpperCase() || "?"}
+                </span>
+              )}
+            </div>
+
+            {/* Company Info */}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <h3 className="font-semibold truncate">{company?.name || "Sin nombre"}</h3>
+                {company?.domain && (
+                  <span className="text-sm text-muted-foreground flex items-center gap-1">
+                    <Globe className="size-3" />
+                    {company.domain}
+                  </span>
+                )}
+              </div>
+              
+              {company?.industry && (
+                <p className="text-sm text-muted-foreground">{company.industry}</p>
+              )}
+
+              {/* Stats Row */}
+              {hasData && (
+                <div className="flex items-center gap-4 mt-2">
+                  {contactCount > 0 && (
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <Users className="size-3.5 text-green-500" />
+                      <span>{contactCount} DMs</span>
+                    </div>
+                  )}
+                  {signalCount > 0 && (
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <TrendingUp className="size-3.5 text-amber-500" />
+                      <span>{signalCount} señales</span>
+                    </div>
+                  )}
+                  {newItems > 0 && (
+                    <Badge variant="secondary" className="text-xs">
+                      {newItems} nuevos
+                    </Badge>
+                  )}
+                </div>
+              )}
+
+              {/* Prospection Status */}
+              {!hasData && (
+                <div className="flex items-center gap-2 mt-2">
+                  <Badge variant="outline" className="text-xs">
+                    Pendiente de prospección
+                  </Badge>
+                </div>
+              )}
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center gap-2">
+              <ChevronRight className="size-5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+            </div>
+          </div>
+        </Link>
+
+        {/* Quick Actions (visible on hover) */}
+        <div className="border-t px-4 py-2 flex items-center justify-between opacity-0 group-hover:opacity-100 transition-opacity bg-muted/30">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            {account.tech_radar_run_at && (
+              <span className="flex items-center gap-1">
+                <Cpu className="size-3" />
+                Tech Radar ejecutado
+              </span>
+            )}
+            {account.apollo_run_at && (
+              <span className="flex items-center gap-1">
+                <Users className="size-3" />
+                Apollo ejecutado
+              </span>
+            )}
+          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm">
+                <MoreHorizontal className="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem asChild>
+                <Link href={`/v3/campaigns/${campaignId}/accounts/${account.id}`}>
+                  <Eye className="size-4 mr-2" />
+                  Ver detalles
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="text-destructive"
+                onClick={(e) => {
+                  e.preventDefault();
+                  onDelete();
+                }}
+              >
+                <Trash2 className="size-4 mr-2" />
+                Eliminar
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
