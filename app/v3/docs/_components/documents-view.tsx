@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { useRouter } from "next/navigation"
 import { 
   FileText, 
@@ -20,17 +20,24 @@ import {
   Cpu,
   Settings2,
   Sparkles,
-  TrendingUp
+  TrendingUp,
+  Search,
+  X,
+  Filter
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
+import { Input } from "@/components/ui/input"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  DropdownMenuSeparator,
+  DropdownMenuCheckboxItem,
+  DropdownMenuLabel,
 } from "@/components/ui/dropdown-menu"
 import {
   Collapsible,
@@ -40,6 +47,7 @@ import {
 import { toast } from "sonner"
 import { WorkspaceDocument, WorkspaceDocumentTag, deleteWorkspaceDocument, getWorkspaceDocuments } from "@/app/actions/v3/documents"
 import { UploadDocumentDialog } from "./upload-document-dialog"
+import { cn } from "@/lib/utils"
 
 // Helper to parse ai_summary JSON
 function parseAiSummary(doc: WorkspaceDocument): { summary: string; keyResults: string[]; documentType: string } | null {
@@ -93,6 +101,76 @@ export function DocumentsView({ initialDocuments, stats, workspaceName }: Docume
   const [uploadOpen, setUploadOpen] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [expandedDoc, setExpandedDoc] = useState<string | null>(null)
+  
+  // Filter state
+  const [searchQuery, setSearchQuery] = useState("")
+  const [statusFilter, setStatusFilter] = useState<string | null>(null)
+  const [typeFilter, setTypeFilter] = useState<string | null>(null)
+  const [selectedTags, setSelectedTags] = useState<string[]>([])
+
+  // Extract all unique tags from documents for filter options
+  const availableTags = useMemo(() => {
+    const tagMap = new Map<string, { type: string; value: string; count: number }>()
+    documents.forEach(doc => {
+      doc.tags?.forEach(tag => {
+        const key = `${tag.tag_type}:${tag.tag_value}`
+        const existing = tagMap.get(key)
+        if (existing) {
+          existing.count++
+        } else {
+          tagMap.set(key, { type: tag.tag_type, value: tag.tag_value, count: 1 })
+        }
+      })
+    })
+    return Array.from(tagMap.entries()).map(([key, data]) => ({ key, ...data }))
+      .sort((a, b) => b.count - a.count)
+  }, [documents])
+
+  // Filter documents
+  const filteredDocuments = useMemo(() => {
+    return documents.filter(doc => {
+      // Search filter
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase()
+        const aiData = parseAiSummary(doc)
+        const matchesTitle = doc.title.toLowerCase().includes(query)
+        const matchesSummary = aiData?.summary?.toLowerCase().includes(query)
+        const matchesTags = doc.tags?.some(t => t.tag_value.toLowerCase().includes(query))
+        if (!matchesTitle && !matchesSummary && !matchesTags) return false
+      }
+      
+      // Status filter
+      if (statusFilter && doc.status !== statusFilter) return false
+      
+      // Type filter
+      if (typeFilter && doc.type !== typeFilter) return false
+      
+      // Tag filter
+      if (selectedTags.length > 0) {
+        const docTagKeys = doc.tags?.map(t => `${t.tag_type}:${t.tag_value}`) || []
+        if (!selectedTags.some(tag => docTagKeys.includes(tag))) return false
+      }
+      
+      return true
+    })
+  }, [documents, searchQuery, statusFilter, typeFilter, selectedTags])
+
+  const hasActiveFilters = searchQuery || statusFilter || typeFilter || selectedTags.length > 0
+
+  const clearAllFilters = () => {
+    setSearchQuery("")
+    setStatusFilter(null)
+    setTypeFilter(null)
+    setSelectedTags([])
+  }
+
+  const toggleTag = (tagKey: string) => {
+    setSelectedTags(prev => 
+      prev.includes(tagKey) 
+        ? prev.filter(t => t !== tagKey)
+        : [...prev, tagKey]
+    )
+  }
 
   // Poll for updates when there are processing documents
   useEffect(() => {
@@ -175,27 +253,51 @@ export function DocumentsView({ initialDocuments, stats, workspaceName }: Docume
           </p>
         </div>
 
-        {/* Stats */}
+        {/* Stats - clickeable para filtrar */}
         <div className="grid grid-cols-4 gap-4">
-          <Card>
+          <Card 
+            className={cn(
+              "cursor-pointer transition-all hover:border-foreground/20",
+              statusFilter === null && "ring-2 ring-foreground/10"
+            )}
+            onClick={() => setStatusFilter(null)}
+          >
             <CardContent className="pt-4">
               <div className="text-2xl font-bold">{stats.total}</div>
               <div className="text-xs text-muted-foreground">Total</div>
             </CardContent>
           </Card>
-          <Card>
+          <Card 
+            className={cn(
+              "cursor-pointer transition-all hover:border-green-500/50",
+              statusFilter === "ready" && "ring-2 ring-green-500"
+            )}
+            onClick={() => setStatusFilter(statusFilter === "ready" ? null : "ready")}
+          >
             <CardContent className="pt-4">
               <div className="text-2xl font-bold text-green-600">{stats.ready}</div>
               <div className="text-xs text-muted-foreground">Procesados</div>
             </CardContent>
           </Card>
-          <Card>
+          <Card 
+            className={cn(
+              "cursor-pointer transition-all hover:border-yellow-500/50",
+              statusFilter === "processing" && "ring-2 ring-yellow-500"
+            )}
+            onClick={() => setStatusFilter(statusFilter === "processing" ? null : "processing")}
+          >
             <CardContent className="pt-4">
               <div className="text-2xl font-bold text-yellow-600">{stats.processing}</div>
               <div className="text-xs text-muted-foreground">Procesando</div>
             </CardContent>
           </Card>
-          <Card>
+          <Card 
+            className={cn(
+              "cursor-pointer transition-all hover:border-red-500/50",
+              statusFilter === "error" && "ring-2 ring-red-500"
+            )}
+            onClick={() => setStatusFilter(statusFilter === "error" ? null : "error")}
+          >
             <CardContent className="pt-4">
               <div className="text-2xl font-bold text-red-600">{stats.error}</div>
               <div className="text-xs text-muted-foreground">Con error</div>
@@ -203,39 +305,234 @@ export function DocumentsView({ initialDocuments, stats, workspaceName }: Docume
           </Card>
         </div>
 
-        {/* Actions */}
-        <div className="flex items-center justify-between">
-          <Button onClick={() => setUploadOpen(true)}>
-            <Upload data-icon="inline-start" />
-            Subir documento
-          </Button>
+        {/* Search and Filters */}
+        <div className="flex items-center gap-3">
+          {/* Search */}
+          <div className="relative flex-1 max-w-sm">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+            <Input
+              placeholder="Buscar documentos..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9 pr-9"
+            />
+            {searchQuery && (
+              <button 
+                onClick={() => setSearchQuery("")}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <X className="size-4" />
+              </button>
+            )}
+          </div>
 
-          {canContinue && (
-            <Button variant="outline" onClick={() => router.push("/v3/campaigns")}>
-              Continuar a campanas
-              <ArrowRight data-icon="inline-end" />
+          {/* Type filter */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="gap-2">
+                <FileText className="size-4" />
+                {typeFilter ? typeFilter.toUpperCase() : "Tipo"}
+                {typeFilter && <X className="size-3 ml-1" onClick={(e) => { e.stopPropagation(); setTypeFilter(null) }} />}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuCheckboxItem 
+                checked={typeFilter === "pdf"}
+                onCheckedChange={() => setTypeFilter(typeFilter === "pdf" ? null : "pdf")}
+              >
+                PDF
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem 
+                checked={typeFilter === "docx"}
+                onCheckedChange={() => setTypeFilter(typeFilter === "docx" ? null : "docx")}
+              >
+                DOCX
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem 
+                checked={typeFilter === "pptx"}
+                onCheckedChange={() => setTypeFilter(typeFilter === "pptx" ? null : "pptx")}
+              >
+                PPTX
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem 
+                checked={typeFilter === "url"}
+                onCheckedChange={() => setTypeFilter(typeFilter === "url" ? null : "url")}
+              >
+                URL
+              </DropdownMenuCheckboxItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* Tags filter */}
+          {availableTags.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="gap-2">
+                  <Tag className="size-4" />
+                  Tags
+                  {selectedTags.length > 0 && (
+                    <Badge variant="secondary" className="ml-1 size-5 p-0 flex items-center justify-center text-xs">
+                      {selectedTags.length}
+                    </Badge>
+                  )}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-64 max-h-80 overflow-auto">
+                {/* Industries */}
+                {availableTags.filter(t => t.type === "industry").length > 0 && (
+                  <>
+                    <DropdownMenuLabel className="flex items-center gap-2 text-blue-700">
+                      <Building2 className="size-3" />
+                      Industrias
+                    </DropdownMenuLabel>
+                    {availableTags.filter(t => t.type === "industry").map(tag => (
+                      <DropdownMenuCheckboxItem
+                        key={tag.key}
+                        checked={selectedTags.includes(tag.key)}
+                        onCheckedChange={() => toggleTag(tag.key)}
+                      >
+                        <span className="flex-1">{tag.value}</span>
+                        <span className="text-xs text-muted-foreground ml-2">{tag.count}</span>
+                      </DropdownMenuCheckboxItem>
+                    ))}
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                {/* Technologies */}
+                {availableTags.filter(t => t.type === "technology").length > 0 && (
+                  <>
+                    <DropdownMenuLabel className="flex items-center gap-2 text-purple-700">
+                      <Cpu className="size-3" />
+                      Tecnologias
+                    </DropdownMenuLabel>
+                    {availableTags.filter(t => t.type === "technology").map(tag => (
+                      <DropdownMenuCheckboxItem
+                        key={tag.key}
+                        checked={selectedTags.includes(tag.key)}
+                        onCheckedChange={() => toggleTag(tag.key)}
+                      >
+                        <span className="flex-1">{tag.value}</span>
+                        <span className="text-xs text-muted-foreground ml-2">{tag.count}</span>
+                      </DropdownMenuCheckboxItem>
+                    ))}
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                {/* Processes */}
+                {availableTags.filter(t => t.type === "process").length > 0 && (
+                  <>
+                    <DropdownMenuLabel className="flex items-center gap-2 text-green-700">
+                      <Settings2 className="size-3" />
+                      Procesos
+                    </DropdownMenuLabel>
+                    {availableTags.filter(t => t.type === "process").map(tag => (
+                      <DropdownMenuCheckboxItem
+                        key={tag.key}
+                        checked={selectedTags.includes(tag.key)}
+                        onCheckedChange={() => toggleTag(tag.key)}
+                      >
+                        <span className="flex-1">{tag.value}</span>
+                        <span className="text-xs text-muted-foreground ml-2">{tag.count}</span>
+                      </DropdownMenuCheckboxItem>
+                    ))}
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+
+          {/* Clear filters */}
+          {hasActiveFilters && (
+            <Button variant="ghost" size="sm" onClick={clearAllFilters} className="text-muted-foreground">
+              <X className="size-4 mr-1" />
+              Limpiar
             </Button>
           )}
+
+          <div className="flex-1" />
+
+          {/* Upload button */}
+          <Button onClick={() => setUploadOpen(true)} className="gap-2">
+            <Upload className="size-4" />
+            Subir documento
+          </Button>
         </div>
 
+        {/* Active filters display */}
+        {hasActiveFilters && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm text-muted-foreground">Filtros activos:</span>
+            {statusFilter && (
+              <Badge variant="secondary" className="gap-1">
+                Estado: {statusFilter === "ready" ? "Procesados" : statusFilter === "processing" ? "Procesando" : "Error"}
+                <X className="size-3 cursor-pointer" onClick={() => setStatusFilter(null)} />
+              </Badge>
+            )}
+            {typeFilter && (
+              <Badge variant="secondary" className="gap-1">
+                Tipo: {typeFilter.toUpperCase()}
+                <X className="size-3 cursor-pointer" onClick={() => setTypeFilter(null)} />
+              </Badge>
+            )}
+            {selectedTags.map(tagKey => {
+              const tag = availableTags.find(t => t.key === tagKey)
+              if (!tag) return null
+              const config = tagTypeConfig[tag.type as keyof typeof tagTypeConfig]
+              return (
+                <Badge key={tagKey} variant="outline" className={cn("gap-1", config?.color)}>
+                  {tag.value}
+                  <X className="size-3 cursor-pointer" onClick={() => toggleTag(tagKey)} />
+                </Badge>
+              )
+            })}
+            <span className="text-sm text-muted-foreground ml-2">
+              ({filteredDocuments.length} de {documents.length})
+            </span>
+          </div>
+        )}
+
+        {/* Continue button */}
+        {canContinue && (
+          <div className="flex justify-end">
+            <Button variant="outline" onClick={() => router.push("/v3/campaigns")}>
+              Continuar a campanas
+              <ArrowRight className="size-4 ml-2" />
+            </Button>
+          </div>
+        )}
+
         {/* Document List */}
-        {documents.length === 0 ? (
+        {filteredDocuments.length === 0 ? (
           <Card>
             <CardContent className="flex flex-col items-center justify-center py-12">
               <FileText className="size-12 text-muted-foreground/50 mb-4" />
-              <h3 className="font-medium mb-1">Sin documentos</h3>
-              <p className="text-sm text-muted-foreground mb-4">
-                Sube al menos un documento para comenzar a usar ASCI
-              </p>
-              <Button onClick={() => setUploadOpen(true)}>
-                <Upload data-icon="inline-start" />
-                Subir primer documento
-              </Button>
+              {hasActiveFilters ? (
+                <>
+                  <h3 className="font-medium mb-1">Sin resultados</h3>
+                  <p className="text-sm text-muted-foreground mb-4">
+                    No hay documentos que coincidan con los filtros
+                  </p>
+                  <Button variant="outline" onClick={clearAllFilters}>
+                    Limpiar filtros
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <h3 className="font-medium mb-1">Sin documentos</h3>
+                  <p className="text-sm text-muted-foreground mb-4">
+                    Sube al menos un documento para comenzar a usar ASCI
+                  </p>
+                  <Button onClick={() => setUploadOpen(true)}>
+                    <Upload className="size-4 mr-2" />
+                    Subir primer documento
+                  </Button>
+                </>
+              )}
             </CardContent>
           </Card>
         ) : (
           <div className="space-y-3">
-            {documents.map((doc) => {
+            {filteredDocuments.map((doc) => {
               const aiData = parseAiSummary(doc)
               const groupedTags = doc.tags ? groupTags(doc.tags) : { industries: [], technologies: [], processes: [] }
               const totalTags = (doc.tags?.length || 0)
