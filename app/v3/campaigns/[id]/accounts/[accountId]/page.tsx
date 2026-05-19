@@ -31,37 +31,38 @@ export default async function AccountPage({ params }: AccountPageProps) {
   }
   
   const campaignAccount = accountResult.data
+  const companyId = campaignAccount.company_id
   
-  // Obtener company del schema public
-  const { data: company } = await adminClient
-    .from('companies')
-    .select('id, name, website, industry, linkedin_url, logo_url, description, employee_count, founded_year, headquarters')
-    .eq('id', campaignAccount.company_id)
-    .single()
-  
-  // Obtener digest con datos expandidos
-  const digest = await getAccountDigest(accountId, true)
-  
-  // Obtener signals de v2 para esta company (user_company_signals y company_news)
-  const [signalsResult, newsResult] = await Promise.all([
+  // Paralelizar TODAS las queries restantes para reducir latencia
+  const [companyResult, digest, signalsResult, newsResult] = await Promise.all([
+    adminClient
+      .from('companies')
+      .select('id, name, website, industry, linkedin_url, logo_url, description, employee_count, founded_year, headquarters')
+      .eq('id', companyId)
+      .single(),
+    getAccountDigest(accountId, true),
     adminClient
       .from('user_company_signals')
       .select('id, title, content, signal_type, created_at')
-      .eq('company_id', campaignAccount.company_id)
+      .eq('company_id', companyId)
       .order('created_at', { ascending: false })
       .limit(20),
     adminClient
       .from('company_news')
       .select('id, title, summary, source_url, published_at')
-      .eq('company_id', campaignAccount.company_id)
+      .eq('company_id', companyId)
       .order('published_at', { ascending: false })
       .limit(20)
   ])
+  
+  // Log para debug del problema de nombre
+  console.log("[v0] Company query result:", companyResult.error ? companyResult.error : `Found: ${companyResult.data?.name}`)
   
   // Marcar como visto (fire and forget)
   markDigestAsSeen(accountId).catch(() => {})
   
   // Map website to domain for consistency
+  const company = companyResult.data
   const companyWithDomain = company ? {
     ...company,
     domain: company.website

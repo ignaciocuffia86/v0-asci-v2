@@ -50,7 +50,8 @@ export async function generateAccountDigest(
   
   // 1. Obtener el campaign_account con su company
   const { data: campaignAccount, error: caError } = await adminClient
-    .from('v3.campaign_accounts')
+    .schema('v3')
+    .from('campaign_accounts')
     .select(`
       id,
       company_id,
@@ -93,7 +94,8 @@ export async function generateAccountDigest(
   
   // 5. Buscar digest existente
   const { data: existingDigest } = await adminClient
-    .from('v3.campaign_account_digest')
+    .schema('v3')
+    .from('campaign_account_digest')
     .select('*')
     .eq('campaign_account_id', campaignAccountId)
     .single()
@@ -123,7 +125,8 @@ export async function generateAccountDigest(
   }
   
   const { data: digest, error: upsertError } = await adminClient
-    .from('v3.campaign_account_digest')
+    .schema('v3')
+    .from('campaign_account_digest')
     .upsert(digestData, { onConflict: 'campaign_account_id' })
     .select()
     .single()
@@ -154,7 +157,8 @@ export async function getAccountDigest(
   
   // 1. Buscar digest existente
   const { data: digest, error } = await adminClient
-    .from('v3.campaign_account_digest')
+    .schema('v3')
+    .from('campaign_account_digest')
     .select('*')
     .eq('campaign_account_id', campaignAccountId)
     .single()
@@ -170,7 +174,8 @@ export async function getAccountDigest(
   
   // 2. Obtener company_id del campaign_account
   const { data: campaignAccount } = await adminClient
-    .from('v3.campaign_accounts')
+    .schema('v3')
+    .from('campaign_accounts')
     .select('company_id')
     .eq('id', campaignAccountId)
     .single()
@@ -210,7 +215,8 @@ export async function markDigestAsSeen(campaignAccountId: string): Promise<void>
   const adminClient = createAdminClient()
   
   await adminClient
-    .from('v3.campaign_account_digest')
+    .schema('v3')
+    .from('campaign_account_digest')
     .update({
       last_user_seen_at: new Date().toISOString(),
       new_items_count: 0
@@ -230,7 +236,8 @@ export async function getRecommendedJobTitles(
   // 1. Si hay buyer persona especifico, usar sus job titles
   if (buyerPersonaId) {
     const { data: persona } = await adminClient
-      .from('v3.buyer_personas')
+      .schema('v3')
+      .from('buyer_personas')
       .select('recommended_job_titles')
       .eq('id', buyerPersonaId)
       .single()
@@ -242,7 +249,8 @@ export async function getRecommendedJobTitles(
   
   // 2. Obtener workspace value profile
   const { data: valueProfile } = await adminClient
-    .from('v3.workspace_value_profiles')
+    .schema('v3')
+    .from('workspace_value_profiles')
     .select('target_processes, target_technologies')
     .eq('workspace_id', workspaceId)
     .single()
@@ -261,7 +269,8 @@ export async function getRecommendedJobTitles(
     .map((t: any) => t.id)
   
   const { data: jobTitles } = await adminClient
-    .from('v3.dictionary_job_titles')
+    .schema('v3')
+    .from('dictionary_job_titles')
     .select('job_title')
     .or(`process_id.in.(${processIds.join(',')}),product_id.in.(${technologyIds.join(',')})`)
   
