@@ -7,7 +7,7 @@ import {
   extractTextFromPptx,
   extractTextFromUrl,
 } from "@/lib/documents/extract-text"
-import { analyzeDocument } from "@/lib/documents/analyze-document"
+import { analyzeDocumentV3 } from "@/lib/v3/ai"
 
 /**
  * POST /api/v3/documents/process
@@ -149,8 +149,21 @@ export async function POST(request: NextRequest) {
       })
       .eq("id", document.id)
 
-    // Step 2: Analyze with Gemini (reutiliza funcion de v2)
-    const analysis = await analyzeDocument(extractedText)
+    // Step 2: Load dictionaries and analyze with AI Gateway
+    // Fetch dictionaries from v2 tables (shared)
+    const [{ data: products }, { data: processes }, { data: companiesData }] = await Promise.all([
+      adminClient.from("dictionary_products").select("id, name").limit(500),
+      adminClient.from("dictionary_processes").select("id, name").limit(500),
+      adminClient.from("companies").select("industry").not("industry", "is", null).limit(1000),
+    ])
+
+    const uniqueIndustries = [...new Set((companiesData || []).map((c: any) => c.industry).filter(Boolean))]
+
+    const analysis = await analyzeDocumentV3(extractedText, {
+      technologies: (products || []) as { id: string; name: string }[],
+      processes: (processes || []) as { id: string; name: string }[],
+      industries: uniqueIndustries as string[],
+    })
 
     console.log(`[v0] Analysis complete: ${analysis.tags.length} tags found`)
 
