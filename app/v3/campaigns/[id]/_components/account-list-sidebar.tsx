@@ -1,8 +1,9 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState, useEffect, useCallback } from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
+import useSWR from "swr"
 import { 
   Building2, 
   Loader2, 
@@ -16,6 +17,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { getCampaignAccounts } from "@/app/actions/v3/campaigns"
+import Image from "next/image"
 
 interface Account {
   id: string
@@ -40,14 +42,33 @@ interface AccountListSidebarProps {
   campaignId: string
   onAddAccount?: () => void
   onImportCsv?: () => void
+  refreshKey?: number
 }
 
-export function AccountListSidebar({ campaignId, onAddAccount, onImportCsv }: AccountListSidebarProps) {
+export function AccountListSidebar({ campaignId, onAddAccount, onImportCsv, refreshKey = 0 }: AccountListSidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
-  const [accounts, setAccounts] = useState<Account[]>([])
-  const [loading, setLoading] = useState(true)
   const [pendingImports, setPendingImports] = useState(0)
+
+  // Use SWR for account list with auto-revalidation
+  const { data: accounts = [], isLoading: loading, mutate } = useSWR(
+    `campaign-accounts-${campaignId}`,
+    async () => {
+      const result = await getCampaignAccounts(campaignId)
+      return Array.isArray(result) ? result as unknown as Account[] : []
+    },
+    {
+      refreshInterval: 5000, // Poll every 5 seconds
+      revalidateOnFocus: true,
+    }
+  )
+
+  // Revalidate when refreshKey changes
+  useEffect(() => {
+    if (refreshKey > 0) {
+      mutate()
+    }
+  }, [refreshKey, mutate])
 
   const handleAddAccount = () => {
     if (onAddAccount) {
@@ -64,25 +85,6 @@ export function AccountListSidebar({ campaignId, onAddAccount, onImportCsv }: Ac
       router.push(`/v3/campaigns/${campaignId}?import=true`)
     }
   }
-  
-  useEffect(() => {
-    async function loadAccounts() {
-      setLoading(true)
-      try {
-        const result = await getCampaignAccounts(campaignId)
-        if (Array.isArray(result)) {
-          setAccounts(result as unknown as Account[])
-        }
-        // TODO: Check for pending imports
-      } catch (error) {
-        console.error("Error loading accounts:", error)
-      } finally {
-        setLoading(false)
-      }
-    }
-    
-    loadAccounts()
-  }, [campaignId])
   
   // Extract account ID from pathname if viewing a specific account
   const currentAccountId = pathname.match(/\/accounts\/([^/]+)/)?.[1]
@@ -163,16 +165,18 @@ export function AccountListSidebar({ campaignId, onAddAccount, onImportCsv }: Ac
             >
               {/* Company Avatar */}
               <div className={cn(
-                "flex size-9 shrink-0 items-center justify-center rounded-md text-sm font-medium",
+                "flex size-9 shrink-0 items-center justify-center rounded-md text-sm font-medium overflow-hidden",
                 isActive 
                   ? "bg-primary text-primary-foreground"
                   : "bg-muted text-muted-foreground"
               )}>
                 {company?.logo_url ? (
-                  <img 
+                  <Image 
                     src={company.logo_url} 
                     alt={company.name}
-                    className="size-9 rounded-md object-cover"
+                    width={36}
+                    height={36}
+                    className="size-9 object-contain bg-white"
                   />
                 ) : (
                   company?.name?.charAt(0).toUpperCase() || "?"
