@@ -28,6 +28,8 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
 import { AccountListSidebar } from "./account-list-sidebar"
 import { CopilotPanel } from "./copilot-panel"
+import { AddAccountDialog } from "./add-account-dialog"
+import { CsvImportDialog } from "./csv-import-dialog"
 
 interface Campaign {
   id: string
@@ -64,6 +66,9 @@ export function CampaignLayoutClient({
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [copilotOpen, setCopilotOpen] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
+  const [addAccountOpen, setAddAccountOpen] = useState(false)
+  const [csvImportOpen, setCsvImportOpen] = useState(false)
+  const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0)
   
   const currentCampaign = campaigns.find(c => c.id === currentCampaignId)
   const CampaignIcon = currentCampaign ? campaignTypeIcons[currentCampaign.type] : Radio
@@ -82,6 +87,18 @@ export function CampaignLayoutClient({
       setSidebarOpen(false)
     }
   }, [pathname, isMobile])
+  
+  const handleAccountAdded = () => {
+    setSidebarRefreshKey(k => k + 1)
+    setAddAccountOpen(false)
+    router.refresh()
+  }
+
+  const handleCsvImportSuccess = () => {
+    setSidebarRefreshKey(k => k + 1)
+    setCsvImportOpen(false)
+    router.refresh()
+  }
   
   return (
     <div className="flex h-screen bg-background">
@@ -153,7 +170,12 @@ export function CampaignLayoutClient({
             
             {/* Account List */}
             <ScrollArea className="flex-1">
-              <AccountListSidebar campaignId={currentCampaignId} />
+              <AccountListSidebar 
+                campaignId={currentCampaignId} 
+                onAddAccount={() => setAddAccountOpen(true)}
+                onImportCsv={() => setCsvImportOpen(true)}
+                refreshKey={sidebarRefreshKey}
+              />
             </ScrollArea>
             
             {/* Campaign Type Badge */}
@@ -232,6 +254,20 @@ export function CampaignLayoutClient({
           )}
         </div>
       </main>
+      
+      {/* Dialogs */}
+      <AddAccountDialog
+        open={addAccountOpen}
+        onOpenChange={setAddAccountOpen}
+        campaignId={currentCampaignId}
+        onSuccess={handleAccountAdded}
+      />
+      <CsvImportDialog
+        open={csvImportOpen}
+        onOpenChange={setCsvImportOpen}
+        campaignId={currentCampaignId}
+        onSuccess={handleCsvImportSuccess}
+      />
     </div>
   )
 }
