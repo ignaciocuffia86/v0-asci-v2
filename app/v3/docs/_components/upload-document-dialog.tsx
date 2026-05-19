@@ -2,7 +2,6 @@
 
 import { useState, useCallback } from "react"
 import { useDropzone } from "react-dropzone"
-import { createClient } from "@/lib/supabase/client"
 import { createWorkspaceDocument } from "@/app/actions/v3/documents"
 import {
   Dialog,
@@ -61,47 +60,20 @@ export function UploadDocumentDialog({
         else throw new Error(`Tipo de archivo no soportado: ${file.type || file.name}`)
       }
 
-      const supabase = createClient()
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) throw new Error("No autenticado")
-
-      // Get workspace_id from session/context
-      const { data: membership } = await supabase
-        .from("v3.workspace_members")
-        .select("workspace_id")
-        .eq("user_id", user.id)
-        .eq("status", "active")
-        .single()
-
-      if (!membership) throw new Error("Sin workspace activo")
-
-      // Generate storage path: workspaces/{workspace_id}/{doc_id}/{filename}
-      const docId = crypto.randomUUID()
-      const sanitizedName = file.name
-        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-        .replace(/[^a-zA-Z0-9._-]/g, "_")
-        .replace(/_+/g, "_")
-      const storagePath = `workspaces/${membership.workspace_id}/${docId}/${sanitizedName}`
-
-      // Upload to Supabase Storage (workspace-documents bucket)
-      const { error: storageError } = await supabase.storage
-        .from("workspace-documents")
-        .upload(storagePath, file, {
-          cacheControl: "3600",
-          upsert: false,
-        })
-
-      if (storageError) {
-        throw new Error(`Error al subir archivo: ${storageError.message}`)
-      }
-
-      // Create DB record via server action
+      // Get file info for title
       const fileExt = file.name.split(".").pop()
       const title = file.name.replace(`.${fileExt}`, "")
+      
+      // Convert file to base64 for server action
+      const arrayBuffer = await file.arrayBuffer()
+      const base64 = Buffer.from(arrayBuffer).toString('base64')
+
+      // Create document via server action (handles auth, workspace, and storage)
       const result = await createWorkspaceDocument({
         title,
         type: docType,
-        storage_path: storagePath,
+        file_data: base64,
+        file_name: file.name,
         file_size: file.size,
       })
 

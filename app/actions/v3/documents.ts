@@ -171,7 +171,10 @@ export async function createWorkspaceDocument(params: {
   source_url?: string
   storage_path?: string
   file_size?: number
+  file_data?: string  // base64 encoded file data
+  file_name?: string  // original file name for storage
 }): Promise<{ data: WorkspaceDocument | null; error: string | null }> {
+  const admin = createAdminClient()
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   
@@ -193,9 +196,9 @@ export async function createWorkspaceDocument(params: {
 
   // Check for duplicates
   if (params.type === "url" && params.source_url) {
-    const { data: existing } = await supabase
+    const { data: existing } = await admin
       .schema("v3")
-    .from("workspace_documents")
+      .from("workspace_documents")
       .select("id, title")
       .eq("workspace_id", workspace.id)
       .eq("source_url", params.source_url)
@@ -206,9 +209,9 @@ export async function createWorkspaceDocument(params: {
       return { data: null, error: `Esta URL ya fue cargada como "${existing.title}".` }
     }
   } else if (params.type !== "url") {
-    const { data: existing } = await supabase
+    const { data: existing } = await admin
       .schema("v3")
-    .from("workspace_documents")
+      .from("workspace_documents")
       .select("id, title")
       .eq("workspace_id", workspace.id)
       .eq("title", params.title)
@@ -224,7 +227,35 @@ export async function createWorkspaceDocument(params: {
     }
   }
 
-  const { data, error } = await supabase
+  // Handle file upload if file_data is provided
+  let storagePath = params.storage_path
+  if (params.file_data && params.file_name) {
+    const docId = crypto.randomUUID()
+    const sanitizedName = params.file_name
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-zA-Z0-9._-]/g, "_")
+      .replace(/_+/g, "_")
+    storagePath = `workspaces/${workspace.id}/${docId}/${sanitizedName}`
+    
+    // Decode base64 and upload to storage
+    const fileBuffer = Buffer.from(params.file_data, 'base64')
+    const { error: storageError } = await admin.storage
+      .from("workspace-documents")
+      .upload(storagePath, fileBuffer, {
+        cacheControl: "3600",
+        upsert: false,
+        contentType: params.type === "pdf" ? "application/pdf" 
+          : params.type === "pptx" ? "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+          : params.type === "docx" ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          : "application/octet-stream"
+      })
+
+    if (storageError) {
+      return { data: null, error: `Error al subir archivo: ${storageError.message}` }
+    }
+  }
+
+  const { data, error } = await admin
     .schema("v3")
     .from("workspace_documents")
     .insert({
@@ -233,7 +264,7 @@ export async function createWorkspaceDocument(params: {
       title: params.title,
       type: params.type,
       source_url: params.source_url || null,
-      storage_path: params.storage_path || null,
+      storage_path: storagePath || null,
       file_size: params.file_size || null,
       status: "processing",
     })
