@@ -18,6 +18,7 @@ export type WorkspaceDocument = {
   storage_path: string | null
   file_size: number | null
   status: "uploading" | "processing" | "ready" | "error"
+  processing_progress: number
   processing_error: string | null
   extracted_text: string | null
   ai_summary: string | null
@@ -62,14 +63,14 @@ export async function getWorkspaceDocuments(): Promise<{
   data: WorkspaceDocument[] | null
   error: string | null 
 }> {
-  const supabase = await createClient()
+  const admin = createAdminClient()
   const workspace = await getCurrentWorkspace()
   
   if (!workspace) {
     return { data: null, error: "No hay workspace activo" }
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await admin
     .schema("v3")
     .from("workspace_documents")
     .select("*")
@@ -87,14 +88,14 @@ export async function getWorkspaceDocumentsWithTags(): Promise<{
   data: WorkspaceDocument[] | null
   error: string | null 
 }> {
-  const supabase = await createClient()
+  const admin = createAdminClient()
   const workspace = await getCurrentWorkspace()
   
   if (!workspace) {
     return { data: null, error: "No hay workspace activo" }
   }
 
-  const { data: docs, error: docsError } = await supabase
+  const { data: docs, error: docsError } = await admin
     .schema("v3")
     .from("workspace_documents")
     .select("*")
@@ -104,7 +105,7 @@ export async function getWorkspaceDocumentsWithTags(): Promise<{
   if (docsError) return { data: null, error: docsError.message }
 
   // Fetch all tags
-  const { data: allTags } = await supabase
+  const { data: allTags } = await admin
     .schema("v3")
     .from("workspace_document_tags")
     .select("*")
@@ -112,11 +113,11 @@ export async function getWorkspaceDocumentsWithTags(): Promise<{
     .order("confidence", { ascending: false })
 
   // Group tags by document_id
-  const tagsByDoc = (allTags || []).reduce((acc, tag) => {
+  const tagsByDoc = (allTags || []).reduce<Record<string, WorkspaceDocumentTag[]>>((acc, tag) => {
     if (!acc[tag.document_id]) acc[tag.document_id] = []
-    acc[tag.document_id].push(tag)
+    acc[tag.document_id].push(tag as WorkspaceDocumentTag)
     return acc
-  }, {} as Record<string, WorkspaceDocumentTag[]>)
+  }, {})
 
   const docsWithTags = (docs || []).map((doc) => ({
     ...doc,

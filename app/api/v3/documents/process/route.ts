@@ -15,6 +15,7 @@ import { analyzeDocument } from "@/lib/documents/analyze-document"
  * 
  * Reutiliza las funciones de extraccion y analisis de v2.
  * La diferencia es que trabaja con v3.workspace_documents y v3.workspace_document_tags
+ * y descarga archivos desde Vercel Blob en lugar de Supabase Storage.
  */
 export async function POST(request: NextRequest) {
   const supabase = await createClient()
@@ -36,10 +37,11 @@ export async function POST(request: NextRequest) {
   try {
     // Find the document - must belong to a workspace the user is member of
     const { data: document, error: docError } = await adminClient
-      .from("v3.workspace_documents")
+      .schema("v3")
+      .from("workspace_documents")
       .select(`
         *,
-        workspace:workspace_id (
+        workspace:workspaces!workspace_id (
           id,
           domain
         )
@@ -48,12 +50,14 @@ export async function POST(request: NextRequest) {
       .single()
 
     if (docError || !document) {
+      console.error("[v0] Document not found:", docError)
       return NextResponse.json({ error: "Documento no encontrado" }, { status: 404 })
     }
 
     // Verify user has access to this workspace
     const { data: membership } = await adminClient
-      .from("v3.workspace_members")
+      .schema("v3")
+      .from("workspace_members")
       .select("role")
       .eq("workspace_id", document.workspace_id)
       .eq("user_id", user.id)
@@ -69,16 +73,19 @@ export async function POST(request: NextRequest) {
     // If reprocessing, clear existing tags
     if (reprocess) {
       await adminClient
-        .from("v3.workspace_document_tags")
+        .schema("v3")
+        .from("workspace_document_tags")
         .delete()
         .eq("document_id", document.id)
     }
 
     // Update status to processing
     await adminClient
-      .from("v3.workspace_documents")
+      .schema("v3")
+      .from("workspace_documents")
       .update({ 
-        status: "processing", 
+        status: "processing",
+        processing_progress: 10,
         updated_at: new Date().toISOString() 
       })
       .eq("id", document.id)
@@ -89,16 +96,26 @@ export async function POST(request: NextRequest) {
     if (document.type === "url") {
       extractedText = await extractTextFromUrl(document.source_url)
     } else {
-      // Download file from Supabase Storage
-      const { data: fileData, error: downloadError } = await adminClient.storage
-        .from("workspace-documents")
-        .download(document.storage_path)
-
-      if (downloadError || !fileData) {
-        throw new Error(`Failed to download file: ${downloadError?.message || "No data"}`)
+      // Download file from Vercel Blob (storage_path is the blob URL)
+      if (!document.storage_path) {
+        throw new Error("No storage path for document")
+      }
+      
+      console.log(`[v0] Downloading from Vercel Blob: ${document.storage_path}`)
+      const fileResponse = await fetch(document.storage_path)
+      
+      if (!fileResponse.ok) {
+        throw new Error(`Failed to download file from Blob: ${fileResponse.status}`)
       }
 
-      const buffer = Buffer.from(await fileData.arrayBuffer())
+      const buffer = Buffer.from(await fileResponse.arrayBuffer())
+
+      // Update progress: file downloaded
+      await adminClient
+        .schema("v3")
+        .from("workspace_documents")
+        .update({ processing_progress: 30 })
+        .eq("id", document.id)
 
       switch (document.type) {
         case "pdf":
@@ -121,11 +138,13 @@ export async function POST(request: NextRequest) {
 
     console.log(`[v0] Extracted ${extractedText.length} chars from v3 document ${document.id}`)
 
-    // Save extracted text
+    // Update progress: text extracted
     await adminClient
-      .from("v3.workspace_documents")
+      .schema("v3")
+      .from("workspace_documents")
       .update({ 
-        extracted_text: extractedText, 
+        extracted_text: extractedText,
+        processing_progress: 50,
         updated_at: new Date().toISOString() 
       })
       .eq("id", document.id)
@@ -135,14 +154,23 @@ export async function POST(request: NextRequest) {
 
     console.log(`[v0] Analysis complete: ${analysis.tags.length} tags found`)
 
+    // Update progress: analysis complete
+    await adminClient
+      .schema("v3")
+      .from("workspace_documents")
+      .update({ processing_progress: 80 })
+      .eq("id", document.id)
+
     // Step 3: Save summary
     await adminClient
-      .from("v3.workspace_documents")
+      .schema("v3")
+      .from("workspace_documents")
       .update({
         ai_summary: analysis.summary,
         status: "ready",
+        processing_progress: 100,
         processing_error: null,
-        version: document.version + 1,
+        version: (document.version || 0) + 1,
         updated_at: new Date().toISOString(),
       })
       .eq("id", document.id)
@@ -159,7 +187,8 @@ export async function POST(request: NextRequest) {
       }))
 
       const { error: tagsError } = await adminClient
-        .from("v3.workspace_document_tags")
+        .schema("v3")
+        .from("workspace_document_tags")
         .insert(tagRows)
 
       if (tagsError) {
@@ -180,9 +209,11 @@ export async function POST(request: NextRequest) {
     // Update document status to error
     try {
       await adminClient
-        .from("v3.workspace_documents")
+        .schema("v3")
+        .from("workspace_documents")
         .update({
           status: "error",
+          processing_progress: 0,
           processing_error: err.message?.slice(0, 500) || "Error desconocido",
           updated_at: new Date().toISOString(),
         })
@@ -208,7 +239,8 @@ async function updateWorkspaceValueProfile(
   try {
     // Get all tags for this workspace
     const { data: allTags } = await adminClient
-      .from("v3.workspace_document_tags")
+      .schema("v3")
+      .from("workspace_document_tags")
       .select("tag_type, tag_value, confidence")
       .eq("workspace_id", workspaceId)
       .order("confidence", { ascending: false })
@@ -228,7 +260,8 @@ async function updateWorkspaceValueProfile(
 
     // Upsert value profile
     await adminClient
-      .from("v3.workspace_value_profiles")
+      .schema("v3")
+      .from("workspace_value_profiles")
       .upsert({
         workspace_id: workspaceId,
         target_industries: Array.from(industries),

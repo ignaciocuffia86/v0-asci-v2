@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS v3.workspace_documents (
   storage_path TEXT,
   file_size INTEGER,
   status TEXT NOT NULL DEFAULT 'processing' CHECK (status IN ('uploading', 'processing', 'ready', 'error')),
+  processing_progress INTEGER DEFAULT 0 CHECK (processing_progress >= 0 AND processing_progress <= 100),
   processing_error TEXT,
   extracted_text TEXT,
   ai_summary TEXT,
@@ -117,7 +118,7 @@ CREATE TABLE IF NOT EXISTS v3.workspace_value_profiles (
 -- ═══════════════════════════════════════════════════════════════════════════════
 -- PASO 6: TABLA BUYER PERSONAS
 -- Campos requeridos por lib/v3/digest.ts
--- ═══════════════════════════════════════════════════════════════════════════════
+-- ════════════════════════════════════════════════���══════════════════════════════
 
 CREATE TABLE IF NOT EXISTS v3.buyer_personas (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

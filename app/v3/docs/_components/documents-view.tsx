@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { 
   FileText, 
@@ -17,6 +17,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { Progress } from "@/components/ui/progress"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,7 +25,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { toast } from "sonner"
-import { WorkspaceDocument, deleteWorkspaceDocument } from "@/app/actions/v3/documents"
+import { WorkspaceDocument, deleteWorkspaceDocument, getWorkspaceDocuments } from "@/app/actions/v3/documents"
 import { UploadDocumentDialog } from "./upload-document-dialog"
 
 interface DocumentsViewProps {
@@ -43,6 +44,30 @@ export function DocumentsView({ initialDocuments, stats, workspaceName }: Docume
   const [documents, setDocuments] = useState(initialDocuments)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+
+  // Poll for updates when there are processing documents
+  useEffect(() => {
+    const hasProcessing = documents.some(d => d.status === "processing")
+    if (!hasProcessing) return
+
+    const interval = setInterval(async () => {
+      try {
+        const result = await getWorkspaceDocuments()
+        if (result.data) {
+          setDocuments(result.data)
+          // If no more processing, router.refresh to update stats
+          const stillProcessing = result.data.some((d: WorkspaceDocument) => d.status === "processing")
+          if (!stillProcessing) {
+            router.refresh()
+          }
+        }
+      } catch {
+        // Ignore polling errors
+      }
+    }, 3000) // Poll every 3 seconds
+
+    return () => clearInterval(interval)
+  }, [documents, router])
 
   const handleDocumentCreated = () => {
     router.refresh()
@@ -207,15 +232,32 @@ export function DocumentsView({ initialDocuments, stats, workspaceName }: Docume
                   </div>
 
                   {/* Status */}
-                  <div className="flex-shrink-0">
+                  <div className="flex-shrink-0 w-24">
                     {doc.status === "ready" && (
-                      <CheckCircle2 className="size-5 text-green-600" />
+                      <div className="flex items-center gap-1.5 text-green-600">
+                        <CheckCircle2 className="size-4" />
+                        <span className="text-xs font-medium">Listo</span>
+                      </div>
                     )}
                     {doc.status === "processing" && (
-                      <Loader2 className="size-5 text-yellow-600 animate-spin" />
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-1.5 text-yellow-600">
+                          <Loader2 className="size-4 animate-spin" />
+                          <span className="text-xs font-medium">
+                            {doc.processing_progress || 0}%
+                          </span>
+                        </div>
+                        <Progress 
+                          value={doc.processing_progress || 0} 
+                          className="h-1.5"
+                        />
+                      </div>
                     )}
                     {doc.status === "error" && (
-                      <AlertCircle className="size-5 text-red-600" />
+                      <div className="flex items-center gap-1.5 text-red-600">
+                        <AlertCircle className="size-4" />
+                        <span className="text-xs font-medium">Error</span>
+                      </div>
                     )}
                   </div>
 
