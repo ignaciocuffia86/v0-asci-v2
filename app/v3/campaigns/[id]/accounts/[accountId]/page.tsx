@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation"
 import { createAdminClient } from "@/lib/supabase/admin"
-import { getAccountDigest, markDigestAsSeen } from "@/lib/v3/digest"
+import { markDigestAsSeen } from "@/lib/v3/digest"
 import { getCampaign } from "@/app/actions/v3/campaigns"
 import { DigestView } from "./_components/digest-view"
 
@@ -13,7 +13,7 @@ export default async function AccountPage({ params }: AccountPageProps) {
   
   const adminClient = createAdminClient()
   
-  // Obtener campaign y campaign_account en paralelo
+  // Primera ronda: obtener campaign y campaign_account
   const [campaign, accountResult] = await Promise.all([
     getCampaign(campaignId),
     adminClient
@@ -33,14 +33,13 @@ export default async function AccountPage({ params }: AccountPageProps) {
   const campaignAccount = accountResult.data
   const companyId = campaignAccount.company_id
   
-  // Paralelizar TODAS las queries restantes para reducir latencia
-  const [companyResult, digest, signalsResult, newsResult] = await Promise.all([
+  // Segunda ronda: obtener datos de la company y signals en paralelo
+  const [companyResult, signalsResult, newsResult] = await Promise.all([
     adminClient
       .from('companies')
       .select('id, name, website, industry, linkedin_url, logo_url, description, employee_count, founded_year, headquarters')
       .eq('id', companyId)
       .single(),
-    getAccountDigest(accountId, true),
     adminClient
       .from('user_company_signals')
       .select('id, title, content, signal_type, created_at')
@@ -55,8 +54,12 @@ export default async function AccountPage({ params }: AccountPageProps) {
       .limit(20)
   ])
   
-  // Log para debug del problema de nombre
-  console.log("[v0] Company query result:", companyResult.error ? companyResult.error : `Found: ${companyResult.data?.name}`)
+  // Debug: verificar qué pasa con la query de company
+  if (companyResult.error) {
+    console.error("[v0] Company query error for companyId:", companyId, "error:", companyResult.error)
+  } else if (!companyResult.data) {
+    console.error("[v0] Company not found for companyId:", companyId)
+  }
   
   // Marcar como visto (fire and forget)
   markDigestAsSeen(accountId).catch(() => {})
@@ -74,7 +77,7 @@ export default async function AccountPage({ params }: AccountPageProps) {
         ...campaignAccount,
         companies: companyWithDomain
       }}
-      digest={digest}
+      digest={null}
       campaignId={campaignId}
       campaignName={campaign.name}
       v2Signals={signalsResult.data || []}
