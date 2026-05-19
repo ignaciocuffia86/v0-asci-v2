@@ -431,7 +431,7 @@ export async function updateAccountStatus(
 
 export async function searchCompanies(
   query: string
-): Promise<{ id: string; name: string; domain: string | null; industry: string | null; logo_url: string | null }[]> {
+): Promise<{ id: string; name: string; domain: string | null; industry: string | null; logo_url: string | null; country: string | null }[]> {
   if (!query || query.length < 2) return [];
 
   const adminClient = createAdminClient();
@@ -440,7 +440,7 @@ export async function searchCompanies(
   // Solo traer compañías con linkedin_url (tienen info normalizada/enriquecida)
   const { data, error } = await adminClient
     .from("companies")
-    .select("id, name, website, industry, logo_url, linkedin_url")
+    .select("id, name, website, industry, logo_url, linkedin_url, country")
     .or(`name.ilike.%${query}%,website.ilike.%${query}%,normalized_name.ilike.%${query}%`)
     .not("linkedin_url", "is", null)
     .order("name")
@@ -457,7 +457,8 @@ export async function searchCompanies(
     name: c.name,
     domain: c.website,
     industry: c.industry,
-    logo_url: c.logo_url
+    logo_url: c.logo_url,
+    country: c.country
   }));
 }
 

@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Search, Building2, Globe, Loader2 } from "lucide-react";
+import { Search, Building2, Globe, Loader2, MapPin } from "lucide-react";
 import { searchCompanies, addAccountToCampaign } from "@/app/actions/v3/campaigns";
 import { useDebouncedCallback } from "use-debounce";
 import Image from "next/image";
@@ -29,6 +29,7 @@ interface SearchResult {
   domain: string | null;
   industry: string | null;
   logo_url: string | null;
+  country: string | null;
 }
 
 export function AddAccountDialog({
@@ -133,18 +134,23 @@ export function AddAccountDialog({
                       )}
                       <div>
                         <div className="font-medium">{company.name}</div>
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground flex-wrap">
                           {company.domain && (
-                            <>
+                            <span className="flex items-center gap-1">
                               <Globe className="size-3" />
-                              <span>{company.domain}</span>
-                            </>
+                              {company.domain}
+                            </span>
+                          )}
+                          {company.country && (
+                            <span className="flex items-center gap-1">
+                              <MapPin className="size-3" />
+                              {company.country}
+                            </span>
                           )}
                           {company.industry && (
-                            <>
-                              <span>•</span>
-                              <span>{company.industry}</span>
-                            </>
+                            <span className="text-xs bg-muted px-1.5 py-0.5 rounded">
+                              {company.industry}
+                            </span>
                           )}
                         </div>
                       </div>
