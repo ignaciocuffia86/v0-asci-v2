@@ -495,7 +495,7 @@ export function DocumentsView({ initialDocuments, stats, workspaceName }: Docume
         {canContinue && (
           <div className="flex justify-end">
             <Button variant="outline" onClick={() => router.push("/v3/campaigns")}>
-              Continuar a campanas
+              Continuar a campañas
               <ArrowRight className="size-4 ml-2" />
             </Button>
           </div>

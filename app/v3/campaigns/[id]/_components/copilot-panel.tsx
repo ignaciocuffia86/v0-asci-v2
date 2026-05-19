@@ -58,7 +58,7 @@ export function CopilotPanel({ onClose }: CopilotPanelProps) {
               <Sparkles className="size-3 text-purple-500" />
             </div>
             <span className="text-muted-foreground">
-              <strong className="text-foreground">Feedback</strong> sobre tus campanas
+              <strong className="text-foreground">Feedback</strong> sobre tus campañas
             </span>
           </li>
           <li className="flex items-start gap-2">
@@ -73,7 +73,7 @@ export function CopilotPanel({ onClose }: CopilotPanelProps) {
         
         <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
           <Clock className="size-3" />
-          <span>Disponible en proxima version</span>
+          <span>Disponible en próxima versión</span>
         </div>
       </div>
     </div>

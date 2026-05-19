@@ -81,7 +81,7 @@ export function AddAccountDialog({
         <DialogHeader>
           <DialogTitle>Agregar Cuenta</DialogTitle>
           <DialogDescription>
-            Busca una empresa por nombre o dominio para agregarla a la campana
+            Busca una empresa por nombre o dominio para agregarla a la campaña
           </DialogDescription>
         </DialogHeader>
 

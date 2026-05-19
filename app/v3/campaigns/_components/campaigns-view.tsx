@@ -38,13 +38,13 @@ interface CampaignsViewProps {
 const CAMPAIGN_TYPE_CONFIG = {
   monitorear: {
     label: "Monitoreo",
-    description: "Solo seguimiento de senales y noticias",
+    description: "Solo seguimiento de señales y noticias",
     icon: Eye,
     color: "bg-blue-500/10 text-blue-500",
   },
   prospectar: {
-    label: "Prospeccion",
-    description: "Busqueda de decision makers",
+    label: "Prospección",
+    description: "Búsqueda de decision makers",
     icon: Search,
     color: "bg-green-500/10 text-green-500",
   },
@@ -84,15 +84,15 @@ export function CampaignsView({ campaigns, accountStats }: CampaignsViewProps) {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Campanas</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Campañas</h1>
           <p className="text-sm text-muted-foreground">
-            Gestiona tus listas de cuentas para prospeccion
+            Gestiona tus listas de cuentas para prospección
           </p>
         </div>
         <Button asChild>
           <Link href="/v3/campaigns/new">
             <Plus data-icon="inline-start" />
-            Nueva Campana
+            Nueva Campaña
           </Link>
         </Button>
       </div>
@@ -123,14 +123,14 @@ export function CampaignsView({ campaigns, accountStats }: CampaignsViewProps) {
           <div className="rounded-full bg-muted p-3 mb-4">
             <Search className="size-6 text-muted-foreground" />
           </div>
-          <h3 className="font-semibold mb-1">Sin campanas</h3>
+          <h3 className="font-semibold mb-1">Sin campañas</h3>
           <p className="text-sm text-muted-foreground mb-4">
-            Crea tu primera campana para comenzar a monitorear o prospectar cuentas
+            Crea tu primera campaña para comenzar a monitorear o prospectar cuentas
           </p>
           <Button asChild>
             <Link href="/v3/campaigns/new">
               <Plus data-icon="inline-start" />
-              Crear Campana
+              Crear Campaña
             </Link>
           </Button>
         </Card>
@@ -203,10 +203,10 @@ export function CampaignsView({ campaigns, accountStats }: CampaignsViewProps) {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Eliminar campana</AlertDialogTitle>
+            <AlertDialogTitle>Eliminar campaña</AlertDialogTitle>
             <AlertDialogDescription>
-              Estas seguro de eliminar la campana &quot;{deleteDialog.campaign?.name}&quot;?
-              Esta accion no se puede deshacer y se eliminaran todas las cuentas asociadas.
+              Estás seguro de eliminar la campaña &quot;{deleteDialog.campaign?.name}&quot;?
+              Esta acción no se puede deshacer y se eliminarán todas las cuentas asociadas.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

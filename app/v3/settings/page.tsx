@@ -17,7 +17,7 @@ export default async function SettingsPage() {
   if (!workspace) {
     return (
       <div className="flex flex-col gap-4">
-        <h2 className="text-xl font-semibold">Configuracion General</h2>
+        <h2 className="text-xl font-semibold">Configuración General</h2>
         <p className="text-muted-foreground">No tienes un workspace configurado.</p>
       </div>
     )
@@ -47,9 +47,9 @@ export default async function SettingsPage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h2 className="text-xl font-semibold">Configuracion General</h2>
+        <h2 className="text-xl font-semibold">Configuración General</h2>
         <p className="text-sm text-muted-foreground">
-          Informacion de tu workspace
+          Información de tu workspace
         </p>
       </div>
       
@@ -61,7 +61,7 @@ export default async function SettingsPage() {
               <Building2 className="size-5" />
               Workspace
             </CardTitle>
-            <CardDescription>Informacion general</CardDescription>
+            <CardDescription>Información general</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <div className="flex items-center justify-between">
@@ -100,7 +100,7 @@ export default async function SettingsPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Calendar className="size-5" />
-              Estadisticas
+              Estadísticas
             </CardTitle>
             <CardDescription>Uso del workspace</CardDescription>
           </CardHeader>
@@ -122,7 +122,7 @@ export default async function SettingsPage() {
             <div className="flex items-center justify-between">
               <span className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Building2 className="size-4" />
-                Campanas
+                Campañas
               </span>
               <span className="font-medium">{campaignCount}</span>
             </div>

@@ -12,7 +12,7 @@ export default async function CampaignLayout({
 }) {
   const { id: campaignId } = await params
   
-  // Verificar autenticacion
+  // Verificar autenticación
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   
@@ -20,10 +20,10 @@ export default async function CampaignLayout({
     redirect("/auth/login?next=/v3")
   }
   
-  // Obtener campanas del workspace
+  // Obtener campañas del workspace
   const campaigns = await getCampaigns()
   
-  // Verificar que la campana existe
+  // Verificar que la campaña existe
   const currentCampaign = campaigns?.find((c: any) => c.id === campaignId)
   if (!currentCampaign) {
     redirect("/v3/campaigns")

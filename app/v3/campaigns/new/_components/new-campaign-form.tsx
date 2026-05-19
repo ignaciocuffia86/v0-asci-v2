@@ -22,23 +22,23 @@ const CAMPAIGN_TYPES: {
   {
     value: "monitorear",
     label: "Monitoreo",
-    description: "Seguimiento de senales y noticias de cuentas conocidas",
+    description: "Seguimiento de señales y noticias de cuentas conocidas",
     icon: Eye,
-    features: ["Noticias y senales", "Alertas de cambios", "Sin prospeccion activa"],
+    features: ["Noticias y señales", "Alertas de cambios", "Sin prospección activa"],
   },
   {
     value: "prospectar",
-    label: "Prospeccion",
-    description: "Busqueda activa de decision makers en cuentas target",
+    label: "Prospección",
+    description: "Búsqueda activa de decision makers en cuentas target",
     icon: Search,
-    features: ["Tech Radar", "Busqueda en Apollo", "Recomendacion de cargos", "Email agent"],
+    features: ["Tech Radar", "Búsqueda en Apollo", "Recomendación de cargos", "Email agent"],
   },
   {
     value: "descubrir",
     label: "Descubrimiento",
     description: "ASCI recomienda nuevas cuentas basado en tu perfil",
     icon: Sparkles,
-    features: ["Recomendaciones de ASCI", "Filtro por senales", "Blacklist de cuentas"],
+    features: ["Recomendaciónes de ASCI", "Filtro por señales", "Blacklist de cuentas"],
   },
 ];
 
@@ -72,7 +72,7 @@ export function NewCampaignForm() {
     if (result.success && result.campaignId) {
       router.push(`/v3/campaigns/${result.campaignId}`);
     } else {
-      setError(result.error || "Error al crear la campana");
+      setError(result.error || "Error al crear la campaña");
       setIsSubmitting(false);
     }
   };
@@ -82,13 +82,13 @@ export function NewCampaignForm() {
       <Button variant="ghost" size="sm" className="w-fit" asChild>
         <Link href="/v3/campaigns">
           <ArrowLeft data-icon="inline-start" />
-          Volver a campanas
+          Volver a campañas
         </Link>
       </Button>
 
       {/* Nombre */}
       <div className="flex flex-col gap-2">
-        <Label htmlFor="name">Nombre de la campana</Label>
+        <Label htmlFor="name">Nombre de la campaña</Label>
         <Input
           id="name"
           placeholder="Ej: Enterprise Q1 2025"
@@ -100,7 +100,7 @@ export function NewCampaignForm() {
 
       {/* Tipo */}
       <div className="flex flex-col gap-3">
-        <Label>Tipo de campana</Label>
+        <Label>Tipo de campaña</Label>
         <RadioGroup
           value={type}
           onValueChange={(v) => setType(v as CampaignType)}
@@ -168,7 +168,7 @@ export function NewCampaignForm() {
             rows={3}
           />
           <p className="text-xs text-muted-foreground">
-            Describe el perfil de los decision makers que buscas. ASCI usara esto para recomendar
+            Describe el perfil de los decision makers que buscas. ASCI usará esto para recomendar
             cargos relevantes.
           </p>
         </div>
@@ -183,7 +183,7 @@ export function NewCampaignForm() {
           <Link href="/v3/campaigns">Cancelar</Link>
         </Button>
         <Button type="submit" disabled={isSubmitting || !name.trim()}>
-          {isSubmitting ? "Creando..." : "Crear Campana"}
+          {isSubmitting ? "Creando..." : "Crear Campaña"}
         </Button>
       </div>
     </form>

@@ -152,10 +152,10 @@ export function CsvReviewView({ campaign, imports }: CsvReviewViewProps) {
           <CheckCircle className="size-12 text-green-500 mb-4" />
           <h3 className="font-semibold mb-1">Todo resuelto</h3>
           <p className="text-sm text-muted-foreground mb-4">
-            No hay imports pendientes de revision
+            No hay imports pendientes de revisión
           </p>
           <Button asChild>
-            <Link href={`/v3/campaigns/${campaign.id}`}>Volver a la campana</Link>
+            <Link href={`/v3/campaigns/${campaign.id}`}>Volver a la campaña</Link>
           </Button>
         </Card>
       </div>
@@ -199,7 +199,7 @@ export function CsvReviewView({ campaign, imports }: CsvReviewViewProps) {
         <Card>
           <CardContent className="flex items-center justify-between p-4">
             <div>
-              <p className="font-medium">Progreso de revision</p>
+              <p className="font-medium">Progreso de revisión</p>
               <p className="text-sm text-muted-foreground">
                 {resolvedCount} de {importData.rows.length} filas resueltas
               </p>
@@ -216,7 +216,7 @@ export function CsvReviewView({ campaign, imports }: CsvReviewViewProps) {
       {/* Rows Table */}
       <Card>
         <CardHeader>
-          <CardTitle>Filas pendientes de revision</CardTitle>
+          <CardTitle>Filas pendientes de revisión</CardTitle>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -228,7 +228,7 @@ export function CsvReviewView({ campaign, imports }: CsvReviewViewProps) {
               <CheckCircle className="size-12 text-green-500 mb-4" />
               <h3 className="font-semibold mb-1">Todas las filas resueltas</h3>
               <p className="text-sm text-muted-foreground">
-                Puedes volver a la campana para ver las cuentas agregadas
+                Puedes volver a la campaña para ver las cuentas agregadas
               </p>
             </div>
           ) : (

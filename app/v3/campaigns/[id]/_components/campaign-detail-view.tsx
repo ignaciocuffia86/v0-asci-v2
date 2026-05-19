@@ -353,8 +353,8 @@ export function CampaignDetailView({
           <AlertDialogHeader>
             <AlertDialogTitle>Eliminar cuenta</AlertDialogTitle>
             <AlertDialogDescription>
-              Estas seguro de eliminar &quot;{deleteDialog.account?.company?.name}&quot; de esta
-              campana?
+              Estás seguro de eliminar &quot;{deleteDialog.account?.company?.name}&quot; de esta
+              campaña?
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

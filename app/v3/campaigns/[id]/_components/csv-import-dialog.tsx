@@ -156,7 +156,7 @@ export function CsvImportDialog({
       if (result.success) {
         setState("success");
         setResultMessage(
-          `Se procesaron ${parsedRows.length} filas. Las coincidencias automaticas se agregaron a la campana.`
+          `Se procesaron ${parsedRows.length} filas. Las coincidencias automáticas se agregaron a la campaña.`
         );
         setTimeout(() => {
           onSuccess();
@@ -179,7 +179,7 @@ export function CsvImportDialog({
         <DialogHeader>
           <DialogTitle>Importar CSV</DialogTitle>
           <DialogDescription>
-            Sube un archivo CSV con nombres de empresas para agregarlas a la campana
+            Sube un archivo CSV con nombres de empresas para agregarlas a la campaña
           </DialogDescription>
         </DialogHeader>
 

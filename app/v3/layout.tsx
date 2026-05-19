@@ -8,7 +8,7 @@ export default async function V3Layout({
 }: {
   children: React.ReactNode
 }) {
-  // Verificar autenticacion
+  // Verificar autenticación
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   
@@ -16,15 +16,15 @@ export default async function V3Layout({
     redirect("/auth/login?next=/v3")
   }
   
-  // Obtener campanas para el Command Palette
+  // Obtener campañas para el Command Palette
   let campaigns: Array<{ id: string; name: string }> = []
   try {
     campaigns = await getCampaigns()
   } catch {
-    // Si falla, continuamos sin campanas en el palette
+    // Si falla, continuamos sin campañas en el palette
   }
   
-  // Aplicar v3-theme (dark mode warm charcoal) a todas las paginas de v3
+  // Aplicar v3-theme (dark mode warm charcoal) a todas las páginas de v3
   return (
     <div className="v3-theme min-h-screen bg-background text-foreground">
       {children}

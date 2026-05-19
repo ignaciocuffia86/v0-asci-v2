@@ -131,11 +131,11 @@ export function CampaignLayoutClient({
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={() => router.push("/v3/campaigns/new")}>
                     <Plus className="mr-2 size-4" />
-                    Nueva campana
+                    Nueva campaña
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => router.push("/v3/campaigns")}>
                     <Settings className="mr-2 size-4" />
-                    Gestionar campanas
+                    Gestionar campañas
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
