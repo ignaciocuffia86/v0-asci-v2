@@ -422,12 +422,16 @@ export async function getCurrentWorkspace(userId?: string): Promise<WorkspaceWit
   
   let uid = userId
   if (!uid) {
-    const { data: { user } } = await supabase.auth.getUser()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    console.log("[v0] getCurrentWorkspace - auth result:", { user: user?.id, email: user?.email, authError })
     if (!user) return null
     uid = user.id
   }
   
-  return getWorkspaceForUser(uid)
+  console.log("[v0] getCurrentWorkspace - calling getWorkspaceForUser with uid:", uid)
+  const workspace = await getWorkspaceForUser(uid)
+  console.log("[v0] getCurrentWorkspace - workspace result:", workspace)
+  return workspace
 }
 
 /**

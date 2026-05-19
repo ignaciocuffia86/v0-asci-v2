@@ -70,7 +70,8 @@ export async function getWorkspaceDocuments(): Promise<{
   }
 
   const { data, error } = await supabase
-    .from("v3.workspace_documents")
+    .schema("v3")
+    .from("workspace_documents")
     .select("*")
     .eq("workspace_id", workspace.id)
     .order("created_at", { ascending: false })
@@ -94,7 +95,8 @@ export async function getWorkspaceDocumentsWithTags(): Promise<{
   }
 
   const { data: docs, error: docsError } = await supabase
-    .from("v3.workspace_documents")
+    .schema("v3")
+    .from("workspace_documents")
     .select("*")
     .eq("workspace_id", workspace.id)
     .order("created_at", { ascending: false })
@@ -103,7 +105,8 @@ export async function getWorkspaceDocumentsWithTags(): Promise<{
 
   // Fetch all tags
   const { data: allTags } = await supabase
-    .from("v3.workspace_document_tags")
+    .schema("v3")
+    .from("workspace_document_tags")
     .select("*")
     .eq("workspace_id", workspace.id)
     .order("confidence", { ascending: false })
@@ -138,7 +141,8 @@ export async function getDocumentWithTags(documentId: string): Promise<{
   }
 
   const { data: doc, error: docError } = await supabase
-    .from("v3.workspace_documents")
+    .schema("v3")
+    .from("workspace_documents")
     .select("*")
     .eq("id", documentId)
     .eq("workspace_id", workspace.id)
@@ -147,7 +151,8 @@ export async function getDocumentWithTags(documentId: string): Promise<{
   if (docError) return { data: null, error: docError.message }
 
   const { data: tags } = await supabase
-    .from("v3.workspace_document_tags")
+    .schema("v3")
+    .from("workspace_document_tags")
     .select("*")
     .eq("document_id", documentId)
     .eq("workspace_id", workspace.id)
@@ -189,7 +194,8 @@ export async function createWorkspaceDocument(params: {
   // Check for duplicates
   if (params.type === "url" && params.source_url) {
     const { data: existing } = await supabase
-      .from("v3.workspace_documents")
+      .schema("v3")
+    .from("workspace_documents")
       .select("id, title")
       .eq("workspace_id", workspace.id)
       .eq("source_url", params.source_url)
@@ -201,7 +207,8 @@ export async function createWorkspaceDocument(params: {
     }
   } else if (params.type !== "url") {
     const { data: existing } = await supabase
-      .from("v3.workspace_documents")
+      .schema("v3")
+    .from("workspace_documents")
       .select("id, title")
       .eq("workspace_id", workspace.id)
       .eq("title", params.title)
@@ -218,7 +225,8 @@ export async function createWorkspaceDocument(params: {
   }
 
   const { data, error } = await supabase
-    .from("v3.workspace_documents")
+    .schema("v3")
+    .from("workspace_documents")
     .insert({
       workspace_id: workspace.id,
       uploaded_by: user.id,
@@ -258,7 +266,8 @@ export async function deleteWorkspaceDocument(documentId: string): Promise<{
 
   // Get doc to find storage path
   const { data: doc } = await supabase
-    .from("v3.workspace_documents")
+    .schema("v3")
+    .from("workspace_documents")
     .select("storage_path")
     .eq("id", documentId)
     .eq("workspace_id", workspace.id)
@@ -272,7 +281,8 @@ export async function deleteWorkspaceDocument(documentId: string): Promise<{
 
   // Delete document (tags cascade via FK)
   const { error } = await supabase
-    .from("v3.workspace_documents")
+    .schema("v3")
+    .from("workspace_documents")
     .delete()
     .eq("id", documentId)
     .eq("workspace_id", workspace.id)
@@ -296,7 +306,8 @@ export async function getDocumentPreviewUrl(documentId: string): Promise<{
   }
 
   const { data: doc } = await supabase
-    .from("v3.workspace_documents")
+    .schema("v3")
+    .from("workspace_documents")
     .select("storage_path, source_url, type")
     .eq("id", documentId)
     .eq("workspace_id", workspace.id)
@@ -342,7 +353,8 @@ export async function getWorkspaceValueProfile(): Promise<{
   }
 
   const { data, error } = await supabase
-    .from("v3.workspace_value_profiles")
+    .schema("v3")
+    .from("workspace_value_profiles")
     .select("*")
     .eq("workspace_id", workspace.id)
     .maybeSingle()
@@ -365,7 +377,8 @@ export async function hasProcessedDocuments(): Promise<boolean> {
   if (!workspace) return false
 
   const { count } = await supabase
-    .from("v3.workspace_documents")
+    .schema("v3")
+    .from("workspace_documents")
     .select("id", { count: "exact", head: true })
     .eq("workspace_id", workspace.id)
     .eq("status", "ready")
@@ -390,7 +403,8 @@ export async function getDocumentStats(): Promise<{
   }
 
   const { data } = await supabase
-    .from("v3.workspace_documents")
+    .schema("v3")
+    .from("workspace_documents")
     .select("status")
     .eq("workspace_id", workspace.id)
 
