@@ -5,10 +5,12 @@ import { CampaignDetailView } from "./_components/campaign-detail-view";
 
 interface CampaignPageProps {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ add?: string; import?: string }>;
 }
 
-export default async function CampaignPage({ params }: CampaignPageProps) {
+export default async function CampaignPage({ params, searchParams }: CampaignPageProps) {
   const { id } = await params;
+  const { add, import: importParam } = await searchParams;
   
   const [campaign, accounts, csvImports] = await Promise.all([
     getCampaign(id),
@@ -25,6 +27,8 @@ export default async function CampaignPage({ params }: CampaignPageProps) {
       campaign={campaign}
       accounts={accounts}
       csvImports={csvImports}
+      initialAddDialogOpen={add === "true"}
+      initialImportDialogOpen={importParam === "true"}
     />
   );
 }

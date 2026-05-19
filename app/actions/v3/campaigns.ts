@@ -436,9 +436,11 @@ export async function searchCompanies(
     .limit(20);
 
   if (error) {
-    console.error("Error searching companies:", error);
+    console.error("[v0] Error searching companies:", error);
     return [];
   }
+
+  console.log("[v0] searchCompanies query:", query, "results:", data?.length || 0);
 
   return data || [];
 }

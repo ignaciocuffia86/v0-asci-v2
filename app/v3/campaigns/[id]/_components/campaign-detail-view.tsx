@@ -57,6 +57,8 @@ interface CampaignDetailViewProps {
   campaign: Campaign;
   accounts: CampaignAccount[];
   csvImports: CsvImport[];
+  initialAddDialogOpen?: boolean;
+  initialImportDialogOpen?: boolean;
 }
 
 const CAMPAIGN_TYPE_CONFIG = {
@@ -81,11 +83,13 @@ export function CampaignDetailView({
   campaign,
   accounts,
   csvImports,
+  initialAddDialogOpen = false,
+  initialImportDialogOpen = false,
 }: CampaignDetailViewProps) {
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState("");
-  const [addDialogOpen, setAddDialogOpen] = useState(false);
-  const [csvDialogOpen, setCsvDialogOpen] = useState(false);
+  const [addDialogOpen, setAddDialogOpen] = useState(initialAddDialogOpen);
+  const [csvDialogOpen, setCsvDialogOpen] = useState(initialImportDialogOpen);
   const [deleteDialog, setDeleteDialog] = useState<{
     open: boolean;
     account: CampaignAccount | null;
