@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
-import { usePathname } from "next/navigation"
+import { usePathname, useRouter } from "next/navigation"
 import { 
   Building2, 
   Loader2, 
@@ -38,13 +38,36 @@ interface Account {
 
 interface AccountListSidebarProps {
   campaignId: string
+  onAddAccount?: () => void
+  onImportCsv?: () => void
 }
 
-export function AccountListSidebar({ campaignId }: AccountListSidebarProps) {
+export function AccountListSidebar({ campaignId, onAddAccount, onImportCsv }: AccountListSidebarProps) {
   const pathname = usePathname()
+  const router = useRouter()
   const [accounts, setAccounts] = useState<Account[]>([])
   const [loading, setLoading] = useState(true)
   const [pendingImports, setPendingImports] = useState(0)
+
+  const handleAddAccount = () => {
+    if (onAddAccount) {
+      onAddAccount()
+    } else {
+      // Fallback: navigate with query param and force refresh
+      router.push(`/v3/campaigns/${campaignId}?add=true`)
+      router.refresh()
+    }
+  }
+
+  const handleImportCsv = () => {
+    if (onImportCsv) {
+      onImportCsv()
+    } else {
+      // Fallback: navigate with query param and force refresh
+      router.push(`/v3/campaigns/${campaignId}?import=true`)
+      router.refresh()
+    }
+  }
   
   useEffect(() => {
     async function loadAccounts() {
@@ -97,17 +120,13 @@ export function AccountListSidebar({ campaignId }: AccountListSidebarProps) {
           </p>
         </div>
         <div className="flex flex-col gap-2 w-full">
-          <Button size="sm" className="w-full gap-2" asChild>
-            <Link href={`/v3/campaigns/${campaignId}?add=true`}>
-              <Plus className="size-4" />
-              Agregar cuenta
-            </Link>
+          <Button size="sm" className="w-full gap-2" onClick={handleAddAccount}>
+            <Plus className="size-4" />
+            Agregar cuenta
           </Button>
-          <Button size="sm" variant="outline" className="w-full gap-2" asChild>
-            <Link href={`/v3/campaigns/${campaignId}?import=true`}>
-              <FileUp className="size-4" />
-              Importar CSV
-            </Link>
+          <Button size="sm" variant="outline" className="w-full gap-2" onClick={handleImportCsv}>
+            <FileUp className="size-4" />
+            Importar CSV
           </Button>
         </div>
       </div>
@@ -205,12 +224,10 @@ export function AccountListSidebar({ campaignId }: AccountListSidebarProps) {
           variant="ghost" 
           size="sm" 
           className="w-full justify-start gap-2 text-muted-foreground"
-          asChild
+          onClick={handleAddAccount}
         >
-          <Link href={`/v3/campaigns/${campaignId}?add=true`}>
-            <Plus className="size-4" />
-            Agregar cuenta
-          </Link>
+          <Plus className="size-4" />
+          Agregar cuenta
         </Button>
       </div>
     </div>

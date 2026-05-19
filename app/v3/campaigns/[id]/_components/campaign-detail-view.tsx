@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -87,6 +87,7 @@ export function CampaignDetailView({
   initialImportDialogOpen = false,
 }: CampaignDetailViewProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [searchQuery, setSearchQuery] = useState("");
   const [addDialogOpen, setAddDialogOpen] = useState(initialAddDialogOpen);
   const [csvDialogOpen, setCsvDialogOpen] = useState(initialImportDialogOpen);
@@ -95,6 +96,23 @@ export function CampaignDetailView({
     account: CampaignAccount | null;
   }>({ open: false, account: null });
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // React to URL search params changes (from sidebar clicks)
+  useEffect(() => {
+    const addParam = searchParams.get("add");
+    const importParam = searchParams.get("import");
+    
+    if (addParam === "true") {
+      setAddDialogOpen(true);
+      // Clean up URL
+      router.replace(`/v3/campaigns/${campaign.id}`, { scroll: false });
+    }
+    if (importParam === "true") {
+      setCsvDialogOpen(true);
+      // Clean up URL
+      router.replace(`/v3/campaigns/${campaign.id}`, { scroll: false });
+    }
+  }, [searchParams, campaign.id, router]);
 
   const config = CAMPAIGN_TYPE_CONFIG[campaign.type];
   const Icon = config.icon;
