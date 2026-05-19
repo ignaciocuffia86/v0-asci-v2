@@ -39,7 +39,7 @@ export default async function AccountPage({ params }: AccountPageProps) {
       .from('companies')
       .select('id, name, website, industry, linkedin_url, logo_url, description, employee_count, founded_year, headquarters')
       .eq('id', companyId)
-      .single(),
+      .maybeSingle(),
     adminClient
       .from('user_company_signals')
       .select('id, title, content, signal_type, created_at')
@@ -54,12 +54,8 @@ export default async function AccountPage({ params }: AccountPageProps) {
       .limit(20)
   ])
   
-  // Debug: verificar qué pasa con la query de company
-  if (companyResult.error) {
-    console.error("[v0] Company query error for companyId:", companyId, "error:", companyResult.error)
-  } else if (!companyResult.data) {
-    console.error("[v0] Company not found for companyId:", companyId)
-  }
+  // Log para debug - remover después
+  console.log("[v0] companyId:", companyId, "company found:", !!companyResult.data, "error:", companyResult.error?.message || "none")
   
   // Marcar como visto (fire and forget)
   markDigestAsSeen(accountId).catch(() => {})

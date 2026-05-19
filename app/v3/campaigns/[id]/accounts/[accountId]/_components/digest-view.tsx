@@ -262,7 +262,9 @@ export function DigestView({ campaignAccount, digest, campaignId, campaignName, 
       {lastUpdate && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Calendar className="size-3" />
-          <span>Última actualización: {formatDistanceToNow(new Date(lastUpdate), { addSuffix: true, locale: es })}</span>
+          <span suppressHydrationWarning>
+            Última actualización: {formatDistanceToNow(new Date(lastUpdate), { addSuffix: true, locale: es })}
+          </span>
         </div>
       )}
       
@@ -401,7 +403,7 @@ export function DigestView({ campaignAccount, digest, campaignId, campaignName, 
                             )}
                             <div className="flex items-center gap-2 text-xs text-muted-foreground">
                               {item.published_at && (
-                                <span>
+                                <span suppressHydrationWarning>
                                   {format(new Date(item.published_at), "d MMM yyyy", { locale: es })}
                                 </span>
                               )}
