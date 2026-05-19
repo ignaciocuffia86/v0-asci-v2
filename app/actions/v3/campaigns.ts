@@ -428,11 +428,12 @@ export async function searchCompanies(
 
   const adminClient = createAdminClient();
 
-  // Buscar por nombre o dominio
+  // Buscar por nombre, website o normalized_name (igual que v2)
   const { data, error } = await adminClient
     .from("companies")
-    .select("id, name, domain, industry")
-    .or(`name.ilike.%${query}%,domain.ilike.%${query}%`)
+    .select("id, name, website, industry")
+    .or(`name.ilike.%${query}%,website.ilike.%${query}%,normalized_name.ilike.%${query}%`)
+    .order("name")
     .limit(20);
 
   if (error) {
@@ -442,7 +443,13 @@ export async function searchCompanies(
 
   console.log("[v0] searchCompanies query:", query, "results:", data?.length || 0);
 
-  return data || [];
+  // Map website to domain for consistency with UI
+  return (data || []).map(c => ({
+    id: c.id,
+    name: c.name,
+    domain: c.website,
+    industry: c.industry
+  }));
 }
 
 // ============================================================

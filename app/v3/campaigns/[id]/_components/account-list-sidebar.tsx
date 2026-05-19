@@ -50,22 +50,24 @@ export function AccountListSidebar({ campaignId, onAddAccount, onImportCsv }: Ac
   const [pendingImports, setPendingImports] = useState(0)
 
   const handleAddAccount = () => {
+    console.log("[v0] handleAddAccount called, onAddAccount:", !!onAddAccount)
     if (onAddAccount) {
       onAddAccount()
     } else {
-      // Fallback: navigate with query param and force refresh
+      // Fallback: navigate with query param
+      console.log("[v0] Navigating to add account URL")
       router.push(`/v3/campaigns/${campaignId}?add=true`)
-      router.refresh()
     }
   }
 
   const handleImportCsv = () => {
+    console.log("[v0] handleImportCsv called, onImportCsv:", !!onImportCsv)
     if (onImportCsv) {
       onImportCsv()
     } else {
-      // Fallback: navigate with query param and force refresh
+      // Fallback: navigate with query param
+      console.log("[v0] Navigating to import CSV URL")
       router.push(`/v3/campaigns/${campaignId}?import=true`)
-      router.refresh()
     }
   }
   
