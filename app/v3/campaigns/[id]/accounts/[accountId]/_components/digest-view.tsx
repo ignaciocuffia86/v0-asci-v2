@@ -77,11 +77,12 @@ interface DigestViewProps {
   campaignAccount: CampaignAccount
   digest: CampaignAccountDigest | null
   campaignId: string
+  campaignName?: string
   v2Signals?: V2Signal[]
   v2News?: V2News[]
 }
 
-export function DigestView({ campaignAccount, digest, campaignId, v2Signals = [], v2News = [] }: DigestViewProps) {
+export function DigestView({ campaignAccount, digest, campaignId, campaignName, v2Signals = [], v2News = [] }: DigestViewProps) {
   const router = useRouter()
   const [newsOpen, setNewsOpen] = useState(true)
   const [techOpen, setTechOpen] = useState(true)
@@ -137,6 +138,23 @@ export function DigestView({ campaignAccount, digest, campaignId, v2Signals = []
   
   return (
     <div className="flex flex-col gap-6 p-6">
+      {/* Breadcrumb */}
+      <nav className="flex items-center gap-2 text-sm text-muted-foreground">
+        <a href="/v3/docs" className="hover:text-foreground transition-colors">
+          Documentos
+        </a>
+        <span>/</span>
+        <a href="/v3/campaigns" className="hover:text-foreground transition-colors">
+          Campañas
+        </a>
+        <span>/</span>
+        <a href={`/v3/campaigns/${campaignId}`} className="hover:text-foreground transition-colors">
+          {campaignName || "Campaña"}
+        </a>
+        <span>/</span>
+        <span className="text-foreground font-medium">{company?.name || "Cuenta"}</span>
+      </nav>
+
       {/* Company Header */}
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-start gap-4">

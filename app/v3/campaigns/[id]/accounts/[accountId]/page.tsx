@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { getAccountDigest, markDigestAsSeen } from "@/lib/v3/digest"
+import { getCampaign } from "@/app/actions/v3/campaigns"
 import { DigestView } from "./_components/digest-view"
 
 interface AccountPageProps {
@@ -12,19 +13,24 @@ export default async function AccountPage({ params }: AccountPageProps) {
   
   const adminClient = createAdminClient()
   
-  // Obtener campaign_account del schema v3
-  const { data: campaignAccount, error } = await adminClient
-    .schema('v3')
-    .from('campaign_accounts')
-    .select('id, company_id, status, prospection_status, tech_radar_run_at, apollo_run_at, added_at')
-    .eq('id', accountId)
-    .eq('campaign_id', campaignId)
-    .single()
+  // Obtener campaign y campaign_account en paralelo
+  const [campaign, accountResult] = await Promise.all([
+    getCampaign(campaignId),
+    adminClient
+      .schema('v3')
+      .from('campaign_accounts')
+      .select('id, company_id, status, prospection_status, tech_radar_run_at, apollo_run_at, added_at')
+      .eq('id', accountId)
+      .eq('campaign_id', campaignId)
+      .single()
+  ])
   
-  if (error || !campaignAccount) {
-    console.error("[v0] Error fetching campaign account:", error)
+  if (!campaign || accountResult.error || !accountResult.data) {
+    console.error("[v0] Error fetching campaign or account:", accountResult.error)
     notFound()
   }
+  
+  const campaignAccount = accountResult.data
   
   // Obtener company del schema public
   const { data: company } = await adminClient
@@ -69,6 +75,7 @@ export default async function AccountPage({ params }: AccountPageProps) {
       }}
       digest={digest}
       campaignId={campaignId}
+      campaignName={campaign.name}
       v2Signals={signalsResult.data || []}
       v2News={newsResult.data || []}
     />

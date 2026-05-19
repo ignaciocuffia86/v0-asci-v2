@@ -1,8 +1,8 @@
-import { notFound } from "next/navigation";
-import { getCampaign, getCampaignAccounts } from "@/app/actions/v3/campaigns";
+import { notFound, redirect } from "next/navigation";
+import { getCampaign } from "@/app/actions/v3/campaigns";
 import { getCsvImportsForCampaign } from "@/app/actions/v3/csv-import";
 import { getCampaignAccountsWithDigest } from "@/lib/v3/digest";
-import { CampaignDetailView } from "./_components/campaign-detail-view";
+import { CampaignEmptyState } from "./_components/campaign-empty-state";
 
 interface CampaignPageProps {
   params: Promise<{ id: string }>;
@@ -13,22 +13,25 @@ export default async function CampaignPage({ params, searchParams }: CampaignPag
   const { id } = await params;
   const { add, import: importParam } = await searchParams;
   
-  const [campaign, accounts, csvImports, accountsWithDigest] = await Promise.all([
+  const [campaign, accountsWithDigest, csvImports] = await Promise.all([
     getCampaign(id),
-    getCampaignAccounts(id),
-    getCsvImportsForCampaign(id),
     getCampaignAccountsWithDigest(id),
+    getCsvImportsForCampaign(id),
   ]);
 
   if (!campaign) {
     notFound();
   }
 
+  // Si hay cuentas, redirigir a la primera cuenta automáticamente
+  if (accountsWithDigest.length > 0 && add !== "true" && importParam !== "true") {
+    redirect(`/v3/campaigns/${id}/accounts/${accountsWithDigest[0].id}`);
+  }
+
+  // Solo mostrar empty state cuando no hay cuentas
   return (
-    <CampaignDetailView
+    <CampaignEmptyState
       campaign={campaign}
-      accounts={accounts}
-      accountsWithDigest={accountsWithDigest}
       csvImports={csvImports}
       initialAddDialogOpen={add === "true"}
       initialImportDialogOpen={importParam === "true"}
