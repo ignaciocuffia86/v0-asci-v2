@@ -3,6 +3,21 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* ═══════════════════════════════════════════════════════════
+   V3 SIGNAL COLORS (used in both light and dark mode)
+   ═══════════════════════════════════════════════════════════ */
+:root {
+  --signal-technology: oklch(0.70 0.12 280);
+  --signal-hiring: oklch(0.70 0.12 145);
+  --signal-news: oklch(0.70 0.12 220);
+  --signal-funding: oklch(0.75 0.15 85);
+  --signal-technology-muted: oklch(0.30 0.05 280);
+  --signal-hiring-muted: oklch(0.30 0.05 145);
+  --signal-news-muted: oklch(0.30 0.05 220);
+  --signal-funding-muted: oklch(0.30 0.05 85);
+}
+
+/* V2 Light Mode (default) */
 :root {
   --background: hsl(210 40% 98%);
   --foreground: hsl(222 47% 11%);
@@ -74,10 +89,45 @@
   --sidebar-ring: hsl(217.2 91.2% 59.8%);
 }
 
+/* ═══════════════════════════════════════════════════════════
+   V3 Dark Theme Override (for bot.bigua.lat)
+   Warm charcoal base inspired by Linear
+   Applied via .v3-theme class on body or specific containers
+   ═══════════════════════════════════════════════════════════ */
+.v3-theme {
+  --background: oklch(0.14 0.005 285);
+  --foreground: oklch(0.95 0.005 285);
+  --card: oklch(0.17 0.005 285);
+  --card-foreground: oklch(0.95 0.005 285);
+  --popover: oklch(0.17 0.005 285);
+  --popover-foreground: oklch(0.95 0.005 285);
+  --primary: oklch(0.75 0.15 180);
+  --primary-foreground: oklch(0.15 0.02 180);
+  --secondary: oklch(0.20 0.005 285);
+  --secondary-foreground: oklch(0.95 0.005 285);
+  --muted: oklch(0.20 0.005 285);
+  --muted-foreground: oklch(0.65 0.005 285);
+  --accent: oklch(0.23 0.005 285);
+  --accent-foreground: oklch(0.95 0.005 285);
+  --destructive: oklch(0.65 0.20 25);
+  --destructive-foreground: oklch(0.95 0.005 285);
+  --border: oklch(0.25 0.005 285);
+  --input: oklch(0.20 0.005 285);
+  --ring: oklch(0.75 0.15 180);
+  --sidebar: oklch(0.12 0.005 285);
+  --sidebar-foreground: oklch(0.95 0.005 285);
+  --sidebar-primary: oklch(0.75 0.15 180);
+  --sidebar-primary-foreground: oklch(0.15 0.02 180);
+  --sidebar-accent: oklch(0.17 0.005 285);
+  --sidebar-accent-foreground: oklch(0.95 0.005 285);
+  --sidebar-border: oklch(0.22 0.005 285);
+  --sidebar-ring: oklch(0.75 0.15 180);
+}
+
 @theme inline {
   --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
   --font-serif: 'Source Serif 4', ui-serif, Georgia, Cambria, 'Times New Roman', Times, serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   --color-lime: #d9f270;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -115,6 +165,16 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  
+  /* V3 Signal Colors */
+  --color-signal-technology: var(--signal-technology);
+  --color-signal-hiring: var(--signal-hiring);
+  --color-signal-news: var(--signal-news);
+  --color-signal-funding: var(--signal-funding);
+  --color-signal-technology-muted: var(--signal-technology-muted);
+  --color-signal-hiring-muted: var(--signal-hiring-muted);
+  --color-signal-news-muted: var(--signal-news-muted);
+  --color-signal-funding-muted: var(--signal-funding-muted);
 }
 
 @layer base {

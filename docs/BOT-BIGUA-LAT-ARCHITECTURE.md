@@ -1,1107 +1,1444 @@
-# BOT.BIGUA.LAT: Arquitectura MCP para Agentes de IA
+# BOT.BIGUA.LAT — Arquitectura Definitiva
 
-## Resumen Ejecutivo
-
-Nueva iteración de ASCI como MCP (Model Context Protocol) server que permite a agentes de IA consumir inteligencia de cuentas, gestionar secuencias de outreach y coordinar el envío de emails con aprobación humana. 
-
-**Coexistencia en producción:**
-- `asci.bigua.lat` - ASCI v2 actual (producción, usuarios reales)
-- `bot.bigua.lat` - Nueva iteración MCP (beta testing)
-
-Ambas aplicaciones comparten la misma base de datos Supabase y un paquete core común.
+> Documento de referencia unico. Refleja todas las decisiones confirmadas.
+> Principio rector: **v2 esta en produccion con usuarios reales. v3 no puede generar ningun cambio que afecte v2.**
 
 ---
 
-## Arquitectura General
+## 0. Tabla de Decisiones Confirmadas
 
-### Estructura de Repositorios
+| Tema | Decision |
+|------|----------|
+| Schema isolation | Todas las tablas nuevas viven en `v3.*`. Cero modificaciones a `public.*` |
+| Bookmarks v2 | `public.bookmarks` no se toca. v3 tiene `v3.campaign_accounts` |
+| ETL v2 | `import_batches` / `import_rows` son intocables. CSV de v3 es proceso separado |
+| Multi-tenant | Workspace por dominio de correo. Admin = primer usuario del dominio |
+| Roles | admin / editor / viewer por workspace |
+| Limite de cuentas | 100 por workspace total (todas las campanias combinadas) |
+| Docs del workspace | `v3.workspace_documents` — compartido entre todos los miembros del workspace |
+| Docs: blocker | Obligatorio subir al menos un documento antes de crear campanias |
+| Docs: reprocesamiento | Los documentos se pueden reprocesar, actualizar y agregar |
+| Tipos de campana | monitor / prospect / discover |
+| Buyer personas | Por campana. Inferidas de docs + diccionario. Editables por el usuario |
+| Job titles | Pre-laburados por proceso/tecnologia en diccionario. ASCI infiere y propone |
+| Blacklist | Por campana. Una cuenta puede estar blacklisted en A y whitelisted en B |
+| Cuentas nuevas (discover) | ASCI recomienda desde `public.companies` con senales que hacen fit |
+| Cache global | `company_news`, `company_implementations`, `apollo_contacts_cache` — lectura solamente |
+| Apollo | ASCI absorbe el costo. Agente lee cache. ASCI recomienda cargos; usuario dispara busqueda |
+| Tech Radar scope | Solo para campanias prospect / discover |
+| Tech Radar primera vez | On-demand: usuario selecciona 5 cuentas |
+| Tech Radar siguiente | Las restantes se encolan automaticamente en tandas de 5 |
+| Tech Radar cron | 1x/mes automatico mientras la cuenta este en alguna campana activa |
+| Tech Radar herramienta | Parallel (existente en v2) con fallback a Gemini |
+| Sistema de colas | Trigger.dev — de a 1, max 5 en cola, sin reintentos, con fallback |
+| Contenedor de info | Cache global compartido + digest filtrado por buyer_persona por campana |
+| MCP Auth | API key por usuario, scoped al workspace_id |
+| MCP transporte | HTTP Streamable (sin WebSockets) |
+| Real-time dashboard | Supabase Realtime |
+| Notificacion agentes | Webhooks HMAC-SHA256 |
+| Gmail | Integracion externa. TBD: threading y reply tracking |
+| DKIM/SPF | Check obligatorio via DNS lookup. Agente bloqueado si no esta configurado |
+| CSV matching | Normalizacion + fuzzy ratio >= 85%. No crea nuevas companies |
+| CSV: no match | Queda en `csv_import_rows` como `no_match`. Usuario informado |
+| Reporting | Trigger.dev dashboard + `v3.activity_log` |
+
+---
+
+## 1. Que es ASCI v3 / bot.bigua.lat
+
+ASCI v3 es una plataforma de prospecting B2B asistida por IA con tres componentes:
+
+1. **Dashboard web** (bot.bigua.lat): donde el usuario configura campanias, revisa señales de cuentas, aprueba emails del agente
+2. **MCP Server**: expone herramientas de inteligencia de cuentas a agentes IA externos (Claude, GPT, etc.)
+3. **Copiloto de ventas**: panel derecho del dashboard — recomienda icebreakers, redacta emails y gestiona la aprobacion antes del envio
+
+### Layout del home
 
 ```
-Organización GitHub
-├── asci-core/                    # Paquete NPM privado @asci/core
-│   ├── src/
-│   │   ├── db/                   # Cliente Supabase tipado
-│   │   ├── types/                # Tipos TypeScript compartidos
-│   │   └── utils/                # Utilidades comunes
-│   └── package.json
-│
-├── v0-asci-v2/                   # ASCI Web actual (este repo)
-│   ├── app/
-│   └── package.json              # Importa @asci/core
-│
-└── bigua-bot/                    # NUEVO: MCP Server + Dashboard
-    ├── apps/
-    │   ├── mcp-server/           # MCP Server (Node.js)
-    │   └── dashboard/            # Next.js - UI de configuración
-    └── package.json              # Importa @asci/core
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  [Logo]   [ Campana actual ▼ ]                            [Workspace] [User] │
+├──────────────┬──────────────────────────────────┬───────────────────────────┤
+│              │                                  │                           │
+│  SIDEBAR     │      DIGEST CENTRAL              │    COPILOTO / AGENTE      │
+│  (fijo)      │                                  │    (fijo)                 │
+│              │  [Cuenta seleccionada]            │                           │
+│  Cuentas     │  ─────────────────────────────── │  Chat con el agente IA    │
+│  de la       │                                  │                           │
+│  campana:    │  Timeline de señales:             │  Icebreakers sugeridos    │
+│              │                                  │  basados en señales       │
+│  ○ Acme      │  ● [NUEVA] Acme lanza AI product  │                           │
+│  ○ Bigua     │    hace 2 dias                   │  [Redactar email]         │
+│  ○ Softtek   │                                  │  [Ver DMs disponibles]    │
+│  ○ Despegar  │  ● Acme contrata VP Engineering   │  [Cargos a buscar]        │
+│  ...         │    hace 5 dias                   │                           │
+│              │                                  │  ─────────────────────── │
+│  [+ Agregar  │  ● Uso de Salesforce detectado   │                           │
+│   cuenta]    │    en perfil de CTO              │  Feedback de campana:     │
+│              │                                  │  "3 emails enviados,      │
+│              │  ─────────────────────────────── │   1 respuesta (33%)"      │
+│              │                                  │                           │
+│              │  DMs identificados:              │                           │
+│              │  Juan Perez — CTO       [Email]  │                           │
+│              │  Ana Lopez — VP Eng     [Email]  │                           │
+│              │                                  │                           │
+│              │  [Buscar mas DMs en Apollo]       │                           │
+│              │  Cargos sugeridos:               │                           │
+│              │  · VP Engineering                │                           │
+│              │  · Head of IT                    │                           │
+│              │                                  │                           │
+└──────────────┴──────────────────────────────────┴───────────────────────────┘
 ```
 
-### Deployments en Vercel
-
-| Proyecto | Dominio | Propósito |
-|----------|---------|-----------|
-| v0-asci-v2 | asci.bigua.lat | ASCI actual - búsqueda y bookmarks (PROD) |
-| bigua-bot-dashboard | bot.bigua.lat | Dashboard de configuración MCP (BETA) |
-| bigua-bot-mcp | api.bot.bigua.lat | MCP Server (streamable HTTP) |
-
-### Base de Datos
-
-**Decisión: Misma base de Supabase, nuevas tablas**
-
-- Reutilizar tablas existentes: `companies`, `bookmarks`, `signals`, `news`, `contacts`, `documents`, `users`
-- Agregar nuevas tablas para funcionalidad MCP (ver schema abajo)
+**Notas del layout:**
+- El selector de campana en el header cambia todo el contexto (sidebar + digest)
+- El sidebar muestra cuentas de la campana seleccionada. Click en cuenta = digest de esa cuenta
+- El digest tiene badge "NUEVA" para items desde el ultimo login del usuario
+- La seccion DMs y cargos sugeridos solo aparece en campanias `prospect` y `discover`
+- El copiloto es contextual a la cuenta/campana activa
 
 ---
 
-## Modelo de Datos: Bookmarks = Whitelist (Cuentas Objetivo)
+## 2. Modelo de Datos
 
-### Decisión Arquitectónica Clave
+### 2.1 Tablas de v2 que v3 lee (NUNCA escribe directamente)
 
-**Los bookmarks existentes SON la whitelist de cuentas objetivo.**
+| Tabla | Uso en v3 | Notas |
+|-------|----------|-------|
+| `public.companies` | Matching de CSV, display de cuentas, recomendaciones | Columnas: id, name, normalized_name, domain, linkedin_url, industry, etc. |
+| `public.contacts` | Lectura de señales | Personas con señales detectadas |
+| `public.signals` | Filtrado por buyer_persona | signal_type: 'technology' o 'process', signal_id apunta a dictionary |
+| `public.dictionary_vendors` | Padre de dictionary_products | Proveedores (SAP, Microsoft, etc.) |
+| `public.dictionary_processes` | Inferencia de buyer personas | Columnas: id, name, keywords[], created_at |
+| `public.dictionary_products` | Idem | Columnas: id, vendor_id, name, keywords[], created_at |
+| `public.dictionary_patterns_cache` | Regex pre-compilados para matching | Cache de patrones por diccionario |
+| `public.company_news` | Cache de noticias para digest | **RLS:** Solo visible si user tiene bookmark de la company |
+| `public.company_implementations` | Cache de tech radar | **RLS:** Idem company_news |
+| `public.apollo_contacts_cache` | Contactos pre-enriquecidos | Cache global de Apollo |
+| `public.job_postings` | Señales de hiring | Ofertas de trabajo scrapeadas |
+| `public.user_news_interactions` | Tracking de noticias vistas | Por user_id + news_id |
+| `public.user_implementation_interactions` | Tracking de implementaciones vistas | Por user_id + implementation_id |
 
-- Los usuarios actuales que tienen bookmarks con filtros → esos bookmarks son sus cuentas objetivo (whitelist)
-- Cuando un usuario sube un CSV con nuevas cuentas whitelist → se crean bookmarks automáticamente
-- La blacklist (base instalada / cuentas a no prospectar) es una tabla separada de exclusión
+**IMPORTANTE — RLS de company_news y company_implementations:**
 
-Esto significa:
-1. **No necesitamos tabla `account_lists`** - los bookmarks ya cumplen esa función
-2. **No necesitamos `account_list_items`** - los bookmarks ya hacen el link usuario → company
-3. **Solo agregamos `excluded_accounts`** - para blacklist/base instalada
-
----
-
-## Nuevas Tablas de Base de Datos
-
-### 1. `excluded_accounts` - Blacklist / Base Instalada (NO prospectar)
+Estas tablas tienen RLS que solo permite SELECT si el usuario tiene un `bookmark` de esa company:
 
 ```sql
-CREATE TABLE excluded_accounts (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+-- Politica actual en v2:
+CREATE POLICY "Anyone can view news for bookmarked companies" ON company_news
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM bookmarks 
+      WHERE bookmarks.company_id = company_news.company_id 
+      AND bookmarks.user_id = auth.uid()
+    )
+  );
+```
+
+En v3 NO hay `bookmarks`, hay `campaign_accounts`. Para que v3 pueda leer el cache:
+
+**Opcion A (recomendada):** Leer desde server-side con `service_role` key (bypasea RLS)
+**Opcion B:** Agregar politica RLS adicional que permita si existe `v3.campaign_accounts`
+
+> Si v3 necesita escribir en tablas de v2 (ej: guardar contacto nuevo de Apollo),
+> lo hace llamando a las RPCs existentes de v2, nunca con INSERT/UPDATE directo.
+
+### 2.1.1 RPCs y Funciones de v2 reutilizables
+
+| Funcion | Ubicacion | Uso |
+|---------|-----------|-----|
+| `upsert_company(name, domain, linkedin, industry, ...)` | SQL RPC | Crea o actualiza company |
+| `runTechRadar({ bookmarkId, companyName, ... })` | `lib/tech-radar.ts` | Ejecuta Parallel + Gemini fallback |
+| `searchPeople({ domain, linkedinUrl, jobTitles, ... })` | `lib/apollo/search.ts` | Busca en Apollo API |
+| `enrichPerson(apolloId)` | `lib/apollo/enrich.ts` | Enriquece contacto individual |
+| `enrichMany(apolloIds)` | `lib/apollo/enrich.ts` | Enriquecimiento batch |
+| `apolloRequest(endpoint, params)` | `lib/apollo/client.ts` | Cliente base de Apollo |
+| `normalizeDomain(input)` | `lib/apollo/domain.ts` | Normaliza dominios |
+| `get_company_drawer_data(company_id)` | SQL RPC | Datos para drawer de company |
+| `get_company_signal_summary(company_id)` | SQL RPC | Resumen de señales |
+
+> v3 reutiliza estas funciones directamente. NO las duplica.
+
+### 2.2 Separacion ETL v2 vs CSV Import v3
+
+Estos son procesos completamente distintos y no se tocan entre si:
+
+| | ETL v2 (`public.import_batches`) | CSV Import v3 (`v3.csv_imports`) |
+|-|----------------------------------|----------------------------------|
+| **Que importa** | Contactos de LinkedIn (personas) y Job Postings | Companias (cuentas target) |
+| **Para que** | Generar señales de prospeccion | Crear cuentas masivas en campanias |
+| **Output** | `contacts`, `signals`, `job_postings` | `v3.campaign_accounts` |
+| **Matching** | LinkedIn URL / nombre exacto | Fuzzy nombre + dominio |
+| **Crea registros** | Si, contactos y companias nuevas | No — solo busca en `public.companies` |
+| **Se toca en v3** | Nunca | Exclusivo de v3 |
+
+### 2.3 Schema v3 completo
+
+```sql
+-- ═══════════════════════════════════════════════════════════
+-- WORKSPACE Y MULTI-TENANT
+-- ═══════════════════════════════════════════════════════════
+
+CREATE TABLE v3.workspaces (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  domain        TEXT UNIQUE NOT NULL,       -- extraido del email del primer usuario
+  name          TEXT NOT NULL,              -- nombre de la empresa
+  website_url   TEXT,
+  logo_url      TEXT,
+  account_count INTEGER DEFAULT 0,          -- total de cuentas en todas las campanias
+  max_accounts  INTEGER DEFAULT 100,
+  created_by    UUID REFERENCES auth.users(id),
+  created_at    TIMESTAMPTZ DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE v3.workspace_members (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id  UUID REFERENCES v3.workspaces(id) ON DELETE CASCADE,
+  user_id       UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  role          TEXT CHECK (role IN ('admin', 'editor', 'viewer')) NOT NULL,
+  status        TEXT CHECK (status IN ('pending', 'active', 'rejected')) DEFAULT 'pending',
+  invited_by    UUID REFERENCES auth.users(id),
+  created_at    TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (workspace_id, user_id)
+);
+
+-- ═══════════════════════════════════════════════════════════
+-- DOCUMENTOS DEL WORKSPACE
+-- Separado de user_documents de v2. Compartido entre miembros.
+-- ═══════════════════════════════════════════════════════════
+
+CREATE TABLE v3.workspace_documents (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id      UUID REFERENCES v3.workspaces(id) ON DELETE CASCADE,
+  uploaded_by       UUID REFERENCES auth.users(id),
+  filename          TEXT NOT NULL,
+  file_url          TEXT NOT NULL,          -- Vercel Blob URL
+  document_type     TEXT CHECK (document_type IN (
+    'landing', 'case_study', 'brochure', 'deck', 'other'
+  )),
+
+  -- Output del procesamiento IA (matcheado contra el diccionario de v2)
+  processing_status TEXT CHECK (processing_status IN (
+    'pending', 'processing', 'completed', 'failed'
+  )) DEFAULT 'pending',
+  extracted_industries   TEXT[],
+  extracted_processes    TEXT[],            -- IDs de dictionary_processes
+  extracted_technologies TEXT[],            -- IDs de dictionary_products
+  extracted_kpis         TEXT[],
+  extracted_roi_signals  TEXT[],
+  raw_extracted_text     TEXT,
+
+  version      INTEGER DEFAULT 1,           -- incrementa al reprocesar
+  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Tags extraidos de los documentos (analogo a document_tags de v2)
+CREATE TABLE v3.workspace_document_tags (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  document_id     UUID NOT NULL REFERENCES v3.workspace_documents(id) ON DELETE CASCADE,
+  workspace_id    UUID NOT NULL REFERENCES v3.workspaces(id) ON DELETE CASCADE,
+  tag_type        TEXT CHECK (tag_type IN ('industry', 'technology', 'process')) NOT NULL,
+  tag_value       TEXT NOT NULL,
+  tag_reference_id UUID,                       -- ID en dictionary_processes o dictionary_products
+  confidence      REAL DEFAULT 0.5,
+  created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Perfil de valor consolidado del workspace (analogo a user_value_profiles de v2)
+CREATE TABLE v3.workspace_value_profiles (
+  id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id       UUID NOT NULL REFERENCES v3.workspaces(id) ON DELETE CASCADE,
+  profile_summary    TEXT,
+  target_industries  JSONB DEFAULT '[]'::jsonb,
+  target_technologies JSONB DEFAULT '[]'::jsonb,
+  target_processes   JSONB DEFAULT '[]'::jsonb,
+  raw_analysis       JSONB,
+  generated_at       TIMESTAMPTZ,
+  created_at         TIMESTAMPTZ DEFAULT NOW(),
+  updated_at         TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (workspace_id)
+);
+
+-- ═══════════════════════════════════════════════════════════
+-- JOB TITLES POR PROCESO/TECNOLOGIA
+-- Pre-laburados en el diccionario. ASCI infiere nuevos con IA.
+-- ═══════════════════════════════════════════════════════════
+
+CREATE TABLE v3.dictionary_job_titles (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  -- Uno de estos dos debe estar presente (o ambos)
+  process_id  UUID REFERENCES public.dictionary_processes(id),
+  product_id  UUID REFERENCES public.dictionary_products(id),
   
-  -- Puede estar vinculada a una company existente o no
-  company_id UUID REFERENCES companies(id), -- NULL si no hay match
-  
-  -- Input del usuario (del CSV de exclusión)
-  original_name TEXT NOT NULL,
-  original_domain TEXT,
-  
-  -- Match con ASCI (para mostrar info si existe)
-  match_status TEXT DEFAULT 'pending' CHECK (match_status IN ('pending', 'matched', 'ambiguous', 'no_match', 'ignored')),
-  match_confidence FLOAT,
-  match_candidates JSONB, -- [{company_id, name, score}] para casos ambiguos
-  
-  -- Razón de exclusión
-  exclusion_reason TEXT, -- 'installed_base', 'competitor', 'do_not_contact', 'other'
-  notes TEXT,
+  job_title   TEXT NOT NULL,                  -- "CTO", "VP Engineering", "Head of IT"
+  seniority   TEXT CHECK (seniority IN (
+    'c_level', 'vp', 'director', 'manager', 'senior', 'individual_contributor'
+  )),
   
   -- Metadata
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  matched_at TIMESTAMPTZ,
+  is_inferred BOOLEAN DEFAULT false,          -- true = inferido por IA, false = pre-cargado
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
   
-  -- Índice único: un usuario no puede excluir la misma cuenta dos veces
-  UNIQUE(user_id, COALESCE(company_id, original_name))
+  CONSTRAINT at_least_one_reference CHECK (
+    process_id IS NOT NULL OR product_id IS NOT NULL
+  )
 );
 
--- RLS: usuarios solo ven sus propias exclusiones
-ALTER TABLE excluded_accounts ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Users can manage their own exclusions" ON excluded_accounts
-  FOR ALL USING (auth.uid() = user_id);
-```
+-- Indices para busqueda rapida
+CREATE INDEX idx_job_titles_process ON v3.dictionary_job_titles(process_id) WHERE process_id IS NOT NULL;
+CREATE INDEX idx_job_titles_product ON v3.dictionary_job_titles(product_id) WHERE product_id IS NOT NULL;
 
-### 2. `csv_imports` - Tracking de importaciones de CSV
+-- ═══════════════════════════════════════════════════════════
+-- BUYER PERSONAS
+-- Por campana. Inferidas de docs. Editables por el usuario.
+-- ═══════════════════════════════════════════════════════════
 
-```sql
-CREATE TABLE csv_imports (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
-  
-  -- Tipo de importación
-  import_type TEXT NOT NULL CHECK (import_type IN ('whitelist', 'blacklist')),
-  
-  -- Archivo original
-  file_name TEXT NOT NULL,
-  file_url TEXT, -- Vercel Blob URL
-  
-  -- Estadísticas
-  total_rows INTEGER DEFAULT 0,
-  matched_count INTEGER DEFAULT 0,
-  ambiguous_count INTEGER DEFAULT 0,
-  no_match_count INTEGER DEFAULT 0,
-  
-  -- Estado
-  status TEXT DEFAULT 'processing' CHECK (status IN ('processing', 'pending_review', 'completed', 'failed')),
-  error_message TEXT,
-  
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  completed_at TIMESTAMPTZ
+CREATE TABLE v3.buyer_personas (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id  UUID REFERENCES v3.workspaces(id) ON DELETE CASCADE,
+  campaign_id   UUID,                       -- FK a v3.campaigns (se agrega con ALTER luego)
+  name          TEXT NOT NULL,              -- "CTO en SaaS Fintech"
+
+  -- Inferido de workspace_documents cruzado con el diccionario de v2
+  target_processes       TEXT[],            -- IDs de public.dictionary_processes
+  target_technologies    TEXT[],            -- IDs de public.dictionary_products
+  target_industries      TEXT[],
+  kpi_signals            TEXT[],
+  roi_signals            TEXT[],
+
+  -- Job titles recomendados
+  -- Pre-laburados en el diccionario por proceso/tecnologia, luego ASCI infiere nuevos
+  recommended_job_titles TEXT[],
+
+  -- Señales que se consideran relevantes para el digest de esta persona
+  relevant_signal_types  TEXT[],
+
+  is_inferred  BOOLEAN DEFAULT true,        -- true = generado por ASCI, false = editado por usuario
+  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ DEFAULT NOW()
 );
-```
 
-### 3. Migración tabla `bookmarks` existente
+-- ═══════════════════════════════════════════════════════════
+-- CAMPANIAS
+-- ═══════════════════════════════════════════════════════════
 
-```sql
--- Agregar columna para distinguir bookmarks de seguimiento vs prospección activa
-ALTER TABLE bookmarks ADD COLUMN is_target_account BOOLEAN DEFAULT true;
+CREATE TABLE v3.campaigns (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id  UUID REFERENCES v3.workspaces(id) ON DELETE CASCADE,
+  created_by    UUID REFERENCES auth.users(id),
+  name          TEXT NOT NULL,
 
--- Agregar columna para tracking de última prospección
-ALTER TABLE bookmarks ADD COLUMN last_prospected_at TIMESTAMPTZ;
+  type TEXT CHECK (type IN (
+    'monitor',   -- solo señales de cuentas conocidas. Sin DMs, sin Tech Radar, sin email agent
+    'prospect',  -- buscar DMs en cuentas conocidas: Tech Radar + Apollo + email agent
+    'discover'   -- ASCI recomienda cuentas con señales: todo lo de prospect + recomendaciones
+  )) NOT NULL,
 
--- Agregar columna para estado de secuencia actual
-ALTER TABLE bookmarks ADD COLUMN current_sequence_id UUID REFERENCES email_sequences(id);
+  -- Solo para prospect / discover
+  buyer_persona_id UUID,                    -- FK a v3.buyer_personas (post ALTER)
+  country_filter   TEXT[],
 
--- Índice para queries del MCP
-CREATE INDEX idx_bookmarks_target_accounts ON bookmarks(user_id, is_target_account) 
-  WHERE is_target_account = true;
+  -- Feature flags calculados al crear segun tipo. Editables.
+  enable_tech_radar   BOOLEAN DEFAULT false,
+  enable_apollo       BOOLEAN DEFAULT false,
+  enable_email_agent  BOOLEAN DEFAULT false,
+  enable_signals_only BOOLEAN DEFAULT true,
 
--- Comentario para documentar
-COMMENT ON COLUMN bookmarks.is_target_account IS 
-  'true = cuenta objetivo para prospectar activamente (whitelist), false = solo seguimiento de señales';
-```
-
-### 4. `csv_import_rows` - Filas pendientes de resolver (ambiguas)
-
-```sql
-CREATE TABLE csv_import_rows (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  import_id UUID REFERENCES csv_imports(id) ON DELETE CASCADE,
-  
-  -- Input del usuario
-  original_name TEXT NOT NULL,
-  original_domain TEXT,
-  row_number INTEGER,
-  
-  -- Estado del matching
-  match_status TEXT DEFAULT 'pending' CHECK (match_status IN ('pending', 'matched', 'ambiguous', 'no_match', 'resolved', 'skipped')),
-  match_confidence FLOAT,
-  match_candidates JSONB, -- [{company_id, name, domain, score}]
-  
-  -- Resolución
-  resolved_company_id UUID REFERENCES companies(id),
-  resolved_at TIMESTAMPTZ,
-  resolution_type TEXT, -- 'auto', 'manual', 'skipped', 'new_company'
-  
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  status  TEXT CHECK (status IN ('active', 'paused', 'archived')) DEFAULT 'active',
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
 );
-```
 
-### 5. `api_keys` - Autenticación MCP
+-- FKs circulares se agregan despues de crear ambas tablas
+ALTER TABLE v3.buyer_personas
+  ADD CONSTRAINT fk_buyer_persona_campaign
+  FOREIGN KEY (campaign_id) REFERENCES v3.campaigns(id) ON DELETE SET NULL;
 
-```sql
-CREATE TABLE api_keys (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
-  key_hash TEXT NOT NULL, -- SHA256 del key, nunca guardar plaintext
-  key_prefix TEXT NOT NULL, -- Primeros 8 chars para identificación (asci_xxxx)
-  name TEXT NOT NULL, -- "Mi agente Claude", "Cursor", etc.
-  
-  -- Permisos y límites
-  scopes TEXT[] DEFAULT ARRAY['read', 'write'], -- Granularidad futura
-  tier TEXT DEFAULT 'beta' CHECK (tier IN ('beta', 'starter', 'pro', 'enterprise')),
-  
-  -- Rate limits según tier
-  rate_limit_day INTEGER, -- Calls por día
-  rate_limit_minute INTEGER, -- Calls por minuto
-  
-  -- Tracking
-  last_used_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  revoked_at TIMESTAMPTZ
+ALTER TABLE v3.campaigns
+  ADD CONSTRAINT fk_campaign_buyer_persona
+  FOREIGN KEY (buyer_persona_id) REFERENCES v3.buyer_personas(id) ON DELETE SET NULL;
+
+-- ═══════════════════════════════════════════════════════════
+-- CUENTAS EN CAMPANIAS
+-- Una company puede estar en multiples campanias del mismo workspace.
+-- Puede ser whitelisted en una y blacklisted en otra.
+-- ═══════════════════════════════════════════════════════════
+
+CREATE TABLE v3.campaign_accounts (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  campaign_id  UUID REFERENCES v3.campaigns(id) ON DELETE CASCADE,
+  company_id   UUID NOT NULL,               -- referencia a public.companies (sin FK cross-schema)
+
+  -- Estado en esta campania
+  list_status TEXT CHECK (list_status IN ('whitelisted', 'blacklisted')) DEFAULT 'whitelisted',
+  match_source TEXT CHECK (match_source IN (
+    'csv_import',          -- vino de un CSV upload
+    'manual',              -- el usuario lo agrego manualmente
+    'asci_recommendation'  -- ASCI lo recomendo (solo para campanias discover)
+  )),
+
+  -- Estado de prospeccion (solo relevante para prospect / discover)
+  prospection_status TEXT CHECK (prospection_status IN (
+    'pending',     -- en espera de ser seleccionada
+    'queued',      -- encolada en Trigger.dev
+    'running',     -- job en ejecucion
+    'completed',   -- tech radar corrido, datos disponibles
+    'failed'       -- fallo el job
+  )) DEFAULT 'pending',
+
+  tech_radar_run_at   TIMESTAMPTZ,
+  apollo_checked_at   TIMESTAMPTZ,
+
+  -- Para cron mensual
+  last_refresh_at  TIMESTAMPTZ,
+  next_refresh_at  TIMESTAMPTZ,             -- = last_refresh_at + 30 dias
+
+  added_at  TIMESTAMPTZ DEFAULT NOW(),
+  added_by  UUID REFERENCES auth.users(id),
+
+  UNIQUE (campaign_id, company_id)
+);
+
+-- ═══════════════════════════════════════════════════════════
+-- DIGEST FILTRADO POR CAMPANA/CUENTA
+-- Capa por encima del cache global de v2, filtrada por buyer_persona
+--
+-- NOTA: En v2 existen user_news_interactions y user_implementation_interactions
+-- que trackean que noticias vio cada usuario. En v3 el tracking es por
+-- campaign_account (last_user_seen_at) en lugar de por user+news individual.
+-- Esto simplifica el modelo para el flujo de campanas.
+-- ═══════════════════════════════════════════════════════════
+
+CREATE TABLE v3.campaign_account_digest (
+  id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  campaign_account_id  UUID REFERENCES v3.campaign_accounts(id) ON DELETE CASCADE UNIQUE,
+
+  -- Referencias al cache global de v2 (solo IDs, no duplicamos contenido)
+  -- IMPORTANTE: Para leer company_news y company_implementations desde v3,
+  -- usar service_role key porque las RLS de v2 filtran por bookmarks.
+  news_ids             UUID[],              -- IDs de public.company_news
+  implementation_ids   UUID[],             -- IDs de public.company_implementations
+  contact_ids          UUID[],             -- IDs de public.apollo_contacts_cache (DMs disponibles)
+
+  -- Metadatos del filtrado
+  buyer_persona_id     UUID,               -- referencia a v3.buyer_personas
+  signal_types_matched TEXT[],             -- señales que matchearon con el buyer_persona
+
+  -- Cargos recomendados (si no hay contactos en cache)
+  recommended_job_titles TEXT[],           -- calculados desde v3.dictionary_job_titles
+
+  -- Timeline para badge "NUEVAS"
+  last_fetched_at   TIMESTAMPTZ,
+  new_items_count   INTEGER DEFAULT 0,
+  last_user_seen_at TIMESTAMPTZ,           -- se actualiza cuando el usuario abre el digest
+
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ═══════════════════════════════════════════════════════════
+-- CSV IMPORT DE CUENTAS
+-- Completamente separado del ETL de v2 (import_batches / import_rows)
+-- ═══════════════════════════════════════════════════════════
+
+CREATE TABLE v3.csv_imports (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  campaign_id  UUID REFERENCES v3.campaigns(id) ON DELETE CASCADE,
+  uploaded_by  UUID REFERENCES auth.users(id),
+  filename     TEXT NOT NULL,
+  total_rows   INTEGER DEFAULT 0,
+  status       TEXT CHECK (status IN (
+    'processing', 'pending_review', 'completed', 'failed'
+  )) DEFAULT 'processing',
+
+  -- Resumen del matching
+  auto_matched  INTEGER DEFAULT 0,
+  needs_review  INTEGER DEFAULT 0,
+  no_match      INTEGER DEFAULT 0,
+  ignored       INTEGER DEFAULT 0,
+
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE v3.csv_import_rows (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  import_id   UUID REFERENCES v3.csv_imports(id) ON DELETE CASCADE,
+  row_number  INTEGER NOT NULL,
+
+  -- Datos crudos
+  raw_company_name  TEXT NOT NULL,
+  raw_domain        TEXT,
+
+  -- Datos normalizados (calculados al procesar)
+  normalized_name   TEXT,                  -- lowercase, sin sufijos legales, sin puntuacion
+  normalized_domain TEXT,                  -- sin www, sin protocolo, sin TLD
+
+  -- Resultado del matching
+  match_status TEXT CHECK (match_status IN (
+    'auto_matched',  -- dominio exacto + nombre similar >= 85%
+    'needs_review',  -- dominio exacto pero nombre diferente, o nombre exacto sin dominio
+    'ambiguous',     -- multiples candidatos con score similar
+    'no_match',      -- ningun match encontrado en public.companies
+    'confirmed',     -- usuario confirmo manualmente
+    'ignored'        -- usuario descarto esta fila
+  )) DEFAULT 'needs_review',
+
+  matched_company_id  UUID,                -- referencia a public.companies (sin FK cross-schema)
+  match_candidates    JSONB,               -- [{company_id, name, domain, score, method}]
+  match_method        TEXT,               -- 'domain_exact', 'name_fuzzy', 'domain_fuzzy', 'manual'
+  match_score         FLOAT,              -- 0.0 a 1.0
+
+  reviewed_at  TIMESTAMPTZ,
+  reviewed_by  UUID REFERENCES auth.users(id)
+);
+
+-- ═══════════════════════════════════════════════════════════
+-- COLA DE PROSPECCION (jobs de Trigger.dev)
+-- ═══════════════════════════════════════════════════════════
+
+CREATE TABLE v3.prospection_jobs (
+  id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id         UUID REFERENCES v3.workspaces(id),
+  campaign_account_id  UUID REFERENCES v3.campaign_accounts(id),
+
+  job_type TEXT CHECK (job_type IN (
+    'tech_radar',         -- ejecuta lib/tech-radar.ts existente (Parallel o Gemini fallback)
+    'apollo_cache_check'  -- verifica y trae contactos del cache de Apollo
+  )) NOT NULL,
+
+  status TEXT CHECK (status IN (
+    'pending', 'running', 'completed', 'failed'
+  )) DEFAULT 'pending',
+
+  trigger_job_id  TEXT,                    -- ID del job en Trigger.dev para tracking
+  used_fallback   BOOLEAN DEFAULT false,   -- true si se uso Gemini en lugar de Parallel
+
+  result_summary  JSONB,   -- { news_found: 3, techs: ["Salesforce"], contacts_cached: 5 }
+  error_message   TEXT,
+
+  created_at    TIMESTAMPTZ DEFAULT NOW(),
+  started_at    TIMESTAMPTZ,
+  completed_at  TIMESTAMPTZ
+);
+
+-- ═══════════════════════════════════════════════════════════
+-- MCP API KEYS
+-- 1 key por usuario. Scoped al workspace_id.
+-- ═══════════════════════════════════════════════════════════
+
+CREATE TABLE v3.mcp_api_keys (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id  UUID REFERENCES v3.workspaces(id) ON DELETE CASCADE,
+  user_id       UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+
+  key_hash    TEXT UNIQUE NOT NULL,         -- SHA-256. El key en claro se muestra una sola vez al crear
+  key_prefix  TEXT NOT NULL,               -- primeros 8 chars para identificar ("asci_k1_...")
+  name        TEXT,                        -- nombre descriptivo ("Claude en Cursor")
+
+  scopes  TEXT[] DEFAULT ARRAY['read'],    -- ['read', 'write', 'email_draft']
+
+  -- Rate limiting basado en plan del workspace
+  rate_limit_per_hour  INTEGER DEFAULT 100,
+
+  is_active         BOOLEAN DEFAULT true,
+  last_used_at      TIMESTAMPTZ,
+  expires_at        TIMESTAMPTZ,           -- null = no expira
+  revoked_at        TIMESTAMPTZ,
+  revocation_reason TEXT,
+
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW(),
+
+  UNIQUE (workspace_id, user_id)           -- 1 key por usuario
+);
+
+-- ═══════════════════════════════════════════════════════════
+-- BORRADORES Y SECUENCIAS DE EMAIL
+-- ═══════════════════════════════════════════════════════════
+
+CREATE TABLE v3.email_drafts (
+  id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id         UUID REFERENCES v3.workspaces(id) ON DELETE CASCADE,
+  campaign_account_id  UUID REFERENCES v3.campaign_accounts(id),
+
+  -- Destinatario
+  contact_id    UUID,                       -- referencia a public.contacts
+  to_email      TEXT NOT NULL,
+  to_name       TEXT,
+  subject       TEXT NOT NULL,
+  body_html     TEXT NOT NULL,
+  body_text     TEXT,
+
+  -- Contexto usado para generar el draft
+  icebreaker_signals  JSONB,               -- señales usadas como contexto
+  buyer_persona_id    UUID,                -- referencia a v3.buyer_personas
+
+  -- Estado de aprobacion
+  status TEXT CHECK (status IN (
+    'pending_approval',  -- esperando al usuario en el dashboard
+    'approved',          -- usuario aprobo
+    'rejected',          -- usuario rechazo
+    'sent',              -- enviado via Gmail
+    'failed'             -- fallo el envio
+  )) DEFAULT 'pending_approval',
+
+  generated_by  TEXT CHECK (generated_by IN ('agent', 'copilot', 'user')) DEFAULT 'agent',
+
+  reviewed_at  TIMESTAMPTZ,
+  reviewed_by  UUID REFERENCES auth.users(id),
+  sent_at      TIMESTAMPTZ,
+
+  -- TBD: threading y reply tracking (post-MVP)
+  gmail_message_id  TEXT,
+  gmail_thread_id   TEXT,
+
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE v3.email_sequences (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id  UUID REFERENCES v3.workspaces(id) ON DELETE CASCADE,
+  campaign_id   UUID REFERENCES v3.campaigns(id),
+  name          TEXT NOT NULL,
+  steps         JSONB NOT NULL,  -- [{day: 0, subject: "...", body: "..."}, {day: 3, ...}]
+  created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ═══════════════════════════════════════════════════════════
+-- WEBHOOKS
+-- ═══════════════════════════════════════════════════════════
+
+CREATE TABLE v3.webhook_endpoints (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id  UUID REFERENCES v3.workspaces(id) ON DELETE CASCADE,
+  url           TEXT NOT NULL,
+  secret_hash   TEXT NOT NULL,             -- SHA-256. El agente verifica HMAC-SHA256
+  events        TEXT[] NOT NULL,
+  is_active     BOOLEAN DEFAULT true,
+  last_fired_at TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ═══════════════════════════════════════════════════════════
+-- CONFIGURACION DKIM/SPF
+-- ═══════════════════════════════════════════════════════════
+
+CREATE TABLE v3.email_domain_config (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id  UUID REFERENCES v3.workspaces(id) ON DELETE CASCADE,
+  domain        TEXT NOT NULL,
+
+  spf_valid     BOOLEAN DEFAULT false,
+  dkim_valid    BOOLEAN DEFAULT false,
+  dmarc_valid   BOOLEAN DEFAULT false,
+
+  last_checked_at  TIMESTAMPTZ,
+  check_details    JSONB,   -- { spf_record: "...", dkim_selector: "...", errors: [] }
+
+  -- Columna generada: los 3 deben estar ok para habilitar el agente
+  is_email_ready  BOOLEAN GENERATED ALWAYS AS (spf_valid AND dkim_valid AND dmarc_valid) STORED,
+
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW(),
+
+  UNIQUE (workspace_id, domain)
+);
+
+-- ═══════════════════════════════════════════════════════════
+-- ACTIVIDAD Y REPORTING
+-- ═══════════════════════════════════════════════════════════
+
+CREATE TABLE v3.activity_log (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id  UUID REFERENCES v3.workspaces(id),
+  user_id       UUID REFERENCES auth.users(id),
+
+  activity_type TEXT NOT NULL,
+  -- Valores: 'csv_uploaded', 'account_matched', 'account_ignored',
+  --          'tech_radar_run', 'apollo_searched', 'email_drafted',
+  --          'email_approved', 'email_rejected', 'email_sent',
+  --          'doc_uploaded', 'doc_processed', 'campaign_created',
+  --          'apikey_created', 'apikey_revoked', 'webhook_fired'
+
+  entity_type  TEXT,                        -- 'campaign', 'campaign_account', 'email_draft', etc.
+  entity_id    UUID,
+  meta         JSONB,
+
+  created_at  TIMESTAMPTZ DEFAULT NOW()
 );
 ```
 
 ---
 
-## Workflow de API Keys (Detalle)
+## 3. Flujo de Matching CSV
 
-### Generación de API Key (Dashboard MCP)
+### Contexto: que es este proceso
 
-```
-Usuario en bot.bigua.lat → "Crear API Key"
-                    ↓
-         Ingresa nombre descriptivo
-         (ej: "Claude Desktop", "Cursor Work")
-                    ↓
-         Backend genera key segura:
-         - Formato: asci_live_xxxxxxxxxxxxxxxxxxxx (32 chars random)
-         - SHA256 del key → guardado en DB (key_hash)
-         - Prefix "asci_live_" + primeros 4 chars → guardado (key_prefix)
-                    ↓
-         UI muestra key COMPLETA una única vez
-         con botón "Copiar" y warning
-                    ↓
-         Usuario copia y guarda en su cliente MCP
-```
+Cuando un usuario quiere agregar muchas cuentas a una campana de una vez, sube un CSV con nombres de companias y dominios opcionales. ASCI busca esas companias en `public.companies` (la base de datos compartida con v2) y propone los matches.
 
-### Estructura del API Key
+**No se crean companias nuevas.** Las que no se encuentran quedan como `no_match`.
 
-```
-asci_live_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
-│    │    │
-│    │    └── 32 caracteres random (crypto secure)
-│    │
-│    └── Ambiente: "live" (producción) o "test" (sandbox)
-│
-└── Prefijo identificador
-```
-
-### Autenticación en el MCP Server
+### Normalizacion
 
 ```typescript
-// El agente envía el API key en el header Authorization
-// Formato: Bearer asci_live_xxxxxxxxxxxx
+// lib/v3/csv-matcher.ts
 
-// Middleware de autenticación (api.bot.bigua.lat)
-async function authenticateApiKey(request: Request) {
-  const authHeader = request.headers.get('Authorization');
-  if (!authHeader?.startsWith('Bearer asci_')) {
-    throw new Error('Invalid API key format');
-  }
-  
-  const apiKey = authHeader.replace('Bearer ', '');
-  const keyHash = sha256(apiKey);
-  
-  // Buscar en DB por hash (nunca comparar plaintext)
-  const keyRecord = await db.api_keys
-    .findFirst({ where: { key_hash: keyHash, revoked_at: null } });
-  
-  if (!keyRecord) {
-    throw new Error('Invalid or revoked API key');
-  }
-  
-  // Actualizar last_used_at
-  await db.api_keys.update({
-    where: { id: keyRecord.id },
-    data: { last_used_at: new Date() }
-  });
-  
-  // Verificar rate limits según tier
-  await checkRateLimits(keyRecord);
-  
-  return { userId: keyRecord.user_id, tier: keyRecord.tier };
+const LEGAL_SUFFIXES = /\b(inc|llc|sa|srl|corp|corporation|ltd|gmbh|s\.a\.|s\.r\.l\.|ag)\b/gi;
+const DOMAIN_PREFIXES = /^(https?:\/\/)?(www\.)?/i;
+
+function normalizeName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(LEGAL_SUFFIXES, '')
+    .replace(/[^a-z0-9\s]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeDomain(domain: string): string {
+  return domain
+    .replace(DOMAIN_PREFIXES, '')
+    .split('/')[0]                           // quitar paths
+    .split('.').slice(-2).join('.')          // quitar subdominios
+    .toLowerCase()
+    .trim();
 }
 ```
 
-### UI de Gestión de API Keys (Dashboard)
+### Matriz de decision
+
+| Dominio CSV | Nombre CSV | Resultado | Accion automatica |
+|-------------|-----------|-----------|-------------------|
+| Exacto match | Normalizado exacto o fuzzy >= 85% | `auto_matched` | Crea `campaign_account` directamente |
+| Exacto match | Diferente (fuzzy < 85%) | `needs_review` | Muestra al usuario (posible rebrand o holding) |
+| No existe | Exacto normalizado | `needs_review` | Muestra: confirmar que es la empresa correcta |
+| No existe | Fuzzy >= 50% y < 85% | `ambiguous` | Muestra top 3 candidatos con score |
+| No existe o null | Fuzzy < 50% | `no_match` | Empresa no encontrada en ASCI |
+| null / vacio | Exacto o fuzzy >= 85% | `needs_review` | Sin dominio para confirmar |
+
+> Si `public.companies` tampoco tiene dominio para la empresa, el matching es solo por nombre.
+
+### UX de resultados
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  API Keys                                       [+ Nueva Key]   │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Claude Desktop                                                 │
-│  asci_live_a1b2...  •  Creada hace 3 días  •  Usada hace 2h    │
-│  [Ver uso] [Revocar]                                           │
-│                                                                 │
-│  ─────────────────────────────────────────────────────────────  │
-│                                                                 │
-│  Cursor Trabajo                                                 │
-│  asci_live_x9y8...  •  Creada hace 1 semana  •  Nunca usada    │
-│  [Ver uso] [Revocar]                                           │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Resultado del import "Q1_2025.csv"                          [Exportar] │
+│                                                                         │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────────┐ │
+│  │  38 Auto-match  │  │  7 Revision     │  │  5 Sin match            │ │
+│  │  Listos         │  │  Pendientes     │  │  No estan en ASCI       │ │
+│  └─────────────────┘  └─────────────────┘  └─────────────────────────┘ │
+│                                                                         │
+│  Pendientes de revision:                                                │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ CSV: "Globant SA"  /  globant.com                               │   │
+│  │ Dominio exacto, nombre diferente                                │   │
+│  │ Candidato: Globant LLC (globant.com) — 78%                      │   │
+│  │                           [Confirmar]  [Ignorar]                │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ CSV: "Banco Galicia"  /  (sin dominio)                          │   │
+│  │ Multiples candidatos:                                           │   │
+│  │  ○ Banco de Galicia y Bs As SA — 89%                            │   │
+│  │  ○ Grupo Financiero Galicia — 72%                               │   │
+│  │  ○ Galicia Seguros — 65%                                        │   │
+│  │                           [Seleccionar]  [Ignorar]              │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│  Sin match (5): No existen en la base de ASCI                          │
+│  · "Startup XYZ"  · "Empresa Nueva"  · ...                             │
+│                                                                         │
+│                        [Aplicar y agregar a campana]                   │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Configuración del Cliente MCP (Usuario Final)
+Las cuentas confirmadas o auto-matched pasan a `v3.campaign_accounts` con `list_status = 'whitelisted'`.
 
-El usuario configura su cliente MCP (Claude Desktop, Cursor, etc.) con:
+---
+
+## 4. Flujo de Prospeccion en Tandas
+
+### Primera tanda (on-demand)
+
+```
+Usuario confirma cuentas del matching
+          │
+          ▼
+"Selecciona hasta 5 cuentas para prospectar ahora"
+(lista de campaign_accounts con prospection_status = 'pending')
+          │
+          ▼
+Usuario selecciona 5 y confirma
+          │
+          ├─ Las 5 seleccionadas: status = 'queued'
+          └─ Las restantes: se encolan automaticamente
+             en tandas de 5 a medida que se libera la cola
+                              │
+                              ▼
+          ┌───────────────────────────────────────────────────────┐
+          │  Trigger.dev — por cada cuenta (de a 1, max 5 cola): │
+          │                                                       │
+          │  JOB: tech_radar                                      │
+          │  1. lib/tech-radar.ts → runTechRadar()                │
+          │     - Parallel busca noticias y casos de uso          │
+          │     - Fallback: Gemini si Parallel falla              │
+          │     - Escribe en public.company_news                  │
+          │       y public.company_implementations via RPC de v2  │
+          │                                                       │
+          │  JOB: apollo_cache_check (post tech_radar)            │
+          │  2. Verificar public.apollo_contacts_cache            │
+          │     - Si hay contactos: disponibles en digest         │
+          │     - Si no hay: generar cargos recomendados          │
+          │       segun buyer_persona del workspace               │
+          │                                                       │
+          │  3. Actualizar v3.campaign_account_digest             │
+          │     - Filtrar noticias por buyer_persona              │
+          │     - Contar items nuevos desde ultimo login          │
+          │                                                       │
+          │  4. campaign_accounts:                                │
+          │     prospection_status = 'completed'                  │
+          │     tech_radar_run_at = NOW()                         │
+          │     next_refresh_at = NOW() + 30 dias                 │
+          │                                                       │
+          │  5. Loggear en v3.activity_log                        │
+          │  6. Supabase Realtime → notificar dashboard           │
+          └───────────────────────────────────────────────────────┘
+```
+
+### Cron mensual (mantenimiento automatico)
+
+```sql
+-- Trigger.dev Cron: 1x/mes
+-- Seleccionar cuentas que vencieron su refresh
+-- y que esten en al menos una campana activa
+
+SELECT ca.id
+FROM v3.campaign_accounts ca
+JOIN v3.campaigns c ON c.id = ca.campaign_id
+WHERE ca.next_refresh_at <= NOW()
+  AND ca.list_status = 'whitelisted'
+  AND c.status = 'active'
+  AND c.enable_tech_radar = true;
+
+-- Si la cuenta no esta en ninguna campana activa,
+-- NO se encola → se deja de actualizar automaticamente
+-- hasta que un usuario la vuelva a agregar a una campana
+```
+
+---
+
+## 5. Contenedor de Informacion por Cuenta
+
+Cada cuenta tiene dos capas:
+
+### Capa 1: Cache Global (v2 — compartido entre todos los workspaces)
+
+| Tabla | Contenido |
+|-------|----------|
+| `public.company_news` | Noticias scrapeadas (Parallel/Gemini) |
+| `public.company_implementations` | Tecnologias detectadas en el tech radar |
+| `public.apollo_contacts_cache` | Contactos enriquecidos de Apollo |
+
+Si dos workspaces distintos hacen tech radar de la misma cuenta, el segundo se
+beneficia del trabajo del primero. El cache es global.
+
+### Capa 2: Digest Filtrado (v3 — por campana)
+
+`v3.campaign_account_digest` toma el cache global y lo filtra segun el
+`buyer_persona` de la campana. Dos campanias del mismo workspace viendo la
+misma cuenta pueden tener digests diferentes si tienen buyer_personas diferentes.
+
+```
+public.company_news (noticias de Acme Corp — global)
+            │
+            │  filtro: buyer_persona.target_processes = ['CRM', 'ERP']
+            │           buyer_persona.target_technologies = ['Salesforce']
+            ▼
+v3.campaign_account_digest
+  news_ids: [solo las relevantes al buyer_persona]
+  signal_types_matched: ['CRM', 'Salesforce']
+  new_items_count: 3   ← items nuevos desde ultimo login del usuario
+            │
+            ▼
+Dashboard: digest personalizado para esa campana
+```
+
+---
+
+## 6. MCP Server
+
+### Arquitectura
+
+El MCP Server son endpoints HTTP en `/app/api/mcp/` dentro del mismo Next.js.
+No es un servidor separado.
+
+```
+Agente IA Externo
+        │
+        │  POST /api/mcp/tools/{tool_name}
+        │  Authorization: Bearer asci_k1_xxxxxxxx
+        │
+        ▼
+Middleware de autenticacion:
+  1. SHA-256(key) → lookup en v3.mcp_api_keys
+  2. is_active + expiracion
+  3. Rate limit por workspace (in-memory + DB)
+  4. Extrae workspace_id + user_id del registro
+        │
+        ▼
+Tool handler:
+  - Todas las queries filtran por workspace_id
+  - Lee de public.* y v3.*
+  - Escribe solo en v3.* o via RPCs de v2
+```
+
+### Herramientas disponibles
+
+| Tool | Input | Output | Fuente |
+|------|-------|--------|--------|
+| `list_campaigns` | — | Campanias del workspace | v3.campaigns |
+| `list_accounts` | campaign_id | Cuentas de la campana | v3.campaign_accounts + public.companies |
+| `get_account_signals` | company_id, campaign_id | Señales filtradas por buyer_persona | v3.campaign_account_digest |
+| `get_decision_makers` | company_id | Contactos del cache de Apollo | public.apollo_contacts_cache |
+| `get_recommended_titles` | company_id, campaign_id | Cargos recomendados por buyer_persona | v3.buyer_personas + diccionario |
+| `search_apollo` | company_id, job_titles[] | Dispara busqueda en Apollo | Apollo API → RPC v2 |
+| `create_email_draft` | contact_id, signals[], body | Crea borrador para aprobacion | v3.email_drafts |
+| `list_pending_approvals` | — | Emails pendientes | v3.email_drafts (pending_approval) |
+| `get_workspace_context` | — | Docs, buyer personas, industrias | v3.workspace_documents, v3.buyer_personas |
+
+### Flujo completo de email via agente
+
+```
+1. get_workspace_context()
+   → buyer_persona, propuesta de valor, industrias, KPIs
+
+2. get_account_signals(company_id, campaign_id)
+   → señales filtradas y relevantes de la cuenta
+
+3. get_decision_makers(company_id)
+   → si hay contactos en cache: los retorna
+   → si no hay: retorna get_recommended_titles() para que el usuario
+     dispare la busqueda en Apollo desde el dashboard
+
+4. create_email_draft(contact_id, signals, instructions)
+   → se guarda en v3.email_drafts con status 'pending_approval'
+
+5. Supabase Realtime notifica al dashboard
+   → usuario ve el borrador en la cola
+
+6. Usuario aprueba o rechaza desde el dashboard
+   → si aprueba: status = 'approved'
+   → webhook HMAC-SHA256 notifica al agente
+
+7. Agente recibe el webhook y envia via Gmail
+   → v3.email_drafts.status = 'sent'
+   → v3.activity_log registra el evento
+```
+
+---
+
+## 7. Webhooks
+
+### Eventos disponibles
+
+| Evento | Cuando |
+|--------|--------|
+| `email.draft.created` | El agente creo un borrador |
+| `email.draft.approved` | Usuario aprobo un borrador |
+| `email.draft.rejected` | Usuario rechazo un borrador |
+| `account.prospected` | Tech radar completado para una cuenta |
+| `account.contacts_ready` | Nuevos contactos disponibles en Apollo cache |
+| `campaign.import_complete` | CSV import finalizo el matching |
+
+### Payload y firma
 
 ```json
 {
-  "mcpServers": {
-    "asci": {
-      "url": "https://api.bot.bigua.lat/mcp",
-      "transport": "streamable-http",
-      "headers": {
-        "Authorization": "Bearer asci_live_xxxxxxxxxxxxxxxxxxxx"
-      }
-    }
+  "event": "email.draft.approved",
+  "timestamp": "2025-05-14T15:30:00Z",
+  "workspace_id": "uuid",
+  "data": {
+    "draft_id": "uuid",
+    "contact_id": "uuid",
+    "to_email": "juan@acme.com",
+    "subject": "...",
+    "body_html": "..."
   }
 }
 ```
 
-### Rate Limits por Tier
+Header de firma:
+```
+X-ASCI-Signature: sha256=<hmac_hex>
+```
 
-| Tier | Calls/minuto | Calls/día | Emails/día | Cuentas ABM |
-|------|-------------|-----------|------------|-------------|
-| beta | 30 | 500 | 10 | 25 |
-| starter | 60 | 2,000 | 50 | 100 |
-| pro | 120 | 10,000 | 200 | 500 |
-| enterprise | unlimited | unlimited | 1,000 | unlimited |
+Verificacion: `HMAC-SHA256(webhook_secret, JSON.stringify(payload)) === signature`
+
+### Politica de entrega
+
+- Un intento por evento. Sin reintentos automaticos.
+- Timeout de 10s. Si el endpoint no responde: `failed` en `activity_log`.
+- El agente puede compensar via polling con `list_pending_approvals`.
 
 ---
 
-### 6. `email_sequences` - Secuencias de outreach por cuenta
+## 8. DKIM / SPF — Check Obligatorio
 
-```sql
-CREATE TABLE email_sequences (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
-  company_id UUID REFERENCES companies(id),
-  bookmark_id UUID REFERENCES bookmarks(id),
-  
-  -- Configuración
-  status TEXT DEFAULT 'active' CHECK (status IN ('active', 'paused', 'completed', 'cancelled')),
-  wait_days INTEGER DEFAULT 5, -- Días para esperar respuesta antes de escalar
-  
-  -- Tracking
-  current_contact_index INTEGER DEFAULT 0, -- 0=A, 1=B, 2=C
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-```
+El agente de email queda bloqueado hasta que `v3.email_domain_config.is_email_ready = true`.
 
-### 7. `email_queue` - Cola de emails pendientes de aprobación
-
-```sql
-CREATE TABLE email_queue (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  sequence_id UUID REFERENCES email_sequences(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
-  
-  -- Contacto destino
-  contact_id UUID REFERENCES contacts(id),
-  contact_email TEXT NOT NULL,
-  contact_name TEXT NOT NULL,
-  contact_title TEXT,
-  
-  -- Contenido del email (generado por el agente)
-  subject TEXT NOT NULL,
-  body_html TEXT NOT NULL,
-  body_plain TEXT NOT NULL,
-  
-  -- Icebreaker y contexto usado
-  icebreaker TEXT,
-  context_used JSONB, -- {signals: [...], news: [...], docs: [...]}
-  
-  -- Estado
-  status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'sent', 'bounced')),
-  
-  -- Edición por el vendedor
-  edited_subject TEXT,
-  edited_body_html TEXT,
-  edited_body_plain TEXT,
-  editor_notes TEXT, -- Notas del vendedor sobre cambios
-  
-  -- Timestamps
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  reviewed_at TIMESTAMPTZ,
-  sent_at TIMESTAMPTZ,
-  
-  -- Tracking de respuesta
-  response_received_at TIMESTAMPTZ,
-  response_type TEXT CHECK (response_type IN ('reply', 'bounce', 'none'))
-);
-```
-
-### 8. `contact_rankings` - Priorización A/B/C de decision makers
-
-```sql
-CREATE TABLE contact_rankings (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  company_id UUID REFERENCES companies(id),
-  user_id UUID REFERENCES auth.users(id),
-  
-  -- Contacto de Apollo
-  contact_id UUID REFERENCES contacts(id),
-  
-  -- Ranking generado por IA
-  rank TEXT CHECK (rank IN ('A', 'B', 'C')),
-  rank_score FLOAT, -- 0-100
-  rank_reasoning TEXT, -- Explicación de la IA
-  
-  -- Factores considerados
-  factors JSONB, -- {seniority_match: 0.9, department_match: 0.8, doc_relevance: 0.7}
-  
-  -- Icebreaker personalizado
-  icebreaker TEXT,
-  icebreaker_context JSONB, -- Señales/noticias usadas para el icebreaker
-  
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  
-  UNIQUE(company_id, user_id, contact_id)
-);
-```
-
-### 9. `webhooks` - Configuración de webhooks del usuario
-
-```sql
-CREATE TABLE webhooks (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
-  
-  url TEXT NOT NULL,
-  secret TEXT NOT NULL, -- Para firmar payloads
-  
-  -- Eventos suscritos
-  events TEXT[] NOT NULL, -- ['email.approved', 'email.sent', 'sequence.escalated', etc.]
-  
-  -- Estado
-  active BOOLEAN DEFAULT true,
-  last_triggered_at TIMESTAMPTZ,
-  failure_count INTEGER DEFAULT 0,
-  
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-```
-
-### 10. `user_tiers` - Límites por plan
-
-```sql
-CREATE TABLE user_tiers (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE UNIQUE,
-  
-  tier TEXT DEFAULT 'beta' CHECK (tier IN ('beta', 'starter', 'pro', 'enterprise')),
-  
-  -- Límites
-  max_abm_accounts INTEGER DEFAULT 100,
-  max_emails_per_day INTEGER DEFAULT 50,
-  max_api_calls_per_day INTEGER DEFAULT 1000,
-  max_api_calls_per_minute INTEGER DEFAULT 60,
-  
-  -- Uso actual (reset diario)
-  emails_sent_today INTEGER DEFAULT 0,
-  api_calls_today INTEGER DEFAULT 0,
-  last_reset_at DATE DEFAULT CURRENT_DATE,
-  
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-```
-
----
-
-## MCP Server - Tools Expuestos
-
-### 1. `get_bookmarks`
-Lista los bookmarks del usuario (cuentas objetivo / whitelist) con resumen de señales.
-**Nota:** Los bookmarks SON la whitelist. No se devuelven cuentas que estén en `excluded_accounts`.
+### Verificacion DNS
 
 ```typescript
-interface GetBookmarksInput {
-  include_signals?: boolean;  // Incluir resumen de señales
-  has_recent_signals?: boolean; // Filtrar solo con señales recientes
-  industry?: string;          // Filtrar por industria
-  limit?: number;
-  offset?: number;
-}
+// app/api/v3/email-domain/verify/route.ts
+async function checkEmailDomain(domain: string) {
+  const spfRecords  = await dns.resolveTxt(domain).catch(() => []);
+  const dkimRecords = await dns.resolveTxt(`default._domainkey.${domain}`).catch(() => []);
+  const dmarcRecords = await dns.resolveTxt(`_dmarc.${domain}`).catch(() => []);
 
-interface GetBookmarksOutput {
-  bookmarks: Array<{
-    id: string;
-    company: {
-      id: string;
-      name: string;
-      domain: string;
-      industry: string;
-      employee_count: number;
-    };
-    signals_summary: {
-      total_signals: number;
-      recent_news_count: number;
-      open_positions_count: number;
-      tech_changes_count: number;
-      last_signal_date: string;
-    };
-    // Campos de prospección
-    has_active_sequence: boolean;
-    last_contacted_at: string | null;
-    sequence_status: 'not_started' | 'in_progress' | 'completed' | 'paused' | null;
-  }>;
-  total: number;
-  has_more: boolean;
-  // Info útil para el agente
-  excluded_count: number; // Cuántas cuentas tiene en blacklist
-}
-```
-
-### 2. `get_account_intelligence`
-Obtiene inteligencia completa de una cuenta específica.
-
-```typescript
-interface GetAccountIntelligenceInput {
-  company_id: string;
-  include_news?: boolean;      // Default: true
-  include_signals?: boolean;   // Default: true
-  include_tech_radar?: boolean; // Default: true
-  include_job_postings?: boolean; // Default: true
-  news_limit?: number;         // Default: 10
-  signals_days?: number;       // Señales de los últimos X días
-}
-
-interface GetAccountIntelligenceOutput {
-  company: { /* datos básicos */ };
-  news: Array<{
-    title: string;
-    summary: string;
-    source: string;
-    url: string;
-    published_at: string;
-    relevance_score: number;
-  }>;
-  signals: Array<{
-    type: string; // 'job_posting', 'tech_adoption', 'expansion', etc.
-    title: string;
-    description: string;
-    detected_at: string;
-    source: string;
-  }>;
-  tech_radar: {
-    current_stack: string[];
-    recent_adoptions: string[];
-    potential_needs: string[]; // Inferido de job postings
-  };
-  job_postings: Array<{
-    title: string;
-    department: string;
-    seniority: string;
-    skills_required: string[];
-    posted_at: string;
-    linkedin_url: string;
-  }>;
-}
-```
-
-### 3. `get_decision_makers`
-Obtiene contactos priorizados (A/B/C) con icebreakers.
-
-```typescript
-interface GetDecisionMakersInput {
-  company_id: string;
-  refresh?: boolean; // Forzar re-análisis de IA
-}
-
-interface GetDecisionMakersOutput {
-  decision_makers: Array<{
-    rank: 'A' | 'B' | 'C';
-    contact: {
-      id: string;
-      name: string;
-      title: string;
-      email: string;
-      phone?: string;
-      linkedin_url?: string;
-    };
-    ranking_reasoning: string; // "VP of IT, matches your ICP for cloud solutions..."
-    icebreaker: string; // "Noté que están expandiendo su equipo de data..."
-    icebreaker_context: {
-      based_on: string[]; // ['job_posting:data_engineer', 'news:expansion_latam']
-    };
-  }>;
-  analysis_date: string;
-  user_documents_used: string[]; // IDs de docs usados para el análisis
-}
-```
-
-### 4. `get_icebreakers`
-Genera icebreakers personalizados para un contacto específico.
-
-```typescript
-interface GetIcebreakersInput {
-  company_id: string;
-  contact_id: string;
-  context?: {
-    meeting_type?: string; // 'cold_email', 'follow_up', 'referral'
-    tone?: string; // 'formal', 'casual', 'consultative'
-    focus_areas?: string[]; // ['cost_reduction', 'innovation', 'compliance']
-  };
-}
-
-interface GetIcebreakersOutput {
-  icebreakers: Array<{
-    text: string;
-    type: string; // 'news_based', 'job_posting_based', 'tech_based'
-    confidence: number;
-    source_signals: string[];
-  }>;
-  contact_insights: {
-    tenure_at_company: string;
-    recent_activity: string[];
-    mutual_connections?: number;
+  return {
+    spf_valid:   spfRecords.some(r => r.join('').includes('v=spf1')),
+    dkim_valid:  dkimRecords.length > 0,
+    dmarc_valid: dmarcRecords.some(r => r.join('').includes('v=DMARC1')),
   };
 }
 ```
 
-### 5. `get_user_documents`
-Obtiene documentos/propuesta de valor del usuario para contexto.
+### UI del check
 
-```typescript
-interface GetUserDocumentsInput {
-  document_ids?: string[]; // Específicos, o todos si vacío
-  include_content?: boolean; // Default: false (solo metadata)
-}
-
-interface GetUserDocumentsOutput {
-  documents: Array<{
-    id: string;
-    name: string;
-    type: string; // 'value_proposition', 'case_study', 'product_sheet'
-    summary: string; // Resumen generado por IA
-    content?: string; // Solo si include_content=true
-    key_points: string[]; // Puntos clave extraídos
-    target_personas: string[]; // 'CTO', 'CFO', etc.
-    industries: string[]; // Industrias relevantes
-  }>;
-}
+```
+┌───────────────────────────────────────────────────────┐
+│  Configura tu dominio para enviar emails              │
+│                                                       │
+│  SPF    ✓ Configurado                                 │
+│  DKIM   ✗ No encontrado                               │
+│  DMARC  ✓ Configurado                                 │
+│                                                       │
+│  El agente de email estara disponible cuando los      │
+│  3 registros esten configurados.                      │
+│                                                       │
+│  [Verificar nuevamente]                               │
+└───────────────────────────────────────────────────────┘
 ```
 
-### 6. `search_accounts`
-Busca cuentas en la base de ASCI. Automáticamente excluye cuentas en la blacklist del usuario.
+---
+
+## 9. Multi-Tenancy y Roles
+
+### Reglas de negocio
+
+- El primer usuario de un dominio crea el workspace y es `admin` automaticamente
+- Si un segundo usuario del mismo dominio se registra: `workspace_members` con `status = 'pending'`
+- El admin recibe notificacion (Supabase Realtime) y acepta o rechaza
+
+### Permisos por rol
+
+| Accion | admin | editor | viewer |
+|--------|-------|--------|--------|
+| Ver digest y cuentas | si | si | si |
+| Crear / editar campanias | si | si | no |
+| Subir CSV | si | si | no |
+| Aprobar emails | si | si | no |
+| Subir documentos | si | si | no |
+| Invitar miembros | si | no | no |
+| Activar agente de email | si | no | no |
+| Crear API key MCP | si | no | no |
+| Borrar campanas | si | no | no |
+
+### Deteccion de workspace al registrar
 
 ```typescript
-interface SearchAccountsInput {
-  query: string; // Nombre o dominio
-  filters?: {
-    industry?: string;
-    employee_range?: { min?: number; max?: number };
-    country?: string;
-    has_signals?: boolean;
-  };
-  include_excluded?: boolean; // Default: false. Si true, incluye cuentas excluidas marcadas
-  limit?: number;
-}
+// lib/v3/workspace.ts
+async function handleNewUser(userId: string, email: string) {
+  const domain = email.split('@')[1];
 
-interface SearchAccountsOutput {
-  accounts: Array<{
-    id: string;
-    name: string;
-    domain: string;
-    industry: string;
-    match_score: number; // Relevancia del search
-    is_bookmarked: boolean; // Ya está en whitelist/objetivos
-    is_excluded: boolean;   // Está en blacklist (solo si include_excluded=true)
-    exclusion_reason?: string; // 'installed_base', 'competitor', etc.
-  }>;
-}
-```
+  const { data: existing } = await supabase
+    .schema('v3')
+    .from('workspaces')
+    .select('id')
+    .eq('domain', domain)
+    .single();
 
-### 7. `queue_email_for_approval`
-Encola un email para aprobación del vendedor.
+  if (existing) {
+    // Workspace existente: crear member con status pending
+    await supabase.schema('v3').from('workspace_members').insert({
+      workspace_id: existing.id,
+      user_id: userId,
+      role: 'editor',
+      status: 'pending',
+    });
+    // Supabase Realtime notifica al admin del workspace
+  } else {
+    // Primer usuario del dominio: crear workspace y asignar como admin
+    const { data: workspace } = await supabase
+      .schema('v3')
+      .from('workspaces')
+      .insert({ domain, name: domain, created_by: userId })
+      .select()
+      .single();
 
-```typescript
-interface QueueEmailInput {
-  company_id: string;
-  contact_id: string;
-  subject: string;
-  body_html: string;
-  body_plain: string;
-  icebreaker_used?: string;
-  context_used?: {
-    signals?: string[];
-    news?: string[];
-    documents?: string[];
-  };
-  sequence_id?: string; // Si es parte de una secuencia existente
-}
-
-interface QueueEmailOutput {
-  queue_id: string;
-  status: 'queued';
-  approval_url: string; // Deep link al dashboard para aprobar
-  estimated_review_time?: string; // Basado en historial del usuario
-}
-```
-
-### 8. `get_email_status`
-Consulta el estado de emails en cola/enviados.
-
-```typescript
-interface GetEmailStatusInput {
-  queue_ids?: string[];
-  sequence_id?: string;
-  status_filter?: ('pending' | 'approved' | 'rejected' | 'sent')[];
-}
-
-interface GetEmailStatusOutput {
-  emails: Array<{
-    id: string;
-    status: string;
-    contact_name: string;
-    company_name: string;
-    subject: string;
-    created_at: string;
-    reviewed_at?: string;
-    sent_at?: string;
-    was_edited: boolean;
-    response_received: boolean;
-  }>;
+    await supabase.schema('v3').from('workspace_members').insert({
+      workspace_id: workspace.id,
+      user_id: userId,
+      role: 'admin',
+      status: 'active',
+    });
+  }
 }
 ```
 
 ---
 
-## Flujo de Usuario Completo
+## 10. Trigger.dev — Jobs
 
-### Fase 1: Configuración (Dashboard MCP - bot.bigua.lat)
+### Jobs definidos
 
-1. **Login** - Usuario se autentica (misma auth de ASCI actual)
+| Job | Trigger | Descripcion |
+|-----|---------|-------------|
+| `tech-radar-run` | Manual (primeras 5) + Cron mensual | Tech radar de una cuenta |
+| `apollo-cache-check` | Post tech-radar-run | Verifica contactos en cache |
+| `csv-matching` | Al subir CSV | Procesa matching contra public.companies |
+| `workspace-doc-process` | Al subir documento | Extrae industrias, procesos, KPIs |
+| `digest-filter-update` | Post tech-radar-run | Actualiza campaign_account_digest |
+| `dkim-verify` | Manual (boton en UI) | Verifica DNS del dominio |
 
-2. **Subir documentos** - Si no tiene docs, sube propuesta de valor, casos de éxito
-   - Parser extrae key points, target personas, industrias
-   - IA genera resumen y puntos clave
-
-3. **Gestión de cuentas objetivo (Whitelist = Bookmarks)**
-   
-   **Opción A: Usar bookmarks existentes**
-   - Si el usuario ya tiene bookmarks en ASCI → esos SON sus cuentas objetivo
-   - No necesita hacer nada extra, el MCP ya puede consumirlos
-   
-   **Opción B: Importar CSV de cuentas objetivo**
-   - Sube CSV con columnas: `nombre, dominio (opcional), industria (opcional)`
-   - ASCI hace matching y crea bookmarks automáticamente para las cuentas matched
-   - Dashboard muestra: matched (auto-bookmark), ambiguous (elegir), no_match (crear o ignorar)
-   
-4. **Gestión de exclusiones (Blacklist)**
-   - Usuario puede subir CSV de base instalada / cuentas a no prospectar
-   - Matching contra base de ASCI (mismo flujo)
-   - Estas cuentas se guardan en `excluded_accounts`
-   - El MCP automáticamente las filtra de resultados
-
-5. **Matching de cuentas (para ambos flujos)**
-   - ASCI hace regex match contra base de companies
-   - Estados: `matched` (automático), `ambiguous` (requiere confirmación), `no_match`
-   - Para `ambiguous`: UI muestra opciones, usuario elige la correcta
-   - Para `no_match`: opción de crear company nueva o ignorar
-
-6. **Generar API Key**
-   - Usuario genera key con nombre descriptivo
-   - Se muestra UNA vez, luego solo el prefix
-   - Configurar tier/límites según plan
-
-7. **Configurar webhooks** (opcional)
-   - URL endpoint del agente
-   - Seleccionar eventos: `email.approved`, `email.sent`, `sequence.escalated`
-
-### Fase 2: Uso por Agente (MCP)
-
-1. **Agente consulta bookmarks ABM**
-   ```
-   Tool: get_bookmarks
-   Input: { include_signals: true }
-   ```
-
-2. **Para cada cuenta prioritaria, obtiene inteligencia**
-   ```
-   Tool: get_account_intelligence
-   Input: { company_id: 'xxx', include_news: true, include_job_postings: true }
-   ```
-
-3. **Obtiene decision makers priorizados**
-   ```
-   Tool: get_decision_makers
-   Input: { company_id: 'xxx' }
-   ```
-   - ASCI devuelve contactos A, B, C con icebreakers
-
-4. **Agente redacta email usando contexto**
-   - Usa: docs del usuario, señales, noticias, icebreaker
-   - Personaliza según el contacto y la cuenta
-
-5. **Encola email para aprobación**
-   ```
-   Tool: queue_email_for_approval
-   Input: { company_id, contact_id, subject, body_html, body_plain, context_used }
-   ```
-
-### Fase 3: Aprobación (Dashboard MCP)
-
-1. **Vendedor recibe notificación** (email + badge en dashboard)
-
-2. **Revisa email en cola**
-   - Ve: destinatario, empresa, asunto, cuerpo, contexto usado
-   - Acciones: Aprobar, Editar y aprobar, Rechazar
-
-3. **Si edita**: modifica texto, se guarda versión editada
-
-4. **Al aprobar**: 
-   - Webhook notifica al agente: `email.approved`
-   - Agente envía email via su integración (Gmail)
-
-5. **Tracking de respuesta**:
-   - Usuario marca manualmente si recibió respuesta
-   - O sistema detecta reply si hay integración futura
-
-### Fase 4: Escalamiento de Secuencia
-
-1. **Si pasan X días sin respuesta** (configurable, default 5):
-   - Sistema marca secuencia para escalar
-   - Webhook: `sequence.escalated`
-
-2. **Agente consulta siguiente contacto**
-   ```
-   Tool: get_decision_makers
-   # Devuelve contacto B con nuevo icebreaker (distinto al de A)
-   ```
-
-3. **Repite flujo de email** con contacto B
-   - Mensaje diferente para evitar parecer automatizado
-
----
-
-## Integración con Apify (Job Postings)
-
-### Nuevo desarrollo requerido
+### Configuracion de concurrencia
 
 ```typescript
-// lib/apify/linkedin-scraper.ts
-
-interface ApifyJobPostingsInput {
-  linkedin_company_url: string;
-  max_posts: number;
-}
-
-interface ApifyJobPostingsOutput {
-  job_postings: Array<{
-    title: string;
-    department: string;
-    location: string;
-    seniority_level: string;
-    skills: string[];
-    posted_date: string;
-    linkedin_url: string;
-  }>;
-}
-```
-
-### Cron job bimensual
-- Ejecuta cada 2 semanas
-- Itera sobre companies con linkedin_url en bookmarks de usuarios
-- Actualiza tabla `job_postings` (nueva o existente)
-- Genera señales automáticas basadas en patrones
-
----
-
-## Análisis de IA para Priorización
-
-### Ubicación: ASCI (no el agente)
-
-```typescript
-// lib/ai/contact-ranker.ts
-
-async function rankDecisionMakers(
-  companyId: string,
-  userId: string,
-  contacts: Contact[],
-  userDocuments: Document[],
-  companySignals: Signal[]
-): Promise<RankedContact[]> {
-  
-  const prompt = `
-    Analiza los siguientes contactos de ${company.name} y priorízalos 
-    según su relevancia para vender los siguientes productos/servicios:
-    
-    DOCUMENTOS DEL VENDEDOR:
-    ${userDocuments.map(d => d.summary).join('\n')}
-    
-    SEÑALES RECIENTES DE LA EMPRESA:
-    ${companySignals.map(s => s.description).join('\n')}
-    
-    CONTACTOS A EVALUAR:
-    ${contacts.map(c => `- ${c.name}, ${c.title}`).join('\n')}
-    
-    Para cada contacto, devuelve:
-    1. Rank (A, B o C)
-    2. Score (0-100)
-    3. Razonamiento (por qué es relevante o no)
-    4. Un icebreaker personalizado basado en las señales
-    
-    Formato JSON...
-  `;
-  
-  // Llamada a OpenAI/Anthropic
-  const result = await ai.generate(prompt);
-  return parseRankingResult(result);
-}
+// trigger/tech-radar-run.ts
+export const techRadarRun = task({
+  id: 'tech-radar-run',
+  queue: {
+    concurrencyLimit: 5,
+    // Cola por workspace para no mezclar jobs de diferentes clientes
+    name: ({ workspaceId }: { workspaceId: string }) => `tech-radar-${workspaceId}`,
+  },
+  run: async ({ campaignAccountId, workspaceId }: { campaignAccountId: string, workspaceId: string }) => {
+    // 1. runTechRadar() de lib/tech-radar.ts (Parallel)
+    // 2. Si falla Parallel: fallback a Gemini (lib/parallel.ts)
+    // 3. Escribe en public via RPCs de v2
+    // 4. apollo-cache-check como subtask
+    // 5. digest-filter-update como subtask
+    // 6. Actualizar v3.campaign_accounts
+    // 7. Loggear en v3.activity_log
+    // 8. Supabase Realtime notify al dashboard
+  },
+});
 ```
 
 ---
 
-## Sistema de Notificaciones
+## 11. Onboarding Completo — Flujo del Usuario
 
-### Emails pendientes de aprobación
+### Paso 1: Registro
+
+```
+bot.bigua.lat/register
+        │
+        ├── Email del mismo dominio que otro usuario:
+        │   → "Tu empresa ya tiene cuenta en ASCI. Solicitar acceso."
+        │   → workspace_members con status 'pending'
+        │   → Admin recibe notificacion para aceptar
+        │
+        └── Primer usuario del dominio:
+            → Crear workspace
+            → Usuario es admin
+            → Ir a Paso 2
+```
+
+### Paso 2: Documentos del workspace (BLOCKER)
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Para comenzar, necesitamos entender que vende tu empresa.          │
+│  ASCI usara esto para recomendar cuentas e icebreakers.             │
+│                                                                     │
+│  Sube al menos un documento:                                        │
+│                                                                     │
+│  [+ Landing de solucion]                                            │
+│  [+ Caso de exito]                                                  │
+│  [+ Brochure / Deck]                                                │
+│                                                                     │
+│  ASCI detectara automaticamente:                                    │
+│  · Industrias en las que vendés                                     │
+│  · Procesos de negocio que impactas                                 │
+│  · Tecnologias relacionadas                                         │
+│  · KPIs y argumentos de ROI                                         │
+│                                                                     │
+│  [Puedo agregar mas documentos luego]   [Continuar →]               │
+└─────────────────────────────────────────────────────────────────────┘
+          │
+          ▼
+Trigger.dev: workspace-doc-process
+  → Extrae texto del PDF / URL
+  → Matchea contra public.dictionary_processes y public.dictionary_products
+  → Genera buyer_persona inicial
+  → Sugiere job titles recomendados por proceso/tecnologia
+```
+
+### Paso 3: Crear primera campana
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Crea tu primera campana                                            │
+│                                                                     │
+│  Nombre: [_________________________________]                        │
+│                                                                     │
+│  Tipo de campana:                                                   │
+│                                                                     │
+│  ○ Monitorear                                                       │
+│    Seguir señales de cuentas que ya conoces.                        │
+│    Sin busqueda de contactos ni envio de emails.                    │
+│                                                                     │
+│  ○ Prospectar                                                       │
+│    Buscar decision makers en cuentas conocidas.                     │
+│    Incluye Tech Radar, Apollo y agente de email.                    │
+│                                                                     │
+│  ○ Descubrir                                                        │
+│    ASCI recomienda cuentas nuevas con señales relevantes.           │
+│    Incluye todo lo de Prospectar.                                   │
+│                                                                     │
+│                                                    [Continuar →]   │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Paso 4: Agregar cuentas
+
+**Para Monitor / Prospect:**
+```
+Opcion A — Subir CSV:
+  Upload → Matching (normalizacion + fuzzy) → Revision → campaign_accounts
+
+Opcion B — Busqueda manual:
+  Buscar en public.companies → Agregar de a una
+```
+
+**Para Discover:**
+```
+ASCI recomienda cuentas de public.companies que:
+  1. Tengan signals.signal_type que matcheen con
+     buyer_persona.target_processes o target_technologies del workspace
+  2. No esten en blacklist del workspace para esta campana
+  3. No superen el limite de 100 cuentas del workspace
+
+┌─────────────────────────────────────────────────────────────────────┐
+│  ASCI encontro estas cuentas con señales relevantes                 │
+│                                                                     │
+│  [+] Acme Corp          señales: CRM, ERP      [Agregar] [Omitir]  │
+│  [+] Bigua Technologies señales: AI, Infra     [Agregar] [Omitir]  │
+│  [+] Softtek            señales: ERP           [Agregar] [Omitir]  │
+│                                                                     │
+│                         [Agregar todas]  [Continuar →]             │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Paso 5: Seleccionar primeras 5 para prospectar
+
+(Solo para campanias prospect / discover)
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Selecciona hasta 5 cuentas para comenzar                           │
+│  Las restantes se procesaran automaticamente en tandas de 5.        │
+│                                                                     │
+│  ☑ Acme Corp           · señal reciente: Job posting CTO            │
+│  ☑ Bigua Technologies  · señal reciente: Ronda de inversion         │
+│  ☑ Softtek             · sin señales recientes                      │
+│  ☐ Despegar            · señal reciente: Expansion Brasil           │
+│  ☐ MercadoLibre        · señal reciente: Nuevo producto AI          │
+│                                                                     │
+│  Seleccionadas: 3 / 5                                               │
+│                                                                     │
+│                                       [Iniciar prospeccion →]      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Paso 6: Dashboard activo
+
+- Trigger.dev ejecuta tech radar en background para las seleccionadas
+- Las restantes se encolan automaticamente de a 5
+- Supabase Realtime actualiza el dashboard a medida que completan
+- El digest se va poblando con señales filtradas por buyer_persona
+- El copiloto sugiere icebreakers segun las señales detectadas
+- Los cargos recomendados aparecen para que el usuario dispare busqueda en Apollo
+
+---
+
+## 12. Buyer Personas — Logica de Inferencia
+
+### Fuente 1: Diccionario pre-laburado
+
+En `public.dictionary_processes` y `public.dictionary_products` ya existen entradas
+con keywords. Para v3 se extiende el diccionario con job titles por proceso/tecnologia
+en la tabla `v3.dictionary_job_titles` (definida en seccion 2.3).
+
+Estructura de `v3.dictionary_job_titles`:
+- `process_id` o `product_id`: FK a las tablas del diccionario de v2
+- `job_title`: "CTO", "VP Engineering", etc.
+- `seniority`: c_level, vp, director, manager, senior, individual_contributor
+- `is_inferred`: false para pre-cargados, true para inferidos por IA
+
+### Fuente 2: Inferencia desde docs del workspace
+
+Al procesar `v3.workspace_documents`, ASCI matchea el contenido del doc contra
+el diccionario y extrae los procesos/tecnologias mencionados. Luego consulta
+`v3.dictionary_job_titles` para proponer los cargos relevantes.
+
+Ejemplo:
+- Doc menciona "automatizacion de procesos de compras" → matchea `dictionary_processes.id = ERP`
+- `v3.dictionary_job_titles` para ERP → ["CPO", "VP Supply Chain", "Head of Procurement"]
+- ASCI propone esos cargos en el buyer_persona de la campana
+
+### Fuente 3: Recomendacion IA adicional (Gemini)
+
+Si el doc tiene contexto que no matchea con el diccionario, Gemini puede inferir
+cargos adicionales que se suman a `buyer_persona.recommended_job_titles` con
+`is_inferred = true`. El usuario puede editarlos o descartarlos.
+
+---
+
+## 13. Separacion v2/v3 — Tabla de Seguridad
+
+| Riesgo | Mitigacion |
+|--------|-----------|
+| v3 escribe en tablas de v2 | Solo via RPCs existentes de v2. Nunca INSERT/UPDATE directo |
+| v3 modifica el ETL de v2 | CSV de v3 usa `v3.csv_imports` / `v3.csv_import_rows`. Las tablas `public.import_batches` y `public.import_rows` no se tocan |
+| v3 modifica bookmarks de v2 | `public.bookmarks` no se toca. v3 usa `v3.campaign_accounts` |
+| FK cross-schema | No hay FK de v3 a tablas de v2. Las referencias a `companies.id` y `contacts.id` son campos UUID sin constraint FK formal |
+| RLS de v2 se rompe | v3 tiene sus propias policies en schema v3. Las de v2 no se modifican |
+| Performance de v2 | v3 crea sus propios indices. Los de v2 no se modifican |
+| Trigger en auth.users | El trigger `on_auth_user_created` de v2 crea `public.profiles`. v3 agrega su logica en una funcion separada llamada desde la API, no modifica el trigger existente |
+
+---
+
+## 14. Variables de Entorno
+
+### Ya existentes (v2 — se reutilizan en v3)
+
+```
+NEXT_PUBLIC_SUPABASE_URL
+NEXT_PUBLIC_SUPABASE_ANON_KEY
+SUPABASE_SERVICE_ROLE_KEY
+APOLLO_API_KEY
+PARALLEL_API_KEY
+GOOGLE_AI_API_KEY
+```
+
+### Nuevas para v3
+
+```
+TRIGGER_SECRET_KEY         # Trigger.dev autenticacion
+TRIGGER_API_URL            # Trigger.dev endpoint
+BLOB_READ_WRITE_TOKEN      # Vercel Blob para workspace_documents
+```
+
+---
+
+## 15. Consideraciones de Integracion v2/v3
+
+### 15.1 Puntos criticos verificados
+
+| Verificacion | Estado | Notas |
+|--------------|--------|-------|
+| `public.dictionary_processes` existe | OK | Columnas: id, name, keywords[], created_at |
+| `public.dictionary_products` existe | OK | Columnas: id, vendor_id, name, keywords[], created_at |
+| `public.dictionary_vendors` existe | OK | Padre de dictionary_products |
+| `public.dictionary_patterns_cache` existe | OK | Cache de regex pre-compilados |
+| `public.companies` existe | OK | Tabla principal de empresas |
+| `public.contacts` existe | OK | Personas con senales |
+| `public.signals` existe | OK | Senales detectadas |
+| `public.company_news` existe | OK | Cache de noticias (RLS por bookmark) |
+| `public.company_implementations` existe | OK | Cache de tech radar (RLS por bookmark) |
+| `public.apollo_contacts_cache` existe | OK | Cache de Apollo |
+| `public.job_postings` existe | OK | Ofertas de trabajo |
+| `public.import_batches` existe | OK | ETL de contactos v2 (NO TOCAR) |
+| `public.import_rows` existe | OK | Filas del ETL v2 (NO TOCAR) |
+| `public.bookmarks` existe | OK | Bookmarks de v2 (NO TOCAR) |
+| `public.user_documents` existe | OK | Docs de v2 por user_id (NO TOCAR, v3 usa workspace_documents) |
+| `user_news_interactions` existe | OK | Tracking de noticias vistas |
+| `user_implementation_interactions` existe | OK | Tracking de implementaciones vistas |
+| `upsert_company()` RPC existe | OK | Funcion para crear/actualizar companies |
+| `get_company_drawer_data()` RPC existe | OK | Datos para drawer de company |
+| `runTechRadar()` funcion existe | OK | En lib/tech-radar.ts |
+| `searchPeople()` funcion existe | OK | En lib/apollo/search.ts |
+
+### 15.2 Acciones requeridas para RLS de company_news
+
+Las tablas `company_news` y `company_implementations` tienen RLS que permite SELECT
+solo si el usuario tiene un bookmark de esa company. En v3 NO hay bookmarks.
+
+**Solucion implementada:** Leer desde server-side con `SUPABASE_SERVICE_ROLE_KEY`.
 
 ```typescript
-// Trigger: nuevo email en cola
-// Destino: email del vendedor + badge en dashboard
+// lib/v3/cache-reader.ts
+import { createClient } from '@supabase/supabase-js';
 
-interface ApprovalNotification {
-  type: 'email_pending_approval';
-  user_id: string;
-  queue_id: string;
-  company_name: string;
-  contact_name: string;
-  subject_preview: string;
-  approval_url: string;
+const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
+
+export async function getCompanyNews(companyId: string) {
+  // service_role bypasea RLS
+  const { data } = await supabaseAdmin
+    .from('company_news')
+    .select('*')
+    .eq('company_id', companyId);
+  return data;
 }
 ```
 
-### Canales de notificación (configurable por usuario)
-- **Email**: Resend para enviar notificación
-- **Dashboard**: Badge/contador en header + lista en página principal
+### 15.3 Checklist de migracion
+
+**Fase 1: Schema**
+- [ ] Crear schema `v3` en Supabase
+- [ ] Ejecutar script de creacion de tablas v3 (seccion 2.3)
+- [ ] Poblar `v3.dictionary_job_titles` con datos iniciales
+
+**Fase 2: Backend**
+- [ ] Crear `lib/v3/workspace.ts` - manejo de multi-tenant
+- [ ] Crear `lib/v3/csv-matcher.ts` - matching de CSV
+- [ ] Crear `lib/v3/cache-reader.ts` - lectura de cache global con service_role
+- [ ] Integrar Trigger.dev y crear jobs
+- [ ] Crear endpoints MCP en `/app/api/mcp/`
+
+**Fase 3: Frontend**
+- [ ] Dashboard principal con layout de 3 columnas
+- [ ] Selector de campana
+- [ ] Vista de digest por cuenta
+- [ ] Panel de copiloto
+- [ ] UI de matching de CSV
+- [ ] UI de verificacion DKIM/SPF
+
+**Fase 4: Integraciones**
+- [ ] Configurar Vercel Blob para documentos
+- [ ] Configurar Trigger.dev
+- [ ] Configurar webhooks
+
+### 15.4 Funciones de v2 que v3 reutiliza directamente
+
+| Funcion | Path | Uso en v3 |
+|---------|------|-----------|
+| `runTechRadar` | `lib/tech-radar.ts` | Tech radar de cuentas en campanias |
+| `searchPeople` | `lib/apollo/search.ts` | Busqueda en Apollo |
+| `enrichPerson` | `lib/apollo/enrich.ts` | Enriquecimiento de contactos |
+| `enrichMany` | `lib/apollo/enrich.ts` | Enriquecimiento batch |
+| `apolloRequest` | `lib/apollo/client.ts` | Cliente base de Apollo |
+| `normalizeDomain` | `lib/apollo/domain.ts` | Normalizar dominios |
+| `normalizeCompanyName` | RPC SQL | Normalizar nombres de empresas |
+
+### 15.5 Tablas que v3 NUNCA modifica directamente
+
+| Tabla | Razon |
+|-------|-------|
+| `public.bookmarks` | Usado por v2. v3 tiene campaign_accounts |
+| `public.import_batches` | ETL de contactos de v2 |
+| `public.import_rows` | ETL de contactos de v2 |
+| `public.user_documents` | Docs por user_id de v2. v3 tiene workspace_documents |
+| `public.profiles` | Trigger de auth de v2 |
 
 ---
 
-## Paquete @asci/core (Scope Mínimo Viable)
-
-```typescript
-// packages/core/src/index.ts
-
-// 1. Cliente Supabase tipado
-export { createSupabaseClient, createSupabaseAdmin } from './db/client';
-
-// 2. Tipos compartidos
-export type { 
-  Company, 
-  Bookmark,        // Ahora incluye is_target_account
-  Signal, 
-  Contact,
-  Document,
-  ExcludedAccount, // Nueva tabla blacklist
-  CsvImport,       // Tracking de importaciones
-  EmailQueue,
-  EmailSequence,
-  ContactRanking,
-  ApiKey,
-  Webhook,
-  UserTier
-} from './types';
-
-// 3. Utilidades básicas
-export { hashApiKey, verifyApiKey } from './utils/auth';
-export { normalizeCompanyName, matchCompanyByRegex } from './utils/matching';
-```
-
-### Publicación NPM privada
-- GitHub Packages o npm privado
-- Versionado semántico
-- CI/CD para publicar en merge a main
-
----
-
-## Plan de Implementación por Fases
-
-### Fase 0: Setup (1-2 días)
-- [ ] Crear repo `asci-core` con estructura básica
-- [ ] Configurar npm privado (GitHub Packages)
-- [ ] Crear repo `bigua-bot` con Turborepo (apps/mcp-server + apps/dashboard)
-- [ ] Configurar proyectos en Vercel
-
-### Fase 1: Base de datos (2-3 días)
-- [ ] Migrar tabla `bookmarks`: agregar `is_target_account`, `last_prospected_at`, `current_sequence_id`
-- [ ] Crear tabla `excluded_accounts` (blacklist)
-- [ ] Crear tablas `csv_imports` y `csv_import_rows`
-- [ ] Crear tablas `api_keys`, `webhooks`, `user_tiers`
-- [ ] Crear tablas `email_sequences`, `email_queue`, `contact_rankings`
-- [ ] Configurar RLS policies para todas las tablas nuevas
-- [ ] Seed data para testing
-
-### Fase 2: Dashboard MCP - Configuración (1 semana)
-- [ ] Auth (reusar de ASCI actual)
-- [ ] UI para subir/gestionar documentos
-- [ ] UI para ver bookmarks existentes como cuentas objetivo
-- [ ] UI para importar CSV de nuevas cuentas objetivo → crear bookmarks
-- [ ] UI para importar CSV de blacklist → crear excluded_accounts
-- [ ] Parser de CSV con matching regex
-- [ ] UI de matching de cuentas (resolver ambiguos)
-- [ ] Generación de API keys
-- [ ] Configuración de webhooks
-
-### Fase 3: MCP Server - Core (1 semana)
-- [ ] Setup MCP server con `@modelcontextprotocol/sdk`
-- [ ] Configurar transport **streamable HTTP** en `/mcp` endpoint
-- [ ] Middleware de autenticación (API key en header `Authorization: Bearer asci_live_xxx`)
-- [ ] Rate limiting por tier (usando Upstash Redis o similar)
-- [ ] Implementar tools básicos: `get_bookmarks`, `search_accounts`, `get_user_documents`
-- [ ] Health check endpoint en `/health`
-- [ ] Logging y métricas básicas
-
-### Fase 4: MCP Server - Intelligence (1 semana)
-- [ ] `get_account_intelligence`
-- [ ] `get_decision_makers` con ranking de IA
-- [ ] `get_icebreakers`
-- [ ] Integración con Apollo API para contactos
-
-### Fase 5: Sistema de Emails (1 semana)
-- [ ] `queue_email_for_approval`
-- [ ] `get_email_status`
-- [ ] Dashboard: cola de aprobación
-- [ ] Edición de emails
-- [ ] Sistema de webhooks
-- [ ] Notificaciones por email
-
-### Fase 6: Secuencias y Escalamiento (3-4 días)
-- [ ] Lógica de secuencias
-- [ ] Detección de "sin respuesta" (manual inicialmente)
-- [ ] Escalamiento a contacto B/C
-- [ ] Variación de mensajes
-
-### Fase 7: Apify Integration (3-4 días)
-- [ ] Integración con Apify para LinkedIn scraping
-- [ ] Cron job bimensual
-- [ ] Procesamiento y almacenamiento de job postings
-
-### Fase 8: Testing y Beta (1 semana)
-- [ ] Tests E2E del flujo completo
-- [ ] Beta con usuarios seleccionados
-- [ ] Ajustes basados en feedback
-
----
-
-## Límites por Tier
-
-| Tier | Cuentas ABM | Emails/día | API calls/día | API calls/min |
-|------|-------------|------------|---------------|---------------|
-| Beta | 100 | 50 | 1000 | 60 |
-| Starter | 50 | 20 | 500 | 30 |
-| Pro | 200 | 100 | 5000 | 120 |
-| Enterprise | Ilimitado | Ilimitado | Ilimitado | 300 |
-
----
-
-## Consideraciones de Seguridad
-
-1. **API Keys**: Hasheadas con SHA256, nunca en plaintext
-2. **Rate Limiting**: Por tier, con backoff exponencial
-3. **Webhooks**: Firmados con HMAC para verificar origen
-4. **RLS**: Usuarios solo acceden a sus propios datos
-5. **Audit Log**: Registrar todas las acciones del MCP (futuro)
-
----
-
-## Preguntas Resueltas
-
-- **MCP Client**: Multi-cliente (cualquier MCP compatible)
-- **Modelo Whitelist/Blacklist**: 
-  - **Whitelist = Bookmarks**: Los bookmarks existentes son las cuentas objetivo
-  - **Nuevas cuentas whitelist**: Al importar CSV, se crean bookmarks automáticamente
-  - **Blacklist = excluded_accounts**: Tabla separada para cuentas a no prospectar
-- **Core sharing**: NPM package privado @asci/core
-- **Email OAuth**: Delegado al agente (Gmail API)
-- **Match confirmation**: En dashboard web
-- **MCP Auth**: API Key por usuario
-- **Upload format**: CSV/Excel con columnas
-- **Refresh rate**: Mensual manual + bimensual Apify
-- **Approval queue**: Dashboard web + notificación por email
-- **Contact filter**: Análisis en ASCI, ranking A/B/C
-- **Email tracking**: Sin respuesta en X días (configurable, default 5)
-- **Apify**: Nuevo desarrollo
-- **Core scope**: Mínimo viable (tipos + cliente Supabase)
-- **Notifications**: Email + Dashboard
-- **Webhooks**: Sí, para notificar eventos al agente
-- **Limits**: Por tier/plan
-
----
-
-## Migración de Usuarios Existentes
-
-### Usuarios actuales de ASCI con bookmarks:
-
-1. **No requieren migración de datos** - sus bookmarks ya son su whitelist
-2. **Nuevo flag en bookmarks**: Agregar columna `is_target_account BOOLEAN DEFAULT true`
-   - Permite que usuarios marquen bookmarks como "solo seguimiento" vs "prospectar activamente"
-3. **Onboarding MCP**: 
-   - Al acceder por primera vez al dashboard MCP, se les muestra cuántos bookmarks tienen
-   - Pueden generar API key inmediatamente sin configuración adicional
-   - Opcionalmente pueden subir blacklist de base instalada
+*Documento actualizado: 2025-05-14*
+*Version: 2.0 — Cruce verificado con v2*
