@@ -65,15 +65,17 @@ export async function getDictionaryTechnologies(): Promise<DictionaryEntry[]> {
   return data || []
 }
 
-// Get distinct industries from companies
+// Get distinct industries from companies that have signals with contacts
 export async function getContactIndustries(): Promise<string[]> {
   const supabase = await createClient()
 
+  // Get industries from companies that actually have signals with contacts
   const { data, error } = await supabase
-    .from("companies")
-    .select("industry")
-    .not("industry", "is", null)
-    .neq("industry", "")
+    .from("signals")
+    .select(`
+      companies!inner(industry)
+    `)
+    .not("contact_id", "is", null)
 
   if (error) {
     console.error("Error getting industries:", error)
@@ -81,8 +83,8 @@ export async function getContactIndustries(): Promise<string[]> {
   }
 
   const industries = new Set<string>()
-  data.forEach((row) => {
-    const industry = row.industry?.trim()
+  data.forEach((row: any) => {
+    const industry = row.companies?.industry?.trim()
     if (industry) {
       industries.add(industry)
     }
@@ -91,15 +93,17 @@ export async function getContactIndustries(): Promise<string[]> {
   return Array.from(industries).sort((a, b) => a.localeCompare(b, "es"))
 }
 
-// Get distinct countries from companies (using country_normalized field)
+// Get distinct countries from companies that have signals with contacts
 export async function getContactCountries(): Promise<string[]> {
   const supabase = await createClient()
 
+  // Get countries from companies that actually have signals with contacts
   const { data, error } = await supabase
-    .from("companies")
-    .select("country_normalized")
-    .not("country_normalized", "is", null)
-    .neq("country_normalized", "")
+    .from("signals")
+    .select(`
+      companies!inner(country_normalized)
+    `)
+    .not("contact_id", "is", null)
 
   if (error) {
     console.error("Error getting contact countries:", error)
@@ -107,8 +111,8 @@ export async function getContactCountries(): Promise<string[]> {
   }
 
   const countries = new Set<string>()
-  data.forEach((row) => {
-    const country = row.country_normalized?.trim()
+  data.forEach((row: any) => {
+    const country = row.companies?.country_normalized?.trim()
     if (country) {
       countries.add(country)
     }
