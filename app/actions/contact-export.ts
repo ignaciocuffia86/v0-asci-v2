@@ -17,9 +17,10 @@ export interface ExportRow {
   first_name: string | null
   last_name: string | null
   full_name: string | null
-  job_title: string | null // matches RPC column name
+  job_title: string | null
   company_name: string | null
   company_country: string | null
+  contact_country: string | null
   linkedin_url: string | null
   email: string | null
   signal_type: string | null
@@ -69,13 +70,14 @@ export async function getDictionaryTechnologies(): Promise<DictionaryEntry[]> {
 export async function getContactIndustries(): Promise<string[]> {
   const supabase = await createClient()
 
-  // Get industries from companies that actually have signals with contacts
+  // Get industries from companies that have signals with contacts
   const { data, error } = await supabase
     .from("signals")
     .select(`
       companies!inner(industry)
     `)
     .not("contact_id", "is", null)
+    .not("companies.industry", "is", null)
 
   if (error) {
     console.error("Error getting industries:", error)
@@ -93,69 +95,29 @@ export async function getContactIndustries(): Promise<string[]> {
   return Array.from(industries).sort((a, b) => a.localeCompare(b, "es"))
 }
 
-// Get distinct countries from companies that have signals with contacts
+// Get distinct countries from contacts that have signals (using normalized country)
 export async function getContactCountries(): Promise<string[]> {
   const supabase = await createClient()
 
-  // Get countries directly from companies table, using country field
-  // Filter to only get real country names (exclude job titles, etc.)
+  // Get countries from contacts that have signals, using country_normalized
+  // This ensures we only show countries that can actually be filtered
   const { data, error } = await supabase
-    .from("companies")
-    .select("country")
-    .not("country", "is", null)
-    .neq("country", "")
+    .from("signals")
+    .select(`
+      contacts!inner(country_normalized)
+    `)
+    .not("contact_id", "is", null)
 
   if (error) {
     console.error("Error getting contact countries:", error)
     return []
   }
 
-  // List of known valid countries to filter against
-  const validCountryPatterns = [
-    "Argentina", "Chile", "Mexico", "México", "Colombia", "Peru", "Perú", 
-    "Brazil", "Brasil", "Ecuador", "Uruguay", "Paraguay", "Bolivia", "Venezuela",
-    "Spain", "España", "United States", "USA", "US", "Canada", "Canadá",
-    "United Kingdom", "UK", "Germany", "France", "Italy", "Portugal",
-    "Australia", "Japan", "China", "India", "South Korea", "Singapore",
-    "Netherlands", "Belgium", "Switzerland", "Austria", "Sweden", "Norway",
-    "Denmark", "Finland", "Ireland", "Poland", "Czech Republic", "Romania",
-    "Hungary", "Greece", "Turkey", "Israel", "UAE", "Saudi Arabia",
-    "South Africa", "Nigeria", "Kenya", "Egypt", "Morocco",
-    "New Zealand", "Philippines", "Thailand", "Vietnam", "Indonesia", "Malaysia",
-    "Taiwan", "Hong Kong", "Russia", "Ukraine", "Costa Rica", "Panama",
-    "Guatemala", "Honduras", "El Salvador", "Nicaragua", "Puerto Rico",
-    "Dominican Republic", "Cuba", "Jamaica", "Trinidad", "Afghanistan", "Albania",
-    "Algeria", "Andorra", "Angola", "Antigua", "Armenia", "Azerbaijan", "Bahamas",
-    "Bahrain", "Bangladesh", "Barbados", "Belarus", "Belize", "Benin", "Bhutan",
-    "Bosnia", "Botswana", "Brunei", "Bulgaria", "Burkina", "Burundi", "Cambodia",
-    "Cameroon", "Cape Verde", "Central African", "Chad", "Comoros", "Congo",
-    "Croatia", "Cyprus", "Djibouti", "Dominica", "East Timor", "Eritrea",
-    "Estonia", "Ethiopia", "Fiji", "Gabon", "Gambia", "Georgia", "Ghana",
-    "Grenada", "Guinea", "Guyana", "Haiti", "Iceland", "Iraq", "Ivory Coast",
-    "Jordan", "Kazakhstan", "Kuwait", "Kyrgyzstan", "Laos", "Latvia", "Lebanon",
-    "Lesotho", "Liberia", "Libya", "Liechtenstein", "Lithuania", "Luxembourg",
-    "Madagascar", "Malawi", "Maldives", "Mali", "Malta", "Mauritania", "Mauritius",
-    "Moldova", "Monaco", "Mongolia", "Montenegro", "Mozambique", "Myanmar",
-    "Namibia", "Nepal", "Niger", "North Korea", "North Macedonia", "Oman",
-    "Pakistan", "Palestine", "Papua New Guinea", "Qatar", "Rwanda", "Samoa",
-    "San Marino", "Senegal", "Serbia", "Sierra Leone", "Slovakia", "Slovenia",
-    "Solomon Islands", "Somalia", "Sri Lanka", "Sudan", "Suriname", "Swaziland",
-    "Syria", "Tajikistan", "Tanzania", "Togo", "Tonga", "Tunisia", "Turkmenistan",
-    "Uganda", "Uzbekistan", "Vanuatu", "Vatican", "Yemen", "Zambia", "Zimbabwe"
-  ]
-
   const countries = new Set<string>()
-  data.forEach((row) => {
-    const country = row.country?.trim()
+  data.forEach((row: any) => {
+    const country = row.contacts?.country_normalized?.trim()
     if (country) {
-      // Check if it looks like a real country (starts with a known country name)
-      const isValidCountry = validCountryPatterns.some(pattern => 
-        country.toLowerCase().includes(pattern.toLowerCase()) ||
-        pattern.toLowerCase().includes(country.toLowerCase())
-      )
-      if (isValidCountry) {
-        countries.add(country)
-      }
+      countries.add(country)
     }
   })
 
