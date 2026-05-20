@@ -327,6 +327,9 @@ WHERE country IS NOT NULL AND country_normalized IS NULL;
 -- =====================================================
 -- PASO 6: Actualizar RPC export_contacts para usar contacts.country_normalized
 -- =====================================================
+-- Primero hacer DROP de la función existente porque cambiamos los OUT parameters
+DROP FUNCTION IF EXISTS export_contacts(TEXT, TEXT[], TEXT[], TEXT[], BOOLEAN, INT);
+
 CREATE OR REPLACE FUNCTION export_contacts(
   p_signal_type TEXT DEFAULT NULL,
   p_signal_names TEXT[] DEFAULT NULL,
