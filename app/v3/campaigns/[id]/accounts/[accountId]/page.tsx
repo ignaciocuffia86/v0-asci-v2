@@ -55,7 +55,8 @@ export default async function AccountPage({ params }: AccountPageProps) {
   ])
   
   // Log para debug - remover después
-  console.log("[v0] companyId:", companyId, "company found:", !!companyResult.data, "error:", companyResult.error?.message || "none")
+  console.log("[v0] companyId:", companyId)
+  console.log("[v0] company query result:", JSON.stringify(companyResult, null, 2))
   
   // Marcar como visto (fire and forget)
   markDigestAsSeen(accountId).catch(() => {})
