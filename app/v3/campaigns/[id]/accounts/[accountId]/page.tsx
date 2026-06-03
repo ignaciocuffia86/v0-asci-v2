@@ -40,7 +40,7 @@ export default async function AccountPage({ params }: AccountPageProps) {
   const [companyResult, signalsResult, newsResult] = await Promise.all([
     publicClient
       .from('companies')
-      .select('id, name, website, industry, linkedin_url, logo_url, description, employee_count, founded_year, headquarters')
+      .select('id, name, website, linkedin_url, industry, logo_url')
       .eq('id', companyId)
       .maybeSingle(),
     publicClient
@@ -56,10 +56,6 @@ export default async function AccountPage({ params }: AccountPageProps) {
       .order('published_at', { ascending: false })
       .limit(20)
   ])
-  
-  // Log para debug - remover después
-  console.log("[v0] companyId:", companyId)
-  console.log("[v0] company query result:", JSON.stringify(companyResult, null, 2))
   
   // Marcar como visto (fire and forget)
   markDigestAsSeen(accountId).catch(() => {})
