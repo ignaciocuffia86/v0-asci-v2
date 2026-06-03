@@ -11,13 +11,13 @@ interface AccountPageProps {
 export default async function AccountPage({ params }: AccountPageProps) {
   const { id: campaignId, accountId } = await params
   
-  const adminClient = createAdminClient()
+  // Crear cliente para v3 schema
+  const v3Client = createAdminClient().schema('v3')
   
   // Primera ronda: obtener campaign y campaign_account
   const [campaign, accountResult] = await Promise.all([
     getCampaign(campaignId),
-    adminClient
-      .schema('v3')
+    v3Client
       .from('campaign_accounts')
       .select('id, company_id, status, prospection_status, tech_radar_run_at, apollo_run_at, added_at')
       .eq('id', accountId)
@@ -34,19 +34,22 @@ export default async function AccountPage({ params }: AccountPageProps) {
   const companyId = campaignAccount.company_id
   
   // Segunda ronda: obtener datos de la company y signals en paralelo
+  // Crear cliente separado para schema public (igual que getCampaignAccounts)
+  const publicClient = createAdminClient()
+  
   const [companyResult, signalsResult, newsResult] = await Promise.all([
-    adminClient
+    publicClient
       .from('companies')
       .select('id, name, website, industry, linkedin_url, logo_url, description, employee_count, founded_year, headquarters')
       .eq('id', companyId)
       .maybeSingle(),
-    adminClient
+    publicClient
       .from('user_company_signals')
       .select('id, title, content, signal_type, created_at')
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })
       .limit(20),
-    adminClient
+    publicClient
       .from('company_news')
       .select('id, title, summary, source_url, published_at')
       .eq('company_id', companyId)
@@ -55,7 +58,8 @@ export default async function AccountPage({ params }: AccountPageProps) {
   ])
   
   // Log para debug - remover después
-  console.log("[v0] companyId:", companyId, "company found:", !!companyResult.data, "error:", companyResult.error?.message || "none")
+  console.log("[v0] companyId:", companyId)
+  console.log("[v0] company query result:", JSON.stringify(companyResult, null, 2))
   
   // Marcar como visto (fire and forget)
   markDigestAsSeen(accountId).catch(() => {})
