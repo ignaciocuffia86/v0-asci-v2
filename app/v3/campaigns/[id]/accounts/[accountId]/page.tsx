@@ -11,13 +11,13 @@ interface AccountPageProps {
 export default async function AccountPage({ params }: AccountPageProps) {
   const { id: campaignId, accountId } = await params
   
-  const adminClient = createAdminClient()
+  // Crear cliente para v3 schema
+  const v3Client = createAdminClient().schema('v3')
   
   // Primera ronda: obtener campaign y campaign_account
   const [campaign, accountResult] = await Promise.all([
     getCampaign(campaignId),
-    adminClient
-      .schema('v3')
+    v3Client
       .from('campaign_accounts')
       .select('id, company_id, status, prospection_status, tech_radar_run_at, apollo_run_at, added_at')
       .eq('id', accountId)
@@ -34,8 +34,7 @@ export default async function AccountPage({ params }: AccountPageProps) {
   const companyId = campaignAccount.company_id
   
   // Segunda ronda: obtener datos de la company y signals en paralelo
-  // IMPORTANTE: Crear un nuevo cliente para queries al schema public
-  // para evitar cualquier estado residual del schema v3
+  // Crear cliente separado para schema public (igual que getCampaignAccounts)
   const publicClient = createAdminClient()
   
   const [companyResult, signalsResult, newsResult] = await Promise.all([
