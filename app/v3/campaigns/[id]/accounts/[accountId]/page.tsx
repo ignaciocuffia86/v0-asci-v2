@@ -34,19 +34,23 @@ export default async function AccountPage({ params }: AccountPageProps) {
   const companyId = campaignAccount.company_id
   
   // Segunda ronda: obtener datos de la company y signals en paralelo
+  // IMPORTANTE: Crear un nuevo cliente para queries al schema public
+  // para evitar cualquier estado residual del schema v3
+  const publicClient = createAdminClient()
+  
   const [companyResult, signalsResult, newsResult] = await Promise.all([
-    adminClient
+    publicClient
       .from('companies')
       .select('id, name, website, industry, linkedin_url, logo_url, description, employee_count, founded_year, headquarters')
       .eq('id', companyId)
       .maybeSingle(),
-    adminClient
+    publicClient
       .from('user_company_signals')
       .select('id, title, content, signal_type, created_at')
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })
       .limit(20),
-    adminClient
+    publicClient
       .from('company_news')
       .select('id, title, summary, source_url, published_at')
       .eq('company_id', companyId)
