@@ -3,7 +3,7 @@
 import { useState, useCallback } from "react"
 import { useDropzone } from "react-dropzone"
 import { upload } from "@vercel/blob/client"
-import { createWorkspaceDocument } from "@/app/actions/v3/documents"
+import { createWorkspaceDocument, checkDocumentUpload } from "@/app/actions/v3/documents"
 import {
   Dialog,
   DialogContent,
@@ -64,12 +64,27 @@ export function UploadDocumentDialog({
       // Get file info for title
       const fileExt = file.name.split(".").pop()
       const title = file.name.replace(`.${fileExt}`, "")
-      
-      // Upload to Vercel Blob (client-side, bypasses 4.5MB limit)
-      const blob = await upload(file.name, file, {
-        access: "public",
-        handleUploadUrl: "/api/v3/documents/blob-upload",
-      })
+
+      // Validate against DB BEFORE touching Blob. The Blob store is global to
+      // the project, so a raw filename can collide with another tenant's file.
+      // This returns a friendly error for real (same-workspace) duplicates and
+      // gives us the workspaceId to namespace the Blob path.
+      const check = await checkDocumentUpload({ title, type: docType })
+      if (check.error || !check.workspaceId) {
+        throw new Error(check.error || "No se pudo validar el documento")
+      }
+
+      // Upload to Vercel Blob (client-side, bypasses 4.5MB limit).
+      // Path is namespaced by workspace; addRandomSuffix (set server-side in
+      // the token) guarantees uniqueness even across tenants and orphan blobs.
+      const blob = await upload(
+        `workspaces/${check.workspaceId}/${file.name}`,
+        file,
+        {
+          access: "public",
+          handleUploadUrl: "/api/v3/documents/blob-upload",
+        },
+      )
 
       // Create document record via server action
       const result = await createWorkspaceDocument({
