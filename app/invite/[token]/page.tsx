@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server"
 import { getInvitationByToken } from "@/lib/v3/invitations"
-import { getWorkspaceById } from "@/lib/v3/workspace"
+import { getWorkspaceById, getAuthUserByEmail } from "@/lib/v3/workspace"
 import { InviteView } from "./_components/invite-view"
 
 interface InvitePageProps {
@@ -19,6 +19,9 @@ export default async function InvitePage({ params }: InvitePageProps) {
   // Estado de la invitación
   let invitationState: "valid" | "not_found" | "used" | "revoked" | "expired" = "valid"
   let workspaceName: string | null = null
+  // Para invitados sin sesión: detectar si el email ya tiene cuenta para
+  // mostrar el CTA correcto (crear cuenta vs iniciar sesión).
+  let invitedHasAccount = false
 
   if (!invitation) {
     invitationState = "not_found"
@@ -31,6 +34,11 @@ export default async function InvitePage({ params }: InvitePageProps) {
   } else {
     const workspace = await getWorkspaceById(invitation.workspace_id)
     workspaceName = workspace?.name ?? null
+    // Solo consultamos cuando hace falta decidir el CTA (sin sesión activa).
+    if (!user) {
+      const existing = await getAuthUserByEmail(invitation.email)
+      invitedHasAccount = !!existing
+    }
   }
 
   const emailMatches =
@@ -50,6 +58,7 @@ export default async function InvitePage({ params }: InvitePageProps) {
           currentEmail={user?.email ?? null}
           isAuthenticated={!!user}
           emailMatches={emailMatches}
+          invitedHasAccount={invitedHasAccount}
         />
       </div>
     </div>

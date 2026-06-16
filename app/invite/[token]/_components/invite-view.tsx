@@ -19,6 +19,7 @@ interface InviteViewProps {
   currentEmail: string | null
   isAuthenticated: boolean
   emailMatches: boolean
+  invitedHasAccount: boolean
 }
 
 export function InviteView({
@@ -30,6 +31,7 @@ export function InviteView({
   currentEmail,
   isAuthenticated,
   emailMatches,
+  invitedHasAccount,
 }: InviteViewProps) {
   const router = useRouter()
   const [isLoading, setIsLoading] = useState(false)
@@ -98,6 +100,10 @@ export function InviteView({
   // ── No autenticado: pedir login/registro con el email invitado ──────
   if (!isAuthenticated) {
     const next = encodeURIComponent(`/invite/${token}`)
+    const emailParam = invitedEmail ? `&email=${encodeURIComponent(invitedEmail)}` : ""
+    const signupHref = `/auth/sign-up?next=${next}${emailParam}`
+    const loginHref = `/auth/login?next=${next}${emailParam}`
+
     return (
       <Card className="border-border/50">
         <CardHeader className="text-center">
@@ -109,19 +115,40 @@ export function InviteView({
           </CardTitle>
           <CardDescription className="text-base text-pretty">
             La invitación es para <strong>{invitedEmail}</strong> con rol de {roleLabel}.
-            Iniciá sesión o creá tu cuenta con ese email para aceptarla.
+            {invitedHasAccount
+              ? " Iniciá sesión con ese email para aceptarla."
+              : " Creá tu cuenta con ese email para aceptarla."}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
-          <Button asChild className="w-full" size="lg">
-            <Link href={`/auth/login?next=${next}`}>
-              <LogIn data-icon="inline-start" />
-              Iniciar sesión
-            </Link>
-          </Button>
-          <Button asChild variant="outline" className="w-full" size="lg">
-            <Link href={`/auth/sign-up?next=${next}`}>Crear cuenta</Link>
-          </Button>
+          {invitedHasAccount ? (
+            <>
+              <Button asChild className="w-full" size="lg">
+                <Link href={loginHref}>
+                  <LogIn data-icon="inline-start" />
+                  Iniciar sesión
+                </Link>
+              </Button>
+              <Button asChild variant="outline" className="w-full" size="lg">
+                <Link href={signupHref}>Crear cuenta</Link>
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button asChild className="w-full" size="lg">
+                <Link href={signupHref}>
+                  <Mail data-icon="inline-start" />
+                  Crear cuenta
+                </Link>
+              </Button>
+              <Button asChild variant="outline" className="w-full" size="lg">
+                <Link href={loginHref}>
+                  <LogIn data-icon="inline-start" />
+                  Ya tengo cuenta
+                </Link>
+              </Button>
+            </>
+          )}
         </CardContent>
       </Card>
     )
