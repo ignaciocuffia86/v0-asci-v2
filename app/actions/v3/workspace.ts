@@ -295,7 +295,7 @@ export async function removeMember(memberId: string): Promise<{
 }
 
 // ═══════════════════════════════════════════════════════════
-// INVITATION ACCEPTANCE (landing /v3/invite/[token])
+  // INVITATION ACCEPTANCE (landing /invite/[token])
 // ═══════════════════════════════════════════════════════════
 
 /**

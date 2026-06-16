@@ -17,7 +17,7 @@ export function getAppBaseUrl(): string {
 
 /** Construye el link de aceptación de invitación a partir del token. */
 export function buildInviteUrl(token: string): string {
-  return `${getAppBaseUrl()}/v3/invite/${token}`
+  return `${getAppBaseUrl()}/invite/${token}`
 }
 
 interface SendInviteEmailParams {
