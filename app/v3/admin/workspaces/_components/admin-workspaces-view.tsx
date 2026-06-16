@@ -26,9 +26,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { Plus, Building2, Users, AlertCircle } from "lucide-react"
+import { Plus, Building2, Users, AlertCircle, Trash2 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
-import { createWorkspaceAsSuperAdmin, type WorkspaceSummary } from "@/app/actions/v3/admin"
+import {
+  createWorkspaceAsSuperAdmin,
+  deleteWorkspaceAsSuperAdmin,
+  type WorkspaceSummary,
+} from "@/app/actions/v3/admin"
 
 interface AdminWorkspacesViewProps {
   initialWorkspaces: WorkspaceSummary[]
@@ -44,6 +48,11 @@ export function AdminWorkspacesView({ initialWorkspaces, loadError }: AdminWorks
   const [domain, setDomain] = useState("")
   const [websiteUrl, setWebsiteUrl] = useState("")
   const [adminEmail, setAdminEmail] = useState("")
+
+  // Estado del dialog de eliminación
+  const [deleteTarget, setDeleteTarget] = useState<WorkspaceSummary | null>(null)
+  const [deleteConfirmName, setDeleteConfirmName] = useState("")
+  const [isDeleting, setIsDeleting] = useState(false)
 
   const handleCreate = async () => {
     if (!name.trim() || !adminEmail.trim() || !domain.trim()) {
@@ -102,6 +111,44 @@ export function AdminWorkspacesView({ initialWorkspaces, loadError }: AdminWorks
       })
     } finally {
       setIsSubmitting(false)
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return
+
+    setIsDeleting(true)
+    try {
+      const result = await deleteWorkspaceAsSuperAdmin({
+        workspaceId: deleteTarget.id,
+        confirmationName: deleteConfirmName.trim(),
+      })
+
+      if (!result.success) {
+        toast({
+          title: "No se pudo eliminar",
+          description: result.error ?? "Error desconocido",
+          variant: "destructive",
+        })
+        return
+      }
+
+      toast({
+        title: "Workspace eliminado",
+        description: `Se eliminó "${deleteTarget.name}" y todos sus datos asociados.`,
+      })
+
+      setDeleteTarget(null)
+      setDeleteConfirmName("")
+      router.refresh()
+    } catch (err) {
+      toast({
+        title: "Error inesperado",
+        description: err instanceof Error ? err.message : "Intentá de nuevo.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsDeleting(false)
     }
   }
 
@@ -213,6 +260,7 @@ export function AdminWorkspacesView({ initialWorkspaces, loadError }: AdminWorks
                     <TableHead>Admins</TableHead>
                     <TableHead>Miembros</TableHead>
                     <TableHead>Creado</TableHead>
+                    <TableHead className="text-right">Acciones</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -238,6 +286,20 @@ export function AdminWorkspacesView({ initialWorkspaces, loadError }: AdminWorks
                       <TableCell className="text-muted-foreground">
                         {format(new Date(ws.created_at), "d MMM yyyy", { locale: es })}
                       </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="text-muted-foreground hover:text-destructive"
+                          onClick={() => {
+                            setDeleteTarget(ws)
+                            setDeleteConfirmName("")
+                          }}
+                          aria-label={`Eliminar ${ws.name}`}
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -246,6 +308,64 @@ export function AdminWorkspacesView({ initialWorkspaces, loadError }: AdminWorks
           </CardContent>
         </Card>
       )}
+
+      <Dialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeleteTarget(null)
+            setDeleteConfirmName("")
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertCircle className="size-5" />
+              Eliminar workspace
+            </DialogTitle>
+            <DialogDescription>
+              Esta acción es permanente. Se eliminarán el workspace{" "}
+              <strong>{deleteTarget?.name}</strong> y todos sus datos asociados: miembros,
+              invitaciones, documentos, campañas y API keys. No se puede deshacer.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-col gap-2 py-2">
+            <Label htmlFor="confirm-name">
+              Escribí <span className="font-semibold text-foreground">{deleteTarget?.name}</span> para
+              confirmar
+            </Label>
+            <Input
+              id="confirm-name"
+              value={deleteConfirmName}
+              onChange={(e) => setDeleteConfirmName(e.target.value)}
+              placeholder={deleteTarget?.name ?? ""}
+              autoComplete="off"
+            />
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setDeleteTarget(null)
+                setDeleteConfirmName("")
+              }}
+              disabled={isDeleting}
+            >
+              Cancelar
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDelete}
+              disabled={isDeleting || deleteConfirmName.trim() !== deleteTarget?.name}
+            >
+              {isDeleting ? "Eliminando..." : "Eliminar definitivamente"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

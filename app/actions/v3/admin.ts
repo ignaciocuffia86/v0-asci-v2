@@ -229,3 +229,58 @@ export async function createWorkspaceAsSuperAdmin(input: {
     emailSent: emailResult.sent,
   }
 }
+
+// ═══════════════════════════════════════════════════════════
+// ELIMINAR WORKSPACE (destructivo - cascade)
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Elimina un workspace y, por ON DELETE CASCADE, todos sus miembros,
+ * invitaciones, documentos, campañas, perfiles y API keys.
+ * Para confirmar, el caller debe pasar el nombre exacto del workspace.
+ */
+export async function deleteWorkspaceAsSuperAdmin(input: {
+  workspaceId: string
+  confirmationName: string
+}): Promise<{ success: boolean; error?: string }> {
+  const guard = await requireSuperAdmin()
+  if ("error" in guard) {
+    return { success: false, error: guard.error }
+  }
+
+  const admin = createAdminClient()
+
+  // Cargar el workspace para validar la confirmación por nombre
+  const { data: workspace, error: wsError } = await admin
+    .schema("v3")
+    .from("workspaces")
+    .select("id, name")
+    .eq("id", input.workspaceId)
+    .maybeSingle()
+
+  if (wsError || !workspace) {
+    return { success: false, error: "El workspace no existe o ya fue eliminado" }
+  }
+
+  // Confirmación: el nombre tipeado debe coincidir exactamente
+  if (input.confirmationName.trim() !== workspace.name) {
+    return {
+      success: false,
+      error: "El nombre de confirmación no coincide con el del workspace",
+    }
+  }
+
+  const { error: deleteError } = await admin
+    .schema("v3")
+    .from("workspaces")
+    .delete()
+    .eq("id", input.workspaceId)
+
+  if (deleteError) {
+    console.error("[v3] superadmin delete workspace error:", deleteError)
+    return { success: false, error: "Error al eliminar el workspace" }
+  }
+
+  revalidatePath("/v3/admin/workspaces")
+  return { success: true }
+}
