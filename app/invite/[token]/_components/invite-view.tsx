@@ -97,7 +97,7 @@ export function InviteView({
 
   // ── No autenticado: pedir login/registro con el email invitado ──────
   if (!isAuthenticated) {
-    const next = encodeURIComponent(`/v3/invite/${token}`)
+    const next = encodeURIComponent(`/invite/${token}`)
     return (
       <Card className="border-border/50">
         <CardHeader className="text-center">

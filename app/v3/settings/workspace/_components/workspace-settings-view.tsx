@@ -147,7 +147,7 @@ export function WorkspaceSettingsView({
   }
 
   const handleCopyInvite = async (token: string) => {
-    const url = `${window.location.origin}/v3/invite/${token}`
+    const url = `${window.location.origin}/invite/${token}`
     await navigator.clipboard.writeText(url).catch(() => {})
     toast.success("Link copiado al portapapeles")
   }
