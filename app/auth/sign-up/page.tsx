@@ -12,6 +12,7 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { Suspense, useState } from "react"
 import Image from "next/image"
 import { syncUserToResend } from "@/app/actions/resend"
+import { checkInvitationForSignup } from "@/app/actions/v3/workspace"
 
 function SignUpForm() {
   const searchParams = useSearchParams()
@@ -33,6 +34,17 @@ function SignUpForm() {
     setError(null)
 
     try {
+      // El registro es solo por invitación: validamos que el email tenga
+      // una invitación pendiente y válida antes de crear la cuenta.
+      const { allowed } = await checkInvitationForSignup(email)
+      if (!allowed) {
+        setError(
+          "El registro es solo por invitación. Pedile a un administrador que te invite a su workspace.",
+        )
+        setIsLoading(false)
+        return
+      }
+
       const { error } = await supabase.auth.signUp({
         email,
         password,
