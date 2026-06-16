@@ -11,16 +11,18 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { Suspense, useEffect, useState } from "react"
 
 function LoginForm() {
-  const [email, setEmail] = useState("")
-  const [password, setPassword] = useState("")
-  const [error, setError] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
   const router = useRouter()
   const searchParams = useSearchParams()
   const nextUrl = searchParams.get("next")
 
   // Solo permitir redirects internos para evitar open-redirect
   const safeNext = nextUrl && nextUrl.startsWith("/") ? nextUrl : "/search"
+  const prefilledEmail = searchParams.get("email") ?? ""
+
+  const [email, setEmail] = useState(prefilledEmail)
+  const [password, setPassword] = useState("")
+  const [error, setError] = useState<string | null>(null)
+  const [isLoading, setIsLoading] = useState(false)
 
   useEffect(() => {
     const checkSession = async () => {

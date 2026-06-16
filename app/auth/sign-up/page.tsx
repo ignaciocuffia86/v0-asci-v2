@@ -14,15 +14,17 @@ import Image from "next/image"
 import { syncUserToResend } from "@/app/actions/resend"
 
 function SignUpForm() {
-  const [email, setEmail] = useState("")
+  const searchParams = useSearchParams()
+  const nextUrl = searchParams.get("next")
+  const safeNext = nextUrl && nextUrl.startsWith("/") ? nextUrl : null
+  const prefilledEmail = searchParams.get("email") ?? ""
+
+  const [email, setEmail] = useState(prefilledEmail)
   const [password, setPassword] = useState("")
   const [fullName, setFullName] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const router = useRouter()
-  const searchParams = useSearchParams()
-  const nextUrl = searchParams.get("next")
-  const safeNext = nextUrl && nextUrl.startsWith("/") ? nextUrl : null
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault()
