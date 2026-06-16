@@ -7,15 +7,20 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { useRouter } from "next/navigation"
-import { useEffect, useState } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
+import { Suspense, useEffect, useState } from "react"
 
-export default function LoginPage() {
+function LoginForm() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const nextUrl = searchParams.get("next")
+
+  // Solo permitir redirects internos para evitar open-redirect
+  const safeNext = nextUrl && nextUrl.startsWith("/") ? nextUrl : "/search"
 
   useEffect(() => {
     const checkSession = async () => {
@@ -24,12 +29,12 @@ export default function LoginPage() {
         data: { session },
       } = await supabase.auth.getSession()
       if (session) {
-        console.log("[v0] Login page: User already has session, redirecting to /search")
-        router.push("/search")
+        console.log("[v0] Login page: User already has session, redirecting to", safeNext)
+        router.push(safeNext)
       }
     }
     checkSession()
-  }, [router])
+  }, [router, safeNext])
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -43,7 +48,7 @@ export default function LoginPage() {
         password,
       })
       if (error) throw error
-      router.push("/search")
+      router.push(safeNext)
     } catch (error: unknown) {
       setError(error instanceof Error ? error.message : "Ocurrió un error")
     } finally {
@@ -101,5 +106,13 @@ export default function LoginPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
   )
 }
