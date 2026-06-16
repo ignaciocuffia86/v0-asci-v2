@@ -8,18 +8,21 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
-import { useState } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
+import { Suspense, useState } from "react"
 import Image from "next/image"
 import { syncUserToResend } from "@/app/actions/resend"
 
-export default function SignUpPage() {
+function SignUpForm() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [fullName, setFullName] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const nextUrl = searchParams.get("next")
+  const safeNext = nextUrl && nextUrl.startsWith("/") ? nextUrl : null
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -32,7 +35,9 @@ export default function SignUpPage() {
         email,
         password,
         options: {
-          emailRedirectTo: process.env.NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL || `${window.location.origin}/search`,
+          emailRedirectTo:
+            process.env.NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL ||
+            `${window.location.origin}${safeNext ?? "/search"}`,
           data: {
             full_name: fullName,
           },
@@ -52,7 +57,15 @@ export default function SignUpPage() {
         // No fallar el signup si Resend falla
       }
 
-      router.push("/auth/sign-up-success")
+      // Si hay sesión inmediata (sin confirmación de email), ir al destino
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+      if (session && safeNext) {
+        router.push(safeNext)
+      } else {
+        router.push("/auth/sign-up-success")
+      }
     } catch (error: unknown) {
       setError(error instanceof Error ? error.message : "Ocurrió un error")
     } finally {
@@ -115,7 +128,10 @@ export default function SignUpPage() {
                 </div>
                 <div className="mt-4 text-center text-sm">
                   ¿Ya tienes cuenta?{" "}
-                  <Link href="/auth/login" className="underline underline-offset-4 text-primary">
+                  <Link
+                    href={safeNext ? `/auth/login?next=${encodeURIComponent(safeNext)}` : "/auth/login"}
+                    className="underline underline-offset-4 text-primary"
+                  >
                     Inicia Sesión
                   </Link>
                 </div>
@@ -125,5 +141,13 @@ export default function SignUpPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function SignUpPage() {
+  return (
+    <Suspense fallback={null}>
+      <SignUpForm />
+    </Suspense>
   )
 }

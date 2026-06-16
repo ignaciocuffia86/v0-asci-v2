@@ -5,8 +5,8 @@ export default async function V3IndexPage() {
   // Verificar estado de onboarding y redirigir
   const status = await getOnboardingStatus()
   
-  if (status.status === "no_workspace" || status.status === "workspace_exists") {
-    // Necesita completar onboarding
+  if (status.status === "no_workspace") {
+    // No tiene acceso: necesita una invitación
     redirect("/v3/onboarding")
   }
   

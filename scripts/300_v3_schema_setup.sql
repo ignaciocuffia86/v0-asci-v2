@@ -5,6 +5,16 @@
 -- IMPORTANTE: 
 -- 1. Si ya existen tablas, ejecutar primero: DROP SCHEMA v3 CASCADE;
 -- 2. Ejecutar este script completo
+--
+-- ⚠️ NOTA (multitenant): El modelo de membresía definido más abajo
+-- (workspace_members con roles 'admin'/'editor'/'viewer' y status
+-- 'pending'/'active'/'rejected') quedó SUPERSEDED por la migración
+-- supabase/migrations/20260616000000_v3_multitenant.sql, que:
+--   • colapsa los roles a 'admin'/'member'
+--   • normaliza el status a 'active'/'revoked' (sin flujo de solicitud por dominio)
+--   • agrega la tabla v3.workspace_invitations (ingreso solo por invitación)
+-- Si recreás el schema desde cero con este script, volvé a aplicar esa migración.
+-- Los scripts 200_v3_schema.sql / 201_v3_rls.sql son un diseño anterior NO vigente.
 -- ═══════════════════════════════════════════════════════════════════════════════
 
 -- ═══════════════════════════════════════════════════════════════════════════════

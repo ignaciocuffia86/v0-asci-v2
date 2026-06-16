@@ -35,6 +35,10 @@ export async function POST(request: NextRequest) {
             "application/vnd.openxmlformats-officedocument.presentationml.presentation",
           ],
           maximumSizeInBytes: 50 * 1024 * 1024, // 50MB max
+          // El store de Blob es global al proyecto, no esta aislado por tenant.
+          // addRandomSuffix garantiza que el path nunca colisione entre workspaces
+          // ni con blobs huerfanos de documentos borrados.
+          addRandomSuffix: true,
           tokenPayload: JSON.stringify({ 
             userId: user.id,
             workspaceId: workspace.id 

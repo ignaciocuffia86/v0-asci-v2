@@ -163,6 +163,54 @@ export async function getDocumentWithTags(documentId: string): Promise<{
 }
 
 /**
+ * Validate a file upload BEFORE sending it to Vercel Blob.
+ *
+ * Vercel Blob's store is global to the whole project (not isolated per tenant),
+ * so a raw filename can collide with another workspace's file and throw a
+ * confusing "blob already exists" error. We run the real (per-workspace)
+ * duplicate check here against the DB, and return the workspaceId so the client
+ * can prefix the Blob path with `workspaces/{workspaceId}/`.
+ */
+export async function checkDocumentUpload(params: {
+  title: string
+  type: "pdf" | "pptx" | "docx"
+}): Promise<{ workspaceId: string | null; error: string | null }> {
+  const admin = createAdminClient()
+
+  // Require editor or admin role
+  let workspace
+  try {
+    workspace = await requireWorkspaceEditor()
+  } catch {
+    return { workspaceId: null, error: "Sin permisos para subir documentos" }
+  }
+
+  if (!workspace) {
+    return { workspaceId: null, error: "No hay workspace activo" }
+  }
+
+  // Duplicate check scoped to THIS workspace (title + type)
+  const { data: existing } = await admin
+    .schema("v3")
+    .from("workspace_documents")
+    .select("id, title")
+    .eq("workspace_id", workspace.id)
+    .eq("title", params.title)
+    .eq("type", params.type)
+    .limit(1)
+    .maybeSingle()
+
+  if (existing) {
+    return {
+      workspaceId: null,
+      error: `Ya existe un documento "${existing.title}" en Docs de este workspace.`,
+    }
+  }
+
+  return { workspaceId: workspace.id, error: null }
+}
+
+/**
  * Create a document record
  * Storage is handled by Vercel Blob (client-side upload)
  */

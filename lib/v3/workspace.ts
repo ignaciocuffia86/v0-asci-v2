@@ -5,6 +5,9 @@ import { createAdminClient } from "@/lib/supabase/admin"
 // TIPOS
 // ═══════════════════════════════════════════════════════════
 
+export type WorkspaceRole = "admin" | "member"
+export type MemberStatus = "active" | "revoked"
+
 export interface Workspace {
   id: string
   domain: string
@@ -18,11 +21,17 @@ export interface WorkspaceMember {
   id: string
   workspace_id: string
   user_id: string
-  role: 'admin' | 'editor' | 'viewer'
-  status: 'pending' | 'active' | 'rejected'
+  role: WorkspaceRole
+  status: MemberStatus
   invited_by: string | null
   invited_at: string
   joined_at: string | null
+}
+
+/** Miembro enriquecido con identidad resuelta desde auth.users */
+export interface WorkspaceMemberWithIdentity extends WorkspaceMember {
+  email: string | null
+  full_name: string | null
 }
 
 export interface WorkspaceWithMember extends Workspace {
@@ -63,6 +72,69 @@ export function domainToWorkspaceName(domain: string): string {
 }
 
 // ═══════════════════════════════════════════════════════════
+// RESOLUCIÓN DE IDENTIDAD (auth.users vía service role)
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Resuelve email y nombre de una lista de user_ids desde auth.users.
+ * Usa el admin client (service role); seguro porque corre en backend.
+ */
+export async function resolveUserIdentities(
+  userIds: string[]
+): Promise<Map<string, { email: string | null; full_name: string | null }>> {
+  const admin = createAdminClient()
+  const result = new Map<string, { email: string | null; full_name: string | null }>()
+
+  // getUserById es la vía soportada y no requiere paginar toda la base.
+  await Promise.all(
+    Array.from(new Set(userIds)).map(async (id) => {
+      try {
+        const { data, error } = await admin.auth.admin.getUserById(id)
+        if (error || !data?.user) {
+          result.set(id, { email: null, full_name: null })
+          return
+        }
+        const u = data.user
+        const fullName =
+          (u.user_metadata?.full_name as string | undefined) ||
+          (u.user_metadata?.name as string | undefined) ||
+          null
+        result.set(id, { email: u.email ?? null, full_name: fullName })
+      } catch {
+        result.set(id, { email: null, full_name: null })
+      }
+    })
+  )
+
+  return result
+}
+
+/**
+ * Busca un usuario por email en auth.users. Retorna null si no existe.
+ */
+export async function getAuthUserByEmail(
+  email: string
+): Promise<{ id: string; email: string } | null> {
+  const admin = createAdminClient()
+  const normalized = email.trim().toLowerCase()
+
+  // listUsers no permite filtrar por email directamente en todas las versiones,
+  // pero paginamos buscando coincidencia exacta.
+  let page = 1
+  const perPage = 200
+  // Límite defensivo de páginas para no iterar infinito.
+  for (let i = 0; i < 25; i++) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage })
+    if (error || !data?.users?.length) break
+    const match = data.users.find((u) => u.email?.toLowerCase() === normalized)
+    if (match) return { id: match.id, email: match.email! }
+    if (data.users.length < perPage) break
+    page++
+  }
+  return null
+}
+
+// ═══════════════════════════════════════════════════════════
 // QUERIES
 // ═══════════════════════════════════════════════════════════
 
@@ -73,9 +145,7 @@ export function domainToWorkspaceName(domain: string): string {
 export async function getWorkspaceForUser(userId: string): Promise<WorkspaceWithMember | null> {
   // Usamos admin client para bypasear RLS - es seguro porque el userId viene de auth validado
   const admin = createAdminClient()
-  
-  console.log("[v0] getWorkspaceForUser - userId:", userId)
-  
+
   const { data, error } = await admin
     .schema("v3")
     .from("workspace_members")
@@ -86,13 +156,11 @@ export async function getWorkspaceForUser(userId: string): Promise<WorkspaceWith
     .eq("user_id", userId)
     .eq("status", "active")
     .single()
-  
-  console.log("[v0] getWorkspaceForUser - data:", data, "error:", error)
-  
+
   if (error || !data) {
     return null
   }
-  
+
   return {
     ...(data.workspace as Workspace),
     member: {
@@ -104,71 +172,56 @@ export async function getWorkspaceForUser(userId: string): Promise<WorkspaceWith
       invited_by: data.invited_by,
       invited_at: data.invited_at,
       joined_at: data.joined_at,
-    }
+    },
   }
 }
 
-/**
- * Busca un workspace por dominio
- */
-export async function getWorkspaceByDomain(domain: string): Promise<Workspace | null> {
+/** Obtiene un workspace por id. */
+export async function getWorkspaceById(workspaceId: string): Promise<Workspace | null> {
   const admin = createAdminClient()
-  const normalizedDomain = normalizeDomain(domain)
-  
+
   const { data, error } = await admin
     .schema("v3")
     .from("workspaces")
     .select("*")
-    .eq("domain", normalizedDomain)
-    .single()
-  
-  if (error || !data) {
-    return null
-  }
-  
+    .eq("id", workspaceId)
+    .maybeSingle()
+
+  if (error || !data) return null
   return data as Workspace
 }
 
 /**
- * Verifica si el usuario tiene una solicitud pendiente para un workspace
+ * Obtiene todos los miembros activos de un workspace, enriquecidos con
+ * email y nombre resueltos desde auth.users.
  */
-export async function getPendingMembership(userId: string, workspaceId: string): Promise<WorkspaceMember | null> {
-  const supabase = await createClient()
-  
-  const { data, error } = await supabase
-    .schema("v3")
-    .from("workspace_members")
-    .select("*")
-    .eq("user_id", userId)
-    .eq("workspace_id", workspaceId)
-    .eq("status", "pending")
-    .single()
-  
-  if (error || !data) {
-    return null
-  }
-  
-  return data as WorkspaceMember
-}
+export async function getWorkspaceMembers(
+  workspaceId: string
+): Promise<WorkspaceMemberWithIdentity[]> {
+  const admin = createAdminClient()
 
-/**
- * Obtiene todos los miembros de un workspace
- */
-export async function getWorkspaceMembers(workspaceId: string): Promise<WorkspaceMember[]> {
-  const supabase = await createClient()
-  
-  const { data, error } = await supabase
+  const { data, error } = await admin
     .schema("v3")
     .from("workspace_members")
     .select("*")
     .eq("workspace_id", workspaceId)
+    .eq("status", "active")
     .order("joined_at", { ascending: true })
-  
-  if (error) {
+
+  if (error || !data) {
     return []
   }
-  
-  return data as WorkspaceMember[]
+
+  const identities = await resolveUserIdentities(data.map((m) => m.user_id))
+
+  return data.map((m) => {
+    const identity = identities.get(m.user_id)
+    return {
+      ...(m as WorkspaceMember),
+      email: identity?.email ?? null,
+      full_name: identity?.full_name ?? null,
+    }
+  })
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -176,165 +229,66 @@ export async function getWorkspaceMembers(workspaceId: string): Promise<Workspac
 // ═══════════════════════════════════════════════════════════
 
 /**
- * Crea un nuevo workspace y asigna al usuario como admin
- * Solo llamar si no existe workspace para el dominio
+ * Crea un nuevo workspace y asigna a un usuario existente como admin.
+ * Pensado para el panel super-admin (bootstrapping de tenants).
  */
-export async function createWorkspace(
-  userId: string,
-  email: string,
+export async function createWorkspaceWithAdmin(params: {
+  name: string
+  domain: string
   websiteUrl?: string
-): Promise<{ workspace?: Workspace; error?: string }> {
-  const supabaseAdmin = createAdminClient()
-  
-  const domain = extractDomain(email)
-  const normalizedDomain = normalizeDomain(domain)
-  const name = domainToWorkspaceName(domain)
-  
-  // Verificar que no exista ya un workspace para este dominio
-  const { data: existing } = await supabaseAdmin
+  adminUserId: string
+  createdBy: string
+}): Promise<{ workspace?: Workspace; error?: string }> {
+  const admin = createAdminClient()
+  const normalizedDomain = normalizeDomain(params.domain)
+
+  const { data: existing } = await admin
     .schema("v3")
     .from("workspaces")
     .select("id")
     .eq("domain", normalizedDomain)
-    .single()
-  
+    .maybeSingle()
+
   if (existing) {
     return { error: "Ya existe un workspace para este dominio" }
   }
-  
-  // Crear workspace
-  const { data: workspace, error: wsError } = await supabaseAdmin
+
+  const { data: workspace, error: wsError } = await admin
     .schema("v3")
     .from("workspaces")
     .insert({
       domain: normalizedDomain,
-      name,
-      website_url: websiteUrl || `https://${normalizedDomain}`,
-      created_by: userId,
+      name: params.name,
+      website_url: params.websiteUrl || `https://${normalizedDomain}`,
+      created_by: params.createdBy,
     })
     .select()
     .single()
-  
+
   if (wsError || !workspace) {
     console.error("[v3] Error creating workspace:", wsError)
     return { error: "Error al crear el workspace" }
   }
-  
-  // Agregar usuario como admin activo
-  const { error: memberError } = await supabaseAdmin
+
+  const { error: memberError } = await admin
     .schema("v3")
     .from("workspace_members")
     .insert({
       workspace_id: workspace.id,
-      user_id: userId,
+      user_id: params.adminUserId,
       role: "admin",
       status: "active",
+      invited_by: params.createdBy,
       joined_at: new Date().toISOString(),
     })
-  
+
   if (memberError) {
     console.error("[v3] Error adding admin member:", memberError)
-    // Rollback: eliminar workspace creado
-    await supabaseAdmin
-      .schema("v3")
-      .from("workspaces")
-      .delete()
-      .eq("id", workspace.id)
+    await admin.schema("v3").from("workspaces").delete().eq("id", workspace.id)
     return { error: "Error al configurar el administrador" }
   }
-  
+
   return { workspace: workspace as Workspace }
-}
-
-/**
- * Solicita unirse a un workspace existente
- * El admin debe aprobar la solicitud
- */
-export async function requestWorkspaceAccess(
-  userId: string,
-  workspaceId: string
-): Promise<{ member?: WorkspaceMember; error?: string }> {
-  const supabase = await createClient()
-  
-  // Verificar que no tenga ya una membresía
-  const { data: existing } = await supabase
-    .schema("v3")
-    .from("workspace_members")
-    .select("*")
-    .eq("user_id", userId)
-    .eq("workspace_id", workspaceId)
-    .single()
-  
-  if (existing) {
-    if (existing.status === "active") {
-      return { error: "Ya eres miembro de este workspace" }
-    }
-    if (existing.status === "pending") {
-      return { error: "Ya tienes una solicitud pendiente" }
-    }
-    if (existing.status === "rejected") {
-      return { error: "Tu solicitud fue rechazada anteriormente" }
-    }
-  }
-  
-  // Crear solicitud pendiente
-  const { data: member, error } = await supabase
-    .schema("v3")
-    .from("workspace_members")
-    .insert({
-      workspace_id: workspaceId,
-      user_id: userId,
-      role: "viewer", // Por defecto viewer, el admin puede cambiar
-      status: "pending",
-    })
-    .select()
-    .single()
-  
-  if (error) {
-    console.error("[v3] Error requesting access:", error)
-    return { error: "Error al enviar la solicitud" }
-  }
-  
-  return { member: member as WorkspaceMember }
-}
-
-/**
- * Aprueba o rechaza una solicitud de acceso (solo admin)
- */
-export async function respondToAccessRequest(
-  memberId: string,
-  action: "approve" | "reject",
-  role?: 'admin' | 'editor' | 'viewer'
-): Promise<{ success: boolean; error?: string }> {
-  const supabase = await createClient()
-  
-  if (action === "approve") {
-    const { error } = await supabase
-      .schema("v3")
-      .from("workspace_members")
-      .update({
-        status: "active",
-        role: role || "viewer",
-        joined_at: new Date().toISOString(),
-      })
-      .eq("id", memberId)
-    
-    if (error) {
-      return { success: false, error: "Error al aprobar la solicitud" }
-    }
-  } else {
-    const { error } = await supabase
-      .schema("v3")
-      .from("workspace_members")
-      .update({ status: "rejected" })
-      .eq("id", memberId)
-    
-    if (error) {
-      return { success: false, error: "Error al rechazar la solicitud" }
-    }
-  }
-  
-  return { success: true }
 }
 
 /**
@@ -342,20 +296,20 @@ export async function respondToAccessRequest(
  */
 export async function updateMemberRole(
   memberId: string,
-  role: 'admin' | 'editor' | 'viewer'
+  role: WorkspaceRole
 ): Promise<{ success: boolean; error?: string }> {
-  const supabase = await createClient()
-  
-  const { error } = await supabase
+  const admin = createAdminClient()
+
+  const { error } = await admin
     .schema("v3")
     .from("workspace_members")
     .update({ role })
     .eq("id", memberId)
-  
+
   if (error) {
     return { success: false, error: "Error al actualizar el rol" }
   }
-  
+
   return { success: true }
 }
 
@@ -369,11 +323,11 @@ export async function updateMemberRole(
  */
 export async function requireWorkspace(userId: string): Promise<WorkspaceWithMember> {
   const workspace = await getWorkspaceForUser(userId)
-  
+
   if (!workspace) {
     throw new Error("WORKSPACE_REQUIRED")
   }
-  
+
   return workspace
 }
 
@@ -382,14 +336,14 @@ export async function requireWorkspace(userId: string): Promise<WorkspaceWithMem
  */
 export async function requireWorkspaceRole(
   userId: string,
-  allowedRoles: ('admin' | 'editor' | 'viewer')[]
+  allowedRoles: WorkspaceRole[]
 ): Promise<WorkspaceWithMember> {
   const workspace = await requireWorkspace(userId)
-  
+
   if (!allowedRoles.includes(workspace.member.role)) {
     throw new Error("INSUFFICIENT_PERMISSIONS")
   }
-  
+
   return workspace
 }
 
@@ -397,19 +351,19 @@ export async function requireWorkspaceRole(
  * Verifica si el workspace tiene documentos (blocker para usar la plataforma)
  */
 export async function workspaceHasDocuments(workspaceId: string): Promise<boolean> {
-  const supabase = await createClient()
-  
-  const { count, error } = await supabase
+  const admin = createAdminClient()
+
+  const { count, error } = await admin
     .schema("v3")
     .from("workspace_documents")
     .select("*", { count: "exact", head: true })
     .eq("workspace_id", workspaceId)
-    .eq("status", "processed")
-  
+    .eq("status", "ready")
+
   if (error) {
     return false
   }
-  
+
   return (count ?? 0) > 0
 }
 
@@ -419,34 +373,43 @@ export async function workspaceHasDocuments(workspaceId: string): Promise<boolea
  */
 export async function getCurrentWorkspace(userId?: string): Promise<WorkspaceWithMember | null> {
   const supabase = await createClient()
-  
+
   let uid = userId
   if (!uid) {
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    console.log("[v0] getCurrentWorkspace - auth result:", { user: user?.id, email: user?.email, authError })
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
     if (!user) return null
     uid = user.id
   }
-  
-  console.log("[v0] getCurrentWorkspace - calling getWorkspaceForUser with uid:", uid)
-  const workspace = await getWorkspaceForUser(uid)
-  console.log("[v0] getCurrentWorkspace - workspace result:", workspace)
-  return workspace
+
+  return getWorkspaceForUser(uid)
 }
 
 /**
- * Requiere que el usuario tenga rol de editor o admin
- * Shorthand para requireWorkspaceRole con roles de escritura
+ * Requiere que el usuario sea un miembro activo del workspace.
+ * Con el modelo de 2 roles, cualquier miembro (admin o member) puede
+ * crear/editar campañas y documentos.
  */
-export async function requireWorkspaceEditor(userId?: string): Promise<WorkspaceWithMember> {
+export async function requireWorkspaceMember(userId?: string): Promise<WorkspaceWithMember> {
   const supabase = await createClient()
   let uid = userId
   if (!uid) {
-    const { data: { user } } = await supabase.auth.getUser()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
     if (!user) throw new Error("NOT_AUTHENTICATED")
     uid = user.id
   }
-  return requireWorkspaceRole(uid, ['admin', 'editor'])
+  return requireWorkspaceRole(uid, ["admin", "member"])
+}
+
+/**
+ * @deprecated Usar requireWorkspaceMember. Se mantiene como alias para
+ * compatibilidad con callers existentes (campaigns, documents, csv-import).
+ */
+export async function requireWorkspaceEditor(userId?: string): Promise<WorkspaceWithMember> {
+  return requireWorkspaceMember(userId)
 }
 
 /**
@@ -456,11 +419,13 @@ export async function requireWorkspaceAdmin(userId?: string): Promise<WorkspaceW
   const supabase = await createClient()
   let uid = userId
   if (!uid) {
-    const { data: { user } } = await supabase.auth.getUser()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
     if (!user) throw new Error("NOT_AUTHENTICATED")
     uid = user.id
   }
-  return requireWorkspaceRole(uid, ['admin'])
+  return requireWorkspaceRole(uid, ["admin"])
 }
 
 /**
@@ -475,19 +440,21 @@ export async function getWorkspaceContext(userId?: string): Promise<{
   const supabase = await createClient()
   let uid = userId
   if (!uid) {
-    const { data: { user } } = await supabase.auth.getUser()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
     if (!user) return { workspace: null, hasDocuments: false, isOnboarded: false }
     uid = user.id
   }
-  
+
   const workspace = await getWorkspaceForUser(uid)
-  
+
   if (!workspace) {
     return { workspace: null, hasDocuments: false, isOnboarded: false }
   }
-  
+
   const hasDocuments = await workspaceHasDocuments(workspace.id)
-  
+
   return {
     workspace,
     hasDocuments,
