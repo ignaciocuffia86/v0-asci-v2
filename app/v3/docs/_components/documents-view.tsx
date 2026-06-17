@@ -102,6 +102,14 @@ export function DocumentsView({ initialDocuments, stats, workspaceName }: Docume
   const router = useRouter()
   const [documents, setDocuments] = useState(initialDocuments)
   const [uploadOpen, setUploadOpen] = useState(false)
+
+  // Re-sync local state when the server refreshes initialDocuments (e.g. after
+  // reprocessing). useState only captures the prop on first mount, so without
+  // this the UI would keep showing stale documents (missing inferred persona, etc).
+  useEffect(() => {
+    setDocuments(initialDocuments)
+  }, [initialDocuments])
+
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [expandedDoc, setExpandedDoc] = useState<string | null>(null)
   
