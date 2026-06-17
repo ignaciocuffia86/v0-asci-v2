@@ -174,12 +174,18 @@ export async function POST(request: NextRequest) {
       .update({ processing_progress: 80 })
       .eq("id", document.id)
 
-    // Step 3: Save summary
+    // Step 3: Save summary (stored as JSON so the UI can parse structured fields)
     await adminClient
       .schema("v3")
       .from("workspace_documents")
       .update({
-        ai_summary: analysis.summary,
+        ai_summary: JSON.stringify({
+          summary: analysis.summary,
+          key_results: analysis.key_results,
+          document_type: analysis.document_type,
+        }),
+        inferred_persona: analysis.persona,
+        recommended_job_titles: analysis.recommended_job_titles,
         status: "ready",
         processing_progress: 100,
         processing_error: null,
@@ -211,6 +217,9 @@ export async function POST(request: NextRequest) {
 
     // Step 5: Update workspace value profile
     await updateWorkspaceValueProfile(adminClient, document.workspace_id)
+
+    // Step 6: Consolidate auto-managed buyer persona from all docs in the workspace
+    await upsertAutoBuyerPersona(adminClient, document.workspace_id)
 
     console.log(`[v0] V3 Document ${document.id} processed successfully`)
 
@@ -288,5 +297,112 @@ async function updateWorkspaceValueProfile(
 
   } catch (err) {
     console.error("[v0] Error updating workspace value profile:", err)
+  }
+}
+
+/**
+ * Consolida una persona AUTO-GESTIONADA por workspace a partir de las personas
+ * y cargos inferidos en todos los documentos `ready`.
+ *
+ * - Hace upsert sobre la fila is_auto = true (índice único parcial por workspace).
+ * - NUNCA toca las personas creadas manualmente por el usuario (is_auto = false).
+ */
+async function upsertAutoBuyerPersona(
+  adminClient: ReturnType<typeof createAdminClient>,
+  workspaceId: string
+) {
+  try {
+    // Get persona + job title signals from all ready docs in the workspace
+    const { data: docs } = await adminClient
+      .schema("v3")
+      .from("workspace_documents")
+      .select("inferred_persona, recommended_job_titles")
+      .eq("workspace_id", workspaceId)
+      .eq("status", "ready")
+
+    if (!docs || docs.length === 0) return
+
+    const jobTitles = new Set<string>()
+    const personaNames = new Set<string>()
+    const pains = new Set<string>()
+    const goals = new Set<string>()
+    let buyerCount = 0
+    let userCount = 0
+
+    for (const doc of docs) {
+      for (const t of (doc.recommended_job_titles as string[] | null) || []) {
+        if (t && t.trim()) jobTitles.add(t.trim())
+      }
+      const persona = doc.inferred_persona as {
+        name?: string
+        type?: string
+        pains?: string[]
+        goals?: string[]
+      } | null
+      if (persona && persona.name) {
+        personaNames.add(persona.name.trim())
+        if (persona.type === "user") userCount++
+        else buyerCount++
+        for (const p of persona.pains || []) if (p?.trim()) pains.add(p.trim())
+        for (const g of persona.goals || []) if (g?.trim()) goals.add(g.trim())
+      }
+    }
+
+    // Nothing useful inferred yet
+    if (jobTitles.size === 0 && personaNames.size === 0) return
+
+    const dominantType = userCount > buyerCount ? "user" : "buyer"
+    const descriptionParts: string[] = []
+    if (personaNames.size > 0) {
+      descriptionParts.push(`Perfiles detectados: ${Array.from(personaNames).slice(0, 6).join(", ")}.`)
+    }
+    if (pains.size > 0) {
+      descriptionParts.push(`Dolores principales: ${Array.from(pains).slice(0, 5).join("; ")}.`)
+    }
+    if (goals.size > 0) {
+      descriptionParts.push(`Objetivos: ${Array.from(goals).slice(0, 5).join("; ")}.`)
+    }
+
+    const description = JSON.stringify({
+      type: dominantType,
+      summary: descriptionParts.join(" "),
+      persona_names: Array.from(personaNames).slice(0, 10),
+      pains: Array.from(pains).slice(0, 10),
+      goals: Array.from(goals).slice(0, 10),
+    })
+
+    // Find existing auto persona for this workspace
+    const { data: existing } = await adminClient
+      .schema("v3")
+      .from("buyer_personas")
+      .select("id")
+      .eq("workspace_id", workspaceId)
+      .eq("is_auto", true)
+      .maybeSingle()
+
+    const payload = {
+      workspace_id: workspaceId,
+      name: "Perfil sugerido (documentos)",
+      description,
+      recommended_job_titles: Array.from(jobTitles).slice(0, 15),
+      is_auto: true,
+      source: "auto_docs",
+      updated_at: new Date().toISOString(),
+    }
+
+    if (existing) {
+      await adminClient
+        .schema("v3")
+        .from("buyer_personas")
+        .update(payload)
+        .eq("id", existing.id)
+    } else {
+      await adminClient
+        .schema("v3")
+        .from("buyer_personas")
+        .insert(payload)
+    }
+  } catch (err) {
+    console.error("[v0] Error consolidating auto buyer persona:", err)
   }
 }

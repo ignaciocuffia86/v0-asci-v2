@@ -23,7 +23,10 @@ import {
   TrendingUp,
   Search,
   X,
-  Filter
+  Filter,
+  Users,
+  Target,
+  Briefcase
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -537,7 +540,10 @@ export function DocumentsView({ initialDocuments, stats, workspaceName }: Docume
               const groupedTags = doc.tags ? groupTags(doc.tags) : { industries: [], technologies: [], processes: [] }
               const totalTags = (doc.tags?.length || 0)
               const isExpanded = expandedDoc === doc.id
-              const hasDetails = doc.status === "ready" && (totalTags > 0 || (aiData?.keyResults?.length || 0) > 0)
+              const persona = doc.inferred_persona
+              const jobTitles = doc.recommended_job_titles || []
+              const hasPersonaInfo = !!persona || jobTitles.length > 0
+              const hasDetails = doc.status === "ready" && (totalTags > 0 || (aiData?.keyResults?.length || 0) > 0 || hasPersonaInfo)
 
               return (
                 <Collapsible 
@@ -685,6 +691,98 @@ export function DocumentsView({ initialDocuments, stats, workspaceName }: Docume
                       {/* Expanded content */}
                       <CollapsibleContent>
                         <div className="border-t bg-muted/30 p-4 space-y-4">
+                          {/* Persona / Cargos sugeridos */}
+                          {hasPersonaInfo && (
+                            <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-500/5 p-3">
+                              <div className="flex items-center gap-2 text-sm font-medium text-amber-700">
+                                <Users className="size-4" />
+                                Perfil objetivo sugerido
+                              </div>
+
+                              {persona && (
+                                <div className="space-y-2">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="text-sm font-medium text-foreground">
+                                      {persona.name}
+                                    </span>
+                                    <Badge
+                                      variant="outline"
+                                      className="bg-amber-500/10 text-amber-700 border-amber-200"
+                                    >
+                                      {persona.type === "buyer" ? "Decisor / Comprador" : "Usuario"}
+                                    </Badge>
+                                  </div>
+                                  {persona.description && (
+                                    <p className="text-sm text-muted-foreground leading-relaxed">
+                                      {persona.description}
+                                    </p>
+                                  )}
+
+                                  <div className="grid gap-3 sm:grid-cols-2">
+                                    {persona.pains.length > 0 && (
+                                      <div className="space-y-1.5">
+                                        <div className="flex items-center gap-1.5 text-xs font-medium text-red-700">
+                                          <AlertCircle className="size-3" />
+                                          Dolores
+                                        </div>
+                                        <ul className="space-y-1">
+                                          {persona.pains.map((pain, idx) => (
+                                            <li
+                                              key={idx}
+                                              className="text-xs text-muted-foreground flex items-start gap-1.5"
+                                            >
+                                              <span className="mt-1 size-1 rounded-full bg-red-400 shrink-0" />
+                                              {pain}
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    )}
+                                    {persona.goals.length > 0 && (
+                                      <div className="space-y-1.5">
+                                        <div className="flex items-center gap-1.5 text-xs font-medium text-green-700">
+                                          <Target className="size-3" />
+                                          Objetivos
+                                        </div>
+                                        <ul className="space-y-1">
+                                          {persona.goals.map((goal, idx) => (
+                                            <li
+                                              key={idx}
+                                              className="text-xs text-muted-foreground flex items-start gap-1.5"
+                                            >
+                                              <span className="mt-1 size-1 rounded-full bg-green-400 shrink-0" />
+                                              {goal}
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+
+                              {jobTitles.length > 0 && (
+                                <div className="space-y-1.5">
+                                  <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                                    <Briefcase className="size-3" />
+                                    Cargos a buscar
+                                  </div>
+                                  <div className="flex flex-wrap gap-1">
+                                    {jobTitles.map((title, idx) => (
+                                      <Badge
+                                        key={idx}
+                                        variant="outline"
+                                        className="bg-background"
+                                      >
+                                        {title}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
                           {/* Key Results */}
                           {aiData?.keyResults && aiData.keyResults.length > 0 && (
                             <div className="space-y-2">

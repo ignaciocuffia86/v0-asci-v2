@@ -49,6 +49,14 @@ export async function analyzeDocumentV3(
   document_type: "CASO_DE_EXITO" | "BROCHURE" | "OTRO"
   summary: string
   key_results: string[]
+  persona: {
+    name: string
+    type: "buyer" | "user"
+    description: string
+    pains: string[]
+    goals: string[]
+  } | null
+  recommended_job_titles: string[]
   tags: {
     type: "industry" | "technology" | "process"
     value: string
@@ -86,6 +94,14 @@ Responde en formato JSON estricto (sin markdown, sin backticks):
   "document_type": "CASO_DE_EXITO" | "BROCHURE" | "OTRO",
   "summary": "Ver instrucciones segun tipo de documento abajo",
   "key_results": ["Resultado concreto 1", "Resultado concreto 2"],
+  "persona": {
+    "name": "Titulo corto del perfil objetivo, ej: 'Director Financiero de Retail'",
+    "type": "buyer" | "user",
+    "description": "1-2 oraciones describiendo quien es el perfil al que apunta esta solucion",
+    "pains": ["Dolor o problema concreto 1", "Dolor 2"],
+    "goals": ["Objetivo o meta 1", "Objetivo 2"]
+  },
+  "recommended_job_titles": ["CFO", "Head of Supply Chain", "VP Finance"],
   "industries": [
     {"name": "nombre EXACTO de la lista de industrias", "confidence": 0.9}
   ],
@@ -96,6 +112,16 @@ Responde en formato JSON estricto (sin markdown, sin backticks):
     {"name": "nombre EXACTO del diccionario de procesos", "confidence": 0.8}
   ]
 }
+
+=== INSTRUCCIONES PARA PERSONA Y RECOMMENDED_JOB_TITLES ===
+Inferi a QUIEN dentro de la empresa-cliente le sirve o le interesa esta solucion (el perfil objetivo / buyer o user persona).
+- "type": usa "buyer" si el perfil es quien DECIDE/COMPRA (ejecutivo, decisor presupuestario); usa "user" si es quien USA la solucion en el dia a dia.
+- "name": un titulo corto y representativo del perfil (cargo + contexto de industria si aplica).
+- "description": quien es, en 1-2 oraciones.
+- "pains": entre 1 y 4 dolores/problemas concretos que este perfil tiene y que la solucion resuelve.
+- "goals": entre 1 y 4 objetivos o metas de ese perfil.
+- "recommended_job_titles": entre 2 y 8 CARGOS REALES (job titles) que conviene buscar/prospectar para vender esta solucion. Usa titulos estandar de mercado (ej: "CFO", "VP of Engineering", "Head of Supply Chain", "Director de Operaciones"). NO inventes cargos genericos vagos.
+Si el documento no permite inferir un perfil con confianza, devuelve "persona": null y "recommended_job_titles": [].
 
 === INSTRUCCIONES PARA KEY_RESULTS ===
 Extrae entre 0 y 5 resultados CONCRETOS y CUANTIFICABLES del documento.
@@ -152,7 +178,7 @@ REGLAS:
     parsed = JSON.parse(jsonMatch[0])
   } catch (err) {
     console.error("[v3] Failed to parse AI analysis response:", responseText.slice(0, 500))
-    return { document_type: "OTRO", summary: "", key_results: [], tags: [] }
+    return { document_type: "OTRO", summary: "", key_results: [], persona: null, recommended_job_titles: [], tags: [] }
   }
 
   // Build tag array with reference IDs
@@ -211,12 +237,46 @@ REGLAS:
     }
   }
 
+  // Normalize persona (only keep if it has a usable name)
+  let persona: {
+    name: string
+    type: "buyer" | "user"
+    description: string
+    pains: string[]
+    goals: string[]
+  } | null = null
+  const rawPersona = parsed.persona
+  if (rawPersona && typeof rawPersona.name === "string" && rawPersona.name.trim().length > 0) {
+    persona = {
+      name: rawPersona.name.trim(),
+      type: rawPersona.type === "user" ? "user" : "buyer",
+      description: typeof rawPersona.description === "string" ? rawPersona.description.trim() : "",
+      pains: Array.isArray(rawPersona.pains)
+        ? rawPersona.pains.filter((p: any) => typeof p === "string" && p.trim().length > 0).slice(0, 4)
+        : [],
+      goals: Array.isArray(rawPersona.goals)
+        ? rawPersona.goals.filter((g: any) => typeof g === "string" && g.trim().length > 0).slice(0, 4)
+        : [],
+    }
+  }
+
+  // Normalize recommended job titles (dedupe, trim, cap at 8)
+  const recommended_job_titles = Array.isArray(parsed.recommended_job_titles)
+    ? [...new Set(
+        parsed.recommended_job_titles
+          .filter((t: any) => typeof t === "string" && t.trim().length > 0)
+          .map((t: string) => t.trim())
+      )].slice(0, 8) as string[]
+    : []
+
   return {
     document_type: parsed.document_type || "OTRO",
     summary: parsed.summary || "",
     key_results: Array.isArray(parsed.key_results) 
       ? parsed.key_results.filter((r: any) => typeof r === "string" && r.trim().length > 0).slice(0, 5) 
       : [],
+    persona,
+    recommended_job_titles,
     tags,
   }
 }
