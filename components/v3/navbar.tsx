@@ -7,7 +7,8 @@ import {
   FileText, 
   Settings, 
   LogOut,
-  Sparkles
+  Sparkles,
+  Shield
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -33,9 +34,10 @@ interface V3NavbarProps {
   workspace?: {
     name: string
   } | null
+  isSuperAdmin?: boolean
 }
 
-export function V3Navbar({ user, workspace }: V3NavbarProps) {
+export function V3Navbar({ user, workspace, isSuperAdmin = false }: V3NavbarProps) {
   const pathname = usePathname()
   const router = useRouter()
   
@@ -121,6 +123,14 @@ export function V3Navbar({ user, workspace }: V3NavbarProps) {
                 Configuracion
               </Link>
             </DropdownMenuItem>
+            {isSuperAdmin && (
+              <DropdownMenuItem asChild>
+                <Link href="/v3/admin/workspaces">
+                  <Shield className="mr-2 size-4" />
+                  Panel super-admin
+                </Link>
+              </DropdownMenuItem>
+            )}
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={handleSignOut} className="text-destructive">
               <LogOut className="mr-2 size-4" />
