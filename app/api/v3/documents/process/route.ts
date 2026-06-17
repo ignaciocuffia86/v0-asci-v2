@@ -182,6 +182,7 @@ export async function POST(request: NextRequest) {
         ai_summary: JSON.stringify({
           summary: analysis.summary,
           key_results: analysis.key_results,
+          insights: analysis.insights,
           document_type: analysis.document_type,
         }),
         inferred_persona: analysis.persona,
@@ -326,6 +327,9 @@ async function upsertAutoBuyerPersona(
     const personaNames = new Set<string>()
     const pains = new Set<string>()
     const goals = new Set<string>()
+    const targetIndustries = new Set<string>()
+    const targetProcesses = new Set<string>()
+    const targetSignals = new Set<string>()
     let buyerCount = 0
     let userCount = 0
 
@@ -338,6 +342,7 @@ async function upsertAutoBuyerPersona(
         type?: string
         pains?: string[]
         goals?: string[]
+        target_company_profile?: { industries?: string[]; processes?: string[]; signals?: string[] }
       } | null
       if (persona && persona.name) {
         personaNames.add(persona.name.trim())
@@ -345,6 +350,10 @@ async function upsertAutoBuyerPersona(
         else buyerCount++
         for (const p of persona.pains || []) if (p?.trim()) pains.add(p.trim())
         for (const g of persona.goals || []) if (g?.trim()) goals.add(g.trim())
+        const tcp = persona.target_company_profile || {}
+        for (const i of tcp.industries || []) if (i?.trim()) targetIndustries.add(i.trim())
+        for (const p of tcp.processes || []) if (p?.trim()) targetProcesses.add(p.trim())
+        for (const s of tcp.signals || []) if (s?.trim()) targetSignals.add(s.trim())
       }
     }
 
@@ -354,7 +363,13 @@ async function upsertAutoBuyerPersona(
     const dominantType = userCount > buyerCount ? "user" : "buyer"
     const descriptionParts: string[] = []
     if (personaNames.size > 0) {
-      descriptionParts.push(`Perfiles detectados: ${Array.from(personaNames).slice(0, 6).join(", ")}.`)
+      descriptionParts.push(`Perfiles a prospectar: ${Array.from(personaNames).slice(0, 6).join(", ")}.`)
+    }
+    if (targetIndustries.size > 0) {
+      descriptionParts.push(`Industrias objetivo: ${Array.from(targetIndustries).slice(0, 6).join(", ")}.`)
+    }
+    if (targetProcesses.size > 0) {
+      descriptionParts.push(`Procesos relevantes: ${Array.from(targetProcesses).slice(0, 6).join(", ")}.`)
     }
     if (pains.size > 0) {
       descriptionParts.push(`Dolores principales: ${Array.from(pains).slice(0, 5).join("; ")}.`)
@@ -369,6 +384,11 @@ async function upsertAutoBuyerPersona(
       persona_names: Array.from(personaNames).slice(0, 10),
       pains: Array.from(pains).slice(0, 10),
       goals: Array.from(goals).slice(0, 10),
+      target_company_profile: {
+        industries: Array.from(targetIndustries).slice(0, 10),
+        processes: Array.from(targetProcesses).slice(0, 10),
+        signals: Array.from(targetSignals).slice(0, 10),
+      },
     })
 
     // Find existing auto persona for this workspace

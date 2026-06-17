@@ -36,6 +36,11 @@ export type InferredPersona = {
   description: string
   pains: string[]
   goals: string[]
+  target_company_profile?: {
+    industries: string[]
+    processes: string[]
+    signals: string[]
+  }
 }
 
 export type WorkspaceDocumentTag = {

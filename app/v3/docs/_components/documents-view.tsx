@@ -26,7 +26,8 @@ import {
   Filter,
   Users,
   Target,
-  Briefcase
+  Briefcase,
+  Lightbulb
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -53,18 +54,19 @@ import { UploadDocumentDialog } from "./upload-document-dialog"
 import { cn } from "@/lib/utils"
 
 // Helper to parse ai_summary JSON
-function parseAiSummary(doc: WorkspaceDocument): { summary: string; keyResults: string[]; documentType: string } | null {
+function parseAiSummary(doc: WorkspaceDocument): { summary: string; keyResults: string[]; insights: string[]; documentType: string } | null {
   if (!doc.ai_summary) return null
   try {
     const parsed = JSON.parse(doc.ai_summary)
     return {
       summary: parsed.summary || "",
       keyResults: parsed.key_results || [],
+      insights: parsed.insights || [],
       documentType: parsed.document_type || "OTRO"
     }
   } catch {
     // If not JSON, treat as plain text summary
-    return { summary: doc.ai_summary, keyResults: [], documentType: "OTRO" }
+    return { summary: doc.ai_summary, keyResults: [], insights: [], documentType: "OTRO" }
   }
 }
 
@@ -699,16 +701,68 @@ export function DocumentsView({ initialDocuments, stats, workspaceName }: Docume
                       {/* Expanded content */}
                       <CollapsibleContent>
                         <div className="border-t bg-muted/30 p-4 space-y-4">
-                          {/* Persona / Cargos sugeridos */}
+                          {/* 1. Resumen interpretado por IA */}
+                          {aiData?.summary && (
+                            <div className="space-y-2 rounded-lg border bg-background p-3">
+                              <div className="flex items-center gap-2 text-sm font-medium">
+                                <FileText className="size-4 text-muted-foreground" />
+                                Resumen del documento
+                              </div>
+                              <p className="text-sm text-muted-foreground leading-relaxed">
+                                {aiData.summary}
+                              </p>
+                            </div>
+                          )}
+
+                          {/* 2. Insights cualitativos */}
+                          {aiData?.insights && aiData.insights.length > 0 && (
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-2 text-sm font-medium">
+                                <Lightbulb className="size-4 text-amber-500" />
+                                Insights del documento
+                              </div>
+                              <ul className="space-y-1.5 ml-6">
+                                {aiData.insights.map((insight, idx) => (
+                                  <li key={idx} className="text-sm text-muted-foreground flex items-start gap-2">
+                                    <span className="mt-1.5 size-1.5 rounded-full bg-amber-400 shrink-0" />
+                                    {insight}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* 3. Métricas / Resultados cuantitativos */}
+                          {aiData?.keyResults && aiData.keyResults.length > 0 && (
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-2 text-sm font-medium">
+                                <TrendingUp className="size-4 text-green-600" />
+                                Resultados clave
+                              </div>
+                              <ul className="space-y-1.5 ml-6">
+                                {aiData.keyResults.map((result, idx) => (
+                                  <li key={idx} className="text-sm text-muted-foreground flex items-start gap-2">
+                                    <Sparkles className="size-3 mt-1 text-yellow-500 shrink-0" />
+                                    {result}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* 4. Perfil de cliente ideal (ICP) a prospectar en otras companias */}
                           {hasPersonaInfo && (
                             <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-500/5 p-3">
                               <div className="flex items-center gap-2 text-sm font-medium text-amber-700">
                                 <Users className="size-4" />
-                                Perfil objetivo sugerido
+                                Perfil objetivo a prospectar
                               </div>
+                              <p className="text-xs text-muted-foreground -mt-1">
+                                Perfil sugerido para buscar en otras companias similares (no en la del documento).
+                              </p>
 
                               {persona && (
-                                <div className="space-y-2">
+                                <div className="space-y-3">
                                   <div className="flex flex-wrap items-center gap-2">
                                     <span className="text-sm font-medium text-foreground">
                                       {persona.name}
@@ -725,6 +779,49 @@ export function DocumentsView({ initialDocuments, stats, workspaceName }: Docume
                                       {persona.description}
                                     </p>
                                   )}
+
+                                  {/* Perfil de compania objetivo */}
+                                  {persona.target_company_profile &&
+                                    (persona.target_company_profile.industries.length > 0 ||
+                                      persona.target_company_profile.processes.length > 0 ||
+                                      persona.target_company_profile.signals.length > 0) && (
+                                      <div className="rounded-md border border-amber-200/60 bg-background/60 p-2.5 space-y-2">
+                                        <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                                          <Building2 className="size-3" />
+                                          Companias objetivo
+                                        </div>
+                                        {persona.target_company_profile.industries.length > 0 && (
+                                          <div className="flex flex-wrap items-center gap-1">
+                                            <span className="text-xs text-muted-foreground">Industrias:</span>
+                                            {persona.target_company_profile.industries.map((ind, idx) => (
+                                              <Badge key={idx} variant="outline" className="bg-blue-500/10 text-blue-700 border-blue-200">
+                                                {ind}
+                                              </Badge>
+                                            ))}
+                                          </div>
+                                        )}
+                                        {persona.target_company_profile.processes.length > 0 && (
+                                          <div className="flex flex-wrap items-center gap-1">
+                                            <span className="text-xs text-muted-foreground">Procesos:</span>
+                                            {persona.target_company_profile.processes.map((proc, idx) => (
+                                              <Badge key={idx} variant="outline" className="bg-green-500/10 text-green-700 border-green-200">
+                                                {proc}
+                                              </Badge>
+                                            ))}
+                                          </div>
+                                        )}
+                                        {persona.target_company_profile.signals.length > 0 && (
+                                          <ul className="space-y-1">
+                                            {persona.target_company_profile.signals.map((signal, idx) => (
+                                              <li key={idx} className="text-xs text-muted-foreground flex items-start gap-1.5">
+                                                <span className="mt-1 size-1 rounded-full bg-amber-400 shrink-0" />
+                                                {signal}
+                                              </li>
+                                            ))}
+                                          </ul>
+                                        )}
+                                      </div>
+                                    )}
 
                                   <div className="grid gap-3 sm:grid-cols-2">
                                     {persona.pains.length > 0 && (
@@ -788,24 +885,6 @@ export function DocumentsView({ initialDocuments, stats, workspaceName }: Docume
                                   </div>
                                 </div>
                               )}
-                            </div>
-                          )}
-
-                          {/* Key Results */}
-                          {aiData?.keyResults && aiData.keyResults.length > 0 && (
-                            <div className="space-y-2">
-                              <div className="flex items-center gap-2 text-sm font-medium">
-                                <TrendingUp className="size-4 text-green-600" />
-                                Resultados clave
-                              </div>
-                              <ul className="space-y-1.5 ml-6">
-                                {aiData.keyResults.map((result, idx) => (
-                                  <li key={idx} className="text-sm text-muted-foreground flex items-start gap-2">
-                                    <Sparkles className="size-3 mt-1 text-yellow-500 shrink-0" />
-                                    {result}
-                                  </li>
-                                ))}
-                              </ul>
                             </div>
                           )}
 
