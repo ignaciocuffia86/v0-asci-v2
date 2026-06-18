@@ -40,6 +40,7 @@ import {
   Scale,
   Users,
   MoreHorizontal,
+  Sparkles,
   type LucideIcon,
 } from "lucide-react"
 
@@ -114,6 +115,7 @@ export function IndustryManagementDashboard() {
   const [masterIndustries, setMasterIndustries] = useState<MasterIndustry[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [suggesting, setSuggesting] = useState(false)
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set())
   const [bulkMasterIndustry, setBulkMasterIndustry] = useState<string>("")
   const [itemMappings, setItemMappings] = useState<Record<string, string>>({})
@@ -236,6 +238,32 @@ export function IndustryManagementDashboard() {
     }
   }
 
+  const handleSuggestWithAI = async () => {
+    setSuggesting(true)
+    try {
+      const res = await fetch("/api/admin/industries/suggest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 100, source: "all" }),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        if (data.applied > 0) {
+          toast.success(`IA mapeo ${data.applied} industrias automaticamente${data.skipped ? ` (${data.skipped} sin match claro)` : ""}`)
+        } else {
+          toast.info(data.message || "La IA no encontro mapeos nuevos para aplicar")
+        }
+        fetchData()
+      } else {
+        toast.error(data.error || "Error al sugerir mapeos con IA")
+      }
+    } catch {
+      toast.error("Error de conexion")
+    } finally {
+      setSuggesting(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -322,10 +350,22 @@ export function IndustryManagementDashboard() {
             </TabsTrigger>
           </TabsList>
 
-          <Button variant="outline" size="sm" onClick={fetchData} className="gap-2">
-            <RefreshCw className="h-4 w-4" />
-            Actualizar
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="default"
+              size="sm"
+              onClick={handleSuggestWithAI}
+              disabled={suggesting}
+              className="gap-2"
+            >
+              {suggesting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              {suggesting ? "Sugiriendo..." : "Sugerir con IA"}
+            </Button>
+            <Button variant="outline" size="sm" onClick={fetchData} className="gap-2">
+              <RefreshCw className="h-4 w-4" />
+              Actualizar
+            </Button>
+          </div>
         </div>
 
         {/* Companies Tab */}
