@@ -150,19 +150,21 @@ export async function POST(request: NextRequest) {
       .eq("id", document.id)
 
     // Step 2: Load dictionaries and analyze with AI Gateway
-    // Fetch dictionaries from v2 tables (shared)
-    const [{ data: products }, { data: processes }, { data: companiesData }] = await Promise.all([
+    // Fetch dictionaries from v2 tables (shared).
+    // Industries use the canonical master_industries taxonomy (id = slug, name = name_es)
+    // so that document tags align with companies.master_industry_id for recommendation filtering.
+    const [{ data: products }, { data: processes }, { data: masterIndustries }] = await Promise.all([
       adminClient.from("dictionary_products").select("id, name").limit(500),
       adminClient.from("dictionary_processes").select("id, name").limit(500),
-      adminClient.from("companies").select("industry").not("industry", "is", null).limit(1000),
+      adminClient.from("master_industries").select("id, name_es").order("display_order"),
     ])
 
-    const uniqueIndustries = [...new Set((companiesData || []).map((c: any) => c.industry).filter(Boolean))]
+    const industries = (masterIndustries || []).map((i: any) => ({ id: i.id, name: i.name_es }))
 
     const analysis = await analyzeDocumentV3(extractedText, {
       technologies: (products || []) as { id: string; name: string }[],
       processes: (processes || []) as { id: string; name: string }[],
-      industries: uniqueIndustries as string[],
+      industries: industries as { id: string; name: string }[],
     })
 
     console.log(`[v0] Analysis complete: ${analysis.tags.length} tags found`)

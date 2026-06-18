@@ -43,7 +43,7 @@ export async function analyzeDocumentV3(
   dictionaries: {
     technologies: { id: string; name: string }[]
     processes: { id: string; name: string }[]
-    industries: string[]
+    industries: { id: string; name: string }[]
   }
 ): Promise<{
   document_type: "CASO_DE_EXITO" | "BROCHURE" | "OTRO"
@@ -72,7 +72,7 @@ export async function analyzeDocumentV3(
 }> {
   const productList = dictionaries.technologies.map(p => p.name).join(", ")
   const processList = dictionaries.processes.map(p => p.name).join(", ")
-  const industryList = dictionaries.industries.join(", ")
+  const industryList = dictionaries.industries.map(i => i.name).join(", ")
 
   const prompt = `Analiza el siguiente texto de un documento comercial de una empresa de tecnologia / servicios / consultoria.
 
@@ -87,7 +87,7 @@ ${productList}
 DICCIONARIO DE PROCESOS DE NEGOCIO DISPONIBLES (usa EXACTAMENTE estos nombres):
 ${processList}
 
-INDUSTRIAS CONOCIDAS EN NUESTRA BASE:
+TAXONOMIA CERRADA DE INDUSTRIAS (usa EXACTAMENTE y SOLO estos nombres, nunca inventes otros):
 ${industryList}
 
 PRIMERO: Determina el TIPO de documento. Puede ser:
@@ -138,7 +138,7 @@ Define el PERFIL DE CLIENTE IDEAL (ICP) a prospectar en OTRAS companias, derivad
 - "pains": entre 1 y 4 dolores/problemas que este perfil suele tener (los mismos que el documento muestra resueltos).
 - "goals": entre 1 y 4 objetivos de ese perfil.
 - "target_company_profile": describe QUE TIPO DE COMPANIA prospectar:
-    - "industries": verticales/industrias objetivo (usa preferentemente las del diccionario).
+    - "industries": verticales/industrias objetivo. Usa EXACTAMENTE los nombres de la TAXONOMIA CERRADA DE INDUSTRIAS de arriba (nunca inventes otros).
     - "processes": procesos de negocio relevantes (usa preferentemente los del diccionario mapeado).
     - "signals": senales o caracteristicas observables que indican buen fit (tamano, complejidad operativa, etc).
 - "recommended_job_titles": entre 2 y 8 CARGOS REALES a buscar EN OTRAS companias del ICP. Usa titulos estandar de mercado (ej: "CFO", "VP of Engineering", "Head of Supply Chain"). NUNCA personas especificas ni la empresa del caso.
@@ -216,14 +216,35 @@ REGLAS:
     confidence: number
   }[] = []
 
-  // Match industries
+  // Helper: match a free-text industry name against the canonical master_industries.
+  // Returns the canonical { id (slug), name (name_es) } or null when there's no match.
+  const matchIndustry = (raw: string): { id: string; name: string } | null => {
+    const name = (raw || "").toLowerCase().trim()
+    if (!name) return null
+    // Exact match on canonical name
+    let m = dictionaries.industries.find(i => i.name.toLowerCase().trim() === name)
+    if (m) return m
+    // Contains match (either direction) for minor wording differences
+    m = dictionaries.industries.find(
+      i => i.name.toLowerCase().includes(name) || name.includes(i.name.toLowerCase())
+    )
+    return m || null
+  }
+
+  // Match industries against the canonical master_industries taxonomy.
+  // reference_id = slug (e.g. "manufacturing"), value = canonical name_es.
+  const usedIndustryIds = new Set<string>()
   for (const ind of parsed.industries || []) {
-    tags.push({
-      type: "industry",
-      value: ind.name,
-      reference_id: null,
-      confidence: ind.confidence || 0.7,
-    })
+    const match = matchIndustry(ind.name)
+    if (match && !usedIndustryIds.has(match.id)) {
+      usedIndustryIds.add(match.id)
+      tags.push({
+        type: "industry",
+        value: match.name,
+        reference_id: match.id,
+        confidence: ind.confidence || 0.7,
+      })
+    }
   }
 
   // Match technologies against dictionary
@@ -284,6 +305,13 @@ REGLAS:
   const rawPersona = parsed.persona
   if (rawPersona && typeof rawPersona.name === "string" && rawPersona.name.trim().length > 0) {
     const rawTcp = rawPersona.target_company_profile || {}
+    // Normalize ICP industries to the canonical master_industries taxonomy (name_es),
+    // dedupe, and drop any that don't map to a known industry so it stays filterable.
+    const icpIndustries = [...new Set(
+      (Array.isArray(rawTcp.industries) ? rawTcp.industries : [])
+        .map((i: any) => (typeof i === "string" ? matchIndustry(i)?.name : null))
+        .filter((n: any): n is string => typeof n === "string" && n.length > 0)
+    )].slice(0, 6) as string[]
     persona = {
       name: rawPersona.name.trim(),
       type: rawPersona.type === "user" ? "user" : "buyer",
@@ -291,7 +319,7 @@ REGLAS:
       pains: cleanArr(rawPersona.pains, 4),
       goals: cleanArr(rawPersona.goals, 4),
       target_company_profile: {
-        industries: cleanArr(rawTcp.industries, 6),
+        industries: icpIndustries,
         processes: cleanArr(rawTcp.processes, 6),
         signals: cleanArr(rawTcp.signals, 6),
       },
