@@ -44,6 +44,9 @@ export async function analyzeDocumentV3(
     technologies: { id: string; name: string }[]
     processes: { id: string; name: string }[]
     industries: { id: string; name: string }[]
+    // Curated alias -> master_industry_id rules (same source of truth as companies).
+    // original_value is the raw industry text (e.g. "Software Development"), master_industry_id is the slug.
+    industryMappings?: { original_value: string; master_industry_id: string }[]
   }
 ): Promise<{
   document_type: "CASO_DE_EXITO" | "BROCHURE" | "OTRO"
@@ -181,7 +184,7 @@ TAGS PROHIBIDOS - NUNCA los incluyas:
 "Gestion del Cambio", "Estrategia Digital", "Adopcion Tecnologica", "Sostenibilidad", "Optimizacion de Procesos"
 
 EN CAMBIO, busca tags que respondan: "¿para QUE CASO DE NEGOCIO ESPECIFICO sirve?"
-- ¿Que problema de negocio concreto resuelve? → Ej: "Prediccion de Demanda", "Deteccion de Fraude", "Cierre Financiero"
+- ¿Que problema de negocio concreto resuelve? ��� Ej: "Prediccion de Demanda", "Deteccion de Fraude", "Cierre Financiero"
 - ¿En que industria especifica tiene impacto? → Ej: "Retail", "Banking", "Manufacturing"
 - ¿Que tecnologia puntual implementa? → Ej: SAP ERP, Salesforce, AWS (nunca "tecnologia en general")
 - ¿Que proceso de negocio especifico automatiza? → Ej: "Planificacion de Inventario", "Conciliacion Bancaria"
@@ -216,15 +219,30 @@ REGLAS:
     confidence: number
   }[] = []
 
-  // Helper: match a free-text industry name against the canonical master_industries.
-  // Returns the canonical { id (slug), name (name_es) } or null when there's no match.
+  // Index of curated industry_mappings rules (lower(original_value) -> master_industry_id slug).
+  const mappingsIndex = new Map<string, string>(
+    (dictionaries.industryMappings || []).map(m => [m.original_value.toLowerCase().trim(), m.master_industry_id])
+  )
+  const industryById = new Map<string, { id: string; name: string }>(
+    dictionaries.industries.map(i => [i.id, i])
+  )
+
+  // Helper: resolve a free-text industry name to a canonical { id (slug), name (name_es) }.
+  // Resolution order (same source of truth as companies):
+  //   1) curated industry_mappings rule (authority shared with companies / v2 docs)
+  //   2) exact match against the closed master_industries taxonomy (fallback)
+  //   3) contains match for minor wording differences (fallback)
+  //   -> null when nothing matches (tag is discarded).
   const matchIndustry = (raw: string): { id: string; name: string } | null => {
     const name = (raw || "").toLowerCase().trim()
     if (!name) return null
-    // Exact match on canonical name
+    // 1) Curated mapping rule first
+    const mappedId = mappingsIndex.get(name)
+    if (mappedId && industryById.has(mappedId)) return industryById.get(mappedId)!
+    // 2) Exact match on canonical name
     let m = dictionaries.industries.find(i => i.name.toLowerCase().trim() === name)
     if (m) return m
-    // Contains match (either direction) for minor wording differences
+    // 3) Contains match (either direction) for minor wording differences
     m = dictionaries.industries.find(
       i => i.name.toLowerCase().includes(name) || name.includes(i.name.toLowerCase())
     )

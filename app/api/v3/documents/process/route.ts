@@ -153,11 +153,18 @@ export async function POST(request: NextRequest) {
     // Fetch dictionaries from v2 tables (shared).
     // Industries use the canonical master_industries taxonomy (id = slug, name = name_es)
     // so that document tags align with companies.master_industry_id for recommendation filtering.
-    const [{ data: products }, { data: processes }, { data: masterIndustries }] = await Promise.all([
-      adminClient.from("dictionary_products").select("id, name").limit(500),
-      adminClient.from("dictionary_processes").select("id, name").limit(500),
-      adminClient.from("master_industries").select("id, name_es").order("display_order"),
-    ])
+    const [{ data: products }, { data: processes }, { data: masterIndustries }, { data: industryMappings }] =
+      await Promise.all([
+        adminClient.from("dictionary_products").select("id, name").limit(500),
+        adminClient.from("dictionary_processes").select("id, name").limit(500),
+        adminClient.from("master_industries").select("id, name_es").order("display_order"),
+        // Curated alias -> master_industry_id rules for documents (same source of truth used by companies).
+        adminClient
+          .from("industry_mappings")
+          .select("original_value, master_industry_id")
+          .eq("source_type", "document")
+          .not("master_industry_id", "is", null),
+      ])
 
     const industries = (masterIndustries || []).map((i: any) => ({ id: i.id, name: i.name_es }))
 
@@ -165,6 +172,7 @@ export async function POST(request: NextRequest) {
       technologies: (products || []) as { id: string; name: string }[],
       processes: (processes || []) as { id: string; name: string }[],
       industries: industries as { id: string; name: string }[],
+      industryMappings: (industryMappings || []) as { original_value: string; master_industry_id: string }[],
     })
 
     console.log(`[v0] Analysis complete: ${analysis.tags.length} tags found`)
