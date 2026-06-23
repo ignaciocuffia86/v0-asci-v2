@@ -150,19 +150,29 @@ export async function POST(request: NextRequest) {
       .eq("id", document.id)
 
     // Step 2: Load dictionaries and analyze with AI Gateway
-    // Fetch dictionaries from v2 tables (shared)
-    const [{ data: products }, { data: processes }, { data: companiesData }] = await Promise.all([
-      adminClient.from("dictionary_products").select("id, name").limit(500),
-      adminClient.from("dictionary_processes").select("id, name").limit(500),
-      adminClient.from("companies").select("industry").not("industry", "is", null).limit(1000),
-    ])
+    // Fetch dictionaries from v2 tables (shared).
+    // Industries use the canonical master_industries taxonomy (id = slug, name = name_es)
+    // so that document tags align with companies.master_industry_id for recommendation filtering.
+    const [{ data: products }, { data: processes }, { data: masterIndustries }, { data: industryMappings }] =
+      await Promise.all([
+        adminClient.from("dictionary_products").select("id, name").limit(500),
+        adminClient.from("dictionary_processes").select("id, name").limit(500),
+        adminClient.from("master_industries").select("id, name_es").order("display_order"),
+        // Curated alias -> master_industry_id rules for documents (same source of truth used by companies).
+        adminClient
+          .from("industry_mappings")
+          .select("original_value, master_industry_id")
+          .eq("source_type", "document")
+          .not("master_industry_id", "is", null),
+      ])
 
-    const uniqueIndustries = [...new Set((companiesData || []).map((c: any) => c.industry).filter(Boolean))]
+    const industries = (masterIndustries || []).map((i: any) => ({ id: i.id, name: i.name_es }))
 
     const analysis = await analyzeDocumentV3(extractedText, {
       technologies: (products || []) as { id: string; name: string }[],
       processes: (processes || []) as { id: string; name: string }[],
-      industries: uniqueIndustries as string[],
+      industries: industries as { id: string; name: string }[],
+      industryMappings: (industryMappings || []) as { original_value: string; master_industry_id: string }[],
     })
 
     console.log(`[v0] Analysis complete: ${analysis.tags.length} tags found`)
@@ -174,12 +184,19 @@ export async function POST(request: NextRequest) {
       .update({ processing_progress: 80 })
       .eq("id", document.id)
 
-    // Step 3: Save summary
+    // Step 3: Save summary (stored as JSON so the UI can parse structured fields)
     await adminClient
       .schema("v3")
       .from("workspace_documents")
       .update({
-        ai_summary: analysis.summary,
+        ai_summary: JSON.stringify({
+          summary: analysis.summary,
+          key_results: analysis.key_results,
+          insights: analysis.insights,
+          document_type: analysis.document_type,
+        }),
+        inferred_persona: analysis.persona,
+        recommended_job_titles: analysis.recommended_job_titles,
         status: "ready",
         processing_progress: 100,
         processing_error: null,
@@ -211,6 +228,9 @@ export async function POST(request: NextRequest) {
 
     // Step 5: Update workspace value profile
     await updateWorkspaceValueProfile(adminClient, document.workspace_id)
+
+    // Step 6: Consolidate auto-managed buyer persona from all docs in the workspace
+    await upsertAutoBuyerPersona(adminClient, document.workspace_id)
 
     console.log(`[v0] V3 Document ${document.id} processed successfully`)
 
@@ -288,5 +308,131 @@ async function updateWorkspaceValueProfile(
 
   } catch (err) {
     console.error("[v0] Error updating workspace value profile:", err)
+  }
+}
+
+/**
+ * Consolida una persona AUTO-GESTIONADA por workspace a partir de las personas
+ * y cargos inferidos en todos los documentos `ready`.
+ *
+ * - Hace upsert sobre la fila is_auto = true (índice único parcial por workspace).
+ * - NUNCA toca las personas creadas manualmente por el usuario (is_auto = false).
+ */
+async function upsertAutoBuyerPersona(
+  adminClient: ReturnType<typeof createAdminClient>,
+  workspaceId: string
+) {
+  try {
+    // Get persona + job title signals from all ready docs in the workspace
+    const { data: docs } = await adminClient
+      .schema("v3")
+      .from("workspace_documents")
+      .select("inferred_persona, recommended_job_titles")
+      .eq("workspace_id", workspaceId)
+      .eq("status", "ready")
+
+    if (!docs || docs.length === 0) return
+
+    const jobTitles = new Set<string>()
+    const personaNames = new Set<string>()
+    const pains = new Set<string>()
+    const goals = new Set<string>()
+    const targetIndustries = new Set<string>()
+    const targetProcesses = new Set<string>()
+    const targetSignals = new Set<string>()
+    let buyerCount = 0
+    let userCount = 0
+
+    for (const doc of docs) {
+      for (const t of (doc.recommended_job_titles as string[] | null) || []) {
+        if (t && t.trim()) jobTitles.add(t.trim())
+      }
+      const persona = doc.inferred_persona as {
+        name?: string
+        type?: string
+        pains?: string[]
+        goals?: string[]
+        target_company_profile?: { industries?: string[]; processes?: string[]; signals?: string[] }
+      } | null
+      if (persona && persona.name) {
+        personaNames.add(persona.name.trim())
+        if (persona.type === "user") userCount++
+        else buyerCount++
+        for (const p of persona.pains || []) if (p?.trim()) pains.add(p.trim())
+        for (const g of persona.goals || []) if (g?.trim()) goals.add(g.trim())
+        const tcp = persona.target_company_profile || {}
+        for (const i of tcp.industries || []) if (i?.trim()) targetIndustries.add(i.trim())
+        for (const p of tcp.processes || []) if (p?.trim()) targetProcesses.add(p.trim())
+        for (const s of tcp.signals || []) if (s?.trim()) targetSignals.add(s.trim())
+      }
+    }
+
+    // Nothing useful inferred yet
+    if (jobTitles.size === 0 && personaNames.size === 0) return
+
+    const dominantType = userCount > buyerCount ? "user" : "buyer"
+    const descriptionParts: string[] = []
+    if (personaNames.size > 0) {
+      descriptionParts.push(`Perfiles a prospectar: ${Array.from(personaNames).slice(0, 6).join(", ")}.`)
+    }
+    if (targetIndustries.size > 0) {
+      descriptionParts.push(`Industrias objetivo: ${Array.from(targetIndustries).slice(0, 6).join(", ")}.`)
+    }
+    if (targetProcesses.size > 0) {
+      descriptionParts.push(`Procesos relevantes: ${Array.from(targetProcesses).slice(0, 6).join(", ")}.`)
+    }
+    if (pains.size > 0) {
+      descriptionParts.push(`Dolores principales: ${Array.from(pains).slice(0, 5).join("; ")}.`)
+    }
+    if (goals.size > 0) {
+      descriptionParts.push(`Objetivos: ${Array.from(goals).slice(0, 5).join("; ")}.`)
+    }
+
+    const description = JSON.stringify({
+      type: dominantType,
+      summary: descriptionParts.join(" "),
+      persona_names: Array.from(personaNames).slice(0, 10),
+      pains: Array.from(pains).slice(0, 10),
+      goals: Array.from(goals).slice(0, 10),
+      target_company_profile: {
+        industries: Array.from(targetIndustries).slice(0, 10),
+        processes: Array.from(targetProcesses).slice(0, 10),
+        signals: Array.from(targetSignals).slice(0, 10),
+      },
+    })
+
+    // Find existing auto persona for this workspace
+    const { data: existing } = await adminClient
+      .schema("v3")
+      .from("buyer_personas")
+      .select("id")
+      .eq("workspace_id", workspaceId)
+      .eq("is_auto", true)
+      .maybeSingle()
+
+    const payload = {
+      workspace_id: workspaceId,
+      name: "Perfil sugerido (documentos)",
+      description,
+      recommended_job_titles: Array.from(jobTitles).slice(0, 15),
+      is_auto: true,
+      source: "auto_docs",
+      updated_at: new Date().toISOString(),
+    }
+
+    if (existing) {
+      await adminClient
+        .schema("v3")
+        .from("buyer_personas")
+        .update(payload)
+        .eq("id", existing.id)
+    } else {
+      await adminClient
+        .schema("v3")
+        .from("buyer_personas")
+        .insert(payload)
+    }
+  } catch (err) {
+    console.error("[v0] Error consolidating auto buyer persona:", err)
   }
 }

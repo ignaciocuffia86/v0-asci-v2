@@ -43,12 +43,29 @@ export async function analyzeDocumentV3(
   dictionaries: {
     technologies: { id: string; name: string }[]
     processes: { id: string; name: string }[]
-    industries: string[]
+    industries: { id: string; name: string }[]
+    // Curated alias -> master_industry_id rules (same source of truth as companies).
+    // original_value is the raw industry text (e.g. "Software Development"), master_industry_id is the slug.
+    industryMappings?: { original_value: string; master_industry_id: string }[]
   }
 ): Promise<{
   document_type: "CASO_DE_EXITO" | "BROCHURE" | "OTRO"
   summary: string
   key_results: string[]
+  insights: string[]
+  persona: {
+    name: string
+    type: "buyer" | "user"
+    description: string
+    pains: string[]
+    goals: string[]
+    target_company_profile: {
+      industries: string[]
+      processes: string[]
+      signals: string[]
+    }
+  } | null
+  recommended_job_titles: string[]
   tags: {
     type: "industry" | "technology" | "process"
     value: string
@@ -58,7 +75,7 @@ export async function analyzeDocumentV3(
 }> {
   const productList = dictionaries.technologies.map(p => p.name).join(", ")
   const processList = dictionaries.processes.map(p => p.name).join(", ")
-  const industryList = dictionaries.industries.join(", ")
+  const industryList = dictionaries.industries.map(i => i.name).join(", ")
 
   const prompt = `Analiza el siguiente texto de un documento comercial de una empresa de tecnologia / servicios / consultoria.
 
@@ -73,7 +90,7 @@ ${productList}
 DICCIONARIO DE PROCESOS DE NEGOCIO DISPONIBLES (usa EXACTAMENTE estos nombres):
 ${processList}
 
-INDUSTRIAS CONOCIDAS EN NUESTRA BASE:
+TAXONOMIA CERRADA DE INDUSTRIAS (usa EXACTAMENTE y SOLO estos nombres, nunca inventes otros):
 ${industryList}
 
 PRIMERO: Determina el TIPO de documento. Puede ser:
@@ -86,6 +103,20 @@ Responde en formato JSON estricto (sin markdown, sin backticks):
   "document_type": "CASO_DE_EXITO" | "BROCHURE" | "OTRO",
   "summary": "Ver instrucciones segun tipo de documento abajo",
   "key_results": ["Resultado concreto 1", "Resultado concreto 2"],
+  "insights": ["Aprendizaje o contexto cualitativo 1", "Insight 2"],
+  "persona": {
+    "name": "Titulo corto del perfil objetivo, ej: 'Director Financiero en empresas de Retail'",
+    "type": "buyer" | "user",
+    "description": "1-2 oraciones describiendo el perfil de persona a prospectar EN OTRAS COMPANIAS similares",
+    "pains": ["Dolor o problema concreto 1", "Dolor 2"],
+    "goals": ["Objetivo o meta 1", "Objetivo 2"],
+    "target_company_profile": {
+      "industries": ["Industria/vertical objetivo 1", "Industria 2"],
+      "processes": ["Proceso de negocio relevante 1", "Proceso 2"],
+      "signals": ["Senal o caracteristica que indica buen fit, ej: 'opera multiples plantas', 'alto volumen de SKUs'"]
+    }
+  },
+  "recommended_job_titles": ["CFO", "Head of Supply Chain", "VP Finance"],
   "industries": [
     {"name": "nombre EXACTO de la lista de industrias", "confidence": 0.9}
   ],
@@ -97,13 +128,38 @@ Responde en formato JSON estricto (sin markdown, sin backticks):
   ]
 }
 
-=== INSTRUCCIONES PARA KEY_RESULTS ===
+=== CONCEPTO CLAVE: PARA QUE SIRVE ESTE DOCUMENTO ===
+Este documento es EVIDENCIA de lo que el vendor sabe hacer. Lo vamos a usar para PROSPECTAR EN FRIO a tomadores de decision de OTRAS COMPANIAS (no la del documento).
+Si es un CASO DE EXITO de una empresa-cliente (ej: ARCOR), la empresa-cliente es solo la PRUEBA/REFERENCIA. El perfil objetivo NO es gente de ARCOR: es gente PARECIDA a los decisores/usuarios de ARCOR pero en OTRAS companias de la misma vertical o con el mismo proceso de negocio.
+Usa los procesos e industrias mapeados del diccionario como indicio fuerte de a quien apuntar.
+
+=== INSTRUCCIONES PARA PERSONA, TARGET_COMPANY_PROFILE Y RECOMMENDED_JOB_TITLES ===
+Define el PERFIL DE CLIENTE IDEAL (ICP) a prospectar en OTRAS companias, derivado de lo que muestra este documento.
+- "type": usa "buyer" si el perfil es quien DECIDE/COMPRA (ejecutivo, decisor presupuestario); usa "user" si es quien USA la solucion en el dia a dia.
+- "name": titulo corto del perfil, expresado de forma GENERICA y aplicable a multiples companias (ej: "Director de Supply Chain en manufactura de consumo masivo"). NUNCA uses el nombre de la empresa del documento.
+- "description": a quien prospectar en otras companias, en 1-2 oraciones. NUNCA nombres a la empresa del caso como objetivo.
+- "pains": entre 1 y 4 dolores/problemas que este perfil suele tener (los mismos que el documento muestra resueltos).
+- "goals": entre 1 y 4 objetivos de ese perfil.
+- "target_company_profile": describe QUE TIPO DE COMPANIA prospectar:
+    - "industries": verticales/industrias objetivo. Usa EXACTAMENTE los nombres de la TAXONOMIA CERRADA DE INDUSTRIAS de arriba (nunca inventes otros).
+    - "processes": procesos de negocio relevantes (usa preferentemente los del diccionario mapeado).
+    - "signals": senales o caracteristicas observables que indican buen fit (tamano, complejidad operativa, etc).
+- "recommended_job_titles": entre 2 y 8 CARGOS REALES a buscar EN OTRAS companias del ICP. Usa titulos estandar de mercado (ej: "CFO", "VP of Engineering", "Head of Supply Chain"). NUNCA personas especificas ni la empresa del caso.
+Si el documento no permite inferir un ICP con confianza, devuelve "persona": null y "recommended_job_titles": [].
+
+=== INSTRUCCIONES PARA KEY_RESULTS (cuantitativos) ===
 Extrae entre 0 y 5 resultados CONCRETOS y CUANTIFICABLES del documento.
 SOLO incluye datos que sean medibles: porcentajes, tiempos, cantidades, montos, ratios.
 NO incluyas beneficios genericos como "mayor eficiencia" o "mejor rendimiento".
 Si el documento no tiene datos cuantificables (ej: brochure generico), devuelve array vacio [].
 Ejemplos validos: "Reduccion del 60% en tiempo de gestion", "Migracion de 100+ activos", "Ahorro de $2M anuales"
 Ejemplos INVALIDOS: "Mayor eficiencia operativa", "Mejor experiencia de usuario"
+
+=== INSTRUCCIONES PARA INSIGHTS (cualitativos) ===
+Extrae entre 0 y 5 aprendizajes o piezas de CONTEXTO CUALITATIVO utiles para personalizar un mensaje de cold outreach a un perfil similar.
+A diferencia de key_results (metricas duras), los insights son cualitativos: por que el cliente eligio esta solucion, que desafio de negocio enfrentaba, como se resolvio, que cambio en su operacion, que objeciones se superaron.
+Ejemplos validos: "El cliente necesitaba unificar datos de 12 plantas que operaban en silos", "La adopcion se logro con un piloto de 90 dias antes del rollout completo", "El principal driver fue cumplir una nueva regulacion del sector".
+Si no hay contexto cualitativo util, devuelve array vacio [].
 
 === INSTRUCCIONES PARA EL SUMMARY SEGUN TIPO ===
 
@@ -128,7 +184,7 @@ TAGS PROHIBIDOS - NUNCA los incluyas:
 "Gestion del Cambio", "Estrategia Digital", "Adopcion Tecnologica", "Sostenibilidad", "Optimizacion de Procesos"
 
 EN CAMBIO, busca tags que respondan: "¿para QUE CASO DE NEGOCIO ESPECIFICO sirve?"
-- ¿Que problema de negocio concreto resuelve? → Ej: "Prediccion de Demanda", "Deteccion de Fraude", "Cierre Financiero"
+- ¿Que problema de negocio concreto resuelve? ��� Ej: "Prediccion de Demanda", "Deteccion de Fraude", "Cierre Financiero"
 - ¿En que industria especifica tiene impacto? → Ej: "Retail", "Banking", "Manufacturing"
 - ¿Que tecnologia puntual implementa? → Ej: SAP ERP, Salesforce, AWS (nunca "tecnologia en general")
 - ¿Que proceso de negocio especifico automatiza? → Ej: "Planificacion de Inventario", "Conciliacion Bancaria"
@@ -152,7 +208,7 @@ REGLAS:
     parsed = JSON.parse(jsonMatch[0])
   } catch (err) {
     console.error("[v3] Failed to parse AI analysis response:", responseText.slice(0, 500))
-    return { document_type: "OTRO", summary: "", key_results: [], tags: [] }
+    return { document_type: "OTRO", summary: "", key_results: [], insights: [], persona: null, recommended_job_titles: [], tags: [] }
   }
 
   // Build tag array with reference IDs
@@ -163,14 +219,50 @@ REGLAS:
     confidence: number
   }[] = []
 
-  // Match industries
+  // Index of curated industry_mappings rules (lower(original_value) -> master_industry_id slug).
+  const mappingsIndex = new Map<string, string>(
+    (dictionaries.industryMappings || []).map(m => [m.original_value.toLowerCase().trim(), m.master_industry_id])
+  )
+  const industryById = new Map<string, { id: string; name: string }>(
+    dictionaries.industries.map(i => [i.id, i])
+  )
+
+  // Helper: resolve a free-text industry name to a canonical { id (slug), name (name_es) }.
+  // Resolution order (same source of truth as companies):
+  //   1) curated industry_mappings rule (authority shared with companies / v2 docs)
+  //   2) exact match against the closed master_industries taxonomy (fallback)
+  //   3) contains match for minor wording differences (fallback)
+  //   -> null when nothing matches (tag is discarded).
+  const matchIndustry = (raw: string): { id: string; name: string } | null => {
+    const name = (raw || "").toLowerCase().trim()
+    if (!name) return null
+    // 1) Curated mapping rule first
+    const mappedId = mappingsIndex.get(name)
+    if (mappedId && industryById.has(mappedId)) return industryById.get(mappedId)!
+    // 2) Exact match on canonical name
+    let m = dictionaries.industries.find(i => i.name.toLowerCase().trim() === name)
+    if (m) return m
+    // 3) Contains match (either direction) for minor wording differences
+    m = dictionaries.industries.find(
+      i => i.name.toLowerCase().includes(name) || name.includes(i.name.toLowerCase())
+    )
+    return m || null
+  }
+
+  // Match industries against the canonical master_industries taxonomy.
+  // reference_id = slug (e.g. "manufacturing"), value = canonical name_es.
+  const usedIndustryIds = new Set<string>()
   for (const ind of parsed.industries || []) {
-    tags.push({
-      type: "industry",
-      value: ind.name,
-      reference_id: null,
-      confidence: ind.confidence || 0.7,
-    })
+    const match = matchIndustry(ind.name)
+    if (match && !usedIndustryIds.has(match.id)) {
+      usedIndustryIds.add(match.id)
+      tags.push({
+        type: "industry",
+        value: match.name,
+        reference_id: match.id,
+        confidence: ind.confidence || 0.7,
+      })
+    }
   }
 
   // Match technologies against dictionary
@@ -211,12 +303,57 @@ REGLAS:
     }
   }
 
+  // Helper to clean a string array (trim, dedupe, drop empties, cap)
+  const cleanArr = (arr: any, cap: number): string[] =>
+    Array.isArray(arr)
+      ? [...new Set(
+          arr.filter((x: any) => typeof x === "string" && x.trim().length > 0).map((x: string) => x.trim())
+        )].slice(0, cap)
+      : []
+
+  // Normalize persona / ICP (only keep if it has a usable name)
+  let persona: {
+    name: string
+    type: "buyer" | "user"
+    description: string
+    pains: string[]
+    goals: string[]
+    target_company_profile: { industries: string[]; processes: string[]; signals: string[] }
+  } | null = null
+  const rawPersona = parsed.persona
+  if (rawPersona && typeof rawPersona.name === "string" && rawPersona.name.trim().length > 0) {
+    const rawTcp = rawPersona.target_company_profile || {}
+    // Normalize ICP industries to the canonical master_industries taxonomy (name_es),
+    // dedupe, and drop any that don't map to a known industry so it stays filterable.
+    const icpIndustries = [...new Set(
+      (Array.isArray(rawTcp.industries) ? rawTcp.industries : [])
+        .map((i: any) => (typeof i === "string" ? matchIndustry(i)?.name : null))
+        .filter((n: any): n is string => typeof n === "string" && n.length > 0)
+    )].slice(0, 6) as string[]
+    persona = {
+      name: rawPersona.name.trim(),
+      type: rawPersona.type === "user" ? "user" : "buyer",
+      description: typeof rawPersona.description === "string" ? rawPersona.description.trim() : "",
+      pains: cleanArr(rawPersona.pains, 4),
+      goals: cleanArr(rawPersona.goals, 4),
+      target_company_profile: {
+        industries: icpIndustries,
+        processes: cleanArr(rawTcp.processes, 6),
+        signals: cleanArr(rawTcp.signals, 6),
+      },
+    }
+  }
+
+  // Normalize recommended job titles (dedupe, trim, cap at 8)
+  const recommended_job_titles = cleanArr(parsed.recommended_job_titles, 8)
+
   return {
     document_type: parsed.document_type || "OTRO",
     summary: parsed.summary || "",
-    key_results: Array.isArray(parsed.key_results) 
-      ? parsed.key_results.filter((r: any) => typeof r === "string" && r.trim().length > 0).slice(0, 5) 
-      : [],
+    key_results: cleanArr(parsed.key_results, 5),
+    insights: cleanArr(parsed.insights, 5),
+    persona,
+    recommended_job_titles,
     tags,
   }
 }

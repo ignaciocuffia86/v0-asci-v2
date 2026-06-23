@@ -246,40 +246,86 @@ export async function getRecommendedJobTitles(
       return persona.recommended_job_titles
     }
   }
-  
-  // 2. Obtener workspace value profile
+
+  const collected = new Set<string>()
+
+  // 2. Sumar cargos de la persona AUTO-GESTIONADA del workspace (inferida de los docs)
+  const { data: autoPersona } = await adminClient
+    .schema('v3')
+    .from('buyer_personas')
+    .select('recommended_job_titles')
+    .eq('workspace_id', workspaceId)
+    .eq('is_auto', true)
+    .maybeSingle()
+
+  for (const t of (autoPersona?.recommended_job_titles as string[] | null) || []) {
+    if (t?.trim()) collected.add(t.trim())
+  }
+
+  // 3. Obtener workspace value profile
   const { data: valueProfile } = await adminClient
     .schema('v3')
     .from('workspace_value_profiles')
     .select('target_processes, target_technologies')
     .eq('workspace_id', workspaceId)
     .single()
-  
-  if (!valueProfile) {
-    return getDefaultJobTitles()
+
+  // 4. Resolver job titles del diccionario a partir de los NOMBRES del value profile.
+  //    El value profile guarda strings (nombres), no objetos {id}: hay que mapear
+  //    nombre -> id contra los diccionarios de v2 antes de consultar dictionary_job_titles.
+  if (valueProfile) {
+    const processNames = ((valueProfile.target_processes as any[]) || [])
+      .map((p: any) => (typeof p === 'string' ? p : p?.name))
+      .filter((n: any): n is string => typeof n === 'string' && n.trim().length > 0)
+
+    const technologyNames = ((valueProfile.target_technologies as any[]) || [])
+      .map((t: any) => (typeof t === 'string' ? t : t?.name))
+      .filter((n: any): n is string => typeof n === 'string' && n.trim().length > 0)
+
+    const [processIds, technologyIds] = await Promise.all([
+      resolveDictionaryIds(adminClient, 'dictionary_processes', processNames),
+      resolveDictionaryIds(adminClient, 'dictionary_products', technologyNames),
+    ])
+
+    if (processIds.length > 0 || technologyIds.length > 0) {
+      const orFilters: string[] = []
+      if (processIds.length > 0) orFilters.push(`process_id.in.(${processIds.join(',')})`)
+      if (technologyIds.length > 0) orFilters.push(`product_id.in.(${technologyIds.join(',')})`)
+
+      const { data: jobTitles } = await adminClient
+        .schema('v3')
+        .from('dictionary_job_titles')
+        .select('job_title')
+        .or(orFilters.join(','))
+
+      for (const jt of jobTitles || []) {
+        if (jt.job_title?.trim()) collected.add(jt.job_title.trim())
+      }
+    }
   }
-  
-  // 3. Buscar job titles asociados a los procesos/tecnologias
-  const processIds = (valueProfile.target_processes as any[] || [])
-    .filter((p: any) => p.id)
-    .map((p: any) => p.id)
-  
-  const technologyIds = (valueProfile.target_technologies as any[] || [])
-    .filter((t: any) => t.id)
-    .map((t: any) => t.id)
-  
-  const { data: jobTitles } = await adminClient
-    .schema('v3')
-    .from('dictionary_job_titles')
-    .select('job_title')
-    .or(`process_id.in.(${processIds.join(',')}),product_id.in.(${technologyIds.join(',')})`)
-  
-  if (jobTitles?.length) {
-    const uniqueTitles = [...new Set(jobTitles.map(jt => jt.job_title))]
-    return uniqueTitles.slice(0, 10)
+
+  if (collected.size > 0) {
+    return [...collected].slice(0, 10)
   }
-  
+
   return getDefaultJobTitles()
+}
+
+/**
+ * Mapea nombres del value profile a IDs del diccionario de v2 (public schema).
+ * Devuelve los IDs encontrados por coincidencia exacta de nombre (case-insensitive).
+ */
+async function resolveDictionaryIds(
+  adminClient: ReturnType<typeof createAdminClient>,
+  table: 'dictionary_processes' | 'dictionary_products',
+  names: string[]
+): Promise<string[]> {
+  if (names.length === 0) return []
+  const { data } = await adminClient
+    .from(table)
+    .select('id, name')
+    .in('name', names)
+  return (data || []).map((row: any) => row.id)
 }
 
 /**

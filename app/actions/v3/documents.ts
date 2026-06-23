@@ -22,10 +22,25 @@ export type WorkspaceDocument = {
   processing_error: string | null
   extracted_text: string | null
   ai_summary: string | null
+  inferred_persona: InferredPersona | null
+  recommended_job_titles: string[]
   version: number
   created_at: string
   updated_at: string
   tags?: WorkspaceDocumentTag[]
+}
+
+export type InferredPersona = {
+  name: string
+  type: "buyer" | "user"
+  description: string
+  pains: string[]
+  goals: string[]
+  target_company_profile?: {
+    industries: string[]
+    processes: string[]
+    signals: string[]
+  }
 }
 
 export type WorkspaceDocumentTag = {
