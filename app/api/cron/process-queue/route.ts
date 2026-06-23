@@ -70,11 +70,16 @@ export async function GET(request: Request) {
     // A batch wrongly marked "completed" while rows were still being inserted (the race condition)
     // has processed_rows + failed_rows < total_rows. Reactivate those that still have pending rows
     // so the cron picks them up again. Safe for v2: only reactivates batches with real pending work.
+    // Scope: only RECENT zombies (last 72h). Old abandoned imports are left untouched so they don't
+    // flood the FIFO queue; those are handled manually.
+    const ZOMBIE_RECOVERY_WINDOW_MS = 72 * 60 * 60 * 1000
+    const zombieCutoff = new Date(Date.now() - ZOMBIE_RECOVERY_WINDOW_MS).toISOString()
     const { data: zombies } = await supabase
       .from("import_batches")
       .select("id, filename, total_rows, processed_rows, failed_rows")
       .eq("status", "completed")
       .gt("total_rows", 0)
+      .gte("created_at", zombieCutoff)
       .limit(50)
 
     for (const z of zombies ?? []) {
