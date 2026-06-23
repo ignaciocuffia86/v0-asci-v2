@@ -63,15 +63,52 @@ export async function GET(request: Request) {
   let lastBatchId = ""
   const debugLogs: string[] = []
   const skippedBatches: string[] = []
+  const deferredBatches: string[] = []
 
   try {
+    // ── Zombie recovery ──
+    // A batch wrongly marked "completed" while rows were still being inserted (the race condition)
+    // has processed_rows + failed_rows < total_rows. Reactivate those that still have pending rows
+    // so the cron picks them up again. Safe for v2: only reactivates batches with real pending work.
+    const { data: zombies } = await supabase
+      .from("import_batches")
+      .select("id, filename, total_rows, processed_rows, failed_rows")
+      .eq("status", "completed")
+      .gt("total_rows", 0)
+      .limit(50)
+
+    for (const z of zombies ?? []) {
+      const accounted = (z.processed_rows ?? 0) + (z.failed_rows ?? 0)
+      if (accounted >= (z.total_rows ?? 0)) continue // genuinely complete
+
+      const { count: zPending } = await supabase
+        .from("import_rows")
+        .select("*", { count: "exact", head: true })
+        .eq("batch_id", z.id)
+        .eq("status", "pending")
+
+      if (zPending && zPending > 0) {
+        await supabase
+          .from("import_batches")
+          .update({ status: "processing", consecutive_failures: 0, updated_at: new Date().toISOString() })
+          .eq("id", z.id)
+          .eq("status", "completed") // guard against concurrent change
+        debugLogs.push(`Recovered zombie batch ${z.id.slice(0, 8)} (${z.filename}): ${zPending} pending, ${accounted}/${z.total_rows} accounted`)
+      }
+    }
+
     while (Date.now() - startTime < TIME_BUDGET_MS) {
       // ── PHASE 3: FIFO order (oldest first) + skip failing batches ──
-      const { data: batch, error: fetchErr } = await supabase
+      let fetchQuery = supabase
         .from("import_batches")
-        .select("id, batch_type, filename, status, consecutive_failures")
+        .select("id, batch_type, filename, status, consecutive_failures, total_rows, processed_rows, failed_rows")
         .in("status", ["pending", "processing"])
         .lt("consecutive_failures", MAX_CONSECUTIVE_FAILURES)
+      // Exclude batches deferred this run (rows still being inserted by the uploader)
+      if (deferredBatches.length > 0) {
+        fetchQuery = fetchQuery.not("id", "in", `(${deferredBatches.join(",")})`)
+      }
+      const { data: batch, error: fetchErr } = await fetchQuery
         .order("created_at", { ascending: true })  // FIFO: oldest batch first
         .limit(1)
         .single()
@@ -110,11 +147,27 @@ export async function GET(request: Request) {
         .eq("status", "pending")
 
       if (!pendingBefore || pendingBefore === 0) {
-        await supabase
-          .from("import_batches")
-          .update({ status: "completed", updated_at: new Date().toISOString() })
-          .eq("id", batch.id)
-        debugLogs.push(`Batch ${batch.id.slice(0, 8)} completed (0 pending)`)
+        // No pending rows. Only mark completed if the batch's rows are fully accounted for.
+        // Invariant: a batch is done <=> processed_rows + failed_rows >= total_rows.
+        // If total_rows is still greater, the uploader is mid-insert (rows not committed yet),
+        // so completing here would orphan those rows (the original race condition). Defer instead.
+        const totalRows = batch.total_rows ?? 0
+        const accounted = (batch.processed_rows ?? 0) + (batch.failed_rows ?? 0)
+
+        if (totalRows === 0 || accounted >= totalRows) {
+          await supabase
+            .from("import_batches")
+            .update({ status: "completed", updated_at: new Date().toISOString() })
+            .eq("id", batch.id)
+          debugLogs.push(`Batch ${batch.id.slice(0, 8)} completed (0 pending, ${accounted}/${totalRows} accounted)`)
+          continue
+        }
+
+        // Rows still being loaded: defer this batch to a later run, do not complete it.
+        deferredBatches.push(batch.id)
+        debugLogs.push(
+          `Batch ${batch.id.slice(0, 8)} deferred: 0 pending but only ${accounted}/${totalRows} rows loaded (uploader in progress)`
+        )
         continue
       }
 
