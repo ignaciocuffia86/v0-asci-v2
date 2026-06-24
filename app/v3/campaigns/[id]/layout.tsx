@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation"
 import { createClient } from "@/lib/supabase/server"
 import { getCampaigns } from "@/app/actions/v3/campaigns"
+import { isSuperAdmin } from "@/app/actions/v3/admin"
 import { CampaignLayoutClient } from "./_components/campaign-layout-client"
 
 export default async function CampaignLayout({
@@ -28,11 +29,14 @@ export default async function CampaignLayout({
   if (!currentCampaign) {
     redirect("/v3/campaigns")
   }
+
+  const superAdmin = await isSuperAdmin()
   
   return (
     <CampaignLayoutClient 
       campaigns={campaigns || []} 
       currentCampaignId={campaignId}
+      isSuperAdmin={superAdmin}
     >
       {children}
     </CampaignLayoutClient>

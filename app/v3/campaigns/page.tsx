@@ -4,6 +4,7 @@ import { CampaignsView } from "./_components/campaigns-view";
 import { V3Navbar } from "@/components/v3/navbar";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentWorkspace } from "@/lib/v3/workspace";
+import { isSuperAdmin } from "@/app/actions/v3/admin";
 import { redirect } from "next/navigation";
 
 export default async function CampaignsPage() {
@@ -14,14 +15,15 @@ export default async function CampaignsPage() {
   
   const workspace = await getCurrentWorkspace(user.id);
   
-  const [campaigns, stats] = await Promise.all([
+  const [campaigns, stats, superAdmin] = await Promise.all([
     getCampaigns(),
     getWorkspaceAccountStats(),
+    isSuperAdmin(),
   ]);
 
   return (
     <div className="flex min-h-screen flex-col">
-      <V3Navbar user={user} workspace={workspace} />
+      <V3Navbar user={user} workspace={workspace} isSuperAdmin={superAdmin} />
       <main className="flex-1">
         <CampaignsView campaigns={campaigns} accountStats={stats} />
       </main>

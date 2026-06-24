@@ -26,17 +26,20 @@ export default async function SettingsPage() {
   // Obtener stats del workspace
   const [membersResult, docsResult, campaignsResult] = await Promise.all([
     supabase
-      .from("v3_workspace_members")
-      .select("id", { count: "exact" })
+      .schema("v3")
+      .from("workspace_members")
+      .select("id", { count: "exact", head: true })
       .eq("workspace_id", workspace.id)
       .eq("status", "active"),
     supabase
-      .from("v3_workspace_documents")
-      .select("id", { count: "exact" })
+      .schema("v3")
+      .from("workspace_documents")
+      .select("id", { count: "exact", head: true })
       .eq("workspace_id", workspace.id),
     supabase
-      .from("v3_campaigns")
-      .select("id", { count: "exact" })
+      .schema("v3")
+      .from("campaigns")
+      .select("id", { count: "exact", head: true })
       .eq("workspace_id", workspace.id),
   ])
   

@@ -20,6 +20,7 @@ import {
   revokeInvitation,
   acceptInvitation,
   getPendingInvitations,
+  hasValidInvitationForEmail,
   type InvitationWithInviter,
 } from "@/lib/v3/invitations"
 import {
@@ -345,6 +346,21 @@ export async function updateWorkspaceName(name: string): Promise<{
 export async function getMyWorkspace(): Promise<WorkspaceWithMember | null> {
   const user = await getCurrentUser()
   return getWorkspaceForUser(user.id)
+}
+
+/**
+ * Verifica si un email tiene una invitación válida pendiente.
+ * Se usa para gatear el registro público: solo permitimos crear cuenta
+ * a emails que fueron invitados a un workspace de v3.
+ */
+export async function checkInvitationForSignup(email: string): Promise<{
+  allowed: boolean
+}> {
+  if (!email || !email.includes("@")) {
+    return { allowed: false }
+  }
+  const allowed = await hasValidInvitationForEmail(email)
+  return { allowed }
 }
 
 export type { Workspace }

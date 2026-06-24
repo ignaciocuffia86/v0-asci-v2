@@ -88,6 +88,27 @@ export async function getPendingInvitations(
   }))
 }
 
+/**
+ * Verifica si existe una invitación pendiente y no expirada para un email.
+ * Se usa para gatear el registro público (signup solo con invitación válida).
+ */
+export async function hasValidInvitationForEmail(email: string): Promise<boolean> {
+  const admin = createAdminClient()
+  const normalized = normalizeEmail(email)
+
+  const { data, error } = await admin
+    .schema("v3")
+    .from("workspace_invitations")
+    .select("id, expires_at")
+    .ilike("email", normalized)
+    .eq("status", "pending")
+    .gt("expires_at", new Date().toISOString())
+    .limit(1)
+
+  if (error || !data || data.length === 0) return false
+  return true
+}
+
 /** Obtiene una invitación por token (para la landing de aceptación). */
 export async function getInvitationByToken(
   token: string

@@ -13,7 +13,8 @@ import {
   Crosshair,
   MessageSquare,
   Menu,
-  X
+  X,
+  Shield
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -42,6 +43,7 @@ interface CampaignLayoutClientProps {
   campaigns: Campaign[]
   currentCampaignId: string
   children: React.ReactNode
+  isSuperAdmin?: boolean
 }
 
 const campaignTypeIcons = {
@@ -59,7 +61,8 @@ const campaignTypeLabels = {
 export function CampaignLayoutClient({
   campaigns,
   currentCampaignId,
-  children
+  children,
+  isSuperAdmin = false
 }: CampaignLayoutClientProps) {
   const pathname = usePathname()
   const router = useRouter()
@@ -231,6 +234,13 @@ export function CampaignLayoutClient({
               <MessageSquare className="size-4" />
               <span className="hidden sm:inline">Copilot</span>
             </Button>
+            {isSuperAdmin && (
+              <Button variant="ghost" size="icon" asChild title="Panel super-admin">
+                <Link href="/v3/admin/workspaces">
+                  <Shield className="size-4" />
+                </Link>
+              </Button>
+            )}
             <Button variant="ghost" size="icon" asChild>
               <Link href="/v3/settings">
                 <Settings className="size-4" />

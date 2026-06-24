@@ -4,6 +4,7 @@ import { getCurrentWorkspace } from "@/lib/v3/workspace"
 import { getWorkspaceDocumentsWithTags, getDocumentStats } from "@/app/actions/v3/documents"
 import { DocumentsView } from "./_components/documents-view"
 import { V3Navbar } from "@/components/v3/navbar"
+import { isSuperAdmin } from "@/app/actions/v3/admin"
 
 export default async function DocumentsPage() {
   const supabase = await createClient()
@@ -18,14 +19,15 @@ export default async function DocumentsPage() {
     redirect("/v3/onboarding")
   }
 
-  const [docsResult, stats] = await Promise.all([
+  const [docsResult, stats, superAdmin] = await Promise.all([
     getWorkspaceDocumentsWithTags(),
     getDocumentStats(),
+    isSuperAdmin(),
   ])
 
   return (
     <div className="flex min-h-screen flex-col">
-      <V3Navbar user={user} workspace={workspace} />
+      <V3Navbar user={user} workspace={workspace} isSuperAdmin={superAdmin} />
       <main className="flex-1">
         <DocumentsView 
           initialDocuments={docsResult.data || []}
