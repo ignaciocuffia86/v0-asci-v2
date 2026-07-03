@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation"
 import { getOnboardingStatus } from "@/app/actions/v3/workspace"
-import { getFollowedAccounts } from "@/app/actions/v3/accounts"
+import { getFollowedAccounts, getRecentlyResearchedAccounts } from "@/app/actions/v3/accounts"
 import { AccountsView } from "./_components/accounts-view"
 
 export const metadata = {
@@ -13,7 +13,10 @@ export default async function V3AccountsPage() {
   if (status.status === "no_workspace") redirect("/v3/onboarding")
   if (status.status !== "active_member") redirect("/v3/onboarding")
 
-  const accounts = await getFollowedAccounts()
+  const [accounts, researched] = await Promise.all([
+    getFollowedAccounts(),
+    getRecentlyResearchedAccounts().catch(() => []),
+  ])
 
-  return <AccountsView accounts={accounts} />
+  return <AccountsView accounts={accounts} researched={researched} />
 }

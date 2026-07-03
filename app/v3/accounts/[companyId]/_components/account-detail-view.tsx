@@ -152,6 +152,16 @@ export function AccountDetailView({ detail }: { detail: AccountDetail }) {
         </div>
       </div>
 
+      {!isFollowed && (
+        <div className="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 px-4 py-3 text-sm">
+          <Star className="size-4 shrink-0 text-primary" />
+          <p className="text-pretty">
+            No seguís esta cuenta: la información no se refresca automáticamente ni recibís su
+            digest mensual. Seguila para mantenerla al día.
+          </p>
+        </div>
+      )}
+
       {/* Scorecard */}
       {scorecard && (
         <Card>

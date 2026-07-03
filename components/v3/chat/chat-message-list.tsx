@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils"
 import type { V3ChatMessage } from "@/app/api/v3/chat/route"
 import {
   ResolutionCard,
+  PreviewAccountsCard,
   BatchProgressCard,
   AccountOverviewCard,
   FollowResultCard,
@@ -29,6 +30,7 @@ function ToolPart({
   if (part.state === "input-streaming" || part.state === "input-available") {
     const labels: Record<string, string> = {
       "tool-resolveCompanies": "Resolviendo empresas...",
+      "tool-previewAccounts": "Analizando señales en cache...",
       "tool-startResearch": "Encolando research...",
       "tool-checkBatchStatus": "Consultando progreso...",
       "tool-getAccountOverview": "Cargando cuenta...",
@@ -59,6 +61,8 @@ function ToolPart({
   switch (part.type) {
     case "tool-resolveCompanies":
       return <ResolutionCard output={part.output} sendMessage={sendMessage} isBusy={isBusy} />
+    case "tool-previewAccounts":
+      return <PreviewAccountsCard output={part.output} sendMessage={sendMessage} isBusy={isBusy} />
     case "tool-startResearch":
       return <BatchProgressCard output={part.output} sendMessage={sendMessage} isBusy={isBusy} />
     case "tool-checkBatchStatus":

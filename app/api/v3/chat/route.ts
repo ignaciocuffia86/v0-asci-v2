@@ -53,6 +53,54 @@ function buildTools(ctx: { workspaceId: string; userId: string; conversationId: 
     },
   })
 
+  const previewAccounts = tool({
+    description:
+      "Resumen del cache de señales para empresas YA resueltas (usar los companyId de resolveCompanies). Devuelve por empresa: total de señales en la base, cuántas son fit con la propuesta de valor del workspace (match de diccionario + perfil del vendor), los términos matcheados y la frescura del último research. Usar SIEMPRE después de resolveCompanies y ANTES de startResearch para que el usuario decida si usa el cache o refresca.",
+    inputSchema: z.object({
+      companies: z
+        .array(z.object({ companyId: z.string(), name: z.string() }))
+        .max(LIMITS.MAX_BATCH_SIZE)
+        .describe("Empresas resueltas con su companyId y nombre"),
+    }),
+    execute: async ({ companies }) => {
+      const { summarizeCachedSignals } = await import("@/lib/v3/services/fit")
+      const previews = await Promise.all(
+        companies.map(async (c) => {
+          try {
+            const s = await summarizeCachedSignals(c.companyId, ctx.workspaceId)
+            return {
+              companyId: c.companyId,
+              name: c.name,
+              totalSignals: s.totalSignals,
+              fitCount: s.fitCount,
+              topMatches: s.topMatches,
+              fitHighlights: s.fitSignals.slice(0, 3).map((f) => ({
+                title: f.title,
+                matchedTerms: f.matchedTerms.slice(0, 3),
+              })),
+              lastResearchAt: s.lastResearchAt,
+              isFresh: s.isFresh,
+              hasVendorProfile: s.hasVendorProfile,
+            }
+          } catch {
+            return {
+              companyId: c.companyId,
+              name: c.name,
+              totalSignals: 0,
+              fitCount: 0,
+              topMatches: [],
+              fitHighlights: [],
+              lastResearchAt: null,
+              isFresh: false,
+              hasVendorProfile: false,
+            }
+          }
+        })
+      )
+      return { previews }
+    },
+  })
+
   const startResearch = tool({
     description:
       "Inicia el research de un lote de cuentas (máx 25). Crea los jobs y los ejecuta en segundo plano. Si una cuenta tiene cache fresco no re-investiga salvo forceRefresh. Devuelve el batchId para seguir el progreso.",
@@ -252,6 +300,7 @@ function buildTools(ctx: { workspaceId: string; userId: string; conversationId: 
 
   return {
     resolveCompanies,
+    previewAccounts,
     startResearch,
     checkBatchStatus,
     getAccountOverview,
@@ -269,7 +318,7 @@ export type V3ChatMessage = UIMessage<never, UIDataTypes, V3ChatTools>
 const SYSTEM_PROMPT = `Sos el asistente de prospección B2B de ASCI. Ayudás a equipos de venta de tecnología a investigar cuentas, priorizarlas y preparar el primer contacto.
 
 CAPACIDADES (vía tools):
-1. Investigar cuentas: resolvé primero con resolveCompanies, después startResearch (máx 25 por lote). Si una empresa es ambigua, mostrá los candidatos y pedí al usuario que elija ANTES de investigar. Si el cache está fresco avisá que usás datos existentes (salvo que pidan refresh).
+1. Investigar cuentas: resolvé primero con resolveCompanies. Si una empresa es ambigua, mostrá los candidatos y pedí al usuario que elija ANTES de investigar. Para las empresas resueltas que YA EXISTEN en la base, llamá previewAccounts ANTES de startResearch: muestra cuántas señales hay en cache y cuáles son fit con la propuesta de valor del workspace. Con ese preview, preguntá al usuario si quiere usar el cache o refrescar la investigación — EXCEPTO si el usuario ya pidió explícitamente investigar/re-investigar, en cuyo caso encolá directo con startResearch. Para empresas nuevas (sin datos en la base), encolá directo sin preview.
 2. Ver una cuenta: getAccountOverview devuelve scorecard y hallazgos.
 3. Seguir cuentas: followAccounts / unfollowAccount / listFollowed. Después de un research exitoso, ofrecé seguir las cuentas con mejor score.
 4. Contactos e icebreakers: suggestContacts primero, después generateIcebreakers por contacto elegido. Si el usuario pide cambiar un icebreaker, regenerá con regenerateFromId + instruction.

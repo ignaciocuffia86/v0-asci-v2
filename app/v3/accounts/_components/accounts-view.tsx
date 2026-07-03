@@ -26,16 +26,22 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { MessageSquare, Search, Star, StarOff, Users } from "lucide-react"
-import { toggleDigestSubscription, unfollowAccountAction } from "@/app/actions/v3/accounts"
+import { MessageSquare, Search, Star, StarOff, Users, FlaskConical, Plus } from "lucide-react"
+import {
+  toggleDigestSubscription,
+  unfollowAccountAction,
+  followAccountAction,
+  type ResearchedAccount,
+} from "@/app/actions/v3/accounts"
 import type { FollowedAccountWithCompany } from "@/lib/v3/services/accounts"
 import { ScoreBadge } from "@/components/v3/score-badge"
 
 interface AccountsViewProps {
   accounts: FollowedAccountWithCompany[]
+  researched?: ResearchedAccount[]
 }
 
-export function AccountsView({ accounts }: AccountsViewProps) {
+export function AccountsView({ accounts, researched = [] }: AccountsViewProps) {
   const router = useRouter()
   const [search, setSearch] = useState("")
   const [isPending, startTransition] = useTransition()
@@ -63,6 +69,13 @@ export function AccountsView({ accounts }: AccountsViewProps) {
     startTransition(async () => {
       await unfollowAccountAction(unfollowTarget.company_id)
       setUnfollowTarget(null)
+      router.refresh()
+    })
+  }
+
+  const handleFollowResearched = (companyId: string) => {
+    startTransition(async () => {
+      await followAccountAction(companyId)
       router.refresh()
     })
   }
@@ -203,6 +216,78 @@ export function AccountsView({ accounts }: AccountsViewProps) {
             </Table>
           </CardContent>
         </Card>
+      )}
+
+      {researched.length > 0 && (
+        <div className="flex flex-col gap-3">
+          <div>
+            <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
+              <FlaskConical className="size-4 text-muted-foreground" />
+              Investigadas recientemente
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              Empresas investigadas en los últimos 30 días que todavía no seguís
+            </p>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+            {researched.map((r) => (
+              <Card key={r.companyId}>
+                <CardContent className="flex flex-col gap-3 p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <Link
+                      href={`/v3/accounts/${r.companyId}`}
+                      className="flex flex-col hover:underline"
+                    >
+                      <span className="font-medium">{r.companyName}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {[r.industry, r.country].filter(Boolean).join(" · ") || "—"}
+                      </span>
+                    </Link>
+                    <Badge variant="secondary" className="shrink-0">
+                      {new Date(r.researchedAt).toLocaleDateString("es", {
+                        day: "numeric",
+                        month: "short",
+                      })}
+                    </Badge>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5 text-sm">
+                    <span className="text-muted-foreground">
+                      {r.totalSignals} {r.totalSignals === 1 ? "señal" : "señales"}
+                    </span>
+                    {r.fitCount > 0 && (
+                      <Badge variant="outline" className="border-primary/40 text-primary">
+                        {r.fitCount} fit
+                      </Badge>
+                    )}
+                  </div>
+                  {r.topMatches.length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {r.topMatches.slice(0, 4).map((term) => (
+                        <Badge key={term} variant="secondary" className="text-xs font-normal">
+                          {term}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                  <div className="mt-auto flex items-center gap-2">
+                    <Button asChild size="sm" variant="outline" className="flex-1 bg-transparent">
+                      <Link href={`/v3/accounts/${r.companyId}`}>Ver detalle</Link>
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="flex-1"
+                      disabled={isPending}
+                      onClick={() => handleFollowResearched(r.companyId)}
+                    >
+                      <Plus data-icon="inline-start" />
+                      Seguir
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
       )}
 
       <AlertDialog open={!!unfollowTarget} onOpenChange={(open) => !open && setUnfollowTarget(null)}>

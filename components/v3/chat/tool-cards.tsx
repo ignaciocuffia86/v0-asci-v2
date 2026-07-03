@@ -39,6 +39,105 @@ function scoreBg(score: number): string {
 }
 
 // ─────────────────────────────────────────────
+// previewAccounts (cache + fit antes de encolar)
+// ─────────────────────────────────────────────
+export function PreviewAccountsCard({
+  output,
+  sendMessage,
+  isBusy,
+}: {
+  output: any
+  sendMessage: SendMessageFn
+  isBusy: boolean
+}) {
+  const previews: any[] = output?.previews ?? []
+  if (previews.length === 0) return null
+
+  const names = previews.map((p) => p.name).join(", ")
+  const hasCache = previews.some((p) => (p.totalSignals ?? 0) > 0)
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-border">
+      <div className="border-b border-border bg-muted/40 px-3 py-2 text-xs font-medium text-muted-foreground">
+        Señales en la base ({previews.length} {previews.length === 1 ? "cuenta" : "cuentas"})
+      </div>
+      <div className="divide-y divide-border">
+        {previews.map((p) => (
+          <div key={p.companyId} className="flex flex-col gap-2 px-3 py-2.5 text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <Link href={`/v3/accounts/${p.companyId}`} className="font-medium hover:underline">
+                {p.name}
+              </Link>
+              <span className="text-xs text-muted-foreground">
+                {p.totalSignals} {p.totalSignals === 1 ? "señal" : "señales"}
+              </span>
+              {p.fitCount > 0 && (
+                <Badge variant="outline" className="border-primary/40 text-xs text-primary">
+                  {p.fitCount} fit
+                </Badge>
+              )}
+              <span className="ml-auto text-xs text-muted-foreground">
+                {p.lastResearchAt
+                  ? `Último research: ${new Date(p.lastResearchAt).toLocaleDateString("es", { day: "numeric", month: "short" })}${p.isFresh ? " · fresco" : ""}`
+                  : "Sin research previo"}
+              </span>
+            </div>
+            {p.topMatches?.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {p.topMatches.slice(0, 5).map((term: string) => (
+                  <Badge key={term} variant="secondary" className="text-xs font-normal">
+                    {term}
+                  </Badge>
+                ))}
+              </div>
+            )}
+            {p.fitHighlights?.length > 0 && (
+              <ul className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+                {p.fitHighlights.map((h: any, i: number) => (
+                  <li key={i} className="truncate">
+                    · {h.title}
+                    {h.matchedTerms?.length > 0 && (
+                      <span className="text-primary"> ({h.matchedTerms.join(", ")})</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {!p.hasVendorProfile && p.totalSignals > 0 && (
+              <p className="text-xs text-amber-600 dark:text-amber-400">
+                Sin propuesta de valor cargada: el fit se calcula solo por diccionario.
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-2 border-t border-border bg-muted/20 px-3 py-2">
+        {hasCache && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 bg-transparent text-xs"
+            disabled={isBusy}
+            onClick={() => sendMessage({ text: `Usá el cache existente de ${names}, mostrame el resumen de cada cuenta sin re-investigar` })}
+          >
+            Usar cache
+          </Button>
+        )}
+        <Button
+          size="sm"
+          className="h-7 text-xs"
+          disabled={isBusy}
+          onClick={() => sendMessage({ text: `Investigá ${hasCache ? "de nuevo " : ""}${names} (refresh completo)` })}
+        >
+          <RefreshCw data-icon="inline-start" />
+          {hasCache ? "Refrescar investigación" : "Investigar"}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────
 // resolveCompanies
 // ─────────────────────────────────────────────
 export function ResolutionCard({
@@ -190,9 +289,19 @@ function BatchProgressInner({
           <div key={j.id} className="flex items-center gap-3 px-3 py-2 text-sm">
             <span className="min-w-0 flex-1 truncate font-medium">{j.companyInput}</span>
             {j.status === "completed" ? (
-              <Badge variant="secondary" className="gap-1 text-xs">
-                <Check className="size-3" /> Lista
-              </Badge>
+              <span className="flex items-center gap-2">
+                <Badge variant="secondary" className="gap-1 text-xs">
+                  <Check className="size-3" /> Lista
+                </Badge>
+                {j.companyId && (
+                  <Link
+                    href={`/v3/accounts/${j.companyId}`}
+                    className="text-xs text-primary hover:underline"
+                  >
+                    Ver cuenta
+                  </Link>
+                )}
+              </span>
             ) : j.status === "failed" ? (
               <span className="flex items-center gap-2">
                 <Badge variant="destructive" className="text-xs">
