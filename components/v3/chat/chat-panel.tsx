@@ -28,7 +28,7 @@ export function ChatPanel({
   const [input, setInput] = useState("")
   const conversationIdRef = useRef<string | null>(initialConversationId)
 
-  const { messages, sendMessage, status, stop } = useChat<V3ChatMessage>({
+  const { messages, sendMessage, status, stop, error, regenerate } = useChat<V3ChatMessage>({
     transport: new DefaultChatTransport({
       api: "/api/v3/chat",
       prepareSendMessagesRequest: ({ messages: msgs }) => ({
@@ -97,6 +97,17 @@ export function ChatPanel({
         </div>
       ) : (
         <ChatMessageList messages={messages} isBusy={isBusy} sendMessage={sendMessage} />
+      )}
+
+      {error && (
+        <div className="mx-auto w-full max-w-3xl px-4 pb-2">
+          <div className="flex items-start justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            <p className="text-pretty">{error.message || "Ocurrió un error al procesar tu mensaje."}</p>
+            <Button size="sm" variant="outline" className="shrink-0 bg-transparent" onClick={() => void regenerate()}>
+              Reintentar
+            </Button>
+          </div>
+        </div>
       )}
 
       {/* Input */}

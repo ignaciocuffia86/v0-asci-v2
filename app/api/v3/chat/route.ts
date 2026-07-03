@@ -326,6 +326,14 @@ export async function POST(req: Request) {
 
   return result.toUIMessageStreamResponse({
     originalMessages: messages,
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error("[v3] Error en el stream del chat:", message)
+      if (/credit|billing|payment|quota|insufficient/i.test(message)) {
+        return "El AI Gateway no tiene créditos disponibles. Cargá créditos en tu cuenta de Vercel (AI Gateway) y volvé a intentar."
+      }
+      return `Error del modelo: ${message}`
+    },
     onFinish: async ({ messages: finalMessages }) => {
       if (!conversationId) return
       try {
