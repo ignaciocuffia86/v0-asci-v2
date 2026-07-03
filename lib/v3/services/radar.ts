@@ -5,6 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin"
 import { loadDictionary, resolveProductByName, resolveProcessByName, suggestDictionaryTerm } from "./dictionary"
 import { MODELS, type RadarType } from "./types"
 import { logAiUsage } from "@/lib/v3/usage"
+import { getPrompt, renderPrompt } from "@/lib/v3/prompts"
 
 // ═══════════════════════════════════════════════════════════
 // Radar de dos etapas:
@@ -32,35 +33,15 @@ export interface RadarRunSummary {
   error?: string
 }
 
-/** Bundles temáticos (máx 5 corridas de Opus por cuenta). */
-const BUNDLES: { key: string; radarType: RadarType; focus: string }[] = [
-  {
-    key: "tech-stack",
-    radarType: "tech",
-    focus: `Stack tecnológico y sistemas empresariales de la empresa:
-- ERP, CRM, plataformas de datos/BI, cloud providers, sistemas core
-- Implementaciones o migraciones tecnológicas anunciadas o en curso
-- Partners tecnológicos e integradores con los que trabaja
-- Modernización de sistemas legacy`,
-  },
-  {
-    key: "news-business",
-    radarType: "news",
-    focus: `Noticias de negocio recientes (últimos 6 meses):
-- Anuncios de inversión, resultados financieros relevantes
-- Nuevos productos, servicios o líneas de negocio
-- Cambios ejecutivos (CIO, CTO, CDO, CFO, gerencias de tecnología/operaciones)
-- Fusiones, adquisiciones, alianzas estratégicas`,
-  },
-  {
-    key: "expansion-timing",
-    radarType: "news",
-    focus: `Señales de expansión y timing comercial:
-- Aperturas de plantas, oficinas, centros de distribución, nuevos mercados
-- Proyectos de transformación digital anunciados con fechas
-- Licitaciones o RFPs públicos de tecnología
-- Regulaciones nuevas del sector que fuercen inversión en sistemas`,
-  },
+/**
+ * Bundles temáticos (máx 5 corridas de Opus por cuenta).
+ * El texto del foco vive en v3.ai_prompts (editable desde /v3/admin/prompts)
+ * con fallback a los defaults de lib/v3/prompt-defaults.ts.
+ */
+const BUNDLES: { key: string; radarType: RadarType; promptKey: string }[] = [
+  { key: "tech-stack", radarType: "tech", promptKey: "radar.focus.tech" },
+  { key: "news-business", radarType: "news", promptKey: "radar.focus.news" },
+  { key: "expansion-timing", radarType: "news", promptKey: "radar.focus.expansion" },
 ]
 
 const findingSchema = z.object({
@@ -104,21 +85,11 @@ async function researchBundle(input: RadarBundleInput, focus: string, radarType:
     .filter(Boolean)
     .join("\n")
 
+  const prompt = await renderPrompt("radar.base", { context, focus })
+
   const { text, usage } = await generateText({
     model: MODELS.RESEARCH,
-    prompt: `Sos un analista de inteligencia comercial B2B. Investigá a fondo la siguiente empresa usando tu conocimiento y capacidad de búsqueda. Escribí un informe en texto libre, rico en detalles, citando fuentes y fechas cuando las conozcas.
-
-${context}
-
-FOCO DE ESTA INVESTIGACIÓN:
-${focus}
-
-REGLAS:
-- Escribí en español.
-- Incluí URLs de fuentes cuando las tengas; si no tenés certeza de una URL, no la inventes.
-- Marcá claramente qué es un hecho verificable y qué es una inferencia tuya.
-- Si no encontrás información sobre algún punto, decilo explícitamente en una línea y seguí.
-- Priorizá información de los últimos 6-12 meses.`,
+    prompt,
     temperature: 0.3,
     maxOutputTokens: 4096,
   })
@@ -189,7 +160,8 @@ export async function runRadarBundle(
   const dictionary = await loadDictionary()
 
   try {
-    const raw = await researchBundle(input, bundle.focus, bundle.radarType)
+    const focus = await getPrompt(bundle.promptKey)
+    const raw = await researchBundle(input, focus, bundle.radarType)
     const findings = await structureResearch(raw, bundle.radarType, input.companyId)
 
     // Persistir la corrida cruda (re-estructurable sin re-investigar)

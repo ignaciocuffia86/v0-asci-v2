@@ -4,6 +4,7 @@ import { loadDictionary } from "./dictionary"
 import { getRadarFindings } from "./radar"
 import { MODELS, type Scorecard } from "./types"
 import { logAiUsage } from "@/lib/v3/usage"
+import { renderPrompt } from "@/lib/v3/prompts"
 
 // ═══════════════════════════════════════════════════════════
 // Scorecard de cuenta (0-100) por workspace:
@@ -127,19 +128,18 @@ export async function computeScorecard(input: ScoreInput): Promise<Scorecard | n
       .slice(0, 8)
       .map((f) => `- [${f.evidence_level}] ${f.title}: ${f.summary ?? ""}`)
       .join("\n")
+    const prompt = await renderPrompt("scoring.rationale", {
+      companyName: input.companyName,
+      score,
+      vendorProfile: profile?.profile_summary ?? "sin perfil definido",
+      targetTechnologies: targetTechs.join(", ") || "ninguna",
+      matches: [...techMatches, ...procMatches].join(", ") || "ninguna",
+      subScores: `fit ${fitScore}, señales de compra ${buyingSignalsScore}, accesibilidad ${accessibilityScore} (${contactCount} contactos), timing ${timingScore}`,
+      topFindings: topFindings || "(sin hallazgos)",
+    })
     const { text, usage } = await generateText({
       model: MODELS.STRUCTURER,
-      prompt: `Redactá en español un rationale de 2-4 oraciones explicando por qué la cuenta "${input.companyName}" tiene un score de ${score}/100 para este vendor.
-
-Perfil del vendor: ${profile?.profile_summary ?? "sin perfil definido"}
-Tecnologías objetivo: ${targetTechs.join(", ") || "ninguna"}
-Coincidencias detectadas: ${[...techMatches, ...procMatches].join(", ") || "ninguna"}
-Sub-scores: fit ${fitScore}, señales de compra ${buyingSignalsScore}, accesibilidad ${accessibilityScore} (${contactCount} contactos), timing ${timingScore}.
-
-Hallazgos principales:
-${topFindings || "(sin hallazgos)"}
-
-Sé concreto y accionable, sin relleno. Solo el texto del rationale.`,
+      prompt,
       temperature: 0.2,
       maxOutputTokens: 300,
     })

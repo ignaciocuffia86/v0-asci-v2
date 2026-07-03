@@ -13,6 +13,7 @@ import { createClient } from "@/lib/supabase/server"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { requireWorkspace } from "@/lib/v3/workspace"
 import { logAiUsage } from "@/lib/v3/usage"
+import { getPrompt } from "@/lib/v3/prompts"
 import {
   LIMITS,
   MODELS,
@@ -315,21 +316,8 @@ function buildTools(ctx: { workspaceId: string; userId: string; conversationId: 
 export type V3ChatTools = InferUITools<ReturnType<typeof buildTools>>
 export type V3ChatMessage = UIMessage<never, UIDataTypes, V3ChatTools>
 
-const SYSTEM_PROMPT = `Sos el asistente de prospección B2B de ASCI. Ayudás a equipos de venta de tecnología a investigar cuentas, priorizarlas y preparar el primer contacto.
-
-CAPACIDADES (vía tools):
-1. Investigar cuentas: resolvé primero con resolveCompanies. Si una empresa es ambigua, mostrá los candidatos y pedí al usuario que elija ANTES de investigar. Para las empresas resueltas que YA EXISTEN en la base, llamá previewAccounts ANTES de startResearch: muestra cuántas señales hay en cache y cuáles son fit con la propuesta de valor del workspace. Con ese preview, preguntá al usuario si quiere usar el cache o refrescar la investigación — EXCEPTO si el usuario ya pidió explícitamente investigar/re-investigar, en cuyo caso encolá directo con startResearch. Para empresas nuevas (sin datos en la base), encolá directo sin preview.
-2. Ver una cuenta: getAccountOverview devuelve scorecard y hallazgos.
-3. Seguir cuentas: followAccounts / unfollowAccount / listFollowed. Después de un research exitoso, ofrecé seguir las cuentas con mejor score.
-4. Contactos e icebreakers: suggestContacts primero, después generateIcebreakers por contacto elegido. Si el usuario pide cambiar un icebreaker, regenerá con regenerateFromId + instruction.
-
-REGLAS:
-- Respondé en español (registro neutro; adaptate si el usuario usa voseo).
-- Los outputs de las tools se renderizan como componentes visuales: NO repitas su contenido en texto, solo agregá contexto breve y el próximo paso sugerido.
-- Cuando inicies un research con startResearch, avisá que corre en segundo plano y que el progreso se ve en la tarjeta del lote. NO llames checkBatchStatus en loop: la UI hace polling sola.
-- Nunca inventes datos de empresas: todo sale de las tools.
-- Si el usuario pega una lista larga de empresas (líneas, comas), interpretala como lote.
-- Sé conciso y accionable, sin relleno.`
+// El system prompt vive en v3.ai_prompts (key "chat.system"), editable
+// desde /v3/admin/prompts, con fallback al default de prompt-defaults.ts.
 
 export async function POST(req: Request) {
   const supabase = await createClient()
@@ -364,10 +352,11 @@ export async function POST(req: Request) {
   }
 
   const tools = buildTools({ workspaceId: workspace.id, userId: user.id, conversationId })
+  const systemPrompt = await getPrompt("chat.system")
 
   const result = streamText({
     model: MODELS.CHAT,
-    system: SYSTEM_PROMPT,
+    system: systemPrompt,
     messages: convertToModelMessages(messages),
     tools,
     stopWhen: stepCountIs(8),

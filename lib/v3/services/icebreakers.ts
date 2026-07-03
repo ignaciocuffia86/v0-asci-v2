@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin"
 import { getRadarFindings } from "./radar"
 import { MODELS, type Icebreaker } from "./types"
 import { logAiUsage } from "@/lib/v3/usage"
+import { renderPrompt } from "@/lib/v3/prompts"
 
 // ═══════════════════════════════════════════════════════════
 // Icebreakers por contacto, regionalizados por país:
@@ -104,27 +105,17 @@ INSTRUCCIÓN DEL USUARIO: ${req.regenerateFrom.instruction}\n`
     : ""
 
   try {
+    const prompt = await renderPrompt("icebreaker.main", {
+      contactBlock: `${req.contact.name}${req.contact.title ? `, ${req.contact.title}` : ""} en ${req.companyName}${req.contact.country ? ` (${req.contact.country})` : ""}`,
+      registerInstructions: instructions,
+      vendorProfile: profile?.profile_summary ?? "Servicios de tecnología B2B",
+      evidence: evidenceLines || "(sin hallazgos: personalizá por rol e industria)",
+      regenerationBlock,
+    })
+
     const { text, usage } = await generateText({
       model: MODELS.WRITER,
-      prompt: `Escribí un icebreaker de cold outreach (2-4 oraciones, máx 80 palabras) para iniciar conversación con este contacto. Es el primer mensaje de un email o LinkedIn.
-
-CONTACTO: ${req.contact.name}${req.contact.title ? `, ${req.contact.title}` : ""} en ${req.companyName}${req.contact.country ? ` (${req.contact.country})` : ""}
-
-REGISTRO DE LENGUAJE: ${instructions}
-
-QUÉ VENDE EL REMITENTE:
-${profile?.profile_summary ?? "Servicios de tecnología B2B"}
-
-EVIDENCIA SOBRE LA EMPRESA DEL CONTACTO (usá 1-2 puntos, los más relevantes al rol del contacto):
-${evidenceLines || "(sin hallazgos: personalizá por rol e industria)"}
-${regenerationBlock}
-REGLAS:
-- Arrancá con el dato concreto de la empresa (no con "Hola, soy...").
-- NO vendas todavía: el objetivo es abrir conversación con una observación inteligente.
-- NO uses halagos genéricos ("impresionante crecimiento") ni jerga de ventas.
-- Solo mencioná datos que estén en la evidencia. Nunca inventes hechos, cifras ni noticias.
-- Cerrá con una pregunta corta y específica ligada al rol del contacto.
-- Devolvé SOLO el texto del icebreaker, sin asunto ni firma.`,
+      prompt,
       temperature: 0.6,
       maxOutputTokens: 400,
     })
