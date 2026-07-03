@@ -22,8 +22,18 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts"
+import { ChartTooltipContent } from "@/components/ui/chart"
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts"
 import { DollarSign, MessageSquare, Search, PenLine, Users, Zap, Loader2 } from "lucide-react"
 
 const FEATURE_LABELS: Record<string, string> = {
@@ -160,31 +170,34 @@ export function UsageDashboard({ initialReport }: { initialReport: UsageReport }
             <CardTitle className="text-sm font-medium">Costo diario (USD)</CardTitle>
           </CardHeader>
           <CardContent>
-            <ChartContainer
-              config={{ costUsd: { label: "Costo USD", color: "var(--chart-1)" } }}
-              className="h-56 w-full"
-            >
-              <AreaChart data={daily} margin={{ left: 0, right: 8, top: 8 }}>
-                <CartesianGrid vertical={false} strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="date"
-                  tickLine={false}
-                  axisLine={false}
-                  tickFormatter={(d: string) => d.slice(5)}
-                  minTickGap={24}
-                />
-                <YAxis tickLine={false} axisLine={false} width={52} tickFormatter={(v: number) => `$${v}`} />
-                <ChartTooltip content={<ChartTooltipContent />} />
-                <Area
-                  dataKey="costUsd"
-                  type="monotone"
-                  fill="var(--color-costUsd)"
-                  fillOpacity={0.2}
-                  stroke="var(--color-costUsd)"
-                  strokeWidth={2}
-                />
-              </AreaChart>
-            </ChartContainer>
+            <div className="h-56 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={daily} margin={{ left: 0, right: 8, top: 8 }}>
+                  <CartesianGrid vertical={false} strokeDasharray="3 3" />
+                  <XAxis
+                    dataKey="date"
+                    tickLine={false}
+                    axisLine={false}
+                    tickFormatter={(d: string) => d.slice(5)}
+                    minTickGap={24}
+                  />
+                  <YAxis tickLine={false} axisLine={false} width={52} tickFormatter={(v: number) => `$${v}`} />
+                  <Tooltip
+                    content={<ChartTooltipContent valueFormatter={(v) => fmtUsd(v)} />}
+                    cursor={{ stroke: "var(--border)" }}
+                  />
+                  <Area
+                    dataKey="costUsd"
+                    name="Costo USD"
+                    type="monotone"
+                    fill="var(--chart-1)"
+                    fillOpacity={0.2}
+                    stroke="var(--chart-1)"
+                    strokeWidth={2}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
           </CardContent>
         </Card>
 
@@ -193,24 +206,26 @@ export function UsageDashboard({ initialReport }: { initialReport: UsageReport }
             <CardTitle className="text-sm font-medium">Llamadas de IA por día</CardTitle>
           </CardHeader>
           <CardContent>
-            <ChartContainer
-              config={{ calls: { label: "Llamadas", color: "var(--chart-2)" } }}
-              className="h-56 w-full"
-            >
-              <BarChart data={daily} margin={{ left: 0, right: 8, top: 8 }}>
-                <CartesianGrid vertical={false} strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="date"
-                  tickLine={false}
-                  axisLine={false}
-                  tickFormatter={(d: string) => d.slice(5)}
-                  minTickGap={24}
-                />
-                <YAxis tickLine={false} axisLine={false} width={40} allowDecimals={false} />
-                <ChartTooltip content={<ChartTooltipContent />} />
-                <Bar dataKey="calls" fill="var(--color-calls)" radius={[3, 3, 0, 0]} />
-              </BarChart>
-            </ChartContainer>
+            <div className="h-56 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={daily} margin={{ left: 0, right: 8, top: 8 }}>
+                  <CartesianGrid vertical={false} strokeDasharray="3 3" />
+                  <XAxis
+                    dataKey="date"
+                    tickLine={false}
+                    axisLine={false}
+                    tickFormatter={(d: string) => d.slice(5)}
+                    minTickGap={24}
+                  />
+                  <YAxis tickLine={false} axisLine={false} width={40} allowDecimals={false} />
+                  <Tooltip
+                    content={<ChartTooltipContent valueFormatter={(v) => fmtInt(v)} />}
+                    cursor={{ fill: "var(--muted)" }}
+                  />
+                  <Bar dataKey="calls" name="Llamadas" fill="var(--chart-2)" radius={[3, 3, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </CardContent>
         </Card>
       </div>

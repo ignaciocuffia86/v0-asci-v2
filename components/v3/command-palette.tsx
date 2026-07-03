@@ -16,10 +16,11 @@ import {
   Settings, 
   MessageSquare,
   Star,
-  Key
+  Key,
+  ShieldCheck
 } from "lucide-react"
 
-export function CommandPalette() {
+export function CommandPalette({ isSuperAdmin }: { isSuperAdmin?: boolean }) {
   const [open, setOpen] = useState(false)
   const router = useRouter()
 
@@ -93,6 +94,32 @@ export function CommandPalette() {
             API Keys
           </CommandItem>
         </CommandGroup>
+
+        {isSuperAdmin && (
+          <>
+            <CommandSeparator />
+            <CommandGroup heading="Administracion">
+              <CommandItem
+                onSelect={() => runCommand(() => router.push("/v3/admin/usage"))}
+              >
+                <ShieldCheck className="mr-2 size-4" />
+                Dashboard de uso
+              </CommandItem>
+              <CommandItem
+                onSelect={() => runCommand(() => router.push("/v3/admin/workspaces"))}
+              >
+                <ShieldCheck className="mr-2 size-4" />
+                Workspaces
+              </CommandItem>
+              <CommandItem
+                onSelect={() => runCommand(() => router.push("/v3/admin/users"))}
+              >
+                <ShieldCheck className="mr-2 size-4" />
+                Usuarios
+              </CommandItem>
+            </CommandGroup>
+          </>
+        )}
       </CommandList>
     </CommandDialog>
   )

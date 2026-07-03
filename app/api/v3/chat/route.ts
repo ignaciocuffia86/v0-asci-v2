@@ -289,7 +289,7 @@ export async function POST(req: Request) {
   } = await supabase.auth.getUser()
   if (!user) return new Response("Unauthorized", { status: 401 })
 
-  let workspace
+  let workspace: Awaited<ReturnType<typeof requireWorkspace>>
   try {
     workspace = await requireWorkspace(user.id)
   } catch {

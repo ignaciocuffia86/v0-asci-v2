@@ -56,6 +56,7 @@ export function V3Navbar({ user, workspace, isSuperAdmin }: V3NavbarProps) {
     { href: "/v3/chat", label: "Chat", icon: MessageSquare },
     { href: "/v3/accounts", label: "Cuentas", icon: Star },
     { href: "/v3/docs", label: "Documentos", icon: FileText },
+    ...(isSuperAdmin ? [{ href: "/v3/admin", label: "Admin", icon: ShieldCheck }] : []),
   ]
   
   return (
