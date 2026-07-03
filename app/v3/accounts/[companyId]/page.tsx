@@ -1,6 +1,6 @@
 import { notFound, redirect } from "next/navigation"
 import { getOnboardingStatus } from "@/app/actions/v3/workspace"
-import { getAccountDetail } from "@/app/actions/v3/accounts"
+import { getAccountDetail, getAccountSignals } from "@/app/actions/v3/accounts"
 import { AccountDetailView } from "./_components/account-detail-view"
 
 export const metadata = {
@@ -18,8 +18,11 @@ export default async function V3AccountDetailPage({
   if (status.status === "no_workspace") redirect("/v3/onboarding")
   if (status.status !== "active_member") redirect("/v3/onboarding")
 
-  const detail = await getAccountDetail(companyId)
+  const [detail, signals] = await Promise.all([
+    getAccountDetail(companyId),
+    getAccountSignals(companyId).catch(() => null),
+  ])
   if (!detail.company) notFound()
 
-  return <AccountDetailView detail={detail} />
+  return <AccountDetailView detail={detail} signals={signals} />
 }

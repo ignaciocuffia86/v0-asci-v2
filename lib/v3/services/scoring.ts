@@ -22,6 +22,53 @@ import { renderPrompt } from "@/lib/v3/prompts"
 
 const clamp = (n: number) => Math.max(0, Math.min(100, Math.round(n)))
 
+// ── Timing ponderado: peso por tipo de evento + decaimiento por antigüedad ──
+
+export interface TimingEvent {
+  title: string
+  eventType: string
+  weight: number
+  decay: number
+  points: number
+  date: string | null
+}
+
+const TIMING_RULES: { type: string; weight: number; patterns: RegExp }[] = [
+  {
+    type: "Expansión / inversión",
+    weight: 25,
+    patterns:
+      /expansi[oó]n|inversi[oó]n|planta|f[aá]brica|apertura|nuevo mercado|adquisici[oó]n|fusi[oó]n|m&a|centro de distribuci[oó]n|licitaci[oó]n|rfp/i,
+  },
+  {
+    type: "Cambio ejecutivo",
+    weight: 20,
+    patterns: /\bcio\b|\bcto\b|\bcdo\b|\bcfo\b|\bceo\b|nombramiento|nuevo director|nueva director|gerente de|ejecutiv/i,
+  },
+  {
+    type: "Implementación tecnológica",
+    weight: 15,
+    patterns: /implementaci[oó]n|migraci[oó]n|moderniza|transformaci[oó]n digital|erp|crm|sap|oracle|cloud|nube/i,
+  },
+]
+
+function classifyTimingEvent(title: string, summary: string | null, evidenceLevel: string | null) {
+  if (evidenceLevel === "inferred") return { type: "Inferido", weight: 5 }
+  const text = `${title} ${summary ?? ""}`
+  for (const rule of TIMING_RULES) {
+    if (rule.patterns.test(text)) return { type: rule.type, weight: rule.weight }
+  }
+  return { type: "Noticia general", weight: 8 }
+}
+
+function timingDecay(dateMs: number): number {
+  const ageDays = (Date.now() - dateMs) / (24 * 60 * 60 * 1000)
+  if (ageDays <= 30) return 1.0
+  if (ageDays <= 60) return 0.7
+  if (ageDays <= 90) return 0.4
+  return 0
+}
+
 export interface ScoreInput {
   workspaceId: string
   companyId: string
@@ -109,13 +156,27 @@ export async function computeScorecard(input: ScoreInput): Promise<Scorecard | n
   ).length
   const accessibilityScore = clamp(contactCount * 10 + seniorCount * 10)
 
-  // ── TIMING: recencia de hallazgos (90 días) ──
-  const ninetyDaysAgo = Date.now() - 90 * 24 * 60 * 60 * 1000
-  const recentFindings = findings.filter((f) => {
-    const d = f.source_date ? new Date(f.source_date).getTime() : new Date(f.detected_at).getTime()
-    return d >= ninetyDaysAgo
-  }).length
-  const timingScore = clamp(recentFindings * 15)
+  // ── TIMING: eventos ponderados por tipo con decaimiento por antigüedad ──
+  const timingEvents: TimingEvent[] = []
+  for (const f of findings) {
+    const dateStr = f.source_date ?? f.detected_at
+    const dateMs = new Date(dateStr).getTime()
+    if (Number.isNaN(dateMs)) continue
+    const decay = timingDecay(dateMs)
+    if (decay === 0) continue
+    const { type, weight } = classifyTimingEvent(f.title, f.summary ?? null, f.evidence_level ?? null)
+    timingEvents.push({
+      title: f.title,
+      eventType: type,
+      weight,
+      decay,
+      points: Math.round(weight * decay * 10) / 10,
+      date: f.source_date ?? null,
+    })
+  }
+  timingEvents.sort((a, b) => b.points - a.points)
+  const timingScore = clamp(timingEvents.reduce((sum, e) => sum + e.points, 0))
+  const recentFindings = timingEvents.length
 
   const score = clamp(
     fitScore * 0.35 + buyingSignalsScore * 0.35 + accessibilityScore * 0.15 + timingScore * 0.15
@@ -181,6 +242,31 @@ export async function computeScorecard(input: ScoreInput): Promise<Scorecard | n
         legacy_signals: legacySignals,
         contacts: contactCount,
         recent_findings: recentFindings,
+        // Desglose auditable por pilar (para los tooltips del scorecard)
+        breakdown: {
+          fit: {
+            target_total: totalTargets,
+            matches: [...techMatches, ...procMatches],
+            detected_technologies: [...detectedTechNames].slice(0, 12),
+            no_profile: totalTargets === 0,
+          },
+          signals: {
+            explicit: explicitCount,
+            inferred: inferredCount,
+            legacy: legacySignals,
+            formula: `${explicitCount} explícitas ×12 + ${inferredCount} inferidas ×5 + ${Math.min(legacySignals, 10)} legacy ×2`,
+            top_titles: findings.slice(0, 5).map((f) => f.title),
+          },
+          accessibility: {
+            contacts: contactCount,
+            senior: seniorCount,
+            formula: `${contactCount} contactos ×10 + ${seniorCount} senior ×10`,
+          },
+          timing: {
+            events: timingEvents.slice(0, 8),
+            total_events: timingEvents.length,
+          },
+        },
       },
     })
     .select("*")
