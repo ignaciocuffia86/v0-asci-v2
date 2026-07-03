@@ -5,6 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin"
 import { loadDictionary, matchTextAgainstDictionary, resolveProductByName, suggestDictionaryTerm } from "./dictionary"
 import { MODELS } from "./types"
 import type { DictionaryMatch } from "./types"
+import { logAiUsage } from "@/lib/v3/usage"
 
 // ═══════════════════════════════════════════════════════════
 // Intérprete de vacantes en 2 capas:
@@ -104,7 +105,7 @@ ${desc ? `   Extracto: ${desc}` : ""}`
     .join("\n\n")
 
   try {
-    const { object } = await generateObject({
+    const { object, usage } = await generateObject({
       model: MODELS.STRUCTURER,
       schema: jobsInferenceSchema,
       prompt: `Sos un analista de inteligencia comercial B2B. A continuación tenés TODAS las vacantes activas de la empresa "${companyName}". Leelas EN CONJUNTO (no una por una) y deducí qué está construyendo, migrando o adoptando la empresa.
@@ -121,6 +122,15 @@ REGLAS:
 - Máximo 8 inferencias, priorizá las más accionables para venta B2B de tecnología.
 - Escribí en español.`,
       temperature: 0.1,
+    })
+
+    await logAiUsage({
+      feature: "jobs-interpretation",
+      model: MODELS.STRUCTURER,
+      inputTokens: usage?.inputTokens,
+      outputTokens: usage?.outputTokens,
+      companyId,
+      metadata: { postings: annotated.length },
     })
 
     // Persistir inferencias en el cache global

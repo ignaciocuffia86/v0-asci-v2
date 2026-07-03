@@ -4,6 +4,7 @@ import { z } from "zod"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { loadDictionary, resolveProductByName, resolveProcessByName, suggestDictionaryTerm } from "./dictionary"
 import { MODELS, type RadarType } from "./types"
+import { logAiUsage } from "@/lib/v3/usage"
 
 // ═══════════════════════════════════════════════════════════
 // Radar de dos etapas:
@@ -93,7 +94,7 @@ const findingSchema = z.object({
 })
 
 /** Etapa A: investigación en texto libre con Opus. */
-async function researchBundle(input: RadarBundleInput, focus: string): Promise<string> {
+async function researchBundle(input: RadarBundleInput, focus: string, radarType: RadarType): Promise<string> {
   const context = [
     `Empresa: ${input.companyName}`,
     input.domain ? `Sitio web: ${input.domain}` : null,
@@ -103,7 +104,7 @@ async function researchBundle(input: RadarBundleInput, focus: string): Promise<s
     .filter(Boolean)
     .join("\n")
 
-  const { text } = await generateText({
+  const { text, usage } = await generateText({
     model: MODELS.RESEARCH,
     prompt: `Sos un analista de inteligencia comercial B2B. Investigá a fondo la siguiente empresa usando tu conocimiento y capacidad de búsqueda. Escribí un informe en texto libre, rico en detalles, citando fuentes y fechas cuando las conozcas.
 
@@ -122,12 +123,21 @@ REGLAS:
     maxOutputTokens: 4096,
   })
 
+  await logAiUsage({
+    feature: radarType === "news" ? "radar-news" : "radar-tech",
+    model: MODELS.RESEARCH,
+    inputTokens: usage?.inputTokens,
+    outputTokens: usage?.outputTokens,
+    companyId: input.companyId,
+    metadata: { stage: "research" },
+  })
+
   return text
 }
 
 /** Etapa B: estructuración con Gemini + generateObject. */
-async function structureResearch(raw: string, radarType: RadarType) {
-  const { object } = await generateObject({
+async function structureResearch(raw: string, radarType: RadarType, companyId?: string) {
+  const { object, usage } = await generateObject({
     model: MODELS.STRUCTURER,
     schema: findingSchema,
     prompt: `Extraé los hallazgos concretos del siguiente informe de inteligencia comercial. Cada hallazgo debe ser un hecho o inferencia accionable sobre la empresa investigada. Descartá relleno, disclaimers y secciones donde el informe dice que no encontró información.
@@ -144,6 +154,16 @@ REGLAS:
 - technologies y processes: nombres de mercado estándar (ej: "SAP S/4HANA", no "el ERP de SAP").`,
     temperature: 0,
   })
+
+  await logAiUsage({
+    feature: radarType === "news" ? "radar-news" : "radar-tech",
+    model: MODELS.STRUCTURER,
+    inputTokens: usage?.inputTokens,
+    outputTokens: usage?.outputTokens,
+    companyId: companyId ?? null,
+    metadata: { stage: "structure" },
+  })
+
   return object.findings
 }
 
@@ -169,8 +189,8 @@ export async function runRadarBundle(
   const dictionary = await loadDictionary()
 
   try {
-    const raw = await researchBundle(input, bundle.focus)
-    const findings = await structureResearch(raw, bundle.radarType)
+    const raw = await researchBundle(input, bundle.focus, bundle.radarType)
+    const findings = await structureResearch(raw, bundle.radarType, input.companyId)
 
     // Persistir la corrida cruda (re-estructurable sin re-investigar)
     const { data: run } = await admin

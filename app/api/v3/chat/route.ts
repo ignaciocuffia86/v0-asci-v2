@@ -12,6 +12,7 @@ import { z } from "zod"
 import { createClient } from "@/lib/supabase/server"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { requireWorkspace } from "@/lib/v3/workspace"
+import { logAiUsage } from "@/lib/v3/usage"
 import {
   LIMITS,
   MODELS,
@@ -322,6 +323,17 @@ export async function POST(req: Request) {
     tools,
     stopWhen: stepCountIs(8),
     temperature: 0.3,
+    onFinish: async ({ totalUsage }) => {
+      await logAiUsage({
+        workspaceId: workspace.id,
+        userId: user.id,
+        feature: "chat",
+        model: MODELS.CHAT,
+        inputTokens: totalUsage?.inputTokens,
+        outputTokens: totalUsage?.outputTokens,
+        conversationId,
+      })
+    },
   })
 
   return result.toUIMessageStreamResponse({

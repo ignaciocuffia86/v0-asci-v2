@@ -8,7 +8,8 @@ import {
   LogOut,
   Sparkles,
   MessageSquare,
-  Star
+  Star,
+  ShieldCheck
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -34,9 +35,10 @@ interface V3NavbarProps {
   workspace?: {
     name: string
   } | null
+  isSuperAdmin?: boolean
 }
 
-export function V3Navbar({ user, workspace }: V3NavbarProps) {
+export function V3Navbar({ user, workspace, isSuperAdmin }: V3NavbarProps) {
   const pathname = usePathname()
   const router = useRouter()
   

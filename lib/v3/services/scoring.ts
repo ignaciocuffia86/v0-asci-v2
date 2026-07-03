@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin"
 import { loadDictionary } from "./dictionary"
 import { getRadarFindings } from "./radar"
 import { MODELS, type Scorecard } from "./types"
+import { logAiUsage } from "@/lib/v3/usage"
 
 // ═══════════════════════════════════════════════════════════
 // Scorecard de cuenta (0-100) por workspace:
@@ -126,7 +127,7 @@ export async function computeScorecard(input: ScoreInput): Promise<Scorecard | n
       .slice(0, 8)
       .map((f) => `- [${f.evidence_level}] ${f.title}: ${f.summary ?? ""}`)
       .join("\n")
-    const { text } = await generateText({
+    const { text, usage } = await generateText({
       model: MODELS.STRUCTURER,
       prompt: `Redactá en español un rationale de 2-4 oraciones explicando por qué la cuenta "${input.companyName}" tiene un score de ${score}/100 para este vendor.
 
@@ -143,6 +144,14 @@ Sé concreto y accionable, sin relleno. Solo el texto del rationale.`,
       maxOutputTokens: 300,
     })
     if (text.trim()) rationale = text.trim()
+    await logAiUsage({
+      workspaceId: input.workspaceId,
+      feature: "scoring",
+      model: MODELS.STRUCTURER,
+      inputTokens: usage?.inputTokens,
+      outputTokens: usage?.outputTokens,
+      companyId: input.companyId,
+    })
   } catch {
     // rationale determinístico como fallback
   }

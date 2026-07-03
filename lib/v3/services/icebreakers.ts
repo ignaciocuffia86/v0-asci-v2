@@ -2,6 +2,7 @@ import { generateText } from "ai"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { getRadarFindings } from "./radar"
 import { MODELS, type Icebreaker } from "./types"
+import { logAiUsage } from "@/lib/v3/usage"
 
 // ═══════════════════════════════════════════════════════════
 // Icebreakers por contacto, regionalizados por país:
@@ -103,7 +104,7 @@ INSTRUCCIÓN DEL USUARIO: ${req.regenerateFrom.instruction}\n`
     : ""
 
   try {
-    const { text } = await generateText({
+    const { text, usage } = await generateText({
       model: MODELS.WRITER,
       prompt: `Escribí un icebreaker de cold outreach (2-4 oraciones, máx 80 palabras) para iniciar conversación con este contacto. Es el primer mensaje de un email o LinkedIn.
 
@@ -126,6 +127,17 @@ REGLAS:
 - Devolvé SOLO el texto del icebreaker, sin asunto ni firma.`,
       temperature: 0.6,
       maxOutputTokens: 400,
+    })
+
+    await logAiUsage({
+      workspaceId: req.workspaceId,
+      userId: req.createdBy,
+      feature: "icebreaker",
+      model: MODELS.WRITER,
+      inputTokens: usage?.inputTokens,
+      outputTokens: usage?.outputTokens,
+      companyId: req.companyId,
+      metadata: { regenerated: Boolean(req.regenerateFrom) },
     })
 
     const content = text.trim()
