@@ -10,7 +10,7 @@ export default async function OnboardingPage() {
     if (!status.hasDocuments) {
       redirect("/v3/docs")
     }
-    redirect("/v3/campaigns")
+    redirect("/v3/chat")
   }
 
   return (
