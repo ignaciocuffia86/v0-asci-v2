@@ -37,21 +37,38 @@ export async function GET(request: Request) {
   const cutoff = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString()
 
   // Cuentas que tocan hoy y no fueron refrescadas en los últimos 20 días
-  const { data: accounts, error } = await admin
+  const { data: allAccounts, error } = await admin
     .schema("v3")
     .from("followed_accounts")
     .select("id, workspace_id, company_id, followed_by, last_refreshed_at")
     .eq("is_active", true)
     .eq("refresh_day", today)
     .or(`last_refreshed_at.is.null,last_refreshed_at.lt.${cutoff}`)
-    .limit(MAX_ACCOUNTS_PER_RUN)
+    .limit(MAX_ACCOUNTS_PER_RUN * 3)
 
   if (error) {
     console.error("[v3-cron] Error listando cuentas:", error.message)
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
-  if (!accounts || accounts.length === 0) {
+  // El refresh automático es solo para planes pagos: excluir workspaces trial
+  let accounts = allAccounts ?? []
+  if (accounts.length > 0) {
+    const workspaceIds = [...new Set(accounts.map((a) => a.workspace_id))]
+    const { data: workspaces } = await admin
+      .schema("v3")
+      .from("workspaces")
+      .select("id, plan")
+      .in("id", workspaceIds)
+    const cronEnabled = new Set(
+      (workspaces ?? []).filter((w) => w.plan !== "trial").map((w) => w.id)
+    )
+    accounts = accounts
+      .filter((a) => cronEnabled.has(a.workspace_id))
+      .slice(0, MAX_ACCOUNTS_PER_RUN)
+  }
+
+  if (accounts.length === 0) {
     return NextResponse.json({ success: true, processed: 0 })
   }
 
@@ -79,6 +96,7 @@ export async function GET(request: Request) {
         userId: account.followed_by,
         inputs: [company.name],
         forceRefresh: true,
+        source: "cron",
       })
 
       if ("error" in batch) {

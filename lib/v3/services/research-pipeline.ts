@@ -17,21 +17,67 @@ import { LIMITS, type ResearchJob } from "./types"
 // pueda hacer polling y mostrar avance en vivo.
 // ═══════════════════════════════════════════════════════════
 
-/** Crea los jobs de un lote (hasta MAX_BATCH_SIZE cuentas). */
+export interface BlockedResearchInput {
+  input: string
+  reason: string
+}
+
+/**
+ * Crea los jobs de un lote (hasta MAX_BATCH_SIZE cuentas).
+ * source="user" aplica las cuotas del plan del workspace; source="cron"
+ * las omite (el refresh automático no consume cupo del tenant).
+ */
 export async function createResearchBatch(params: {
   workspaceId: string
   userId: string
   conversationId?: string | null
   inputs: string[]
   forceRefresh?: boolean
-}): Promise<{ batchId: string; jobs: ResearchJob[] } | { error: string }> {
+  source?: "user" | "cron"
+}): Promise<
+  | { batchId: string; jobs: ResearchJob[]; blocked: BlockedResearchInput[] }
+  | { error: string; blocked?: BlockedResearchInput[] }
+> {
   const admin = createAdminClient()
-  const inputs = params.inputs
+  const source = params.source ?? "user"
+  let inputs = params.inputs
     .map((i) => i.trim())
     .filter(Boolean)
     .slice(0, LIMITS.MAX_BATCH_SIZE)
 
   if (inputs.length === 0) return { error: "No se recibieron cuentas para investigar" }
+
+  const blocked: BlockedResearchInput[] = []
+
+  if (source === "user") {
+    // ── Cuotas del plan: resolver companyId best-effort por nombre exacto ──
+    const { checkResearchQuota } = await import("@/lib/v3/plans")
+    const companies = await Promise.all(
+      inputs.map(async (input) => {
+        const { data } = await admin
+          .from("companies")
+          .select("id")
+          .ilike("name", input)
+          .limit(1)
+          .maybeSingle()
+        return { input, companyId: (data?.id as string) ?? null }
+      })
+    )
+
+    const quota = await checkResearchQuota({ workspaceId: params.workspaceId, companies })
+    for (const item of quota.items) {
+      if (!item.allowed && item.reason) blocked.push({ input: item.input, reason: item.reason })
+    }
+    const allowedInputs = new Set(quota.items.filter((i) => i.allowed).map((i) => i.input))
+    inputs = inputs.filter((i) => allowedInputs.has(i))
+
+    if (inputs.length === 0) {
+      return {
+        error: blocked[0]?.reason ?? "El plan del workspace no permite investigar estas cuentas",
+        blocked,
+      }
+    }
+  }
 
   const batchId = crypto.randomUUID()
   const rows = inputs.map((input) => ({
@@ -41,6 +87,7 @@ export async function createResearchBatch(params: {
     company_input: input,
     force_refresh: params.forceRefresh ?? false,
     requested_by: params.userId,
+    source,
   }))
 
   const { data, error } = await admin
@@ -51,9 +98,9 @@ export async function createResearchBatch(params: {
 
   if (error || !data) {
     console.error("[v3] Error creando batch de research:", error?.message)
-    return { error: "No se pudo crear el lote de investigación" }
+    return { error: "No se pudo crear el lote de investigación", blocked }
   }
-  return { batchId, jobs: data as ResearchJob[] }
+  return { batchId, jobs: data as ResearchJob[], blocked }
 }
 
 async function updateJob(

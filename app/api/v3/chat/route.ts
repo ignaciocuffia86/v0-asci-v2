@@ -65,8 +65,25 @@ function buildTools(ctx: { workspaceId: string; userId: string; conversationId: 
     }),
     execute: async ({ companies }) => {
       const { summarizeCachedSignals } = await import("@/lib/v3/services/fit")
+      const { checkResearchQuota, getWorkspaceUsage } = await import("@/lib/v3/plans")
+
+      const [quota, usage] = await Promise.all([
+        checkResearchQuota({
+          workspaceId: ctx.workspaceId,
+          companies: companies.map((c) => ({ input: c.name, companyId: c.companyId })),
+        }),
+        getWorkspaceUsage(ctx.workspaceId),
+      ])
+      const quotaByCompany = new Map(quota.items.map((i) => [i.companyId, i]))
+
       const previews = await Promise.all(
         companies.map(async (c) => {
+          const q = quotaByCompany.get(c.companyId)
+          const quotaInfo = {
+            researchAllowed: q?.allowed ?? true,
+            researchBlockedReason: q?.reason ?? null,
+            nextAutoRefreshDate: q?.nextAutoRefreshDate ?? null,
+          }
           try {
             const s = await summarizeCachedSignals(c.companyId, ctx.workspaceId)
             return {
@@ -82,6 +99,7 @@ function buildTools(ctx: { workspaceId: string; userId: string; conversationId: 
               lastResearchAt: s.lastResearchAt,
               isFresh: s.isFresh,
               hasVendorProfile: s.hasVendorProfile,
+              ...quotaInfo,
             }
           } catch {
             return {
@@ -94,11 +112,20 @@ function buildTools(ctx: { workspaceId: string; userId: string; conversationId: 
               lastResearchAt: null,
               isFresh: false,
               hasVendorProfile: false,
+              ...quotaInfo,
             }
           }
         })
       )
-      return { previews }
+      return {
+        previews,
+        plan: {
+          name: usage.config.label,
+          monthlyResearchRemaining: quota.monthlyRemaining,
+          followedUsed: usage.followedCount,
+          followedCap: usage.config.followedCap,
+        },
+      }
     },
   })
 
@@ -116,8 +143,11 @@ function buildTools(ctx: { workspaceId: string; userId: string; conversationId: 
         conversationId: ctx.conversationId,
         inputs,
         forceRefresh,
+        source: "user",
       })
-      if ("error" in result) return { error: result.error }
+      if ("error" in result) {
+        return { error: result.error, blocked: result.blocked ?? [] }
+      }
 
       // Ejecutar jobs en segundo plano tras responder (secuencial)
       const jobIds = result.jobs.map((j) => j.id)
@@ -134,6 +164,7 @@ function buildTools(ctx: { workspaceId: string; userId: string; conversationId: 
       return {
         batchId: result.batchId,
         jobs: result.jobs.map((j) => ({ id: j.id, companyInput: j.company_input, status: j.status })),
+        blocked: result.blocked,
       }
     },
   })

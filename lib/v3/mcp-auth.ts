@@ -97,7 +97,21 @@ export async function validateMcpRequest(req: NextRequest): Promise<McpAuthResul
       }
     }
   }
-  
+
+  // El acceso MCP requiere plan Platinum (aunque la key exista de antes)
+  const { checkApiKeyAccess } = await import("@/lib/v3/plans")
+  const planAccess = await checkApiKeyAccess(keyData.workspace_id)
+  if (!planAccess.allowed) {
+    return {
+      success: false,
+      error: {
+        code: "PLAN_REQUIRED",
+        message: planAccess.reason ?? "MCP access requires the Platinum plan",
+        status: 403
+      }
+    }
+  }
+
   // Check rate limit
   const rateLimit = keyData.rate_limit_per_minute || 60
   const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString()

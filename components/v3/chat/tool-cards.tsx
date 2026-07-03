@@ -53,13 +53,22 @@ export function PreviewAccountsCard({
   const previews: any[] = output?.previews ?? []
   if (previews.length === 0) return null
 
-  const names = previews.map((p) => p.name).join(", ")
+  const researchables = previews.filter((p) => p.researchAllowed !== false)
+  const names = researchables.map((p) => p.name).join(", ")
   const hasCache = previews.some((p) => (p.totalSignals ?? 0) > 0)
+  const plan = output?.plan
 
   return (
     <div className="overflow-hidden rounded-lg border border-border">
-      <div className="border-b border-border bg-muted/40 px-3 py-2 text-xs font-medium text-muted-foreground">
-        Señales en la base ({previews.length} {previews.length === 1 ? "cuenta" : "cuentas"})
+      <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/40 px-3 py-2 text-xs font-medium text-muted-foreground">
+        <span>
+          Señales en la base ({previews.length} {previews.length === 1 ? "cuenta" : "cuentas"})
+        </span>
+        {plan && (
+          <span className="ml-auto font-normal">
+            Plan {plan.name} · {plan.monthlyResearchRemaining} investigaciones restantes este mes
+          </span>
+        )}
       </div>
       <div className="divide-y divide-border">
         {previews.map((p) => (
@@ -108,6 +117,12 @@ export function PreviewAccountsCard({
                 Sin propuesta de valor cargada: el fit se calcula solo por diccionario.
               </p>
             )}
+            {p.researchAllowed === false && p.researchBlockedReason && (
+              <p className="text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">Re-investigación no disponible:</span>{" "}
+                {p.researchBlockedReason}
+              </p>
+            )}
           </div>
         ))}
       </div>
@@ -118,20 +133,22 @@ export function PreviewAccountsCard({
             size="sm"
             className="h-7 bg-transparent text-xs"
             disabled={isBusy}
-            onClick={() => sendMessage({ text: `Usá el cache existente de ${names}, mostrame el resumen de cada cuenta sin re-investigar` })}
+            onClick={() => sendMessage({ text: `Usá el cache existente de ${previews.map((p) => p.name).join(", ")}, mostrame el resumen de cada cuenta sin re-investigar` })}
           >
             Usar cache
           </Button>
         )}
-        <Button
-          size="sm"
-          className="h-7 text-xs"
-          disabled={isBusy}
-          onClick={() => sendMessage({ text: `Investigá ${hasCache ? "de nuevo " : ""}${names} (refresh completo)` })}
-        >
-          <RefreshCw data-icon="inline-start" />
-          {hasCache ? "Refrescar investigación" : "Investigar"}
-        </Button>
+        {researchables.length > 0 && (
+          <Button
+            size="sm"
+            className="h-7 text-xs"
+            disabled={isBusy}
+            onClick={() => sendMessage({ text: `Investigá ${hasCache ? "de nuevo " : ""}${names} (refresh completo)` })}
+          >
+            <RefreshCw data-icon="inline-start" />
+            {hasCache ? "Refrescar investigación" : "Investigar"}
+          </Button>
+        )}
       </div>
     </div>
   )
@@ -233,8 +250,27 @@ export function BatchProgressCard({
 
   const batchId: string | null = output?.batchId ?? null
   const initialJobs: any[] = output?.jobs ?? []
+  const blocked: { input: string; reason: string }[] = output?.blocked ?? []
 
-  return <BatchProgressInner batchId={batchId} initialJobs={initialJobs} sendMessage={sendMessage} isBusy={isBusy} isStatic={isStatic} />
+  return (
+    <div className="flex flex-col gap-2">
+      {blocked.length > 0 && (
+        <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+          <p className="mb-1 font-medium text-foreground">
+            {blocked.length} {blocked.length === 1 ? "cuenta no encolada" : "cuentas no encoladas"} por límites del plan:
+          </p>
+          <ul className="flex flex-col gap-0.5">
+            {blocked.map((b) => (
+              <li key={b.input}>
+                <span className="font-medium">{b.input}:</span> {b.reason}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <BatchProgressInner batchId={batchId} initialJobs={initialJobs} sendMessage={sendMessage} isBusy={isBusy} isStatic={isStatic} />
+    </div>
+  )
 }
 
 function BatchProgressInner({

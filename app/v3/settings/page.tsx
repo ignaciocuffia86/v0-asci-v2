@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge"
 import { Building2, Globe, Users, FileText, Calendar } from "lucide-react"
 import { format } from "date-fns"
 import { es } from "date-fns/locale"
+import { PlanUsageCard } from "@/components/v3/settings/plan-usage-card"
 
 export default async function SettingsPage() {
   const supabase = await createClient()
@@ -53,6 +54,8 @@ export default async function SettingsPage() {
         </p>
       </div>
       
+      <PlanUsageCard workspaceId={workspace.id} />
+
       <div className="grid gap-4 md:grid-cols-2">
         {/* Workspace Info */}
         <Card>

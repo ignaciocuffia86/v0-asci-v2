@@ -24,6 +24,13 @@ export async function followAccount(params: {
     .eq("company_id", params.companyId)
     .maybeSingle()
 
+  // Cap de cuentas seguidas según plan (solo si suma una cuenta activa nueva)
+  if (!existing || !existing.is_active) {
+    const { checkFollowQuota } = await import("@/lib/v3/plans")
+    const quota = await checkFollowQuota(params.workspaceId)
+    if (!quota.allowed) return { error: quota.reason ?? "Límite de cuentas seguidas alcanzado" }
+  }
+
   let followedAccountId: string
 
   if (existing) {
