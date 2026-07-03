@@ -11,6 +11,7 @@ export interface McpAuthResult {
   success: boolean
   workspaceId?: string
   keyId?: string
+  scopes?: string[]
   error?: {
     code: string
     message: string
@@ -71,7 +72,7 @@ export async function validateMcpRequest(req: NextRequest): Promise<McpAuthResul
   const { data: keyData, error: keyError } = await admin
     .schema("v3")
     .from("mcp_api_keys")
-    .select("id, workspace_id, rate_limit_per_minute, revoked_at")
+    .select("id, workspace_id, rate_limit_per_minute, revoked_at, scopes")
     .eq("key_hash", keyHash)
     .single()
     
@@ -132,7 +133,10 @@ export async function validateMcpRequest(req: NextRequest): Promise<McpAuthResul
   return {
     success: true,
     workspaceId: keyData.workspace_id,
-    keyId: keyData.id
+    keyId: keyData.id,
+    scopes: Array.isArray((keyData as { scopes?: string[] }).scopes)
+      ? (keyData as { scopes?: string[] }).scopes
+      : ["read"],
   }
 }
 
