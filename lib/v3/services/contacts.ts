@@ -1,6 +1,7 @@
 import "server-only"
 
 import { createAdminClient } from "@/lib/supabase/admin"
+import { normalizeDomain } from "@/lib/apollo/domain"
 
 export interface CachedContact {
   id: string
@@ -25,19 +26,20 @@ export async function getCompanyCachedContacts(companyId: string, limit = 8): Pr
 
   const { data: company } = await supabase
     .from("companies")
-    .select("website_domain")
+    .select("website")
     .eq("id", companyId)
     .maybeSingle()
 
-  const domain = company?.website_domain
-  if (!domain) return []
+  const normalized = normalizeDomain(company?.website)
+  if (!normalized) return []
+  const domains = [normalized.primary, ...normalized.fallbacks]
 
   const { data: contacts } = await supabase
     .from("apollo_contacts_cache")
     .select(
       "id, apollo_id, full_name, title, seniority, email, email_status, linkedin_url, city, country, departments",
     )
-    .eq("company_domain", domain)
+    .in("company_domain", domains)
     .order("updated_at", { ascending: false })
     .limit(limit)
 

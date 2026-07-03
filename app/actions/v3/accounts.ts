@@ -393,12 +393,16 @@ export async function searchAccountDecisionMakers(
 
   const { data: company } = await admin
     .from("companies")
-    .select("id, name, website_domain, country")
+    .select("id, name, website, country, apollo_organization_id")
     .eq("id", companyId)
     .maybeSingle()
-  if (!company?.website_domain) {
+
+  const { normalizeDomain } = await import("@/lib/apollo/domain")
+  const normalized = normalizeDomain(company?.website)
+  if (!company || (!normalized && !company.apollo_organization_id)) {
     return { success: false, found: 0, error: "La empresa no tiene dominio registrado para buscar en Apollo" }
   }
+  const companyDomain = normalized?.primary ?? null
 
   // Rate limit: ya se buscó este rol hoy para esta cuenta
   const today = new Date()
@@ -419,15 +423,15 @@ export async function searchAccountDecisionMakers(
 
   const { searchPeople } = await import("@/lib/apollo/search")
   const result = await searchPeople({
-    organizationId: null,
-    domain: company.website_domain,
+    organizationId: company.apollo_organization_id ?? null,
+    domain: companyDomain,
     jobTitles: [cleanRole],
     country: company.country ?? null,
     userId,
     bookmarkId: null,
     companyId: company.id,
     maxResults: 10,
-  } as Parameters<typeof searchPeople>[0])
+  })
 
   if (!result.ok) {
     return { success: false, found: 0, error: `Apollo: ${result.error}` }
@@ -439,7 +443,7 @@ export async function searchAccountDecisionMakers(
   // Persistir en cache (indexado por company_domain; upsert por apollo_id)
   const rows = result.people.map((p) => ({
     apollo_id: p.apolloId,
-    company_domain: company.website_domain,
+    company_domain: companyDomain ?? "",
     full_name: p.fullName || `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim(),
     first_name: p.firstName ?? null,
     last_name: p.lastName ?? null,
