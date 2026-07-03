@@ -39,8 +39,7 @@ function UsageBar({
 }
 
 /** Card de plan y consumo del workspace (visible para todos los miembros). */
-export async function PlanUsageCard({ workspaceId }: { workspaceId: string }) {
-  const usage = await getWorkspaceUsage(workspaceId)
+export function PlanUsageCard({ usage }: { usage: WorkspaceUsage }) {
   const { config } = usage
   const isTrial = usage.plan === "trial"
 
