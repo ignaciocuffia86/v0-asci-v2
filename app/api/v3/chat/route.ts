@@ -193,12 +193,12 @@ function buildTools(ctx: { workspaceId: string; userId: string; conversationId: 
       const contacts = await getCompanyCachedContacts(companyId)
       return {
         contacts: contacts.slice(0, LIMITS.MAX_CONTACTS * 2).map((c) => ({
-          apolloId: c.apollo_person_id,
-          name: c.full_name,
+          apolloId: c.apolloId,
+          name: c.fullName,
           title: c.title,
           seniority: c.seniority,
-          country: (c as unknown as { country?: string }).country ?? null,
-          linkedinUrl: c.linkedin_url,
+          country: c.country,
+          linkedinUrl: c.linkedinUrl,
         })),
       }
     },

@@ -28,6 +28,10 @@
     {
       "path": "/api/cron/refresh-landing-stats",
       "schedule": "0 5 * * 1"
+    },
+    {
+      "path": "/api/cron/v3-refresh-accounts",
+      "schedule": "0 6,7,8 * * *"
     }
   ]
 }
