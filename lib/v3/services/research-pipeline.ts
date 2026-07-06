@@ -1,6 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/admin"
 import { resolveCompany, createCompany } from "./company-resolver"
-import { runAllRadarBundles, isRadarCacheFresh, listRadarBundles } from "./radar"
+import { runMicroAgents, isRadarCacheFresh } from "./radar"
+import { selectMicroAgentsForWorkspace } from "./agent-selection"
 import { interpretJobPostings } from "./jobs-interpreter"
 import { computeScorecard } from "./scoring"
 import { LIMITS, type ResearchJob } from "./types"
@@ -204,14 +205,18 @@ export async function runResearchJob(jobId: string): Promise<ResearchJob | null>
     const fresh = await isRadarCacheFresh(companyId!, LIMITS.CACHE_TTL_DAYS)
     const skipResearch = fresh && !job.force_refresh
 
-    // ── 3. Radar (Opus + estructurador) ──
+    // ── 3. Radar (Opus + búsqueda web real + estructurador) ──
     if (!skipResearch) {
-      const total = listRadarBundles().length
-      await runAllRadarBundles(
+      // Selección dinámica de micro-agentes según la propuesta de valor y los
+      // tags de los documentos del workspace (foco en lo que le interesa al usuario).
+      const { agents } = await selectMicroAgentsForWorkspace(job.workspace_id)
+      const total = agents.length || 1
+      await runMicroAgents(
         { companyId: companyId!, companyName, domain, country, industry },
-        async (bundle, index) => {
+        agents,
+        async (agentKey, index) => {
           await updateJob(jobId, {
-            current_step: `radar:${bundle}`,
+            current_step: `radar:${agentKey}`,
             progress: 10 + Math.round(((index + 1) / (total + 2)) * 70),
           })
         }

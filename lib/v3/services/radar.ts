@@ -119,11 +119,15 @@ async function researchBundle(
     temperature: 0.3,
     maxOutputTokens: 4096,
     tools: {
+      // Server-side web search de Anthropic (se ejecuta y cita en el proveedor,
+      // atravesando el AI Gateway). El cast salva un desajuste de generics del
+      // tipo Tool entre las versiones de @ai-sdk/* — el runtime es correcto.
       web_search: anthropic.tools.webSearch_20250305({
         maxUses: MAX_WEB_SEARCHES,
         ...(userLocation ? { userLocation } : {}),
       }),
-    },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any,
     // Permitir varias rondas de búsqueda + síntesis final.
     stopWhen: stepCountIs(MAX_WEB_SEARCHES + 2),
   })
