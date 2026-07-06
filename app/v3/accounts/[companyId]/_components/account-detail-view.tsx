@@ -23,6 +23,7 @@ import {
   ExternalLink,
   Info,
   Lightbulb,
+  Link2,
   MessageSquare,
   Newspaper,
   ShieldCheck,
@@ -59,26 +60,35 @@ export function AccountDetailView({
 }) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
-  const { company, followedAccount, scorecard, previousScore, findings, icebreakers, digests } = detail
+  const { company, followedAccount, scorecard, previousScore, findings, agentLabels, icebreakers, digests } = detail
 
   const isFollowed = !!followedAccount
 
-  const { explicitByType, inferredFindings } = useMemo(() => {
+  // Radiografía: hallazgos verificados agrupados por ÁREA (micro-agente).
+  // Los inferidos van a la solapa Contexto.
+  const { explicitByArea, inferredFindings } = useMemo(() => {
     const explicit = new Map<string, Finding[]>()
     const inferred: Finding[] = []
     for (const f of findings) {
       if (f.evidence_level === "explicit") {
-        const list = explicit.get(f.radar_type) ?? []
+        const areaKey = f.micro_agent ?? f.radar_type
+        const list = explicit.get(areaKey) ?? []
         list.push(f)
-        explicit.set(f.radar_type, list)
+        explicit.set(areaKey, list)
       } else {
         inferred.push(f)
       }
     }
-    return { explicitByType: explicit, inferredFindings: inferred }
+    // Ordenar áreas por cantidad de hallazgos (las más ricas primero).
+    const sorted = new Map(
+      [...explicit.entries()].sort((a, b) => b[1].length - a[1].length)
+    )
+    return { explicitByArea: sorted, inferredFindings: inferred }
   }, [findings])
 
   const explicitCount = findings.length - inferredFindings.length
+  const areaLabel = (key: string) =>
+    agentLabels[key] ?? RADAR_CONFIG[key]?.label ?? key.replaceAll("-", " ").replaceAll("_", " ")
 
   const handleFollowToggle = () => {
     if (!company) return
@@ -196,7 +206,7 @@ export function AccountDetailView({
       <Tabs defaultValue="findings">
         <TabsList>
           <TabsTrigger value="findings">
-            Hallazgos {explicitCount > 0 && `(${explicitCount})`}
+            Radiografía {explicitCount > 0 && `(${explicitCount})`}
           </TabsTrigger>
           <TabsTrigger value="signals">
             Señales {signals && signals.fitSignals.length > 0 && `(${signals.fitSignals.length})`}
@@ -212,37 +222,55 @@ export function AccountDetailView({
           </TabsTrigger>
         </TabsList>
 
-        {/* Hallazgos: solo explícitos, colapsables por tipo, con citas */}
+        {/* Radiografía: hallazgos verificados agrupados por área, con fuentes visibles */}
         <TabsContent value="findings" className="flex flex-col gap-4">
           {explicitCount === 0 ? (
             <EmptyState text="Sin hallazgos verificables todavía. Investigá esta cuenta desde el chat para generar el radar." />
           ) : (
-            <Accordion
-              type="multiple"
-              defaultValue={[Array.from(explicitByType.keys())[0] ?? ""]}
-              className="flex flex-col gap-3"
-            >
-              {Array.from(explicitByType.entries()).map(([type, items]) => {
-                const config = RADAR_CONFIG[type] ?? { label: type, icon: Cpu }
-                const Icon = config.icon
-                return (
-                  <AccordionItem key={type} value={type} className="rounded-lg border px-4 last:border-b">
-                    <AccordionTrigger className="hover:no-underline">
-                      <span className="flex items-center gap-2 text-sm font-medium">
-                        <Icon className="size-4" />
-                        {config.label}
-                        <Badge variant="secondary">{items.length}</Badge>
-                      </span>
-                    </AccordionTrigger>
-                    <AccordionContent className="flex flex-col gap-3">
-                      {items.map((f) => (
-                        <FindingCard key={f.id} finding={f} />
-                      ))}
-                    </AccordionContent>
-                  </AccordionItem>
-                )
-              })}
-            </Accordion>
+            <>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border bg-muted/40 px-4 py-3 text-xs text-muted-foreground">
+                <span className="flex items-center gap-1.5">
+                  <ShieldCheck className="size-3.5 text-primary" />
+                  <span className="font-medium text-foreground">Convergente</span>: confirmado por 2+ fuentes
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <Link2 className="size-3.5" />
+                  <span className="font-medium text-foreground">Directa</span>: 1 fuente verificable
+                </span>
+                <span className="text-pretty">Cada hallazgo enlaza a la fuente web real donde se detectó.</span>
+              </div>
+              <Accordion
+                type="multiple"
+                defaultValue={[Array.from(explicitByArea.keys())[0] ?? ""]}
+                className="flex flex-col gap-3"
+              >
+                {Array.from(explicitByArea.entries()).map(([areaKey, items]) => {
+                  const convergent = items.filter((f) => (f.convergent_sources ?? 1) >= 2).length
+                  return (
+                    <AccordionItem key={areaKey} value={areaKey} className="rounded-lg border px-4 last:border-b">
+                      <AccordionTrigger className="hover:no-underline">
+                        <span className="flex flex-1 items-center gap-2 text-sm font-medium">
+                          <Cpu className="size-4 shrink-0 text-muted-foreground" />
+                          <span className="capitalize">{areaLabel(areaKey)}</span>
+                          <Badge variant="secondary">{items.length}</Badge>
+                          {convergent > 0 && (
+                            <Badge className="gap-1">
+                              <ShieldCheck className="size-3" />
+                              {convergent} convergente{convergent > 1 ? "s" : ""}
+                            </Badge>
+                          )}
+                        </span>
+                      </AccordionTrigger>
+                      <AccordionContent className="flex flex-col gap-3">
+                        {items.map((f) => (
+                          <FindingCard key={f.id} finding={f} />
+                        ))}
+                      </AccordionContent>
+                    </AccordionItem>
+                  )
+                })}
+              </Accordion>
+            </>
           )}
         </TabsContent>
 
@@ -336,47 +364,86 @@ export function AccountDetailView({
   )
 }
 
-/** Hallazgo explícito con cita: Verificado (con URL) o Declarado (solo fuente). */
+/** Hallazgo verificado con todas sus fuentes reales visibles y trazables. */
 function FindingCard({ finding: f }: { finding: Finding }) {
-  const hasUrl = !!f.url
+  // Fuentes verificadas: usar el array supporting_sources; caer a la URL primaria.
+  const sources =
+    f.supporting_sources && f.supporting_sources.length > 0
+      ? f.supporting_sources
+      : f.url
+        ? [{ url: f.url, title: f.source_name, date: f.source_date }]
+        : []
+  const isConvergent = (f.convergent_sources ?? sources.length) >= 2
+  const techs = f.payload?.technologies ?? []
+
   return (
-    <div className="flex flex-col gap-1 rounded-md border p-3">
+    <div className="flex flex-col gap-2 rounded-md border p-3">
       <div className="flex items-start justify-between gap-2">
         <p className="text-sm font-medium text-pretty">{f.title}</p>
-        {hasUrl ? (
+        {isConvergent ? (
           <Badge className="shrink-0 gap-1">
             <ShieldCheck className="size-3" />
-            Verificado
+            Convergente
           </Badge>
         ) : (
-          <Badge variant="secondary" className="shrink-0">
-            Declarado
+          <Badge variant="secondary" className="shrink-0 gap-1">
+            <Link2 className="size-3" />
+            Directa
           </Badge>
         )}
       </div>
       {f.summary && <p className="text-sm text-muted-foreground text-pretty">{f.summary}</p>}
-      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+
+      {techs.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {techs.slice(0, 6).map((t) => (
+            <Badge key={t} variant="outline" className="text-xs font-normal">
+              {t}
+            </Badge>
+          ))}
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
         <span className="capitalize">{f.category.replaceAll("-", " ")}</span>
         {f.source_date && (
           <span>
             · {new Date(f.source_date).toLocaleDateString("es", { month: "short", year: "numeric" })}
           </span>
         )}
-        {hasUrl ? (
-          <a
-            href={f.url!}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-0.5 text-primary hover:underline"
-          >
-            {f.source_name ?? "Ver fuente"} <ArrowUpRight className="size-3" />
-          </a>
-        ) : (
-          f.source_name && <span>· Fuente declarada: {f.source_name}</span>
-        )}
       </div>
+
+      {/* Fuentes verificadas — todas visibles y clickeables */}
+      {sources.length > 0 && (
+        <div className="flex flex-col gap-1 border-t pt-2">
+          <span className="text-xs font-medium text-muted-foreground">
+            {sources.length === 1 ? "Fuente" : `${sources.length} fuentes`}
+          </span>
+          {sources.map((s, i) => (
+            <a
+              key={`${s.url}-${i}`}
+              href={s.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-start gap-1 text-xs text-primary hover:underline"
+            >
+              <ExternalLink className="mt-0.5 size-3 shrink-0" />
+              <span className="text-pretty break-all">{s.title || hostnameOf(s.url) || s.url}</span>
+            </a>
+          ))}
+        </div>
+      )}
     </div>
   )
+}
+
+/** Extrae el hostname legible de una URL. */
+function hostnameOf(url: string): string | null {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "")
+  } catch {
+    return null
+  }
 }
 
 // ─── Scorecard con tooltips explicativos por pilar ───────────

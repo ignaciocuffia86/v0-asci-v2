@@ -153,3 +153,14 @@ export async function deleteMicroAgent(id: string): Promise<void> {
   const { error } = await admin.schema("v3").from("radar_micro_agents").delete().eq("id", id)
   if (error) throw new Error(error.message)
 }
+
+/** Devuelve un mapa key → label de todos los micro-agentes (para etiquetar hallazgos por área). */
+export async function getMicroAgentLabels(): Promise<Record<string, string>> {
+  const admin = createAdminClient()
+  const { data } = await admin.schema("v3").from("radar_micro_agents").select("key, label")
+  const map: Record<string, string> = {}
+  for (const r of (data as { key: string; label: string }[] | null) ?? []) {
+    map[r.key] = r.label
+  }
+  return map
+}

@@ -11,6 +11,7 @@ import {
   listFollowedAccounts,
   type FollowedAccountWithCompany,
 } from "@/lib/v3/services/accounts"
+import { getMicroAgentLabels } from "@/lib/v3/services/radar-agents"
 
 // ═══════════════════════════════════════════════════════════
 // Server actions de cuentas seguidas (vistas /v3/accounts).
@@ -171,6 +172,7 @@ export interface AccountDetail {
   findings: Array<{
     id: string
     radar_type: string
+    micro_agent: string | null
     category: string
     title: string
     summary: string | null
@@ -180,7 +182,12 @@ export interface AccountDetail {
     evidence_level: string
     confidence: number | null
     detected_at: string
+    supporting_sources: Array<{ url: string; title: string | null; date: string | null }>
+    convergent_sources: number
+    payload: { technologies?: string[]; processes?: string[] } | null
   }>
+  /** Catálogo de micro-agentes (para mostrar el nombre legible del área). */
+  agentLabels: Record<string, string>
   icebreakers: Array<{
     id: string
     contact_name: string
@@ -495,11 +502,11 @@ export async function getAccountDetail(companyId: string): Promise<AccountDetail
     admin
       .from("radar_findings")
       .select(
-        "id, radar_type, category, title, summary, url, source_name, source_date, evidence_level, confidence, detected_at"
+        "id, radar_type, micro_agent, category, title, summary, url, source_name, source_date, evidence_level, confidence, detected_at, supporting_sources, convergent_sources, payload"
       )
       .eq("company_id", companyId)
       .order("detected_at", { ascending: false })
-      .limit(50),
+      .limit(80),
     admin
       .schema("v3")
       .from("icebreakers")
@@ -525,13 +532,15 @@ export async function getAccountDetail(companyId: string): Promise<AccountDetail
   }
 
   const scorecards = scorecardsRes.data ?? []
+  const agentLabels = await getMicroAgentLabels()
 
   return {
     followedAccount,
     company: companyRes.data ?? null,
     scorecard: scorecards[0] ?? null,
     previousScore: scorecards[1]?.score ?? null,
-    findings: findingsRes.data ?? [],
+    findings: (findingsRes.data ?? []) as AccountDetail["findings"],
+    agentLabels,
     icebreakers: icebreakersRes.data ?? [],
     digests,
   }
