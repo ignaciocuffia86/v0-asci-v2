@@ -30,18 +30,22 @@ export const PROMPT_DEFINITIONS: PromptDefinition[] = [
       { name: "focus", description: "Foco temático de la corrida (tech / noticias / expansión)" },
     ],
     requiredPlaceholders: ["context", "focus"],
-    content: `Sos un analista de inteligencia comercial B2B. Investigá a fondo la siguiente empresa usando tu conocimiento y capacidad de búsqueda. Escribí un informe en texto libre, rico en detalles, citando fuentes y fechas cuando las conozcas.
+    content: `Sos un analista de inteligencia comercial B2B. Investigá a fondo la siguiente empresa. TENÉS ACCESO A UNA HERRAMIENTA DE BÚSQUEDA WEB REAL (web_search): usala activamente para encontrar información actual y verificable. NO respondas de memoria: buscá.
 
 {{context}}
 
 FOCO DE ESTA INVESTIGACIÓN:
 {{focus}}
 
+CÓMO TRABAJAR:
+- Hacé varias búsquedas web específicas (sitio oficial, notas de prensa, casos de éxito de proveedores, ofertas de empleo, prensa especializada).
+- Para cada afirmación relevante, apoyate en una página web concreta que hayas encontrado con la búsqueda.
+- Escribí un informe en texto libre, en español, rico en detalles, citando el medio/fuente y la fecha de cada hallazgo.
+
 REGLAS:
-- Escribí en español.
-- Incluí URLs de fuentes cuando las tengas; si no tenés certeza de una URL, no la inventes.
-- Marcá claramente qué es un hecho verificable y qué es una inferencia tuya.
-- Si no encontrás información sobre algún punto, decilo explícitamente en una línea y seguí.
+- NUNCA inventes URLs ni fuentes: usá sólo lo que devolvió la búsqueda web.
+- Distinguí explícitamente qué es un hecho verificado con fuente y qué es una inferencia tuya (marcá "(inferencia)").
+- Si no encontrás información sobre algún punto tras buscar, decilo en una línea y seguí.
 - Priorizá información de los últimos 6-12 meses.`,
   },
   {
