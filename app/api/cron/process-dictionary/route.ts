@@ -13,9 +13,27 @@ export async function GET(request: Request) {
 
   const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
     global: {
-      fetch: (url, options) => fetch(url, { ...options, signal: AbortSignal.timeout(25_000) }),
+      // 50s: mayor que el statement_timeout (40s) del driver (así la DB cancela
+      // limpio antes de que aborte el cliente), pero < maxDuration (60s).
+      fetch: (url, options) => fetch(url, { ...options, signal: AbortSignal.timeout(50_000) }),
     },
   })
+
+  // Guard anti-solape global: si ya hay una ejecución de este cron corriendo
+  // (iniciada hace < 90s), salir. Evita dos crons pisándose sobre signals
+  // (deadlock / lock timeout).
+  const { data: active } = await supabase
+    .from("cron_executions")
+    .select("id")
+    .eq("cron_name", "process-dictionary")
+    .eq("status", "running")
+    .gte("started_at", new Date(Date.now() - 90_000).toISOString())
+    .limit(1)
+
+  if (active && active.length > 0) {
+    console.log("[Cron Dictionary] Otra ejecución ya está corriendo, salteando este tick")
+    return NextResponse.json({ skipped: true, reason: "already running" })
+  }
 
   // Register cron execution start
   const { data: execution } = await supabase
@@ -31,7 +49,12 @@ export async function GET(request: Request) {
   const executionId = execution?.id
 
   const startTime = Date.now()
-  const MAX_EXECUTION_TIME = 55000 // 55 seconds max
+  // No arrancar un nuevo paso si no quedan al menos ~45s de margen: un paso de
+  // match pesado puede correr hasta 40s (statement_timeout) y debe caber dentro
+  // del maxDuration=60. Los jobs rápidos (la mayoría) igual drenan de a muchos
+  // por tick porque cada paso tarda milisegundos. Los pesados avanzan por fases
+  // a lo largo de varios ticks (el cron corre cada minuto).
+  const START_STEP_DEADLINE = 15000
   let totalJobsProcessed = 0
   let totalSignalsAffected = 0
   let consecutiveEmptyPolls = 0
@@ -41,7 +64,7 @@ export async function GET(request: Request) {
 
     // Process ONE job at a time, pumping it until completed before moving to next.
     // This is much faster than round-robin across many jobs.
-    while (Date.now() - startTime < MAX_EXECUTION_TIME) {
+    while (Date.now() - startTime < START_STEP_DEADLINE) {
       // Pick the single oldest job, preferring ones already in progress
       const { data: job, error: jobsError } = await supabase
         .from("dictionary_jobs")
@@ -67,7 +90,7 @@ export async function GET(request: Request) {
 
       // Pump this single job repeatedly until it completes or we run out of time
       let jobDone = false
-      while (!jobDone && Date.now() - startTime < MAX_EXECUTION_TIME) {
+      while (!jobDone && Date.now() - startTime < START_STEP_DEADLINE) {
         try {
           const { data: result, error: rpcError } = await supabase.rpc("process_dictionary_job", {
             p_job_id: job.id,
@@ -96,7 +119,15 @@ export async function GET(request: Request) {
             deleted_count?: number
             has_more?: boolean
             phase?: string
+            skipped?: boolean
             error?: string
+          }
+
+          // El driver está lockeado por otro proceso: dejar este job y seguir.
+          if (jobResult.skipped) {
+            console.log(`[Cron Dictionary] Job ${job.id} lockeado por otro proceso, salteando`)
+            jobDone = true
+            continue
           }
 
           if (!jobResult.success) {
