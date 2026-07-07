@@ -224,6 +224,18 @@ export function AdminSidebar() {
                         Export Contactos
                       </Button>
                     </Link>
+                    <Link href="/admin/export/companies">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className={cn(
+                          "w-full justify-start text-sm",
+                          pathname === "/admin/export/companies" && "bg-sidebar-accent/50"
+                        )}
+                      >
+                        Export Compañías por Señal
+                      </Button>
+                    </Link>
                   </div>
                 )}
               </div>
