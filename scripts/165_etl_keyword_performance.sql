@@ -111,14 +111,17 @@ BEGIN
   SELECT array_agg(id ORDER BY id)
   INTO v_ids
   FROM (
+    -- CRÍTICO: columnas SIN COALESCE. Envolver la columna en COALESCE(col,'')
+    -- impide que el planner use el índice trigram (fuerza Seq Scan de ~40s).
+    -- Semánticamente idéntico: NULL ~* patrón => NULL => no matchea == '' ~* patrón => false.
     SELECT c.id
     FROM public.contacts c
     WHERE (p_cursor IS NULL OR c.id > p_cursor)
       AND (
-        COALESCE(c.current_position_title, '')        ~* v_pattern OR
-        COALESCE(c.headline, '')                       ~* v_pattern OR
-        COALESCE(c.about, '')                          ~* v_pattern OR
-        COALESCE(c.current_position_description, '')    ~* v_pattern OR
+        c.current_position_title       ~* v_pattern OR
+        c.headline                      ~* v_pattern OR
+        c.about                         ~* v_pattern OR
+        c.current_position_description   ~* v_pattern OR
         public.contacts_prevpos_text(c.previous_positions) ~* v_pattern
       )
     ORDER BY c.id
@@ -167,10 +170,10 @@ BEGIN
       AND c.current_company_id IS NOT NULL
       AND EXISTS (SELECT 1 FROM public.companies co WHERE co.id = c.current_company_id)
       AND (
-        COALESCE(c.current_position_title, '')     ~* v_pattern OR
-        COALESCE(c.headline, '')                    ~* v_pattern OR
-        COALESCE(c.about, '')                        ~* v_pattern OR
-        COALESCE(c.current_position_description, '') ~* v_pattern
+        c.current_position_title     ~* v_pattern OR
+        c.headline                    ~* v_pattern OR
+        c.about                        ~* v_pattern OR
+        c.current_position_description ~* v_pattern
       )
     ON CONFLICT DO NOTHING
     RETURNING 1
@@ -252,14 +255,12 @@ BEGIN
   SELECT array_agg(id ORDER BY id)
   INTO v_ids
   FROM (
+    -- Columnas SIN COALESCE para habilitar los índices trigram (ver nota en contacts).
     SELECT jp.id
     FROM public.job_postings jp
     WHERE (p_cursor IS NULL OR jp.id > p_cursor)
       AND jp.posted_at >= v_six_months_ago
-      AND (
-        COALESCE(jp.title, '')       ~* v_pattern OR
-        COALESCE(jp.description, '')  ~* v_pattern
-      )
+      AND (jp.title ~* v_pattern OR jp.description ~* v_pattern)
     ORDER BY jp.id
     LIMIT p_batch_size
   ) s;
@@ -292,7 +293,7 @@ BEGIN
     FROM public.job_postings jp
     JOIN public.companies c ON c.id = jp.company_id
     WHERE jp.id = ANY(v_ids)
-      AND (COALESCE(jp.title, '') ~* v_pattern OR COALESCE(jp.description, '') ~* v_pattern)
+      AND (jp.title ~* v_pattern OR jp.description ~* v_pattern)
     ON CONFLICT DO NOTHING
     RETURNING 1
   )
@@ -322,7 +323,7 @@ RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path TO 'public'
-SET statement_timeout TO '120s'
+SET statement_timeout TO '20s'  -- < abort de 25s del cron/action, evita statements huérfanos
 AS $function$
 DECLARE
   v_job RECORD;
