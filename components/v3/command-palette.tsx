@@ -12,23 +12,15 @@ import {
   CommandSeparator,
 } from "@/components/ui/command"
 import { 
-  Building2, 
   FileText, 
   Settings, 
-  Plus,
-  Search,
-  Sparkles,
-  Key
+  MessageSquare,
+  Star,
+  Key,
+  ShieldCheck
 } from "lucide-react"
 
-interface CommandPaletteProps {
-  campaigns?: Array<{
-    id: string
-    name: string
-  }>
-}
-
-export function CommandPalette({ campaigns = [] }: CommandPaletteProps) {
+export function CommandPalette({ isSuperAdmin }: { isSuperAdmin?: boolean }) {
   const [open, setOpen] = useState(false)
   const router = useRouter()
 
@@ -50,16 +42,16 @@ export function CommandPalette({ campaigns = [] }: CommandPaletteProps) {
 
   return (
     <CommandDialog open={open} onOpenChange={setOpen}>
-      <CommandInput placeholder="Buscar campanas, acciones..." />
+      <CommandInput placeholder="Buscar acciones..." />
       <CommandList>
         <CommandEmpty>No se encontraron resultados.</CommandEmpty>
         
         <CommandGroup heading="Acciones rapidas">
           <CommandItem
-            onSelect={() => runCommand(() => router.push("/v3/campaigns/new"))}
+            onSelect={() => runCommand(() => router.push("/v3/chat"))}
           >
-            <Plus className="mr-2 size-4" />
-            Nueva campana
+            <MessageSquare className="mr-2 size-4" />
+            Nueva conversacion
           </CommandItem>
           <CommandItem
             onSelect={() => runCommand(() => router.push("/v3/docs"))}
@@ -69,30 +61,19 @@ export function CommandPalette({ campaigns = [] }: CommandPaletteProps) {
           </CommandItem>
         </CommandGroup>
         
-        {campaigns.length > 0 && (
-          <>
-            <CommandSeparator />
-            <CommandGroup heading="Campanas">
-              {campaigns.map((campaign) => (
-                <CommandItem
-                  key={campaign.id}
-                  onSelect={() => runCommand(() => router.push(`/v3/campaigns/${campaign.id}`))}
-                >
-                  <Building2 className="mr-2 size-4" />
-                  {campaign.name}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </>
-        )}
-        
         <CommandSeparator />
         <CommandGroup heading="Navegacion">
           <CommandItem
-            onSelect={() => runCommand(() => router.push("/v3/campaigns"))}
+            onSelect={() => runCommand(() => router.push("/v3/chat"))}
           >
-            <Building2 className="mr-2 size-4" />
-            Ver campanas
+            <MessageSquare className="mr-2 size-4" />
+            Chat
+          </CommandItem>
+          <CommandItem
+            onSelect={() => runCommand(() => router.push("/v3/accounts"))}
+          >
+            <Star className="mr-2 size-4" />
+            Cuentas seguidas
           </CommandItem>
           <CommandItem
             onSelect={() => runCommand(() => router.push("/v3/docs"))}
@@ -113,6 +94,32 @@ export function CommandPalette({ campaigns = [] }: CommandPaletteProps) {
             API Keys
           </CommandItem>
         </CommandGroup>
+
+        {isSuperAdmin && (
+          <>
+            <CommandSeparator />
+            <CommandGroup heading="Administracion">
+              <CommandItem
+                onSelect={() => runCommand(() => router.push("/v3/admin/usage"))}
+              >
+                <ShieldCheck className="mr-2 size-4" />
+                Dashboard de uso
+              </CommandItem>
+              <CommandItem
+                onSelect={() => runCommand(() => router.push("/v3/admin/workspaces"))}
+              >
+                <ShieldCheck className="mr-2 size-4" />
+                Workspaces
+              </CommandItem>
+              <CommandItem
+                onSelect={() => runCommand(() => router.push("/v3/admin/users"))}
+              >
+                <ShieldCheck className="mr-2 size-4" />
+                Usuarios
+              </CommandItem>
+            </CommandGroup>
+          </>
+        )}
       </CommandList>
     </CommandDialog>
   )

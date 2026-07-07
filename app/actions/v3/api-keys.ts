@@ -41,7 +41,14 @@ export async function generateApiKey(name: string): Promise<{
   if (membership.role !== "admin") {
     return { success: false, error: "Solo admins pueden generar API keys" }
   }
-  
+
+  // API keys / MCP solo en plan Platinum
+  const { checkApiKeyAccess } = await import("@/lib/v3/plans")
+  const access = await checkApiKeyAccess(membership.workspace_id)
+  if (!access.allowed) {
+    return { success: false, error: access.reason ?? "Tu plan no incluye API keys" }
+  }
+
   // Check if workspace already has a key
   const admin = createAdminClient()
   const { data: existingKey } = await admin

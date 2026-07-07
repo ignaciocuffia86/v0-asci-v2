@@ -598,10 +598,28 @@ function DictionaryJobsSection({ jobs, stats, onRefresh }: { jobs: DictionaryJob
   const supabase = createClient()
   const [filter, setFilter] = useState<"all" | "pending" | "processing" | "completed" | "failed">("all")
 
+  // Reset completo para que el reintento arranque siempre desde cero:
+  // ademas de status/error, limpiamos phase, cursores keyset y contadores de
+  // progreso. Es seguro re-ejecutar porque el matcheo es idempotente
+  // (INSERT ... ON CONFLICT DO NOTHING sobre signals).
+  const cleanResetFields = {
+    status: "pending",
+    error_message: null,
+    started_at: null,
+    completed_at: null,
+    phase: null,
+    contacts_cursor: null,
+    job_postings_cursor: null,
+    contacts_processed: 0,
+    job_postings_processed: 0,
+    processed_records: 0,
+    progress: 0,
+  } as Record<string, unknown>
+
   const handleRetryFailed = async () => {
     await supabase
       .from("dictionary_jobs")
-      .update({ status: "pending", error_message: null, started_at: null } as Record<string, unknown>)
+      .update(cleanResetFields)
       .eq("status", "failed")
     onRefresh()
   }
@@ -610,7 +628,7 @@ function DictionaryJobsSection({ jobs, stats, onRefresh }: { jobs: DictionaryJob
     const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString()
     await supabase
       .from("dictionary_jobs")
-      .update({ status: "pending", started_at: null } as Record<string, unknown>)
+      .update(cleanResetFields)
       .eq("status", "processing")
       .lt("started_at", thirtyMinutesAgo)
     onRefresh()

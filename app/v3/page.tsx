@@ -15,8 +15,8 @@ export default async function V3IndexPage() {
       // Tiene workspace pero le faltan docs (blocker)
       redirect("/v3/docs")
     }
-    // Todo OK - ir a campañas
-    redirect("/v3/campaigns")
+    // Todo OK - ir al chat (nuevo flujo cuenta-céntrico)
+    redirect("/v3/chat")
   }
   
   // Fallback

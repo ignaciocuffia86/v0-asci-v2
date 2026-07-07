@@ -148,6 +148,13 @@ export async function inviteMember(
     return { success: false, error: "Rol inválido" }
   }
 
+  // Límite de usuarios según plan del workspace
+  const { checkSeatQuota } = await import("@/lib/v3/plans")
+  const seatQuota = await checkSeatQuota(workspace.id)
+  if (!seatQuota.allowed) {
+    return { success: false, error: seatQuota.reason ?? "Límite de usuarios alcanzado" }
+  }
+
   // Si el email ya pertenece a un miembro activo, evitar duplicado
   const existingUser = await getAuthUserByEmail(normalizedEmail)
   if (existingUser) {

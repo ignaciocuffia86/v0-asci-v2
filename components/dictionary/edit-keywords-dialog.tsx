@@ -125,19 +125,7 @@ export function EditKeywordsDialog({
       const tableName = itemType === "product" ? "dictionary_products" : "dictionary_processes"
       const signalType = itemType === "product" ? "technology" : "process"
 
-      // 1. Delete signals immediately for removed keywords (don't wait for background job)
-      const removals = pendingChanges.filter((c) => c.type === "remove")
-      if (removals.length > 0) {
-        for (const change of removals) {
-          await supabase
-            .from("signals")
-            .delete()
-            .eq("signal_id", itemId)
-            .ilike("keyword_matched", change.keyword)
-        }
-      }
-
-      // 2. Update the dictionary entry (name and keywords)
+      // 1. Update the dictionary entry (name and keywords)
       await supabase
         .from(tableName)
         .update({
@@ -146,16 +134,20 @@ export function EditKeywordsDialog({
         })
         .eq("id", itemId)
 
-      // 3. Create jobs only for additions (removals were already handled above)
-      const additions = pendingChanges.filter((c) => c.type === "add")
-      for (const change of additions) {
-        await supabase.from("dictionary_jobs").insert({
-          job_type: "add_keyword",
-          signal_id: itemId,
-          signal_type: signalType,
-          keyword: change.keyword,
-          status: "pending",
-        })
+      // 2. Encolar TODOS los cambios como jobs en background.
+      //    El borrado ya NO se hace síncrono desde el browser: eso disparaba
+      //    "canceling statement due to lock timeout" (DELETE con ILIKE sobre
+      //    signals bajo el statement_timeout de 8s del rol authenticated).
+      //    Ahora el cron/driver procesa remove_keyword con timeout amplio.
+      const jobs = pendingChanges.map((change) => ({
+        job_type: change.type === "add" ? "add_keyword" : "remove_keyword",
+        signal_id: itemId,
+        signal_type: signalType,
+        keyword: change.keyword,
+        status: "pending",
+      }))
+      if (jobs.length > 0) {
+        await supabase.from("dictionary_jobs").insert(jobs)
       }
 
       onSave()

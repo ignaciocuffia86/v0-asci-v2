@@ -1,0 +1,143 @@
+// ═══════════════════════════════════════════════════════════
+// Tipos compartidos de la capa de servicios v3 (cuenta-céntrico)
+// Consumidos por: chat web, MCP server, cron de refresh.
+// ═══════════════════════════════════════════════════════════
+
+export type RadarType = "tech" | "news" | "jobs-interpretation"
+
+export type ResearchJobStatus = "pending" | "running" | "completed" | "failed" | "cancelled"
+
+export interface ResearchJob {
+  id: string
+  workspace_id: string
+  conversation_id: string | null
+  batch_id: string
+  company_id: string | null
+  company_input: string
+  resolved_domain: string | null
+  resolved_country: string | null
+  status: ResearchJobStatus
+  current_step: string | null
+  progress: number
+  force_refresh: boolean
+  error: string | null
+  requested_by: string
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+}
+
+export interface RadarFinding {
+  id: string
+  company_id: string
+  radar_type: RadarType
+  category: string
+  title: string
+  summary: string | null
+  url: string | null
+  source_name: string | null
+  source_date: string | null
+  evidence_level: "explicit" | "inferred"
+  confidence: number | null
+  dictionary_product_ids: string[]
+  dictionary_process_ids: string[]
+  supporting_job_posting_ids: string[]
+  payload: Record<string, unknown> | null
+  detected_at: string
+}
+
+export interface Scorecard {
+  id: string
+  workspace_id: string
+  company_id: string
+  score: number
+  fit_score: number
+  buying_signals_score: number
+  accessibility_score: number
+  timing_score: number
+  rationale: string | null
+  dictionary_matches: Record<string, unknown> | null
+  signals_snapshot: Record<string, unknown> | null
+  created_at: string
+}
+
+export interface Icebreaker {
+  id: string
+  workspace_id: string
+  company_id: string
+  contact_apollo_id: string | null
+  contact_name: string
+  contact_title: string | null
+  contact_country: string | null
+  language_register: string
+  content: string
+  evidence: unknown
+  version: number
+  feedback: number | null
+  created_at: string
+}
+
+export interface FollowedAccount {
+  id: string
+  workspace_id: string
+  company_id: string
+  followed_by: string
+  is_active: boolean
+  refresh_day: number
+  last_refreshed_at: string | null
+  created_at: string
+}
+
+export interface CompanyResolution {
+  input: string
+  companyId: string | null
+  name: string | null
+  domain: string | null
+  country: string | null
+  industry: string | null
+  /** true si hay datos frescos en cache (< CACHE_TTL_DAYS) */
+  cacheFresh: boolean
+  lastResearchedAt: string | null
+  /** true si el workspace ya sigue esta cuenta */
+  alreadyFollowed: boolean
+  /** candidatos cuando el input es ambiguo */
+  candidates: { companyId: string; name: string; domain: string | null; country: string | null }[]
+}
+
+export interface DictionaryData {
+  vendors: { id: string; name: string }[]
+  products: { id: string; vendor_id: string | null; name: string; keywords: string[] }[]
+  processes: { id: string; name: string; keywords: string[] }[]
+}
+
+export interface DictionaryMatch {
+  type: "product" | "process"
+  id: string
+  name: string
+  keyword: string
+  snippet: string
+}
+
+/** Límites operativos de la plataforma */
+export const LIMITS = {
+  /** Máximo de cuentas por lote en el chat */
+  MAX_BATCH_SIZE: 25,
+  /** Días de validez del cache global antes de re-investigar */
+  CACHE_TTL_DAYS: 30,
+  /** Máximo de bundles Opus por cuenta por ejecución */
+  MAX_OPUS_BUNDLES: 5,
+  /** Contactos máximos a sugerir por cuenta */
+  MAX_CONTACTS: 5,
+} as const
+
+/** Modelos vía Vercel AI Gateway */
+export const MODELS = {
+  /** Investigación profunda (etapa A) */
+  RESEARCH: "anthropic/claude-opus-4-5",
+  /** Estructuración y tareas baratas (etapa B) */
+  STRUCTURER: "google/gemini-2.5-flash",
+  /** Generación de icebreakers (calidad media, barato) */
+  WRITER: "anthropic/claude-sonnet-4-5",
+  /** Chat orquestador */
+  CHAT: "anthropic/claude-sonnet-4-5",
+} as const

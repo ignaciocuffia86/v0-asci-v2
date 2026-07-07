@@ -25,7 +25,7 @@ export default function SettingsLayout({
       <header className="sticky top-0 z-50 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
         <div className="flex h-14 items-center gap-4 px-4">
           <Button variant="ghost" size="sm" asChild>
-            <Link href="/v3/campaigns">
+            <Link href="/v3/chat">
               <ChevronLeft className="mr-1 size-4" />
               Volver
             </Link>

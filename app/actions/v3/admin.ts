@@ -53,6 +53,9 @@ export async function isSuperAdmin(): Promise<boolean> {
 export interface WorkspaceSummary extends Workspace {
   member_count: number
   admin_emails: string[]
+  plan: string
+  followed_count: number
+  monthly_research_count: number
 }
 
 export async function listAllWorkspaces(): Promise<{
@@ -100,15 +103,70 @@ export async function listAllWorkspaces(): Promise<{
         })
       )
 
+      const monthStart = new Date()
+      monthStart.setUTCDate(1)
+      monthStart.setUTCHours(0, 0, 0, 0)
+
+      const [followedRes, monthlyRes] = await Promise.all([
+        admin
+          .schema("v3")
+          .from("followed_accounts")
+          .select("id", { count: "exact", head: true })
+          .eq("workspace_id", ws.id)
+          .eq("is_active", true),
+        admin
+          .schema("v3")
+          .from("research_jobs")
+          .select("id", { count: "exact", head: true })
+          .eq("workspace_id", ws.id)
+          .eq("source", "user")
+          .gte("created_at", monthStart.toISOString()),
+      ])
+
       return {
         ...(ws as Workspace),
         member_count: memberCount,
         admin_emails: adminEmails,
+        plan: (ws as { plan?: string }).plan ?? "trial",
+        followed_count: followedRes.count ?? 0,
+        monthly_research_count: monthlyRes.count ?? 0,
       }
     })
   )
 
   return { workspaces: summaries }
+}
+
+// ═══════════════════════════════════════════════════════════
+// CAMBIO DE PLAN
+// ═══════════════════════════════════════════════════════════
+
+export async function setWorkspacePlan(input: {
+  workspaceId: string
+  plan: string
+}): Promise<{ success: boolean; error?: string }> {
+  const guard = await requireSuperAdmin()
+  if ("error" in guard) return { success: false, error: guard.error }
+
+  if (!["trial", "silver", "gold", "platinum"].includes(input.plan)) {
+    return { success: false, error: "Plan inválido" }
+  }
+
+  const admin = createAdminClient()
+  const { error } = await admin
+    .schema("v3")
+    .from("workspaces")
+    .update({ plan: input.plan })
+    .eq("id", input.workspaceId)
+
+  if (error) {
+    console.error("[v3] Error cambiando plan:", error.message)
+    return { success: false, error: "No se pudo cambiar el plan" }
+  }
+
+  const { invalidatePlanCache } = await import("@/lib/v3/plans")
+  invalidatePlanCache(input.workspaceId)
+  return { success: true }
 }
 
 // ═══════════════════════════════════════════════════════════

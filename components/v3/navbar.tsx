@@ -3,11 +3,13 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { 
-  Building2, 
   FileText, 
   Settings, 
   LogOut,
-  Sparkles
+  Sparkles,
+  MessageSquare,
+  Star,
+  ShieldCheck
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -33,9 +35,10 @@ interface V3NavbarProps {
   workspace?: {
     name: string
   } | null
+  isSuperAdmin?: boolean
 }
 
-export function V3Navbar({ user, workspace }: V3NavbarProps) {
+export function V3Navbar({ user, workspace, isSuperAdmin }: V3NavbarProps) {
   const pathname = usePathname()
   const router = useRouter()
   
@@ -50,8 +53,10 @@ export function V3Navbar({ user, workspace }: V3NavbarProps) {
     : (user.email || "U").slice(0, 2).toUpperCase()
   
   const navItems = [
-    { href: "/v3/campaigns", label: "Campanas", icon: Building2 },
+    { href: "/v3/chat", label: "Chat", icon: MessageSquare },
+    { href: "/v3/accounts", label: "Cuentas", icon: Star },
     { href: "/v3/docs", label: "Documentos", icon: FileText },
+    ...(isSuperAdmin ? [{ href: "/v3/admin", label: "Admin", icon: ShieldCheck }] : []),
   ]
   
   return (

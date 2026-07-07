@@ -5,6 +5,8 @@ import { Badge } from "@/components/ui/badge"
 import { Building2, Globe, Users, FileText, Calendar } from "lucide-react"
 import { format } from "date-fns"
 import { es } from "date-fns/locale"
+import { PlanUsageCard } from "@/components/v3/settings/plan-usage-card"
+import { getWorkspaceUsage } from "@/lib/v3/plans"
 
 export default async function SettingsPage() {
   const supabase = await createClient()
@@ -24,6 +26,7 @@ export default async function SettingsPage() {
   }
   
   // Obtener stats del workspace
+  const usage = await getWorkspaceUsage(workspace.id)
   const [membersResult, docsResult, campaignsResult] = await Promise.all([
     supabase
       .from("v3_workspace_members")
@@ -53,6 +56,8 @@ export default async function SettingsPage() {
         </p>
       </div>
       
+      <PlanUsageCard usage={usage} />
+
       <div className="grid gap-4 md:grid-cols-2">
         {/* Workspace Info */}
         <Card>

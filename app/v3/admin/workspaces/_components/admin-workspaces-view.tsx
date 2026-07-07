@@ -29,10 +29,25 @@ import {
 import { Plus, Building2, Users, AlertCircle, Trash2 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
   createWorkspaceAsSuperAdmin,
   deleteWorkspaceAsSuperAdmin,
+  setWorkspacePlan,
   type WorkspaceSummary,
 } from "@/app/actions/v3/admin"
+
+const PLAN_LABELS: Record<string, { label: string; cap: number }> = {
+  trial: { label: "Trial", cap: 2 },
+  silver: { label: "Silver", cap: 30 },
+  gold: { label: "Gold", cap: 60 },
+  platinum: { label: "Platinum", cap: 120 },
+}
 
 interface AdminWorkspacesViewProps {
   initialWorkspaces: WorkspaceSummary[]
@@ -53,6 +68,30 @@ export function AdminWorkspacesView({ initialWorkspaces, loadError }: AdminWorks
   const [deleteTarget, setDeleteTarget] = useState<WorkspaceSummary | null>(null)
   const [deleteConfirmName, setDeleteConfirmName] = useState("")
   const [isDeleting, setIsDeleting] = useState(false)
+  const [changingPlanId, setChangingPlanId] = useState<string | null>(null)
+
+  const handlePlanChange = async (ws: WorkspaceSummary, plan: string) => {
+    if (plan === ws.plan) return
+    setChangingPlanId(ws.id)
+    try {
+      const result = await setWorkspacePlan({ workspaceId: ws.id, plan })
+      if (!result.success) {
+        toast({
+          title: "No se pudo cambiar el plan",
+          description: result.error ?? "Error desconocido",
+          variant: "destructive",
+        })
+        return
+      }
+      toast({
+        title: "Plan actualizado",
+        description: `"${ws.name}" ahora tiene plan ${PLAN_LABELS[plan]?.label ?? plan}.`,
+      })
+      router.refresh()
+    } finally {
+      setChangingPlanId(null)
+    }
+  }
 
   const handleCreate = async () => {
     if (!name.trim() || !adminEmail.trim() || !domain.trim()) {
@@ -257,6 +296,8 @@ export function AdminWorkspacesView({ initialWorkspaces, loadError }: AdminWorks
                   <TableRow>
                     <TableHead>Nombre</TableHead>
                     <TableHead>Dominio</TableHead>
+                    <TableHead>Plan</TableHead>
+                    <TableHead>Uso</TableHead>
                     <TableHead>Admins</TableHead>
                     <TableHead>Miembros</TableHead>
                     <TableHead>Creado</TableHead>
@@ -273,6 +314,32 @@ export function AdminWorkspacesView({ initialWorkspaces, loadError }: AdminWorks
                         ) : (
                           <span className="text-muted-foreground">—</span>
                         )}
+                      </TableCell>
+                      <TableCell>
+                        <Select
+                          value={ws.plan}
+                          onValueChange={(plan) => handlePlanChange(ws, plan)}
+                          disabled={changingPlanId === ws.id}
+                        >
+                          <SelectTrigger className="h-8 w-28 text-xs" aria-label={`Plan de ${ws.name}`}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Object.entries(PLAN_LABELS).map(([value, { label, cap }]) => (
+                              <SelectItem key={value} value={value} className="text-xs">
+                                {label} ({cap})
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        <div className="flex flex-col gap-0.5">
+                          <span>
+                            {ws.followed_count}/{PLAN_LABELS[ws.plan]?.cap ?? "—"} seguidas
+                          </span>
+                          <span>{ws.monthly_research_count} researches este mes</span>
+                        </div>
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {ws.admin_emails.length > 0 ? ws.admin_emails.join(", ") : "—"}

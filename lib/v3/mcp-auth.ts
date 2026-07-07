@@ -11,6 +11,7 @@ export interface McpAuthResult {
   success: boolean
   workspaceId?: string
   keyId?: string
+  scopes?: string[]
   error?: {
     code: string
     message: string
@@ -71,7 +72,7 @@ export async function validateMcpRequest(req: NextRequest): Promise<McpAuthResul
   const { data: keyData, error: keyError } = await admin
     .schema("v3")
     .from("mcp_api_keys")
-    .select("id, workspace_id, rate_limit_per_minute, revoked_at")
+    .select("id, workspace_id, rate_limit_per_minute, revoked_at, scopes")
     .eq("key_hash", keyHash)
     .single()
     
@@ -96,7 +97,21 @@ export async function validateMcpRequest(req: NextRequest): Promise<McpAuthResul
       }
     }
   }
-  
+
+  // El acceso MCP requiere plan Platinum (aunque la key exista de antes)
+  const { checkApiKeyAccess } = await import("@/lib/v3/plans")
+  const planAccess = await checkApiKeyAccess(keyData.workspace_id)
+  if (!planAccess.allowed) {
+    return {
+      success: false,
+      error: {
+        code: "PLAN_REQUIRED",
+        message: planAccess.reason ?? "MCP access requires the Platinum plan",
+        status: 403
+      }
+    }
+  }
+
   // Check rate limit
   const rateLimit = keyData.rate_limit_per_minute || 60
   const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString()
@@ -132,7 +147,10 @@ export async function validateMcpRequest(req: NextRequest): Promise<McpAuthResul
   return {
     success: true,
     workspaceId: keyData.workspace_id,
-    keyId: keyData.id
+    keyId: keyData.id,
+    scopes: Array.isArray((keyData as { scopes?: string[] }).scopes)
+      ? (keyData as { scopes?: string[] }).scopes
+      : ["read"],
   }
 }
 
