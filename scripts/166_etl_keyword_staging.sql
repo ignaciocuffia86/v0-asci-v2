@@ -42,7 +42,7 @@ RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path TO 'public'
-SET statement_timeout TO '45s'  -- permite el scan de match pesado; el cron abortará a ~58s
+SET statement_timeout TO '40s'  -- permite el scan de match pesado; < abort del cron (50s) y del maxDuration (60s)
 AS $function$
 DECLARE
   v_job RECORD;
