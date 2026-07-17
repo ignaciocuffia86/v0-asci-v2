@@ -60,7 +60,7 @@ export function AccountDetailView({
 }) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
-  const { company, followedAccount, scorecard, previousScore, findings, agentLabels, icebreakers, digests } = detail
+  const { company, followedAccount, scorecard, brief, previousScore, findings, agentLabels, icebreakers, digests } = detail
 
   const isFollowed = !!followedAccount
 
@@ -113,7 +113,9 @@ export function AccountDetailView({
   if (!company) return null
 
   const scoreDelta =
-    scorecard && previousScore !== null ? scorecard.score - previousScore : null
+    scorecard?.score !== null && scorecard?.score !== undefined && previousScore !== null
+      ? scorecard.score - previousScore
+      : null
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -130,7 +132,11 @@ export function AccountDetailView({
           <div className="flex flex-col gap-1">
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-semibold tracking-tight">{company.name}</h1>
-              {scorecard && <ScoreBadge score={scorecard.score} />}
+              {typeof scorecard?.score === "number" ? (
+                <ScoreBadge score={scorecard.score} />
+              ) : scorecard?.fit_status === "fit_not_evaluated" ? (
+                <Badge variant="secondary">Fit no evaluado</Badge>
+              ) : null}
               {scoreDelta !== null && scoreDelta !== 0 && (
                 <Badge variant={scoreDelta > 0 ? "default" : "secondary"} className="tabular-nums">
                   {scoreDelta > 0 ? `+${scoreDelta}` : scoreDelta} vs. anterior
@@ -199,8 +205,26 @@ export function AccountDetailView({
         </div>
       )}
 
+      {/* Account Brief: quick win preliminar o resultado final */}
+      {brief && <AccountBriefCard brief={brief} />}
+
       {/* Scorecard */}
-      {scorecard && <ScorecardCard scorecard={scorecard} findingsCount={findings.length} />}
+      {scorecard?.fit_status === "evaluated" && <ScorecardCard scorecard={scorecard} findingsCount={findings.length} />}
+      {scorecard?.fit_status === "fit_not_evaluated" && (
+        <Card className="border-dashed">
+          <CardContent className="flex flex-col gap-3 pt-6 md:flex-row md:items-center md:justify-between">
+            <div className="flex flex-col gap-1">
+              <p className="font-medium">Fit no evaluado</p>
+              <p className="text-sm text-muted-foreground text-pretty">
+                La evidencia de la cuenta está disponible, pero necesitamos tu propuesta de valor para calcular el encaje.
+              </p>
+            </div>
+            <Button asChild>
+              <Link href="/v3/documents">Completá tu propuesta de valor</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Tabs: Hallazgos | Señales | Contexto | Icebreakers | Historial */}
       <Tabs defaultValue="findings">
@@ -361,6 +385,54 @@ export function AccountDetailView({
         </TabsContent>
       </Tabs>
     </div>
+  )
+}
+
+function AccountBriefCard({ brief }: { brief: NonNullable<AccountDetail["brief"]> }) {
+  const coverage = brief.coverage ?? {}
+  const contacts = brief.recommended_contacts ?? []
+  return (
+    <Card className="overflow-hidden">
+      <CardHeader className="border-b bg-muted/30">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <CardTitle className="text-base text-balance">{brief.headline}</CardTitle>
+          <Badge variant={brief.stage === "final" ? "default" : "secondary"}>
+            {brief.stage === "final" ? "Final" : "Preliminar"}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-5 pt-5">
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="flex flex-col gap-1">
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Por qué ahora</p>
+            <p className="text-sm text-pretty">{brief.why_now || "No hay señales recientes suficientes para evaluar el timing."}</p>
+          </div>
+          <div className="flex flex-col gap-1">
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Encaje</p>
+            <p className="text-sm text-pretty">{brief.fit_summary || "Fit no evaluado."}</p>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Badge variant="outline">{coverage.signals ?? 0} señales</Badge>
+          <Badge variant="outline">{coverage.jobPostings ?? 0} vacantes</Badge>
+          <Badge variant="outline">{coverage.technologies ?? 0} tecnologías</Badge>
+          <Badge variant="outline">{contacts.length} contactos</Badge>
+        </div>
+        {brief.next_actions.length > 0 && (
+          <div className="flex flex-col gap-2">
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Próximos pasos</p>
+            <ul className="flex flex-col gap-1 text-sm">
+              {brief.next_actions.slice(0, 3).map((action) => <li key={action}>· {action}</li>)}
+            </ul>
+          </div>
+        )}
+        {brief.stage === "preliminary" && (
+          <p className="rounded-md bg-primary/5 px-3 py-2 text-xs text-muted-foreground text-pretty">
+            Este resultado usa los datos que ASCI ya tenía. La investigación web continúa automáticamente y puede sumar evidencia.
+          </p>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 

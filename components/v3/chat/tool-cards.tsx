@@ -288,8 +288,9 @@ function BatchProgressInner({
 }) {
   const [notified, setNotified] = useState(false)
 
+  const terminalStatuses = ["completed", "completed_with_warnings", "failed_terminal", "cancelled"]
   const initialDone =
-    initialJobs.length > 0 && initialJobs.every((j) => ["completed", "failed", "cancelled"].includes(j.status))
+    initialJobs.length > 0 && initialJobs.every((j) => terminalStatuses.includes(j.status))
 
   const { data } = useSWR(
     batchId && !isStatic && !initialDone ? `/api/v3/research/batch/${batchId}` : null,

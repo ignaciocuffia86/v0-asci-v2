@@ -4,6 +4,9 @@ import { runMicroAgents, isRadarCacheFresh } from "./radar"
 import { selectMicroAgentsForWorkspace } from "./agent-selection"
 import { interpretJobPostings } from "./jobs-interpreter"
 import { computeScorecard } from "./scoring"
+import { buildInternalAccountSnapshot } from "./internal-account-snapshot"
+import { computePreliminaryFit } from "./preliminary-fit"
+import type { CanonicalCompanyIdentity } from "./job-posting-provider"
 import { LIMITS, type ResearchJob } from "./types"
 
 // ═══════════════════════════════════════════════════════════
@@ -113,9 +116,19 @@ async function updateJob(
     company_id: string
     resolved_domain: string | null
     resolved_country: string | null
-    error: string
+    error: string | null
     started_at: string
     finished_at: string
+    phase: "internal" | "external" | "finalizing"
+    heartbeat_at: string
+    lease_expires_at: string
+    worker_id: string | null
+    attempt_count: number
+    error_code: string | null
+    last_error_at: string
+    next_retry_at: string | null
+    preliminary_ready_at: string
+    external_started_at: string
   }>
 ) {
   const admin = createAdminClient()
@@ -141,12 +154,21 @@ export async function runResearchJob(jobId: string): Promise<ResearchJob | null>
     return (job as ResearchJob) ?? null
   }
 
+  const workerId = crypto.randomUUID()
+  const startedAt = new Date()
   await updateJob(jobId, {
     status: "running",
-    current_step: "resolviendo-empresa",
+    phase: "internal",
+    current_step: "resolving_company",
     progress: 5,
-    started_at: new Date().toISOString(),
-    error: undefined as never,
+    started_at: startedAt.toISOString(),
+    heartbeat_at: startedAt.toISOString(),
+    lease_expires_at: new Date(startedAt.getTime() + 15 * 60_000).toISOString(),
+    worker_id: workerId,
+    attempt_count: (job.attempt_count ?? 0) + 1,
+    error: null,
+    error_code: null,
+    next_retry_at: null,
   })
 
   try {
@@ -201,7 +223,46 @@ export async function runResearchJob(jobId: string): Promise<ResearchJob | null>
       }
     }
 
-    // ── 2. Cache-first ──
+    // ── 2. Quick win: snapshot interno + fit preliminar ──
+    await updateJob(jobId, { current_step: "analyzing_internal_data", progress: 18 })
+    const canonicalCompany: CanonicalCompanyIdentity = {
+      id: companyId!,
+      name: companyName,
+      domain,
+      country,
+      industry,
+    }
+    const snapshot = await buildInternalAccountSnapshot({
+      workspaceId: job.workspace_id,
+      company: canonicalCompany,
+      researchJobId: jobId,
+    })
+    const preliminary = await computePreliminaryFit({
+      workspaceId: job.workspace_id,
+      snapshot,
+      researchJobId: jobId,
+    })
+    const preliminaryReadyAt = new Date().toISOString()
+    await updateJob(jobId, {
+      status: "preliminary_ready",
+      current_step: "preliminary_ready",
+      progress: 32,
+      preliminary_ready_at: preliminaryReadyAt,
+      heartbeat_at: preliminaryReadyAt,
+    })
+
+    // ── 3. Continuación automática: research externo cache-first ──
+    const externalStartedAt = new Date().toISOString()
+    await updateJob(jobId, {
+      status: "running",
+      phase: "external",
+      current_step: "researching_external_signals",
+      progress: 35,
+      external_started_at: externalStartedAt,
+      heartbeat_at: externalStartedAt,
+      lease_expires_at: new Date(Date.now() + 15 * 60_000).toISOString(),
+    })
+    void preliminary
     const fresh = await isRadarCacheFresh(companyId!, LIMITS.CACHE_TTL_DAYS)
     const skipResearch = fresh && !job.force_refresh
 
@@ -231,8 +292,8 @@ export async function runResearchJob(jobId: string): Promise<ResearchJob | null>
       await interpretJobPostings(companyId!, companyName)
     }
 
-    // ── 5. Scorecard por workspace (siempre se recalcula) ──
-    await updateJob(jobId, { current_step: "scoring", progress: 90 })
+    // ── 6. Scorecard final por workspace (siempre se recalcula) ──
+    await updateJob(jobId, { phase: "finalizing", current_step: "finalizing", progress: 90 })
     await computeScorecard({
       workspaceId: job.workspace_id,
       companyId: companyId!,
@@ -242,17 +303,26 @@ export async function runResearchJob(jobId: string): Promise<ResearchJob | null>
 
     await updateJob(jobId, {
       status: "completed",
-      current_step: "completado",
+      current_step: "completed",
       progress: 100,
+      heartbeat_at: new Date().toISOString(),
+      worker_id: null,
       finished_at: new Date().toISOString(),
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error"
+    const retryable = /timeout|rate|fetch|network|temporar|provider/i.test(message)
+    const attempt = (job.attempt_count ?? 0) + 1
+    const canRetry = retryable && attempt < (job.max_attempts ?? 3)
     console.error(`[v3] Research job ${jobId} falló:`, message)
     await updateJob(jobId, {
-      status: "failed",
+      status: canRetry ? "failed_retriable" : "failed_terminal",
       error: message,
-      finished_at: new Date().toISOString(),
+      error_code: retryable ? "PROVIDER_TRANSIENT" : "PIPELINE_ERROR",
+      last_error_at: new Date().toISOString(),
+      next_retry_at: canRetry ? new Date(Date.now() + Math.min(15 * 60_000, 30_000 * 2 ** attempt)).toISOString() : null,
+      worker_id: null,
+      finished_at: canRetry ? undefined as never : new Date().toISOString(),
     })
   }
 
