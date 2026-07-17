@@ -32,6 +32,10 @@
     {
       "path": "/api/cron/v3-refresh-accounts",
       "schedule": "0 6,7,8 * * *"
+    },
+    {
+      "path": "/api/cron/v3-research-watchdog",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

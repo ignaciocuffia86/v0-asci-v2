@@ -6,6 +6,8 @@ import { interpretJobPostings } from "./jobs-interpreter"
 import { computeScorecard } from "./scoring"
 import { buildInternalAccountSnapshot } from "./internal-account-snapshot"
 import { computePreliminaryFit } from "./preliminary-fit"
+import { buildFinalAccountBrief } from "./final-account-brief"
+import { runMeasuredStage } from "./research-stage-run"
 import type { CanonicalCompanyIdentity } from "./job-posting-provider"
 import { LIMITS, type ResearchJob } from "./types"
 
@@ -132,7 +134,11 @@ async function updateJob(
   }>
 ) {
   const admin = createAdminClient()
-  await admin.schema("v3").from("research_jobs").update(patch).eq("id", jobId)
+  await admin
+    .schema("v3")
+    .from("research_jobs")
+    .update({ heartbeat_at: new Date().toISOString(), ...patch })
+    .eq("id", jobId)
 }
 
 /**
@@ -184,8 +190,9 @@ export async function runResearchJob(jobId: string): Promise<ResearchJob | null>
       if (resolution.candidates.length > 0) {
         // Ambiguo: el chat debe desambiguar antes de re-encolar
         await updateJob(jobId, {
-          status: "failed",
-          current_step: "ambiguo",
+          status: "failed_terminal",
+          current_step: "company_ambiguous",
+          error_code: "COMPANY_AMBIGUOUS",
           error: `Empresa ambigua: ${resolution.candidates.map((c) => c.name).join(" / ")}`,
           finished_at: new Date().toISOString(),
         })
@@ -232,15 +239,23 @@ export async function runResearchJob(jobId: string): Promise<ResearchJob | null>
       country,
       industry,
     }
-    const snapshot = await buildInternalAccountSnapshot({
-      workspaceId: job.workspace_id,
-      company: canonicalCompany,
+    const snapshot = await runMeasuredStage({
       researchJobId: jobId,
+      stage: "internal_snapshot",
+      execute: () => buildInternalAccountSnapshot({
+        workspaceId: job.workspace_id,
+        company: canonicalCompany,
+        researchJobId: jobId,
+      }),
     })
-    const preliminary = await computePreliminaryFit({
-      workspaceId: job.workspace_id,
-      snapshot,
+    const preliminary = await runMeasuredStage({
       researchJobId: jobId,
+      stage: "preliminary_fit",
+      execute: () => computePreliminaryFit({
+        workspaceId: job.workspace_id,
+        snapshot,
+        researchJobId: jobId,
+      }),
     })
     const preliminaryReadyAt = new Date().toISOString()
     await updateJob(jobId, {
@@ -294,11 +309,25 @@ export async function runResearchJob(jobId: string): Promise<ResearchJob | null>
 
     // ── 6. Scorecard final por workspace (siempre se recalcula) ──
     await updateJob(jobId, { phase: "finalizing", current_step: "finalizing", progress: 90 })
-    await computeScorecard({
-      workspaceId: job.workspace_id,
-      companyId: companyId!,
-      companyName,
+    await runMeasuredStage({
       researchJobId: jobId,
+      stage: "final_scorecard",
+      execute: () => computeScorecard({
+        workspaceId: job.workspace_id,
+        companyId: companyId!,
+        companyName,
+        researchJobId: jobId,
+      }),
+    })
+    await runMeasuredStage({
+      researchJobId: jobId,
+      stage: "final_brief",
+      execute: () => buildFinalAccountBrief({
+        workspaceId: job.workspace_id,
+        companyId: companyId!,
+        companyName,
+        researchJobId: jobId,
+      }),
     })
 
     await updateJob(jobId, {

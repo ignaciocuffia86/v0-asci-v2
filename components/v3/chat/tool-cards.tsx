@@ -303,8 +303,10 @@ function BatchProgressInner({
 
   const jobs: any[] = data?.jobs ?? initialJobs
   const done = data?.done ?? initialDone
-  const completed = jobs.filter((j) => j.status === "completed")
-  const failed = jobs.filter((j) => j.status === "failed")
+  const completed = jobs.filter((j) => ["completed", "completed_with_warnings"].includes(j.status))
+  const failed = jobs.filter((j) => ["failed_terminal", "cancelled"].includes(j.status))
+  const retrying = jobs.filter((j) => j.status === "failed_retriable")
+  const preliminary = jobs.filter((j) => j.status === "preliminary_ready")
 
   // Al terminar, avisar al modelo una sola vez para que presente resultados
   if (done && !isStatic && !notified && !isBusy && completed.length > 0 && data) {
@@ -325,10 +327,10 @@ function BatchProgressInner({
         {jobs.map((j) => (
           <div key={j.id} className="flex items-center gap-3 px-3 py-2 text-sm">
             <span className="min-w-0 flex-1 truncate font-medium">{j.companyInput}</span>
-            {j.status === "completed" ? (
+            {["completed", "completed_with_warnings"].includes(j.status) ? (
               <span className="flex items-center gap-2">
                 <Badge variant="secondary" className="gap-1 text-xs">
-                  <Check className="size-3" /> Lista
+                  <Check className="size-3" /> {j.status === "completed_with_warnings" ? "Lista con alertas" : "Lista"}
                 </Badge>
                 {j.companyId && (
                   <Link
@@ -339,33 +341,49 @@ function BatchProgressInner({
                   </Link>
                 )}
               </span>
-            ) : j.status === "failed" ? (
+            ) : ["failed_terminal", "cancelled"].includes(j.status) ? (
               <span className="flex items-center gap-2">
                 <Badge variant="destructive" className="text-xs">
-                  Falló
+                  {j.status === "cancelled" ? "Cancelada" : "Falló"}
                 </Badge>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-6 bg-transparent px-2 text-xs"
-                  disabled={isBusy}
-                  onClick={() => sendMessage({ text: `Reintentá el research de ${j.companyInput}` })}
-                >
-                  Reintentar
-                </Button>
+                {j.status !== "cancelled" && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-6 bg-transparent px-2 text-xs"
+                    disabled={isBusy}
+                    onClick={() => sendMessage({ text: `Reintentá el research de ${j.companyInput}` })}
+                  >
+                    Reintentar
+                  </Button>
+                )}
               </span>
+            ) : j.status === "failed_retriable" ? (
+              <Badge variant="outline" className="text-xs">Reintentando</Badge>
             ) : (
-              <span className="flex w-40 items-center gap-2">
+              <span className="flex w-48 items-center gap-2">
                 <Progress value={j.progress ?? 0} className="h-1.5" />
-                <span className="w-24 shrink-0 truncate text-xs text-muted-foreground">{j.currentStep ?? "En cola"}</span>
+                <span className="w-32 shrink-0 truncate text-xs text-muted-foreground">
+                  {j.status === "preliminary_ready"
+                    ? "Resultado preliminar listo"
+                    : j.phase === "external"
+                      ? "Buscando señales adicionales"
+                      : j.currentStep === "analyzing_internal_data"
+                        ? "Analizando datos de ASCI"
+                        : j.currentStep ?? "En cola"}
+                </span>
               </span>
             )}
           </div>
         ))}
       </div>
       {!done && (
-        <div className="border-t border-border bg-muted/20 px-3 py-1.5 text-xs text-muted-foreground">
-          Podés cerrar esta pestaña: el proceso continúa en segundo plano.
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border bg-muted/20 px-3 py-1.5 text-xs text-muted-foreground">
+          <span>Podés cerrar esta pestaña: el proceso continúa en segundo plano.</span>
+          <span>
+            {preliminary.length > 0 ? `${preliminary.length} con resultado preliminar` : ""}
+            {retrying.length > 0 ? `${preliminary.length > 0 ? " · " : ""}${retrying.length} reintentando` : ""}
+          </span>
         </div>
       )}
       {failed.length > 0 && done && (

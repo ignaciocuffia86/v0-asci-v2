@@ -619,10 +619,10 @@ function ScorecardCard({
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-          <ScorePillar label="Fit con tu oferta" value={scorecard.fit_score} tooltip={fitTooltip} />
-          <ScorePillar label="Señales de compra" value={scorecard.buying_signals_score} tooltip={signalsTooltip} />
-          <ScorePillar label="Accesibilidad" value={scorecard.accessibility_score} tooltip={accessTooltip} />
-          <ScorePillar label="Timing" value={scorecard.timing_score} tooltip={timingTooltip} />
+          <ScorePillar label="Fit con tu oferta" value={scorecard.fit_score ?? 0} tooltip={fitTooltip} />
+          <ScorePillar label="Señales de compra" value={scorecard.buying_signals_score ?? 0} tooltip={signalsTooltip} />
+          <ScorePillar label="Accesibilidad" value={scorecard.accessibility_score ?? 0} tooltip={accessTooltip} />
+          <ScorePillar label="Timing" value={scorecard.timing_score ?? 0} tooltip={timingTooltip} />
         </div>
         {scorecard.rationale && (
           <p className="text-sm text-muted-foreground text-pretty">{scorecard.rationale}</p>
