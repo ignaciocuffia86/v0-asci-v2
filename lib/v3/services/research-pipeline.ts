@@ -131,6 +131,10 @@ async function updateJob(
     next_retry_at: string | null
     preliminary_ready_at: string
     external_started_at: string
+    original_company_id: string | null
+    resolution_matched_by: "domain" | "alias" | "exact_name" | "ranked"
+    resolution_confidence: number
+    resolution_reason: string
   }>
 ) {
   const admin = createAdminClient()
@@ -185,43 +189,32 @@ export async function runResearchJob(jobId: string): Promise<ResearchJob | null>
     let country: string | null = null
     let industry: string | null = null
 
-    if (!companyId) {
-      const resolution = await resolveCompany(job.company_input, job.workspace_id)
-      if (resolution.candidates.length > 0) {
-        // Ambiguo: el chat debe desambiguar antes de re-encolar
-        await updateJob(jobId, {
-          status: "failed_terminal",
-          current_step: "company_ambiguous",
-          error_code: "COMPANY_AMBIGUOUS",
-          error: `Empresa ambigua: ${resolution.candidates.map((c) => c.name).join(" / ")}`,
-          finished_at: new Date().toISOString(),
-        })
-        return await getResearchJob(jobId)
-      }
-      if (resolution.companyId) {
-        companyId = resolution.companyId
-        companyName = resolution.name ?? job.company_input
-        domain = resolution.domain
-        country = resolution.country
-        industry = resolution.industry
-      } else {
-        // Empresa nueva → alta en cache global (aditivo)
-        const created = await createCompany({ name: job.company_input })
-        if ("error" in created) throw new Error(created.error)
-        companyId = created.companyId
-      }
+    const resolution = await resolveCompany(job.company_input, job.workspace_id)
+    if (resolution.candidates.length > 0) {
       await updateJob(jobId, {
-        company_id: companyId,
-        resolved_domain: domain,
-        resolved_country: country,
-        progress: 10,
+        status: "failed_terminal",
+        current_step: "company_ambiguous",
+        error_code: "COMPANY_AMBIGUOUS",
+        error: `Empresa ambigua: ${resolution.candidates.map((candidate) => candidate.name).join(" / ")}`,
+        resolution_reason: resolution.resolutionReason,
+        finished_at: new Date().toISOString(),
       })
+      return await getResearchJob(jobId)
+    }
+
+    const previousCompanyId = companyId
+    if (resolution.companyId) {
+      companyId = resolution.companyId
+      companyName = resolution.name ?? job.company_input
+      domain = resolution.domain
+      country = resolution.country
+      industry = resolution.industry
+    } else if (!companyId) {
+      const created = await createCompany({ name: job.company_input })
+      if ("error" in created) throw new Error(created.error)
+      companyId = created.companyId
     } else {
-      const { data: company } = await admin
-        .from("companies")
-        .select("name, website, country, industry")
-        .eq("id", companyId)
-        .maybeSingle()
+      const { data: company } = await admin.from("companies").select("name,website,country,industry").eq("id", companyId).maybeSingle()
       if (company) {
         companyName = company.name
         domain = company.website
@@ -229,6 +222,17 @@ export async function runResearchJob(jobId: string): Promise<ResearchJob | null>
         industry = company.industry
       }
     }
+
+    await updateJob(jobId, {
+      company_id: companyId,
+      original_company_id: previousCompanyId !== companyId ? previousCompanyId : undefined,
+      resolved_domain: domain,
+      resolved_country: country,
+      resolution_matched_by: resolution.matchedBy,
+      resolution_confidence: resolution.confidence,
+      resolution_reason: resolution.resolutionReason,
+      progress: 10,
+    })
 
     // ── 2. Quick win: snapshot interno + fit preliminar ──
     await updateJob(jobId, { current_step: "analyzing_internal_data", progress: 18 })

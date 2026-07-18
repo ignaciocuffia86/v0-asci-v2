@@ -6,6 +6,7 @@ import { loadDictionary, matchTextAgainstDictionary } from "./dictionary"
 import { getCanonicalContacts, type CanonicalContact } from "./contact-provider"
 import { cacheV2JobPostingProvider, type CanonicalCompanyIdentity, type NormalizedJobPosting } from "./job-posting-provider"
 import { getWorkspaceFitProfile } from "./workspace-fit-profile"
+import { getLegacySignals, LEGACY_SIGNAL_ADAPTER_VERSION } from "./legacy-signal-provider"
 
 export interface InternalEvidenceItem {
   id: string
@@ -25,7 +26,7 @@ export interface InternalAccountSnapshot {
   company: CanonicalCompanyIdentity
   generatedAt: string
   freshness: { signalsLatestAt: string | null; jobsLatestAt: string | null; contactsLatestAt: string | null }
-  coverage: { signals: number; technologies: number; processes: number; jobPostings: number; contacts: number }
+  coverage: { signals: number; signalsMaterialized: number; technologies: number; processes: number; jobPostings: number; contacts: number }
   technologies: InternalEvidenceItem[]
   processes: InternalEvidenceItem[]
   jobPostings: NormalizedJobPosting[]
@@ -46,15 +47,15 @@ export async function buildInternalAccountSnapshot(params: {
   const profile = await getWorkspaceFitProfile(params.workspaceId)
 
   const [signalResult, dictionary, jobsResult, contactsResult] = await Promise.all([
-    admin.from("signals").select("id, signal_type, signal_name, keyword_matched, context, detected_at").eq("company_id", params.company.id).order("detected_at", { ascending: false }).limit(200),
+    getLegacySignals(params.company.id, 200),
     loadDictionary(),
     cacheV2JobPostingProvider.fetch(params.company, { freshnessHours: 24, maxItems: 50, correlationId: params.researchJobId }),
     getCanonicalContacts({ companyId: params.company.id, recommendedTitles: profile.recommendedJobTitles, limit: 8 }),
   ])
 
   const warnings = [...jobsResult.warnings, ...contactsResult.warnings]
-  if (signalResult.error) warnings.push("No se pudieron recuperar todas las señales internas")
-  const signals = signalResult.data ?? []
+  if (signalResult.warning) warnings.push(signalResult.warning)
+  const signals = signalResult.signals
   const evidence = new Map<string, InternalEvidenceItem>()
 
   const add = (match: { id: string; name: string; type: "product" | "process" }, source: InternalEvidenceItem["sources"][number]) => {
@@ -68,9 +69,15 @@ export async function buildInternalAccountSnapshot(params: {
   }
 
   for (const signal of signals) {
-    const combined = [signal.signal_name, signal.keyword_matched, text(signal.context)].filter(Boolean).join(" · ")
+    const combined = [signal.keyword, signal.snippet, signal.sourceField].filter(Boolean).join(" · ")
     for (const match of matchTextAgainstDictionary(combined, dictionary)) {
-      add(match, { kind: "contact-signal", title: signal.signal_name ?? signal.signal_type, snippet: combined.slice(0, 280) || null, date: signal.detected_at ?? null, url: null })
+      add(match, {
+        kind: "contact-signal",
+        title: signal.keyword ?? signal.type,
+        snippet: signal.snippet?.slice(0, 280) ?? (combined.slice(0, 280) || null),
+        date: signal.occurredAt,
+        url: signal.sourceUrl,
+      })
     }
   }
 
@@ -84,7 +91,13 @@ export async function buildInternalAccountSnapshot(params: {
   const ranked = [...evidence.values()].sort((a, b) => b.count - a.count || (b.latestAt ?? "").localeCompare(a.latestAt ?? ""))
   const technologies = ranked.filter((item) => item.type === "technology").slice(0, 15)
   const processes = ranked.filter((item) => item.type === "process").slice(0, 15)
-  const snapshotVersion = createHash("sha256").update(JSON.stringify({ companyId: params.company.id, signals: signals.map((item) => [item.id, item.detected_at]), jobs: jobsResult.dedupeKeys, contacts: contactsResult.contacts.map((item) => item.id) })).digest("hex").slice(0, 20)
+  const snapshotVersion = createHash("sha256").update(JSON.stringify({
+    adapter: LEGACY_SIGNAL_ADAPTER_VERSION,
+    companyId: params.company.id,
+    signals: signals.map((item) => [item.id, item.occurredAt]),
+    jobs: jobsResult.dedupeKeys,
+    contacts: contactsResult.contacts.map((item) => item.id),
+  })).digest("hex").slice(0, 20)
 
   const payload = {
     workspace_id: params.workspaceId,
@@ -93,9 +106,23 @@ export async function buildInternalAccountSnapshot(params: {
     snapshot_version: snapshotVersion,
     profile_version: profile.version,
     status: warnings.length ? "partial" : "ready",
-    coverage: { signals: signals.length, technologies: technologies.length, processes: processes.length, jobPostings: jobsResult.postings.length, contacts: contactsResult.contacts.length },
-    freshness: { signalsLatestAt: latest(signals.map((item) => item.detected_at)), jobsLatestAt: latest(jobsResult.postings.map((item) => item.postedAt)), contactsLatestAt: latest(contactsResult.contacts.map((item) => item.freshness)) },
-    evidence: { technologies, processes, jobPostings: jobsResult.postings },
+    coverage: {
+      signals: signalResult.total,
+      signalsMaterialized: signals.length,
+      technologies: technologies.length,
+      processes: processes.length,
+      jobPostings: jobsResult.postings.length,
+      contacts: contactsResult.contacts.length,
+    },
+    freshness: { signalsLatestAt: signalResult.latestAt, jobsLatestAt: latest(jobsResult.postings.map((item) => item.postedAt)), contactsLatestAt: latest(contactsResult.contacts.map((item) => item.freshness)) },
+    evidence: {
+      sourceStatus: { legacySignals: signalResult.status },
+      adapterVersion: LEGACY_SIGNAL_ADAPTER_VERSION,
+      canonicalCompanyId: params.company.id,
+      technologies,
+      processes,
+      jobPostings: jobsResult.postings,
+    },
     contacts: contactsResult.contacts,
     warnings,
     generated_at: generatedAt,

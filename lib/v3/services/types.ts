@@ -126,8 +126,18 @@ export interface CompanyResolution {
   lastResearchedAt: string | null
   /** true si el workspace ya sigue esta cuenta */
   alreadyFollowed: boolean
+  matchedBy?: "domain" | "alias" | "exact_name" | "ranked"
+  confidence?: number
+  resolutionReason?: string
   /** candidatos cuando el input es ambiguo */
-  candidates: { companyId: string; name: string; domain: string | null; country: string | null }[]
+  candidates: {
+    companyId: string
+    name: string
+    domain: string | null
+    country: string | null
+    confidence?: number
+    signalsCount?: number
+  }[]
 }
 
 export interface DictionaryData {
