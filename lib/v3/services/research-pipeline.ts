@@ -40,6 +40,7 @@ export async function createResearchBatch(params: {
   inputs: string[]
   forceRefresh?: boolean
   source?: "user" | "cron"
+  quotaMode?: "partial" | "all_or_nothing"
 }): Promise<
   | { batchId: string; jobs: ResearchJob[]; blocked: BlockedResearchInput[] }
   | { error: string; blocked?: BlockedResearchInput[] }
@@ -73,6 +74,9 @@ export async function createResearchBatch(params: {
     const quota = await checkResearchQuota({ workspaceId: params.workspaceId, companies })
     for (const item of quota.items) {
       if (!item.allowed && item.reason) blocked.push({ input: item.input, reason: item.reason })
+    }
+    if (params.quotaMode === "all_or_nothing" && blocked.length > 0) {
+      return { error: blocked[0]?.reason ?? "El lote excede la cuota disponible", blocked }
     }
     const allowedInputs = new Set(quota.items.filter((i) => i.allowed).map((i) => i.input))
     inputs = inputs.filter((i) => allowedInputs.has(i))

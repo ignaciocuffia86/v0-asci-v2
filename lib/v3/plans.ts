@@ -57,7 +57,7 @@ export const PLAN_CONFIG: Record<WorkspacePlan, PlanConfig> = {
     lifetimeResearchCap: null,
     maxUsers: 3,
     allowsCron: true,
-    allowsApiKeys: false,
+    allowsApiKeys: true,
     allowsManualRefresh: true,
     refreshCooldownDays: 30,
   },
@@ -68,7 +68,7 @@ export const PLAN_CONFIG: Record<WorkspacePlan, PlanConfig> = {
     lifetimeResearchCap: null,
     maxUsers: 10,
     allowsCron: true,
-    allowsApiKeys: false,
+    allowsApiKeys: true,
     allowsManualRefresh: true,
     refreshCooldownDays: 30,
   },
@@ -368,7 +368,7 @@ export async function checkApiKeyAccess(
   if (!PLAN_CONFIG[plan].allowsApiKeys) {
     return {
       allowed: false,
-      reason: `Las API keys y el acceso MCP están disponibles solo en el plan Platinum (tu plan actual: ${PLAN_CONFIG[plan].label}).`,
+      reason: `Las API keys y el acceso MCP con IA requieren un plan pago (tu plan actual: ${PLAN_CONFIG[plan].label}).`,
     }
   }
   return { allowed: true, reason: null }

@@ -1,219 +1,97 @@
-import { createAdminClient } from "@/lib/supabase/admin"
 import crypto from "crypto"
 import { NextRequest } from "next/server"
+import { createAdminClient } from "@/lib/supabase/admin"
+import type { McpPrincipal } from "./mcp-usage"
 
-// ═══════════════════════════════════════════════════════════
-// MCP AUTH MIDDLEWARE
-// Validates API keys and rate limits for MCP endpoints
-// ═══════════════════════════════════════════════════════════
-
-export interface McpAuthResult {
+export interface McpAuthResult extends Partial<McpPrincipal> {
   success: boolean
-  workspaceId?: string
-  keyId?: string
-  scopes?: string[]
-  error?: {
-    code: string
-    message: string
-    status: number
-  }
+  error?: { code: string; message: string; status: number }
 }
 
 export interface McpResponse<T> {
   success: boolean
   data?: T
-  error?: {
-    code: string
-    message: string
-  }
-  meta?: {
-    requestId: string
-    timestamp: string
-  }
+  error?: { code: string; message: string }
+  meta: { requestId: string; timestamp: string }
 }
 
-/**
- * Validates the API key from the Authorization header
- * and checks rate limits
- */
+export function mcpResponse<T>(data: T, requestId = crypto.randomUUID()): McpResponse<T> {
+  return { success: true, data, meta: { requestId, timestamp: new Date().toISOString() } }
+}
+
+export function mcpError(code: string, message: string, requestId = crypto.randomUUID()): McpResponse<never> {
+  return { success: false, error: { code, message }, meta: { requestId, timestamp: new Date().toISOString() } }
+}
+
 export async function validateMcpRequest(req: NextRequest): Promise<McpAuthResult> {
-  const authHeader = req.headers.get("Authorization")
-  
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return {
-      success: false,
-      error: {
-        code: "UNAUTHORIZED",
-        message: "Missing or invalid Authorization header. Use: Bearer <api_key>",
-        status: 401
-      }
-    }
-  }
-  
-  const apiKey = authHeader.replace("Bearer ", "")
-  
-  if (!apiKey.startsWith("asci_")) {
-    return {
-      success: false,
-      error: {
-        code: "INVALID_KEY_FORMAT",
-        message: "Invalid API key format",
-        status: 401
-      }
-    }
-  }
-  
-  // Hash the key to compare with stored hash
-  const keyHash = crypto.createHash("sha256").update(apiKey).digest("hex")
-  
+  const header = req.headers.get("authorization")
+  if (!header?.startsWith("Bearer ")) return failure("UNAUTHORIZED", "Usá Authorization: Bearer <api_key>", 401)
+  const rawKey = header.slice(7)
+  if (!rawKey.startsWith("asci_")) return failure("INVALID_KEY_FORMAT", "Formato de API key inválido", 401)
   const admin = createAdminClient()
-  
-  // Find the key
-  const { data: keyData, error: keyError } = await admin
-    .schema("v3")
-    .from("mcp_api_keys")
-    .select("id, workspace_id, rate_limit_per_minute, revoked_at, scopes")
-    .eq("key_hash", keyHash)
-    .single()
-    
-  if (keyError || !keyData) {
-    return {
-      success: false,
-      error: {
-        code: "INVALID_KEY",
-        message: "Invalid API key",
-        status: 401
-      }
-    }
-  }
-  
-  if (keyData.revoked_at) {
-    return {
-      success: false,
-      error: {
-        code: "KEY_REVOKED",
-        message: "This API key has been revoked",
-        status: 401
-      }
-    }
-  }
-
-  // El acceso MCP requiere plan Platinum (aunque la key exista de antes)
-  const { checkApiKeyAccess } = await import("@/lib/v3/plans")
-  const planAccess = await checkApiKeyAccess(keyData.workspace_id)
-  if (!planAccess.allowed) {
-    return {
-      success: false,
-      error: {
-        code: "PLAN_REQUIRED",
-        message: planAccess.reason ?? "MCP access requires the Platinum plan",
-        status: 403
-      }
-    }
-  }
-
-  // Check rate limit
-  const rateLimit = keyData.rate_limit_per_minute || 60
-  const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString()
-  
-  const { count: recentRequests } = await admin
-    .schema("v3")
-    .from("mcp_request_logs")
-    .select("*", { count: "exact", head: true })
-    .eq("api_key_id", keyData.id)
-    .gte("created_at", oneMinuteAgo)
-    
-  if ((recentRequests || 0) >= rateLimit) {
-    return {
-      success: false,
-      error: {
-        code: "RATE_LIMITED",
-        message: `Rate limit exceeded. Maximum ${rateLimit} requests per minute.`,
-        status: 429
-      }
-    }
-  }
-  
-  // Update last_used_at and request_count
-  await admin
-    .schema("v3")
-    .from("mcp_api_keys")
-    .update({
-      last_used_at: new Date().toISOString(),
-      request_count: (keyData as any).request_count + 1 || 1
-    })
-    .eq("id", keyData.id)
-  
+  const keyHash = crypto.createHash("sha256").update(rawKey).digest("hex")
+  const { data: key } = await admin.schema("v3").from("mcp_api_keys")
+    .select("id,workspace_id,owner_user_id,rate_limit_per_minute,revoked_at,scopes,allowed_modes,request_count")
+    .eq("key_hash", keyHash).maybeSingle()
+  if (!key) return failure("INVALID_KEY", "API key inválida", 401)
+  if (key.revoked_at) return failure("KEY_REVOKED", "La API key fue revocada", 401)
+  const { data: membership } = await admin.schema("v3").from("workspace_members")
+    .select("id").eq("workspace_id", key.workspace_id).eq("user_id", key.owner_user_id).eq("status", "active").maybeSingle()
+  if (!membership) return failure("MEMBERSHIP_INACTIVE", "El propietario de la API key ya no es miembro activo", 403)
+  const oneMinuteAgo = new Date(Date.now() - 60000).toISOString()
+  const { count } = await admin.schema("v3").from("mcp_request_logs").select("id", { count: "exact", head: true }).eq("api_key_id", key.id).gte("created_at", oneMinuteAgo)
+  if ((count ?? 0) >= (key.rate_limit_per_minute ?? 60)) return failure("RATE_LIMITED", "Se excedió el límite general de requests por minuto", 429)
+  await admin.schema("v3").from("mcp_api_keys").update({ last_used_at: new Date().toISOString(), request_count: (key.request_count ?? 0) + 1 }).eq("id", key.id)
+  const storedScopes: string[] = key.scopes ?? []
+  const readScopes = ["companies:read", "signals:read", "accounts:read", "usage:read"]
+  const aiScopes = ["research:run", "research:prepare", "research:submit", "icebreakers:generate", "icebreakers:prepare", "icebreakers:submit"]
+  const scopes = storedScopes.includes("read") ? [...new Set([...storedScopes, ...readScopes])] : storedScopes
+  if (storedScopes.includes("write")) scopes.push(...aiScopes)
+  const allowedModes = key.allowed_modes?.length === 1 && key.allowed_modes[0] === "read" && storedScopes.includes("write")
+    ? ["read", "server_managed", "client_assisted"]
+    : (key.allowed_modes ?? ["read"])
   return {
     success: true,
-    workspaceId: keyData.workspace_id,
-    keyId: keyData.id,
-    scopes: Array.isArray((keyData as { scopes?: string[] }).scopes)
-      ? (keyData as { scopes?: string[] }).scopes
-      : ["read"],
+    workspaceId: key.workspace_id,
+    userId: key.owner_user_id,
+    keyId: key.id,
+    scopes: [...new Set(scopes.length ? scopes : readScopes)],
+    allowedModes,
   }
 }
 
-/**
- * Logs an MCP request for analytics and rate limiting
- */
-export async function logMcpRequest(
-  keyId: string,
-  endpoint: string,
-  method: string,
-  statusCode: number,
-  responseTimeMs: number
-): Promise<void> {
+function failure(code: string, message: string, status: number): McpAuthResult {
+  return { success: false, error: { code, message, status } }
+}
+
+export async function logMcpRequest(params: {
+  principal: McpPrincipal
+  toolName?: string
+  method: string
+  statusCode: number
+  responseTimeMs?: number
+  mode?: "read" | "server_managed" | "client_assisted"
+  requestId?: string
+  idempotencyKey?: string
+  units?: number
+  errorCode?: string
+  metadata?: Record<string, unknown>
+}) {
   const admin = createAdminClient()
-  
-  // Fire and forget - no await needed for logging
-  admin
-    .schema("v3")
-    .from("mcp_request_logs")
-    .insert({
-      api_key_id: keyId,
-      endpoint,
-      method,
-      status_code: statusCode,
-      response_time_ms: responseTimeMs
-    })
-    .then(() => {}, (err: Error) => console.error("Error logging MCP request:", err))
-}
-
-/**
- * Creates a standard MCP response
- */
-export function mcpResponse<T>(
-  data: T,
-  requestId?: string
-): McpResponse<T> {
-  return {
-    success: true,
-    data,
-    meta: {
-      requestId: requestId || crypto.randomUUID(),
-      timestamp: new Date().toISOString()
-    }
-  }
-}
-
-/**
- * Creates a standard MCP error response
- */
-export function mcpError(
-  code: string,
-  message: string,
-  requestId?: string
-): McpResponse<never> {
-  return {
-    success: false,
-    error: {
-      code,
-      message
-    },
-    meta: {
-      requestId: requestId || crypto.randomUUID(),
-      timestamp: new Date().toISOString()
-    }
-  }
+  await admin.schema("v3").from("mcp_request_logs").insert({
+    api_key_id: params.principal.keyId,
+    workspace_id: params.principal.workspaceId,
+    user_id: params.principal.userId,
+    endpoint: "/api/v3/mcp/server",
+    method: params.method,
+    status_code: params.statusCode,
+    response_time_ms: params.responseTimeMs ?? 0,
+    tool_name: params.toolName,
+    mode: params.mode ?? "read",
+    request_id: params.requestId ?? crypto.randomUUID(),
+    idempotency_key: params.idempotencyKey,
+    units: params.units ?? 0,
+    error_code: params.errorCode,
+    metadata: params.metadata ?? {},
+  })
 }

@@ -1,345 +1,78 @@
+import crypto from "crypto"
+import { after } from "next/server"
+import { NextRequest } from "next/server"
 import { createMcpHandler, withMcpAuth } from "mcp-handler"
 import { z } from "zod"
-import { NextRequest } from "next/server"
-import { validateMcpRequest, logMcpRequest } from "@/lib/v3/mcp-auth"
 import { createAdminClient } from "@/lib/supabase/admin"
-import { listFollowedAccounts, followAccount } from "@/lib/v3/services/accounts"
-import { getLatestScorecard } from "@/lib/v3/services/scoring"
-import { getCompanyCachedContacts } from "@/lib/v3/services/contacts"
+import { validateMcpRequest, logMcpRequest } from "@/lib/v3/mcp-auth"
+import { requirePaidMcp, reserveMcpUsage, setReservationStatus, getMcpUsage, type McpPrincipal } from "@/lib/v3/mcp-usage"
+import { searchCompanies, getCompanyProfile, getCompanySignals, listWorkspaceAccounts, getAccountIntelligence, getResearchStatus } from "@/lib/v3/mcp-read-tools"
+import { prepareAccountResearch, submitResearchStage, getClientResearchStatus, prepareAccountIcebreaker, submitAccountIcebreaker } from "@/lib/v3/mcp-client-ai"
 import { resolveCompany } from "@/lib/v3/services/company-resolver"
-import {
-  createResearchBatch,
-  runResearchJob,
-  getBatchStatus,
-} from "@/lib/v3/services/research-pipeline"
-import { generateIcebreaker, getIcebreakersForCompany } from "@/lib/v3/services/icebreakers"
-import { getRadarFindings } from "@/lib/v3/services/radar"
-import { after } from "next/server"
+import { createResearchBatch, runResearchJob } from "@/lib/v3/services/research-pipeline"
+import { checkResearchQuota } from "@/lib/v3/plans"
+import { generateIcebreaker } from "@/lib/v3/services/icebreakers"
 
 export const maxDuration = 120
 
-// ─────────────────────────────────────────────────────────────
-// MCP real (protocolo oficial, transporte Streamable HTTP).
-// Auth: Bearer asci_<key> por workspace (v3.mcp_api_keys).
-// Scopes: "read" (consultas) y "write" (ejecuciones costosas).
-// ─────────────────────────────────────────────────────────────
-
-type AuthInfo = {
-  token: string
-  clientId: string
-  scopes: string[]
-  extra: { workspaceId: string; keyId: string }
+type AuthInfo = { token: string; clientId: string; scopes: string[]; extra: McpPrincipal }
+const authOf = (extra: unknown) => {
+  const auth = (extra as { authInfo?: AuthInfo }).authInfo?.extra
+  if (!auth) throw new Error("UNAUTHORIZED")
+  return auth
 }
+const text = (value: unknown, isError = false) => ({ content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }], ...(isError ? { isError: true } : {}) })
+const safely = async (work: () => Promise<unknown>) => { try { return text(await work()) } catch (error) { return text({ success: false, error: error instanceof Error ? error.message : "UNKNOWN_ERROR" }, true) } }
 
-const handler = createMcpHandler(
-  (server) => {
-    // ── READ TOOLS ──────────────────────────────────────────
+const handler = createMcpHandler((server) => {
+  server.tool("search_companies", "Busca empresas globales conocidas por nombre o dominio. Solo lectura; no ejecuta IA.", { query: z.string().min(2), limit: z.number().int().min(1).max(25).default(10) }, async ({ query, limit }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "companies:read", "read"); return searchCompanies(query, limit) }))
+  server.tool("get_company_profile", "Obtiene identidad y cobertura global de señales de una empresa. Solo lectura.", { companyId: z.string().uuid() }, async ({ companyId }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "companies:read", "read"); return getCompanyProfile(companyId) }))
+  server.tool("get_company_signals", "Obtiene señales v2 normalizadas. Solo lectura y sin generación implícita.", { companyId: z.string().uuid(), limit: z.number().int().min(1).max(100).default(50) }, async ({ companyId, limit }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "signals:read", "read"); return getCompanySignals(companyId, limit) }))
+  server.tool("list_workspace_accounts", "Lista cuentas investigadas por el workspace de la API key.", { limit: z.number().int().min(1).max(100).default(50) }, async ({ limit }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "accounts:read", "read"); return listWorkspaceAccounts(auth, limit) }))
+  server.tool("get_account_intelligence", "Lee snapshot, scorecard, brief e icebreakers privados ya materializados.", { companyId: z.string().uuid() }, async ({ companyId }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "accounts:read", "read"); return getAccountIntelligence(auth, companyId) }))
+  server.tool("get_research_status", "Consulta un batch server-managed perteneciente al workspace.", { batchId: z.string().uuid() }, async ({ batchId }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "accounts:read", "read"); return getResearchStatus(auth, batchId) }))
 
-    server.tool(
-      "search_accounts",
-      "Busca empresas en el cache global de ASCI por nombre o dominio. Devuelve empresas conocidas con su ID, dominio y país.",
-      { query: z.string().min(2).describe("Nombre o dominio de la empresa") },
-      async ({ query }, extra) => {
-        const auth = (extra as { authInfo?: AuthInfo }).authInfo
-        if (!auth) throw new Error("Unauthorized")
-        const resolved = await resolveCompany(query, auth.extra.workspaceId)
-        return {
-          content: [{ type: "text", text: JSON.stringify(resolved, null, 2) }],
-        }
-      },
-    )
+  server.tool("run_account_research", "Lanza research server-managed con AI Gateway de ASCI. Consume cuota y hard limits; operación atómica por lote.", { companies: z.array(z.string().min(2)).min(1).max(10), forceRefresh: z.boolean().default(false), idempotencyKey: z.string().min(8).max(200) }, async ({ companies, forceRefresh, idempotencyKey }, extra) => safely(async () => {
+    const auth = authOf(extra); await requirePaidMcp(auth, "research:run", "server_managed")
+    const resolved = await Promise.all(companies.map((input) => resolveCompany(input, auth.workspaceId)))
+    if (resolved.some((item) => item.candidates.length || !item.companyId)) throw new Error("COMPANY_RESOLUTION_REQUIRED")
+    const canonical = [...new Map(resolved.map((item, index) => [item.companyId!, { input: companies[index], companyId: item.companyId! }])).values()]
+    const quota = await checkResearchQuota({ workspaceId: auth.workspaceId, companies: canonical })
+    const rejected = quota.items.filter((item) => !item.allowed)
+    if (rejected.length) throw new Error(`PLAN_QUOTA_EXCEEDED:${rejected.map((item) => item.reason).join(" | ")}`)
+    const reservation = await reserveMcpUsage({ principal: auth, pool: "research_server", units: canonical.length, idempotencyKey, metadata: { companies: canonical } })
+    if (!reservation.allowed || !reservation.reservationId) return reservation
+    const result = await createResearchBatch({ workspaceId: auth.workspaceId, userId: auth.userId, inputs: canonical.map((item) => item.input), forceRefresh, source: "user", quotaMode: "all_or_nothing" })
+    if ("error" in result) { await setReservationStatus(reservation.reservationId, "released"); throw new Error(result.error) }
+    await setReservationStatus(reservation.reservationId, "committed")
+    after(async () => { for (const job of result.jobs) await runResearchJob(job.id).catch((error) => console.error("[v3][mcp] research job", error)) })
+    return { batchId: result.batchId, enqueued: result.jobs.length, reservationId: reservation.reservationId }
+  }))
 
-    server.tool(
-      "list_followed_accounts",
-      "Lista las cuentas seguidas del workspace con su score actual y última actualización.",
-      {},
-      async (_args, extra) => {
-        const auth = (extra as { authInfo?: AuthInfo }).authInfo
-        if (!auth) throw new Error("Unauthorized")
-        const accounts = await listFollowedAccounts(auth.extra.workspaceId, auth.extra.keyId)
-        return {
-          content: [{ type: "text", text: JSON.stringify(accounts, null, 2) }],
-        }
-      },
-    )
+  server.tool("prepare_account_research", "Prepara research completo para ejecutar con el modelo y tokens del cliente MCP. ASCI no llama AI Gateway.", { companies: z.array(z.string().min(2)).min(1).max(10), idempotencyKey: z.string().min(8).max(200) }, async ({ companies, idempotencyKey }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:prepare", "client_assisted"); return prepareAccountResearch(auth, companies, idempotencyKey) }))
+  server.tool("submit_account_research_stage", "Valida y persiste una etapa estructurada generada por el modelo del cliente.", { executionId: z.string().uuid(), stage: z.enum(["internal_analysis", "signal_classification", "fit_scoring", "account_brief"]), packageHash: z.string().length(64), result: z.unknown(), clientModel: z.string().max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async (args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:submit", "client_assisted"); return submitResearchStage(auth, args) }))
+  server.tool("get_client_research_status", "Consulta estado y próximo package del research client-assisted.", { executionId: z.string().uuid() }, async ({ executionId }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "accounts:read", "read"); return getClientResearchStatus(auth, executionId) }))
 
-    server.tool(
-      "get_account_scorecard",
-      "Obtiene el scorecard (score 0-100 con desglose por dimensión: fit PV, señales de compra, accesibilidad, timing) de una cuenta para este workspace.",
-      { companyId: z.string().uuid().describe("ID de la empresa (public.companies)") },
-      async ({ companyId }, extra) => {
-        const auth = (extra as { authInfo?: AuthInfo }).authInfo
-        if (!auth) throw new Error("Unauthorized")
-        const scorecard = await getLatestScorecard(auth.extra.workspaceId, companyId)
-        return {
-          content: [
-            {
-              type: "text",
-              text: scorecard
-                ? JSON.stringify(scorecard, null, 2)
-                : "No hay scorecard para esta cuenta. Ejecutá run_account_research primero.",
-            },
-          ],
-        }
-      },
-    )
+  server.tool("generate_account_icebreaker", "Genera un icebreaker server-managed con AI Gateway de ASCI y límites separados.", { companyId: z.string().uuid(), contactName: z.string().min(2), contactTitle: z.string().optional(), contactCountry: z.string().optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, contactName, contactTitle, contactCountry, idempotencyKey }, extra) => safely(async () => {
+    const auth = authOf(extra); await requirePaidMcp(auth, "icebreakers:generate", "server_managed"); await getAccountIntelligence(auth, companyId)
+    const reservation = await reserveMcpUsage({ principal: auth, pool: "icebreaker_server", units: 1, idempotencyKey, metadata: { companyId } }); if (!reservation.allowed || !reservation.reservationId) return reservation
+    const admin = createAdminClient(); const { data: company } = await admin.from("companies").select("name").eq("id", companyId).maybeSingle(); if (!company) throw new Error("COMPANY_NOT_FOUND")
+    const result = await generateIcebreaker({ workspaceId: auth.workspaceId, companyId, companyName: company.name, contact: { name: contactName, title: contactTitle, country: contactCountry }, createdBy: auth.userId })
+    if (!result) { await setReservationStatus(reservation.reservationId, "released"); throw new Error("ICEBREAKER_GENERATION_FAILED") }
+    await setReservationStatus(reservation.reservationId, "committed"); return result
+  }))
+  server.tool("prepare_account_icebreaker", "Prepara un icebreaker para ejecutar con tokens del cliente.", { companyId: z.string().uuid(), contactName: z.string().min(2), contactTitle: z.string().optional(), contactCountry: z.string().optional(), idempotencyKey: z.string().min(8).max(200) }, async (args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "icebreakers:prepare", "client_assisted"); return prepareAccountIcebreaker(auth, args) }))
+  server.tool("submit_account_icebreaker", "Valida y guarda un icebreaker generado por el modelo del cliente.", { executionId: z.string().uuid(), packageHash: z.string().length(64), result: z.unknown(), clientModel: z.string().max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async (args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "icebreakers:submit", "client_assisted"); return submitAccountIcebreaker(auth, args) }))
+  server.tool("get_ai_usage", "Devuelve cuota mensual, reservas por pool y tokens/costo server-managed verificados.", {}, async (_args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "usage:read", "read"); return getMcpUsage(auth) }))
+}, { serverInfo: { name: "asci-v3", version: "2.0.0" } }, { basePath: "/api/v3/mcp/server", maxDuration: 120, verboseLogs: false })
 
-    server.tool(
-      "get_account_signals",
-      "Obtiene las señales detectadas de una cuenta (radar de noticias, tech-radar, interpretación de vacantes) desde el cache global.",
-      {
-        companyId: z.string().uuid().describe("ID de la empresa"),
-        limit: z.number().int().min(1).max(50).default(20),
-      },
-      async ({ companyId, limit }, extra) => {
-        const auth = (extra as { authInfo?: AuthInfo }).authInfo
-        if (!auth) throw new Error("Unauthorized")
-        const admin = createAdminClient()
-        const { data } = await admin
-          .from("radar_findings")
-          .select(
-            "id, radar_type, category, title, summary, url, source_name, source_date, evidence_level, confidence, detected_at",
-          )
-          .eq("company_id", companyId)
-          .order("detected_at", { ascending: false })
-          .limit(limit)
-        return {
-          content: [{ type: "text", text: JSON.stringify(data ?? [], null, 2) }],
-        }
-      },
-    )
-
-    server.tool(
-      "get_account_contacts",
-      "Obtiene los contactos/decision makers cacheados de una cuenta (nombre, cargo, seniority, país, LinkedIn).",
-      { companyId: z.string().uuid().describe("ID de la empresa") },
-      async ({ companyId }, extra) => {
-        const auth = (extra as { authInfo?: AuthInfo }).authInfo
-        if (!auth) throw new Error("Unauthorized")
-        const contacts = await getCompanyCachedContacts(companyId)
-        return {
-          content: [{ type: "text", text: JSON.stringify(contacts, null, 2) }],
-        }
-      },
-    )
-
-    server.tool(
-      "get_account_overview",
-      "Obtiene el estado completo de una cuenta seguida: radiografía, scorecard, señales recientes, contactos e icebreakers.",
-      { companyId: z.string().uuid().describe("ID de la empresa") },
-      async ({ companyId }, extra) => {
-        const auth = (extra as { authInfo?: AuthInfo }).authInfo
-        if (!auth) throw new Error("Unauthorized")
-        const admin = createAdminClient()
-        const [companyRes, scorecard, findings, contacts, icebreakers] = await Promise.all([
-          admin
-            .from("companies")
-            .select("id, name, website, country, industry")
-            .eq("id", companyId)
-            .maybeSingle(),
-          getLatestScorecard(auth.extra.workspaceId, companyId),
-          getRadarFindings(companyId, { limit: 15 }),
-          getCompanyCachedContacts(companyId),
-          getIcebreakersForCompany(auth.extra.workspaceId, companyId),
-        ])
-        const overview = {
-          company: companyRes.data,
-          scorecard,
-          signals: findings,
-          contacts,
-          icebreakers,
-        }
-        return {
-          content: [{ type: "text", text: JSON.stringify(overview, null, 2) }],
-        }
-      },
-    )
-
-    server.tool(
-      "get_research_status",
-      "Consulta el estado de un lote de investigación lanzado con run_account_research (patrón async: poll hasta completed/failed).",
-      { batchId: z.string().uuid().describe("ID del lote devuelto por run_account_research") },
-      async ({ batchId }, extra) => {
-        const auth = (extra as { authInfo?: AuthInfo }).authInfo
-        if (!auth) throw new Error("Unauthorized")
-        const status = await getBatchStatus(batchId, auth.extra.workspaceId)
-        return {
-          content: [{ type: "text", text: JSON.stringify(status, null, 2) }],
-        }
-      },
-    )
-
-    // ── WRITE TOOLS (requieren scope "write") ───────────────
-
-    server.tool(
-      "run_account_research",
-      "Lanza la investigación completa (radar Opus + diccionario + scorecard + icebreakers) para una o más empresas. Es asíncrono: devuelve un batchId para consultar con get_research_status. Requiere scope write. ADVERTENCIA: consume APIs pagas.",
-      {
-        companies: z
-          .array(z.string().min(2))
-          .min(1)
-          .max(10)
-          .describe("Nombres o dominios de empresas (máx 10 por llamada MCP)"),
-        forceRefresh: z
-          .boolean()
-          .default(false)
-          .describe("Re-investigar aunque el cache tenga menos de 30 días"),
-      },
-      async ({ companies, forceRefresh }, extra) => {
-        const auth = (extra as { authInfo?: AuthInfo }).authInfo
-        if (!auth) throw new Error("Unauthorized")
-        if (!auth.scopes.includes("write")) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: "Esta API key no tiene scope 'write'. Pedile a un admin del workspace que genere una key con permisos de escritura.",
-              },
-            ],
-            isError: true,
-          }
-        }
-        const result = await createResearchBatch({
-          workspaceId: auth.extra.workspaceId,
-          userId: auth.extra.keyId,
-          inputs: companies,
-          forceRefresh,
-        })
-        if ("error" in result) {
-          return {
-            content: [{ type: "text", text: `Error: ${result.error}` }],
-            isError: true,
-          }
-        }
-        // Ejecutar los jobs en segundo plano tras responder
-        const jobIds = result.jobs.map((j) => j.id)
-        after(async () => {
-          for (const jobId of jobIds) {
-            try {
-              await runResearchJob(jobId)
-            } catch (e) {
-              console.error("[v3][mcp] Error ejecutando research job:", e)
-            }
-          }
-        })
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  batchId: result.batchId,
-                  enqueued: result.jobs.length,
-                  note: "Consultá el avance con get_research_status.",
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-        }
-      },
-    )
-
-    server.tool(
-      "follow_account",
-      "Sigue una cuenta a nivel workspace: entra al ciclo de refresh mensual y digest por email. Requiere scope write.",
-      { companyId: z.string().uuid().describe("ID de la empresa a seguir") },
-      async ({ companyId }, extra) => {
-        const auth = (extra as { authInfo?: AuthInfo }).authInfo
-        if (!auth) throw new Error("Unauthorized")
-        if (!auth.scopes.includes("write")) {
-          return {
-            content: [{ type: "text", text: "Esta API key no tiene scope 'write'." }],
-            isError: true,
-          }
-        }
-        const followed = await followAccount({
-          workspaceId: auth.extra.workspaceId,
-          companyId,
-          userId: auth.extra.keyId,
-        })
-        return {
-          content: [{ type: "text", text: JSON.stringify(followed, null, 2) }],
-        }
-      },
-    )
-
-    server.tool(
-      "generate_icebreaker",
-      "Genera un icebreaker regionalizado (español según país del contacto) para un contacto de una cuenta, anclado a las señales detectadas. Requiere scope write.",
-      {
-        companyId: z.string().uuid().describe("ID de la empresa"),
-        contactName: z.string().min(2).describe("Nombre del contacto"),
-        contactTitle: z.string().optional().describe("Cargo del contacto"),
-        contactCountry: z.string().optional().describe("País del contacto (ej: Argentina, Chile)"),
-        instruction: z.string().optional().describe("Instrucción adicional (ej: 'más corto, mencionar caso X')"),
-      },
-      async ({ companyId, contactName, contactTitle, contactCountry, instruction }, extra) => {
-        const auth = (extra as { authInfo?: AuthInfo }).authInfo
-        if (!auth) throw new Error("Unauthorized")
-        if (!auth.scopes.includes("write")) {
-          return {
-            content: [{ type: "text", text: "Esta API key no tiene scope 'write'." }],
-            isError: true,
-          }
-        }
-        const admin = createAdminClient()
-        const { data: company } = await admin
-          .from("companies")
-          .select("name")
-          .eq("id", companyId)
-          .maybeSingle()
-        if (!company) {
-          return {
-            content: [{ type: "text", text: "Empresa no encontrada." }],
-            isError: true,
-          }
-        }
-        const icebreaker = await generateIcebreaker({
-          workspaceId: auth.extra.workspaceId,
-          companyId,
-          companyName: company.name,
-          contact: {
-            apolloId: null,
-            name: contactName,
-            title: contactTitle ?? null,
-            country: contactCountry ?? null,
-          },
-          createdBy: auth.extra.keyId,
-        })
-        return {
-          content: [{ type: "text", text: JSON.stringify(icebreaker, null, 2) }],
-        }
-      },
-    )
-  },
-  {
-    serverInfo: { name: "asci-v3", version: "1.0.0" },
-  },
-  {
-    basePath: "/api/v3/mcp/server",
-    maxDuration: 120,
-    verboseLogs: false,
-  },
-)
-
-const authedHandler = withMcpAuth(
-  handler,
-  async (req: Request, bearerToken?: string) => {
-    if (!bearerToken) return undefined
-    const result = await validateMcpRequest(req as NextRequest)
-    if (!result.success || !result.workspaceId || !result.keyId) return undefined
-    // Log fire-and-forget para auditoría/rate limit
-    logMcpRequest(result.keyId, "/api/v3/mcp/server", req.method, 200, 0)
-    return {
-      token: bearerToken,
-      clientId: result.keyId,
-      scopes: result.scopes ?? ["read"],
-      extra: { workspaceId: result.workspaceId, keyId: result.keyId },
-    }
-  },
-  { required: true },
-)
+const authedHandler = withMcpAuth(handler, async (req: Request, token?: string) => {
+  if (!token) return undefined
+  const result = await validateMcpRequest(req as NextRequest)
+  if (!result.success || !result.workspaceId || !result.userId || !result.keyId) return undefined
+  const principal: McpPrincipal = { workspaceId: result.workspaceId, userId: result.userId, keyId: result.keyId, scopes: result.scopes ?? [], allowedModes: result.allowedModes ?? ["read"] }
+  await logMcpRequest({ principal, method: req.method, statusCode: 200, requestId: crypto.randomUUID() })
+  return { token, clientId: result.keyId, scopes: principal.scopes, extra: principal }
+}, { required: true })
 
 export { authedHandler as GET, authedHandler as POST, authedHandler as DELETE }

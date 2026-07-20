@@ -12,7 +12,7 @@ import crypto from "crypto"
  * Genera una nueva API key para el workspace del usuario
  * Retorna la key completa SOLO UNA VEZ - luego solo se puede ver el prefix
  */
-export async function generateApiKey(name: string): Promise<{
+export async function generateApiKey(name: string, ownerUserId?: string): Promise<{
   success: boolean
   key?: string
   keyId?: string
@@ -49,19 +49,27 @@ export async function generateApiKey(name: string): Promise<{
     return { success: false, error: access.reason ?? "Tu plan no incluye API keys" }
   }
 
-  // Check if workspace already has a key
   const admin = createAdminClient()
+  const keyOwnerId = ownerUserId ?? user.id
+  const { data: ownerMembership } = await admin
+    .schema("v3")
+    .from("workspace_members")
+    .select("id")
+    .eq("workspace_id", membership.workspace_id)
+    .eq("user_id", keyOwnerId)
+    .eq("status", "active")
+    .maybeSingle()
+  if (!ownerMembership) return { success: false, error: "El propietario debe ser un miembro activo del workspace" }
+
   const { data: existingKey } = await admin
     .schema("v3")
     .from("mcp_api_keys")
     .select("id")
     .eq("workspace_id", membership.workspace_id)
-    .eq("revoked_at", null)
-    .single()
-    
-  if (existingKey) {
-    return { success: false, error: "Ya existe una API key activa. Revoca la existente primero." }
-  }
+    .eq("owner_user_id", keyOwnerId)
+    .is("revoked_at", null)
+    .maybeSingle()
+  if (existingKey) return { success: false, error: "Ese usuario ya tiene una API key activa" }
   
   // Generate new key
   const rawKey = `asci_${crypto.randomBytes(32).toString("hex")}`
@@ -76,7 +84,10 @@ export async function generateApiKey(name: string): Promise<{
       name,
       key_hash: keyHash,
       key_prefix: keyPrefix,
-      created_by: user.id
+      created_by: user.id,
+      owner_user_id: keyOwnerId,
+      scopes: ["companies:read", "signals:read", "accounts:read", "research:run", "research:prepare", "research:submit", "icebreakers:generate", "icebreakers:prepare", "icebreakers:submit", "usage:read"],
+      allowed_modes: ["read", "server_managed", "client_assisted"]
     })
     .select("id")
     .single()
