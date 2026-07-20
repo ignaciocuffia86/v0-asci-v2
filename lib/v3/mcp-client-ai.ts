@@ -51,22 +51,36 @@ export async function prepareAccountResearch(principal: McpPrincipal, inputs: st
   const reservation = await reserveMcpUsage({ principal, pool: "research_client", units: unique.length, idempotencyKey, metadata: { companies: unique.map((item) => item.companyId) } })
   if (!reservation.allowed || !reservation.reservationId) return reservation
   const admin = createAdminClient()
-  const executions = []
-  for (const company of unique) {
-    const snapshot = await buildInternalAccountSnapshot({ workspaceId: principal.workspaceId, company: { id: company.companyId!, name: company.name ?? "", domain: company.domain, country: company.country, industry: company.industry }, researchJobId: null })
-    const promptPackage = packageFor("internal_analysis", snapshot)
-    const { data, error } = await admin.schema("v3").from("client_ai_executions").insert({ workspace_id: principal.workspaceId, user_id: principal.userId, api_key_id: principal.keyId, reservation_id: reservation.reservationId, feature: "account_research", company_id: company.companyId, current_stage: "internal_analysis", prompt_version: PROMPT_VERSION, package_hash: promptPackage.packageHash, package_payload: promptPackage, expires_at: promptPackage.expiresAt }).select("id").single()
-    if (error) throw new Error(`CLIENT_EXECUTION_CREATE_FAILED:${error.message}`)
-    executions.push({ executionId: data.id, company: { id: company.companyId, name: company.name }, stage: "internal_analysis", promptPackage })
+  if (reservation.idempotent && reservation.status === "committed") {
+    const { data } = await admin.schema("v3").from("client_ai_executions").select("id,company_id,current_stage,package_payload").eq("reservation_id", reservation.reservationId).order("created_at")
+    return { allowed: true, idempotent: true, executions: (data ?? []).map((item) => ({ executionId: item.id, company: { id: item.company_id }, stage: item.current_stage, promptPackage: item.package_payload })) }
   }
-  await setReservationStatus(reservation.reservationId, "committed")
-  return { allowed: true, executions }
+  const executions = []
+  try {
+    for (const company of unique) {
+      const snapshot = await buildInternalAccountSnapshot({ workspaceId: principal.workspaceId, company: { id: company.companyId!, name: company.name ?? "", domain: company.domain, country: company.country, industry: company.industry }, researchJobId: null })
+      const promptPackage = packageFor("internal_analysis", snapshot)
+      const { data, error } = await admin.schema("v3").from("client_ai_executions").insert({ workspace_id: principal.workspaceId, user_id: principal.userId, api_key_id: principal.keyId, reservation_id: reservation.reservationId, feature: "account_research", company_id: company.companyId, current_stage: "internal_analysis", prompt_version: PROMPT_VERSION, package_hash: promptPackage.packageHash, package_payload: promptPackage, expires_at: promptPackage.expiresAt }).select("id").single()
+      if (error) throw new Error(`CLIENT_EXECUTION_CREATE_FAILED:${error.message}`)
+      executions.push({ executionId: data.id, company: { id: company.companyId, name: company.name }, stage: "internal_analysis", promptPackage })
+    }
+    await setReservationStatus(reservation.reservationId, "committed")
+    return { allowed: true, executions }
+  } catch (error) {
+    await setReservationStatus(reservation.reservationId, "released")
+    throw error
+  }
 }
 
 export async function submitResearchStage(principal: McpPrincipal, params: { executionId: string; stage: Stage; packageHash: string; result: unknown; clientModel?: string; idempotencyKey: string }) {
   const admin = createAdminClient()
   const { data: execution } = await admin.schema("v3").from("client_ai_executions").select("*").eq("id", params.executionId).eq("workspace_id", principal.workspaceId).eq("user_id", principal.userId).maybeSingle()
   if (!execution) throw new Error("CLIENT_EXECUTION_NOT_FOUND")
+  const { data: replay } = await admin.schema("v3").from("client_ai_stage_submissions").select("result,status").eq("execution_id", params.executionId).eq("stage", params.stage).eq("idempotency_key", params.idempotencyKey).maybeSingle()
+  if (replay) {
+    if (hash(replay.result) !== hash(params.result)) throw new Error("IDEMPOTENCY_KEY_REUSED")
+    return { accepted: replay.status === "accepted", idempotent: true, completed: execution.status === "completed", currentStage: execution.current_stage }
+  }
   if (execution.status === "completed") throw new Error("CLIENT_EXECUTION_COMPLETED")
   if (new Date(execution.expires_at).getTime() < Date.now()) throw new Error("CLIENT_PACKAGE_EXPIRED")
   if (execution.current_stage !== params.stage || execution.package_hash !== params.packageHash) throw new Error("CLIENT_PACKAGE_MISMATCH")
@@ -111,22 +125,39 @@ export async function prepareAccountIcebreaker(principal: McpPrincipal, params: 
   if (!count) throw new Error("ACCOUNT_NOT_AVAILABLE_IN_WORKSPACE")
   const reservation = await reserveMcpUsage({ principal, pool: "icebreaker_client", units: 1, idempotencyKey: params.idempotencyKey, metadata: { companyId: params.companyId } })
   if (!reservation.allowed || !reservation.reservationId) return reservation
-  const snapshot = await admin.schema("v3").from("account_internal_snapshots").select("evidence,contacts").eq("workspace_id", principal.workspaceId).eq("company_id", params.companyId).order("generated_at", { ascending: false }).limit(1).maybeSingle()
-  const promptPackage = packageFor("icebreaker", { companyId: params.companyId, contact: { name: params.contactName, title: params.contactTitle, country: params.contactCountry }, snapshot: snapshot.data })
-  const { data, error } = await admin.schema("v3").from("client_ai_executions").insert({ workspace_id: principal.workspaceId, user_id: principal.userId, api_key_id: principal.keyId, reservation_id: reservation.reservationId, feature: "icebreaker", company_id: params.companyId, contact_id: params.contactName, current_stage: "icebreaker", prompt_version: PROMPT_VERSION, package_hash: promptPackage.packageHash, package_payload: promptPackage, expires_at: promptPackage.expiresAt }).select("id").single()
-  if (error) throw new Error(`CLIENT_EXECUTION_CREATE_FAILED:${error.message}`)
-  await setReservationStatus(reservation.reservationId, "committed")
-  return { allowed: true, executionId: data.id, promptPackage }
+  if (reservation.idempotent && reservation.status === "committed") {
+    const { data } = await admin.schema("v3").from("client_ai_executions").select("id,package_payload").eq("reservation_id", reservation.reservationId).eq("feature", "icebreaker").maybeSingle()
+    if (data) return { allowed: true, idempotent: true, executionId: data.id, promptPackage: data.package_payload }
+  }
+  try {
+    const snapshot = await admin.schema("v3").from("account_internal_snapshots").select("evidence,contacts").eq("workspace_id", principal.workspaceId).eq("company_id", params.companyId).order("generated_at", { ascending: false }).limit(1).maybeSingle()
+    const promptPackage = packageFor("icebreaker", { companyId: params.companyId, contact: { name: params.contactName, title: params.contactTitle, country: params.contactCountry }, snapshot: snapshot.data })
+    const { data, error } = await admin.schema("v3").from("client_ai_executions").insert({ workspace_id: principal.workspaceId, user_id: principal.userId, api_key_id: principal.keyId, reservation_id: reservation.reservationId, feature: "icebreaker", company_id: params.companyId, contact_id: params.contactName, current_stage: "icebreaker", prompt_version: PROMPT_VERSION, package_hash: promptPackage.packageHash, package_payload: promptPackage, expires_at: promptPackage.expiresAt }).select("id").single()
+    if (error) throw new Error(`CLIENT_EXECUTION_CREATE_FAILED:${error.message}`)
+    await setReservationStatus(reservation.reservationId, "committed")
+    return { allowed: true, executionId: data.id, promptPackage }
+  } catch (error) {
+    await setReservationStatus(reservation.reservationId, "released")
+    throw error
+  }
 }
 
 export async function submitAccountIcebreaker(principal: McpPrincipal, params: { executionId: string; packageHash: string; result: unknown; clientModel?: string; idempotencyKey: string }) {
   const admin = createAdminClient()
   const { data: execution } = await admin.schema("v3").from("client_ai_executions").select("*").eq("id", params.executionId).eq("workspace_id", principal.workspaceId).eq("user_id", principal.userId).eq("feature", "icebreaker").maybeSingle()
   if (!execution) throw new Error("CLIENT_EXECUTION_NOT_FOUND")
+  const { data: replay } = await admin.schema("v3").from("client_ai_stage_submissions").select("result,status").eq("execution_id", params.executionId).eq("stage", "icebreaker").eq("idempotency_key", params.idempotencyKey).maybeSingle()
+  if (replay) {
+    if (hash(replay.result) !== hash(params.result)) throw new Error("IDEMPOTENCY_KEY_REUSED")
+    return { accepted: replay.status === "accepted", idempotent: true }
+  }
   if (execution.package_hash !== params.packageHash || execution.status === "completed") throw new Error("CLIENT_PACKAGE_MISMATCH")
   if (new Date(execution.expires_at).getTime() < Date.now()) throw new Error("CLIENT_PACKAGE_EXPIRED")
   const parsed = schemas.icebreaker.safeParse(params.result)
   if (!parsed.success) throw new Error(`CLIENT_RESULT_INVALID:${parsed.error.message}`)
+  const evidence = execution.package_payload.evidence.snapshot?.evidence
+  const serializedEvidence = JSON.stringify(evidence ?? {})
+  if (parsed.data.evidenceIds.some((id) => !serializedEvidence.includes(`\"${id}\"`))) throw new Error("UNAUTHORIZED_EVIDENCE")
   const contact = execution.package_payload.evidence.contact
   const { data, error } = await admin.schema("v3").from("icebreakers").insert({ workspace_id: principal.workspaceId, company_id: execution.company_id, contact_name: contact.name, contact_title: contact.title, contact_country: contact.country, content: parsed.data.content, evidence: parsed.data.evidenceIds, created_by: principal.userId, generation_mode: "client_model", client_execution_id: execution.id, prompt_version: PROMPT_VERSION, model: params.clientModel ?? "client-model" }).select("*").single()
   if (error) throw new Error(`ICEBREAKER_SAVE_FAILED:${error.message}`)

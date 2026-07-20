@@ -103,14 +103,18 @@ create or replace function v3.reserve_mcp_usage(
 ) returns jsonb language plpgsql security definer set search_path = v3, public as $$
 declare
   v_existing v3.mcp_usage_reservations;
+  v_reusing boolean := false;
   v_user_minute int; v_user_day int; v_user_week int;
   v_workspace_minute int; v_workspace_day int; v_workspace_week int;
   v_ulm int; v_uld int; v_ulw int; v_wlm int; v_wld int; v_wlw int;
 begin
   if p_units < 1 then raise exception 'INVALID_UNITS'; end if;
   if not exists (select 1 from v3.mcp_api_keys k join v3.workspace_members wm on wm.workspace_id=k.workspace_id and wm.user_id=k.owner_user_id and wm.status='active' where k.id=p_api_key_id and k.workspace_id=p_workspace_id and k.owner_user_id=p_user_id and k.revoked_at is null) then raise exception 'INVALID_MCP_PRINCIPAL'; end if;
-  select * into v_existing from v3.mcp_usage_reservations where api_key_id=p_api_key_id and pool=p_pool and idempotency_key=p_idempotency_key;
-  if found then return jsonb_build_object('allowed',true,'reservationId',v_existing.id,'idempotent',true); end if;
+  select * into v_existing from v3.mcp_usage_reservations where api_key_id=p_api_key_id and pool=p_pool and idempotency_key=p_idempotency_key for update;
+  v_reusing := found;
+  if v_reusing and v_existing.status <> 'released' then
+    return jsonb_build_object('allowed',true,'reservationId',v_existing.id,'idempotent',true,'status',v_existing.status,'metadata',v_existing.metadata);
+  end if;
   if p_pool='research_server' then v_ulm:=2; v_uld:=10; v_ulw:=30; v_wlm:=3; v_wld:=20; v_wlw:=60;
   elsif p_pool='icebreaker_server' then v_ulm:=5; v_uld:=30; v_ulw:=100; v_wlm:=10; v_wld:=100; v_wlw:=300;
   elsif p_pool='research_client' then v_ulm:=5; v_uld:=25; v_ulw:=75; v_wlm:=10; v_wld:=75; v_wlw:=225;
@@ -122,8 +126,12 @@ begin
   if v_user_minute+p_units>v_ulm or v_user_day+p_units>v_uld or v_user_week+p_units>v_ulw or v_workspace_minute+p_units>v_wlm or v_workspace_day+p_units>v_wld or v_workspace_week+p_units>v_wlw then
     return jsonb_build_object('allowed',false,'code','HARD_LIMIT_EXCEEDED','remaining',jsonb_build_object('userMinute',greatest(0,v_ulm-v_user_minute),'userDay',greatest(0,v_uld-v_user_day),'userWeek',greatest(0,v_ulw-v_user_week),'workspaceMinute',greatest(0,v_wlm-v_workspace_minute),'workspaceDay',greatest(0,v_wld-v_workspace_day),'workspaceWeek',greatest(0,v_wlw-v_workspace_week)));
   end if;
-  insert into v3.mcp_usage_reservations(workspace_id,user_id,api_key_id,request_id,idempotency_key,pool,units,metadata) values(p_workspace_id,p_user_id,p_api_key_id,p_request_id,p_idempotency_key,p_pool,p_units,p_metadata) returning * into v_existing;
-  return jsonb_build_object('allowed',true,'reservationId',v_existing.id,'idempotent',false);
+  if v_reusing then
+    update v3.mcp_usage_reservations set request_id=p_request_id,units=p_units,status='reserved',metadata=p_metadata,created_at=now(),committed_at=null,released_at=null where id=v_existing.id returning * into v_existing;
+  else
+    insert into v3.mcp_usage_reservations(workspace_id,user_id,api_key_id,request_id,idempotency_key,pool,units,metadata) values(p_workspace_id,p_user_id,p_api_key_id,p_request_id,p_idempotency_key,p_pool,p_units,p_metadata) returning * into v_existing;
+  end if;
+  return jsonb_build_object('allowed',true,'reservationId',v_existing.id,'idempotent',false,'status','reserved','metadata',v_existing.metadata);
 end $$;
 
 revoke all on function v3.reserve_mcp_usage(uuid,uuid,uuid,uuid,text,text,integer,jsonb) from public, anon, authenticated;

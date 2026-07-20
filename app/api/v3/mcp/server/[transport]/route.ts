@@ -42,11 +42,13 @@ const handler = createMcpHandler((server) => {
     if (rejected.length) throw new Error(`PLAN_QUOTA_EXCEEDED:${rejected.map((item) => item.reason).join(" | ")}`)
     const reservation = await reserveMcpUsage({ principal: auth, pool: "research_server", units: canonical.length, idempotencyKey, metadata: { companies: canonical } })
     if (!reservation.allowed || !reservation.reservationId) return reservation
+    if (reservation.idempotent && reservation.status === "committed" && reservation.metadata?.batchId) return { ...reservation.metadata, idempotent: true }
     const result = await createResearchBatch({ workspaceId: auth.workspaceId, userId: auth.userId, inputs: canonical.map((item) => item.input), forceRefresh, source: "user", quotaMode: "all_or_nothing" })
     if ("error" in result) { await setReservationStatus(reservation.reservationId, "released"); throw new Error(result.error) }
-    await setReservationStatus(reservation.reservationId, "committed")
+    const response = { batchId: result.batchId, enqueued: result.jobs.length, reservationId: reservation.reservationId }
+    await setReservationStatus(reservation.reservationId, "committed", response)
     after(async () => { for (const job of result.jobs) await runResearchJob(job.id).catch((error) => console.error("[v3][mcp] research job", error)) })
-    return { batchId: result.batchId, enqueued: result.jobs.length, reservationId: reservation.reservationId }
+    return response
   }))
 
   server.tool("prepare_account_research", "Prepara research completo para ejecutar con el modelo y tokens del cliente MCP. ASCI no llama AI Gateway.", { companies: z.array(z.string().min(2)).min(1).max(10), idempotencyKey: z.string().min(8).max(200) }, async ({ companies, idempotencyKey }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:prepare", "client_assisted"); return prepareAccountResearch(auth, companies, idempotencyKey) }))
@@ -56,10 +58,17 @@ const handler = createMcpHandler((server) => {
   server.tool("generate_account_icebreaker", "Genera un icebreaker server-managed con AI Gateway de ASCI y límites separados.", { companyId: z.string().uuid(), contactName: z.string().min(2), contactTitle: z.string().optional(), contactCountry: z.string().optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, contactName, contactTitle, contactCountry, idempotencyKey }, extra) => safely(async () => {
     const auth = authOf(extra); await requirePaidMcp(auth, "icebreakers:generate", "server_managed"); await getAccountIntelligence(auth, companyId)
     const reservation = await reserveMcpUsage({ principal: auth, pool: "icebreaker_server", units: 1, idempotencyKey, metadata: { companyId } }); if (!reservation.allowed || !reservation.reservationId) return reservation
-    const admin = createAdminClient(); const { data: company } = await admin.from("companies").select("name").eq("id", companyId).maybeSingle(); if (!company) throw new Error("COMPANY_NOT_FOUND")
-    const result = await generateIcebreaker({ workspaceId: auth.workspaceId, companyId, companyName: company.name, contact: { name: contactName, title: contactTitle, country: contactCountry }, createdBy: auth.userId })
-    if (!result) { await setReservationStatus(reservation.reservationId, "released"); throw new Error("ICEBREAKER_GENERATION_FAILED") }
-    await setReservationStatus(reservation.reservationId, "committed"); return result
+    if (reservation.idempotent && reservation.status === "committed" && reservation.metadata?.icebreakerId) {
+      const admin = createAdminClient(); const { data } = await admin.schema("v3").from("icebreakers").select("*").eq("id", reservation.metadata.icebreakerId).eq("workspace_id", auth.workspaceId).maybeSingle(); return data ?? reservation.metadata
+    }
+    try {
+      const admin = createAdminClient(); const { data: company } = await admin.from("companies").select("name").eq("id", companyId).maybeSingle(); if (!company) throw new Error("COMPANY_NOT_FOUND")
+      const result = await generateIcebreaker({ workspaceId: auth.workspaceId, companyId, companyName: company.name, contact: { name: contactName, title: contactTitle, country: contactCountry }, createdBy: auth.userId })
+      if (!result) throw new Error("ICEBREAKER_GENERATION_FAILED")
+      await setReservationStatus(reservation.reservationId, "committed", { companyId, icebreakerId: result.id }); return result
+    } catch (error) {
+      await setReservationStatus(reservation.reservationId, "released"); throw error
+    }
   }))
   server.tool("prepare_account_icebreaker", "Prepara un icebreaker para ejecutar con tokens del cliente.", { companyId: z.string().uuid(), contactName: z.string().min(2), contactTitle: z.string().optional(), contactCountry: z.string().optional(), idempotencyKey: z.string().min(8).max(200) }, async (args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "icebreakers:prepare", "client_assisted"); return prepareAccountIcebreaker(auth, args) }))
   server.tool("submit_account_icebreaker", "Valida y guarda un icebreaker generado por el modelo del cliente.", { executionId: z.string().uuid(), packageHash: z.string().length(64), result: z.unknown(), clientModel: z.string().max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async (args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "icebreakers:submit", "client_assisted"); return submitAccountIcebreaker(auth, args) }))
@@ -72,7 +81,7 @@ const authedHandler = withMcpAuth(handler, async (req: Request, token?: string) 
   if (!result.success || !result.workspaceId || !result.userId || !result.keyId) return undefined
   const principal: McpPrincipal = { workspaceId: result.workspaceId, userId: result.userId, keyId: result.keyId, scopes: result.scopes ?? [], allowedModes: result.allowedModes ?? ["read"] }
   await logMcpRequest({ principal, method: req.method, statusCode: 200, requestId: crypto.randomUUID() })
-  return { token, clientId: result.keyId, scopes: principal.scopes, extra: principal }
+  return { token, clientId: result.keyId, scopes: principal.scopes, extra: principal as unknown as Record<string, unknown> }
 }, { required: true })
 
 export { authedHandler as GET, authedHandler as POST, authedHandler as DELETE }

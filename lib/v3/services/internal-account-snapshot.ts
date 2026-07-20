@@ -40,7 +40,7 @@ const text = (value: unknown) => typeof value === "string" ? value : value ? JSO
 export async function buildInternalAccountSnapshot(params: {
   workspaceId: string
   company: CanonicalCompanyIdentity
-  researchJobId: string
+  researchJobId: string | null
 }): Promise<InternalAccountSnapshot> {
   const admin = createAdminClient()
   const generatedAt = new Date().toISOString()
@@ -49,7 +49,7 @@ export async function buildInternalAccountSnapshot(params: {
   const [signalResult, dictionary, jobsResult, contactsResult] = await Promise.all([
     getLegacySignals(params.company.id, 200),
     loadDictionary(),
-    cacheV2JobPostingProvider.fetch(params.company, { freshnessHours: 24, maxItems: 50, correlationId: params.researchJobId }),
+    cacheV2JobPostingProvider.fetch(params.company, { freshnessHours: 24, maxItems: 50, correlationId: params.researchJobId ?? `mcp-${params.company.id}` }),
     getCanonicalContacts({ companyId: params.company.id, recommendedTitles: profile.recommendedJobTitles, limit: 8 }),
   ])
 

@@ -18,6 +18,8 @@ export interface ReservationResult {
   allowed: boolean
   reservationId?: string
   idempotent?: boolean
+  status?: "reserved" | "committed" | "released"
+  metadata?: Record<string, unknown>
   code?: string
   remaining?: Record<string, number>
 }
@@ -56,13 +58,15 @@ export async function reserveMcpUsage(params: {
   return data as ReservationResult
 }
 
-export async function setReservationStatus(reservationId: string, status: "committed" | "released") {
+export async function setReservationStatus(reservationId: string, status: "committed" | "released", metadata?: Record<string, unknown>) {
   const admin = createAdminClient()
   const timestamp = new Date().toISOString()
-  await admin.schema("v3").from("mcp_usage_reservations").update({
+  const { error } = await admin.schema("v3").from("mcp_usage_reservations").update({
     status,
+    ...(metadata ? { metadata } : {}),
     ...(status === "committed" ? { committed_at: timestamp } : { released_at: timestamp }),
   }).eq("id", reservationId).eq("status", "reserved")
+  if (error) throw new Error(`RESERVATION_UPDATE_FAILED:${error.message}`)
 }
 
 export async function getMcpUsage(principal: McpPrincipal) {
