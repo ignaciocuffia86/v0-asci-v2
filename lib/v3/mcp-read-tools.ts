@@ -18,7 +18,7 @@ export async function searchCompanies(query: string, limit = 10) {
 export async function getCompanyProfile(companyId: string) {
   const admin = createAdminClient()
   const [{ data: company, error }, signals] = await Promise.all([
-    admin.from("companies").select("id,name,normalized_name,website,country,industry,description,employee_count").eq("id", companyId).maybeSingle(),
+    admin.from("companies").select("id,name,normalized_name,website,country,industry,description").eq("id", companyId).maybeSingle(),
     getLegacySignals(companyId, 1),
   ])
   if (error) throw new Error(`COMPANY_READ_FAILED:${error.message}`)
