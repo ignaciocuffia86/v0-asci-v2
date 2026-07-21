@@ -1,6 +1,7 @@
 import crypto from "crypto"
 import { NextRequest } from "next/server"
 import { createAdminClient } from "@/lib/supabase/admin"
+import { hashOAuthValue } from "@/lib/v3/mcp-oauth"
 import type { McpPrincipal } from "./mcp-usage"
 
 export interface McpAuthResult extends Partial<McpPrincipal> {
@@ -27,8 +28,22 @@ export async function validateMcpRequest(req: NextRequest): Promise<McpAuthResul
   const header = req.headers.get("authorization")
   if (!header?.startsWith("Bearer ")) return failure("UNAUTHORIZED", "Usá Authorization: Bearer <api_key>", 401)
   const rawKey = header.slice(7)
-  if (!rawKey.startsWith("asci_")) return failure("INVALID_KEY_FORMAT", "Formato de API key inválido", 401)
   const admin = createAdminClient()
+
+  if (rawKey.startsWith("asci_oauth_")) {
+    const { data: token } = await admin.schema("v3").from("mcp_oauth_tokens")
+      .select("id,workspace_id,user_id,scopes,expires_at,revoked_at")
+      .eq("token_hash", hashOAuthValue(rawKey)).maybeSingle()
+    if (!token || token.revoked_at || new Date(token.expires_at) <= new Date()) return failure("INVALID_TOKEN", "Token OAuth inválido o vencido", 401)
+    const { data: membership } = await admin.schema("v3").from("workspace_members")
+      .select("id").eq("workspace_id", token.workspace_id).eq("user_id", token.user_id).eq("status", "active").maybeSingle()
+    if (!membership) return failure("MEMBERSHIP_INACTIVE", "El usuario ya no pertenece al workspace", 403)
+    await admin.schema("v3").from("mcp_oauth_tokens").update({ last_used_at: new Date().toISOString() }).eq("id", token.id)
+    const scopes: string[] = token.scopes ?? []
+    return { success: true, workspaceId: token.workspace_id, userId: token.user_id, keyId: token.id, scopes, allowedModes: resolveAllowedModes(scopes) }
+  }
+
+  if (!rawKey.startsWith("asci_")) return failure("INVALID_KEY_FORMAT", "Formato de credencial inválido", 401)
   const keyHash = crypto.createHash("sha256").update(rawKey).digest("hex")
   const { data: key } = await admin.schema("v3").from("mcp_api_keys")
     .select("id,workspace_id,owner_user_id,rate_limit_per_minute,revoked_at,scopes,allowed_modes,request_count")
@@ -58,6 +73,13 @@ export async function validateMcpRequest(req: NextRequest): Promise<McpAuthResul
     scopes: [...new Set(scopes.length ? scopes : readScopes)],
     allowedModes,
   }
+}
+
+function resolveAllowedModes(scopes: string[]) {
+  const modes = ["read"]
+  if (scopes.some((scope) => scope.endsWith(":run") || scope.endsWith(":generate"))) modes.push("server_managed")
+  if (scopes.some((scope) => scope.endsWith(":prepare") || scope.endsWith(":submit"))) modes.push("client_assisted")
+  return modes
 }
 
 function failure(code: string, message: string, status: number): McpAuthResult {
