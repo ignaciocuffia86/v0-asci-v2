@@ -1,12 +1,11 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Activity, AlertTriangle, Check, Clock, Copy, ExternalLink, Key, Plus, ShieldCheck, Trash2 } from "lucide-react"
+import { Activity, Clock, ExternalLink, Key, Plus, ShieldCheck, Trash2 } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 import { es } from "date-fns/locale"
 import { toast } from "sonner"
 import { generateApiKey, listApiKeyOwners, listApiKeys, revokeApiKey, type ApiKeyListItem, type ApiKeyOwnerOption, type ApiKeyWorkspaceOption } from "@/app/actions/v3/api-keys"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -16,6 +15,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
+import { McpSetupWizard } from "./mcp-setup-wizard"
 
 interface ApiKeysViewProps {
   workspaces: ApiKeyWorkspaceOption[]
@@ -35,7 +35,6 @@ export function ApiKeysView({ workspaces, defaultWorkspaceId, isSuperAdmin }: Ap
   const [newKeyName, setNewKeyName] = useState("")
   const [creating, setCreating] = useState(false)
   const [newKey, setNewKey] = useState<string | null>(null)
-  const [copied, setCopied] = useState(false)
   const [keyToRevoke, setKeyToRevoke] = useState<ApiKeyListItem | null>(null)
   const [revoking, setRevoking] = useState(false)
 
@@ -87,14 +86,6 @@ export function ApiKeysView({ workspaces, defaultWorkspaceId, isSuperAdmin }: Ap
     setNewKey(result.key)
     setNewKeyName("")
     await loadWorkspaceData(workspaceId)
-  }
-
-  async function handleCopyKey() {
-    if (!newKey) return
-    await navigator.clipboard.writeText(newKey)
-    setCopied(true)
-    toast.success("API key copiada")
-    window.setTimeout(() => setCopied(false), 2000)
   }
 
   async function handleRevokeKey() {
@@ -197,13 +188,7 @@ export function ApiKeysView({ workspaces, defaultWorkspaceId, isSuperAdmin }: Ap
         </DialogContent>
       </Dialog>
 
-      <Dialog open={Boolean(newKey)} onOpenChange={() => { setNewKey(null); setCreateDialogOpen(false) }}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>API Key generada</DialogTitle><DialogDescription>Copia esta key ahora. No podrás verla nuevamente.</DialogDescription></DialogHeader>
-          <div className="flex flex-col gap-4 py-4"><Alert variant="destructive"><AlertTriangle /><AlertTitle>Importante</AlertTitle><AlertDescription>Guárdala en un lugar seguro. No compartas usuario, contraseña ni IDs del workspace.</AlertDescription></Alert><div className="flex items-center gap-2"><code className="flex-1 rounded-lg border bg-muted p-3 text-sm break-all">{newKey}</code><Button variant="outline" size="icon" aria-label="Copiar API key" onClick={handleCopyKey}>{copied ? <Check /> : <Copy />}</Button></div></div>
-          <DialogFooter><Button onClick={() => { setNewKey(null); setCreateDialogOpen(false) }}>Ya la copié</Button></DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <McpSetupWizard apiKey={newKey} onComplete={() => { setNewKey(null); setCreateDialogOpen(false) }} />
 
       <AlertDialog open={Boolean(keyToRevoke)} onOpenChange={(open) => !open && setKeyToRevoke(null)}>
         <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Revocar API Key</AlertDialogTitle><AlertDialogDescription>La key &quot;{keyToRevoke?.name}&quot; dejará de funcionar inmediatamente.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancelar</AlertDialogCancel><AlertDialogAction onClick={handleRevokeKey} disabled={revoking}>{revoking ? "Revocando..." : "Revocar key"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
