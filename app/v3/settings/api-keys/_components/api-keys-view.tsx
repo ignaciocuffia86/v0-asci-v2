@@ -1,345 +1,213 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { useRouter } from "next/navigation"
-import { 
-  Key, 
-  Plus, 
-  Trash2, 
-  Copy, 
-  Check, 
-  AlertTriangle,
-  Clock,
-  Activity,
-  ExternalLink
-} from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Separator } from "@/components/ui/separator"
-import { generateApiKey, listApiKeys, revokeApiKey } from "@/app/actions/v3/api-keys"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { Activity, AlertTriangle, Check, Clock, Copy, ExternalLink, Key, Plus, ShieldCheck, Trash2 } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 import { es } from "date-fns/locale"
-
-interface ApiKey {
-  id: string
-  name: string
-  key_prefix: string
-  created_at: string
-  last_used_at: string | null
-  request_count: number
-}
+import { toast } from "sonner"
+import { generateApiKey, listApiKeyOwners, listApiKeys, revokeApiKey, type ApiKeyListItem, type ApiKeyOwnerOption, type ApiKeyWorkspaceOption } from "@/app/actions/v3/api-keys"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Skeleton } from "@/components/ui/skeleton"
 
 interface ApiKeysViewProps {
-  workspaceName: string
-  isAdmin: boolean
+  workspaces: ApiKeyWorkspaceOption[]
+  defaultWorkspaceId: string
+  isSuperAdmin: boolean
 }
 
-export function ApiKeysView({ workspaceName, isAdmin }: ApiKeysViewProps) {
-  const router = useRouter()
-  const [keys, setKeys] = useState<ApiKey[]>([])
+export function ApiKeysView({ workspaces, defaultWorkspaceId, isSuperAdmin }: ApiKeysViewProps) {
+  const [workspaceId, setWorkspaceId] = useState(defaultWorkspaceId)
+  const [workspaceName, setWorkspaceName] = useState(workspaces.find((item) => item.id === defaultWorkspaceId)?.name ?? "")
+  const [keys, setKeys] = useState<ApiKeyListItem[]>([])
+  const [owners, setOwners] = useState<ApiKeyOwnerOption[]>([])
+  const [ownerUserId, setOwnerUserId] = useState("")
+  const [canManage, setCanManage] = useState(false)
   const [loading, setLoading] = useState(true)
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [newKeyName, setNewKeyName] = useState("")
   const [creating, setCreating] = useState(false)
   const [newKey, setNewKey] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
-  const [revokeDialogOpen, setRevokeDialogOpen] = useState(false)
-  const [keyToRevoke, setKeyToRevoke] = useState<ApiKey | null>(null)
+  const [keyToRevoke, setKeyToRevoke] = useState<ApiKeyListItem | null>(null)
   const [revoking, setRevoking] = useState(false)
-  
-  useEffect(() => {
-    loadKeys()
-  }, [])
-  
-  const loadKeys = async () => {
+
+  const availableOwners = useMemo(
+    () => owners.filter((owner) => !keys.some((key) => key.owner_user_id === owner.id)),
+    [keys, owners]
+  )
+
+  const loadWorkspaceData = useCallback(async (selectedWorkspaceId: string) => {
     setLoading(true)
-    const result = await listApiKeys()
-    if (result.success && result.keys) {
-      setKeys(result.keys)
+    const [keyResult, ownerResult] = await Promise.all([
+      listApiKeys(selectedWorkspaceId),
+      listApiKeyOwners(selectedWorkspaceId),
+    ])
+
+    if (!keyResult.success || !ownerResult.success) {
+      toast.error(keyResult.error ?? ownerResult.error ?? "No se pudo cargar el workspace")
+      setKeys([])
+      setOwners([])
+      setCanManage(false)
+    } else {
+      setKeys(keyResult.keys ?? [])
+      setOwners(ownerResult.owners ?? [])
+      setCanManage(ownerResult.canManage ?? false)
+      setWorkspaceName(ownerResult.workspaceName ?? "")
     }
     setLoading(false)
-  }
-  
-  const handleCreateKey = async () => {
-    if (!newKeyName.trim()) return
-    
+  }, [])
+
+  useEffect(() => {
+    void loadWorkspaceData(workspaceId)
+  }, [loadWorkspaceData, workspaceId])
+
+  useEffect(() => {
+    if (!availableOwners.some((owner) => owner.id === ownerUserId)) {
+      setOwnerUserId(availableOwners[0]?.id ?? "")
+    }
+  }, [availableOwners, ownerUserId])
+
+  async function handleCreateKey() {
+    if (!newKeyName.trim() || !ownerUserId) return
     setCreating(true)
-    const result = await generateApiKey(newKeyName.trim())
+    const result = await generateApiKey(newKeyName, workspaceId, ownerUserId)
     setCreating(false)
-    
-    if (result.success && result.key) {
-      setNewKey(result.key)
-      setNewKeyName("")
-      loadKeys()
-    } else {
-      alert(result.error || "Error al crear API key")
+    if (!result.success || !result.key) {
+      toast.error(result.error ?? "No se pudo generar la API key")
+      return
     }
+    setNewKey(result.key)
+    setNewKeyName("")
+    await loadWorkspaceData(workspaceId)
   }
-  
-  const handleCopyKey = async () => {
-    if (newKey) {
-      await navigator.clipboard.writeText(newKey)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    }
+
+  async function handleCopyKey() {
+    if (!newKey) return
+    await navigator.clipboard.writeText(newKey)
+    setCopied(true)
+    toast.success("API key copiada")
+    window.setTimeout(() => setCopied(false), 2000)
   }
-  
-  const handleCloseNewKeyDialog = () => {
-    setNewKey(null)
-    setCreateDialogOpen(false)
-  }
-  
-  const handleRevokeKey = async () => {
+
+  async function handleRevokeKey() {
     if (!keyToRevoke) return
-    
     setRevoking(true)
-    const result = await revokeApiKey(keyToRevoke.id)
+    const result = await revokeApiKey(keyToRevoke.id, workspaceId)
     setRevoking(false)
-    
-    if (result.success) {
-      setRevokeDialogOpen(false)
-      setKeyToRevoke(null)
-      loadKeys()
-    } else {
-      alert(result.error || "Error al revocar API key")
+    if (!result.success) {
+      toast.error(result.error ?? "No se pudo revocar la API key")
+      return
     }
+    setKeyToRevoke(null)
+    toast.success("API key revocada")
+    await loadWorkspaceData(workspaceId)
   }
-  
+
   return (
-    <div className="flex flex-col gap-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold">API Keys</h1>
-        <p className="text-muted-foreground">
-          Gestiona las API keys para conectar agentes externos al MCP Server de ASCI
-        </p>
-      </div>
-      
-      {/* Info Card */}
+    <main className="flex flex-col gap-6">
+      <header className="flex flex-col gap-2">
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl font-bold text-balance">API Keys</h1>
+          {isSuperAdmin && <Badge variant="secondary"><ShieldCheck data-icon="inline-start" />Superadmin</Badge>}
+        </div>
+        <p className="text-muted-foreground">Gestiona las credenciales personales para conectar agentes externos al MCP Server de ASCI.</p>
+      </header>
+
+      {isSuperAdmin && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Workspace administrado</CardTitle>
+            <CardDescription>Como superadmin puedes administrar las API keys de cualquier workspace.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex max-w-md flex-col gap-2">
+              <Label htmlFor="workspace-selector">Workspace</Label>
+              <Select value={workspaceId} onValueChange={setWorkspaceId}>
+                <SelectTrigger id="workspace-selector"><SelectValue placeholder="Selecciona un workspace" /></SelectTrigger>
+                <SelectContent><SelectGroup><SelectLabel>Workspaces</SelectLabel>{workspaces.map((workspace) => <SelectItem key={workspace.id} value={workspace.id}>{workspace.name}</SelectItem>)}</SelectGroup></SelectContent>
+              </Select>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Key className="size-5" />
-            MCP Server
-          </CardTitle>
-          <CardDescription>
-            Permite que agentes de IA externos accedan a la inteligencia de ventas de {workspaceName}
-          </CardDescription>
+          <CardTitle className="flex items-center gap-2"><Key />MCP Server</CardTitle>
+          <CardDescription>Los agentes acceden exclusivamente a la información de {workspaceName || "este workspace"}.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="flex items-center gap-4 rounded-lg border bg-muted/50 p-4">
-            <code className="flex-1 text-sm">
-              https://bot.bigua.lat/api/v3/mcp
-            </code>
-            <Button variant="outline" size="sm" asChild>
-              <a href="/api/v3/mcp" target="_blank">
-                <ExternalLink className="mr-2 size-4" />
-                Ver Manifest
-              </a>
-            </Button>
+            <code className="flex-1 text-sm break-all">https://bot.bigua.lat/api/v3/mcp/server/mcp</code>
+            <Button variant="outline" size="sm" asChild><a href="/api/v3/mcp" target="_blank" rel="noreferrer"><ExternalLink data-icon="inline-start" />Ver manifest</a></Button>
           </div>
-          <p className="text-sm text-muted-foreground">
-            Usa esta URL como MCP Server en tu cliente de IA (Claude, etc.)
-          </p>
+          <p className="text-sm text-muted-foreground">El workspace y el usuario se resuelven automáticamente desde la API key. No debes enviar sus IDs.</p>
         </CardContent>
       </Card>
-      
-      {/* API Keys List */}
+
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <div>
-            <CardTitle>Tus API Keys</CardTitle>
-            <CardDescription>
-              {keys.length === 0 
-                ? "No tienes API keys activas" 
-                : `${keys.length} key${keys.length !== 1 ? "s" : ""} activa${keys.length !== 1 ? "s" : ""}`}
-            </CardDescription>
+        <CardHeader className="flex flex-row items-center justify-between gap-4">
+          <div className="flex flex-col gap-1.5">
+            <CardTitle>{canManage ? "API Keys del workspace" : "Tu API Key"}</CardTitle>
+            <CardDescription>{keys.length === 0 ? "No hay API keys activas" : `${keys.length} ${keys.length === 1 ? "key activa" : "keys activas"}`}</CardDescription>
           </div>
-          {isAdmin && keys.length === 0 && (
-            <Button onClick={() => setCreateDialogOpen(true)}>
-              <Plus className="mr-2 size-4" />
-              Generar API Key
-            </Button>
-          )}
+          {canManage && availableOwners.length > 0 && <Button onClick={() => setCreateDialogOpen(true)}><Plus data-icon="inline-start" />Generar API Key</Button>}
         </CardHeader>
         <CardContent>
           {loading ? (
-            <div className="flex items-center justify-center py-8 text-muted-foreground">
-              Cargando...
-            </div>
+            <div className="flex flex-col gap-3"><Skeleton className="h-20 w-full" /><Skeleton className="h-20 w-full" /></div>
           ) : keys.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-4 py-8 text-center">
-              <div className="rounded-full bg-muted p-4">
-                <Key className="size-8 text-muted-foreground" />
-              </div>
-              <div>
-                <p className="font-medium">Sin API Keys</p>
-                <p className="text-sm text-muted-foreground">
-                  {isAdmin 
-                    ? "Genera una API key para conectar agentes externos"
-                    : "Contacta al admin del workspace para generar una API key"}
-                </p>
-              </div>
+            <div className="flex flex-col items-center gap-3 py-8 text-center">
+              <Key className="size-10 text-muted-foreground" />
+              <div><p className="font-medium">Sin API Keys</p><p className="text-sm text-muted-foreground">{canManage ? "Genera una key para un miembro activo del workspace." : "Contacta al admin del workspace para generar tu API key."}</p></div>
             </div>
           ) : (
-            <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-3">
               {keys.map((key) => (
-                <div
-                  key={key.id}
-                  className="flex items-center justify-between rounded-lg border p-4"
-                >
-                  <div className="flex flex-col gap-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium">{key.name}</span>
-                      <Badge variant="outline" className="font-mono text-xs">
-                        {key.key_prefix}...
-                      </Badge>
-                    </div>
-                    <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                      <span className="flex items-center gap-1">
-                        <Clock className="size-3" />
-                        Creada {formatDistanceToNow(new Date(key.created_at), { addSuffix: true, locale: es })}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <Activity className="size-3" />
-                        {key.request_count} requests
-                      </span>
-                      {key.last_used_at && (
-                        <span>
-                          Ultimo uso: {formatDistanceToNow(new Date(key.last_used_at), { addSuffix: true, locale: es })}
-                        </span>
-                      )}
-                    </div>
+                <div key={key.id} className="flex flex-col justify-between gap-4 rounded-lg border p-4 sm:flex-row sm:items-center">
+                  <div className="flex min-w-0 flex-col gap-2">
+                    <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{key.name}</span><Badge variant="outline" className="font-mono text-xs">{key.key_prefix}...</Badge></div>
+                    <p className="text-sm text-muted-foreground">Propietario: {key.owner_name || key.owner_email || key.owner_user_id}</p>
+                    <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground"><span className="flex items-center gap-1"><Clock />Creada {formatDistanceToNow(new Date(key.created_at), { addSuffix: true, locale: es })}</span><span className="flex items-center gap-1"><Activity />{key.request_count} requests</span>{key.last_used_at && <span>Último uso: {formatDistanceToNow(new Date(key.last_used_at), { addSuffix: true, locale: es })}</span>}</div>
                   </div>
-                  {isAdmin && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-destructive hover:text-destructive"
-                      onClick={() => {
-                        setKeyToRevoke(key)
-                        setRevokeDialogOpen(true)
-                      }}
-                    >
-                      <Trash2 className="size-4" />
-                    </Button>
-                  )}
+                  {canManage && <Button variant="ghost" size="icon" aria-label={`Revocar ${key.name}`} onClick={() => setKeyToRevoke(key)}><Trash2 /></Button>}
                 </div>
               ))}
             </div>
           )}
         </CardContent>
       </Card>
-      
-      {/* Create Dialog */}
+
       <Dialog open={createDialogOpen && !newKey} onOpenChange={setCreateDialogOpen}>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Generar nueva API Key</DialogTitle>
-            <DialogDescription>
-              La API key se mostrara solo una vez. Guardala en un lugar seguro.
-            </DialogDescription>
-          </DialogHeader>
+          <DialogHeader><DialogTitle>Generar nueva API Key</DialogTitle><DialogDescription>La credencial quedará vinculada al workspace y al miembro seleccionado.</DialogDescription></DialogHeader>
           <div className="flex flex-col gap-4 py-4">
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="name">Nombre de la key</Label>
-              <Input
-                id="name"
-                placeholder="Ej: Claude Desktop, MCP Client"
-                value={newKeyName}
-                onChange={(e) => setNewKeyName(e.target.value)}
-              />
-            </div>
+            <div className="flex flex-col gap-2"><Label htmlFor="key-name">Nombre</Label><Input id="key-name" placeholder="Ej: Claude Desktop" value={newKeyName} onChange={(event) => setNewKeyName(event.target.value)} /></div>
+            <div className="flex flex-col gap-2"><Label htmlFor="key-owner">Propietario</Label><Select value={ownerUserId} onValueChange={setOwnerUserId}><SelectTrigger id="key-owner"><SelectValue placeholder="Selecciona un miembro" /></SelectTrigger><SelectContent><SelectGroup><SelectLabel>Miembros activos sin key</SelectLabel>{availableOwners.map((owner) => <SelectItem key={owner.id} value={owner.id}>{owner.fullName ? `${owner.fullName} · ` : ""}{owner.email ?? owner.id} ({owner.role})</SelectItem>)}</SelectGroup></SelectContent></Select></div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>
-              Cancelar
-            </Button>
-            <Button onClick={handleCreateKey} disabled={!newKeyName.trim() || creating}>
-              {creating ? "Generando..." : "Generar Key"}
-            </Button>
-          </DialogFooter>
+          <DialogFooter><Button variant="outline" onClick={() => setCreateDialogOpen(false)}>Cancelar</Button><Button onClick={handleCreateKey} disabled={!newKeyName.trim() || !ownerUserId || creating}>{creating ? "Generando..." : "Generar key"}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
-      
-      {/* Show New Key Dialog */}
-      <Dialog open={!!newKey} onOpenChange={handleCloseNewKeyDialog}>
+
+      <Dialog open={Boolean(newKey)} onOpenChange={() => { setNewKey(null); setCreateDialogOpen(false) }}>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle>API Key generada</DialogTitle>
-            <DialogDescription>
-              Copia esta key ahora. No podras verla de nuevo.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex flex-col gap-4 py-4">
-            <Alert variant="destructive">
-              <AlertTriangle className="size-4" />
-              <AlertTitle>Importante</AlertTitle>
-              <AlertDescription>
-                Esta es la unica vez que veras la key completa. Guardala en un lugar seguro.
-              </AlertDescription>
-            </Alert>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 rounded-lg border bg-muted p-3 text-sm break-all">
-                {newKey}
-              </code>
-              <Button variant="outline" size="icon" onClick={handleCopyKey}>
-                {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
-              </Button>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button onClick={handleCloseNewKeyDialog}>
-              Ya la copie
-            </Button>
-          </DialogFooter>
+          <DialogHeader><DialogTitle>API Key generada</DialogTitle><DialogDescription>Copia esta key ahora. No podrás verla nuevamente.</DialogDescription></DialogHeader>
+          <div className="flex flex-col gap-4 py-4"><Alert variant="destructive"><AlertTriangle /><AlertTitle>Importante</AlertTitle><AlertDescription>Guárdala en un lugar seguro. No compartas usuario, contraseña ni IDs del workspace.</AlertDescription></Alert><div className="flex items-center gap-2"><code className="flex-1 rounded-lg border bg-muted p-3 text-sm break-all">{newKey}</code><Button variant="outline" size="icon" aria-label="Copiar API key" onClick={handleCopyKey}>{copied ? <Check /> : <Copy />}</Button></div></div>
+          <DialogFooter><Button onClick={() => { setNewKey(null); setCreateDialogOpen(false) }}>Ya la copié</Button></DialogFooter>
         </DialogContent>
       </Dialog>
-      
-      {/* Revoke Confirmation */}
-      <AlertDialog open={revokeDialogOpen} onOpenChange={setRevokeDialogOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Revocar API Key</AlertDialogTitle>
-            <AlertDialogDescription>
-              Esta seguro de revocar la key &quot;{keyToRevoke?.name}&quot;? 
-              Los agentes que la usen dejaran de funcionar inmediatamente.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancelar</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleRevokeKey}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              disabled={revoking}
-            >
-              {revoking ? "Revocando..." : "Revocar Key"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
+
+      <AlertDialog open={Boolean(keyToRevoke)} onOpenChange={(open) => !open && setKeyToRevoke(null)}>
+        <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Revocar API Key</AlertDialogTitle><AlertDialogDescription>La key &quot;{keyToRevoke?.name}&quot; dejará de funcionar inmediatamente.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancelar</AlertDialogCancel><AlertDialogAction onClick={handleRevokeKey} disabled={revoking}>{revoking ? "Revocando..." : "Revocar key"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
       </AlertDialog>
-    </div>
+    </main>
   )
 }
