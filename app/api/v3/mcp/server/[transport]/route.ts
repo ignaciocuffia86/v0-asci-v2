@@ -82,6 +82,9 @@ const authedHandler = withMcpAuth(handler, async (req: Request, token?: string) 
   const principal: McpPrincipal = { workspaceId: result.workspaceId, userId: result.userId, keyId: result.keyId, scopes: result.scopes ?? [], allowedModes: result.allowedModes ?? ["read"] }
   await logMcpRequest({ principal, method: req.method, statusCode: 200, requestId: crypto.randomUUID() })
   return { token, clientId: result.keyId, scopes: principal.scopes, extra: principal as unknown as Record<string, unknown> }
-}, { required: true })
+}, {
+  required: true,
+  resourceMetadataPath: "/.well-known/oauth-protected-resource",
+})
 
 export { authedHandler as GET, authedHandler as POST, authedHandler as DELETE }

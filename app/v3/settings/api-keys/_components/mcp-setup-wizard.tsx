@@ -121,18 +121,22 @@ export function McpSetupWizard({ apiKey, onComplete }: McpSetupWizardProps) {
               </TabsList>
 
               <TabsContent value="claude-web" className="flex flex-col gap-4 pt-3">
+                <Alert><ShieldCheck /><AlertTitle>Claude se conecta con OAuth</AlertTitle><AlertDescription>En esta pantalla no debes pegar la API key ni completar los campos OAuth avanzados. Claude abrirá ASCI para que inicies sesión y elijas workspace y permisos.</AlertDescription></Alert>
                 <ol className="flex list-decimal flex-col gap-2 pl-5 text-sm text-muted-foreground">
                   <li>Abre Claude y entra en Settings → Connectors.</li>
-                  <li>Selecciona Add custom connector e ingresa la URL del MCP Server.</li>
-                  <li>Configura la autenticación con el header <code className="text-foreground">Authorization</code> y el valor Bearer indicado abajo.</li>
-                  <li>Guarda el conector y habilítalo en una conversación nueva.</li>
+                  <li>Selecciona Add custom connector.</li>
+                  <li>En Nombre escribe <code className="text-foreground">ASCI</code>.</li>
+                  <li>En URL del servidor MCP remoto pega la URL indicada abajo.</li>
+                  <li>Deja OAuth Client ID y Secreto del cliente OAuth vacíos.</li>
+                  <li>Presiona Agregar. Claude te redirigirá a ASCI para autorizar la conexión.</li>
                 </ol>
-                <CopyField label="Valor del header Authorization" value={authorization} copied={copiedTargets.has("header")} onCopy={() => copy("header", authorization)} />
-                <Alert><AlertCircle /><AlertTitle>Disponibilidad</AlertTitle><AlertDescription>Los conectores personalizados y headers pueden depender del plan y de las políticas de tu organización en Claude.</AlertDescription></Alert>
+                <CopyField label="URL del servidor MCP remoto" value={serverUrl} copied={copiedTargets.has("url")} onCopy={() => copy("url", serverUrl)} />
+                <Alert><AlertCircle /><AlertTitle>Disponibilidad</AlertTitle><AlertDescription>Los conectores personalizados pueden depender del plan y de las políticas de tu organización en Claude.</AlertDescription></Alert>
               </TabsContent>
 
               <TabsContent value="claude-desktop" className="flex flex-col gap-4 pt-3">
-                <p className="text-sm text-muted-foreground">Puedes usar el conector remoto como en Claude Web. Si tu versión requiere configuración local, agrega este bloque al archivo de configuración de Claude Desktop y reinicia la aplicación.</p>
+                <Alert><ShieldCheck /><AlertTitle>Opción recomendada: conector remoto</AlertTitle><AlertDescription>En Claude Desktop abre Settings → Connectors → Add custom connector. Completa Nombre con ASCI, pega la URL del servidor, deja ambos campos OAuth avanzados vacíos y presiona Agregar.</AlertDescription></Alert>
+                <p className="text-sm text-muted-foreground">Claude abrirá ASCI para iniciar sesión, seleccionar el workspace y aprobar permisos. Solo usa el archivo local de abajo si tu versión de Claude Desktop no ofrece conectores remotos.</p>
                 <div className="flex flex-col gap-2">
                   <div className="flex items-center justify-between gap-3"><p className="text-sm font-medium">claude_desktop_config.json</p><CopyButton label="configuración JSON" copied={copiedTargets.has("json")} onCopy={() => copy("json", desktopConfig)} /></div>
                   <pre className="overflow-x-auto rounded-lg border bg-muted p-4 text-xs"><code>{desktopConfig}</code></pre>
