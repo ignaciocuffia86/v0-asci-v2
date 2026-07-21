@@ -5,7 +5,18 @@
 
 export type RadarType = "tech" | "news" | "jobs-interpretation"
 
-export type ResearchJobStatus = "pending" | "running" | "completed" | "failed" | "cancelled"
+export type ResearchJobStatus =
+  | "pending"
+  | "running"
+  | "preliminary_ready"
+  | "completed"
+  | "completed_with_warnings"
+  | "failed"
+  | "failed_retriable"
+  | "failed_terminal"
+  | "cancelled"
+
+export type ResearchPhase = "internal" | "external" | "finalizing"
 
 export interface ResearchJob {
   id: string
@@ -25,6 +36,17 @@ export interface ResearchJob {
   created_at: string
   started_at: string | null
   finished_at: string | null
+  phase: ResearchPhase
+  heartbeat_at: string | null
+  lease_expires_at: string | null
+  worker_id: string | null
+  attempt_count: number
+  max_attempts: number
+  error_code: string | null
+  next_retry_at: string | null
+  cancel_requested_at: string | null
+  preliminary_ready_at: string | null
+  external_started_at: string | null
 }
 
 export interface RadarFinding {
@@ -50,11 +72,15 @@ export interface Scorecard {
   id: string
   workspace_id: string
   company_id: string
-  score: number
-  fit_score: number
-  buying_signals_score: number
-  accessibility_score: number
-  timing_score: number
+  score: number | null
+  fit_score: number | null
+  buying_signals_score: number | null
+  accessibility_score: number | null
+  timing_score: number | null
+  score_stage: "preliminary" | "final"
+  fit_status: "evaluated" | "fit_not_evaluated"
+  profile_version: string | null
+  snapshot_version: string | null
   rationale: string | null
   dictionary_matches: Record<string, unknown> | null
   signals_snapshot: Record<string, unknown> | null
@@ -100,8 +126,18 @@ export interface CompanyResolution {
   lastResearchedAt: string | null
   /** true si el workspace ya sigue esta cuenta */
   alreadyFollowed: boolean
+  matchedBy?: "domain" | "alias" | "exact_name" | "ranked"
+  confidence?: number
+  resolutionReason?: string
   /** candidatos cuando el input es ambiguo */
-  candidates: { companyId: string; name: string; domain: string | null; country: string | null }[]
+  candidates: {
+    companyId: string
+    name: string
+    domain: string | null
+    country: string | null
+    confidence?: number
+    signalsCount?: number
+  }[]
 }
 
 export interface DictionaryData {

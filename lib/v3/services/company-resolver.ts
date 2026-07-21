@@ -1,173 +1,172 @@
 import { createAdminClient } from "@/lib/supabase/admin"
 import { LIMITS, type CompanyResolution } from "./types"
 import { isRadarCacheFresh } from "./radar"
+import { findCompanyAlias, normalizeCompanyName } from "./company-aliases"
 
-// ═══════════════════════════════════════════════════════════
-// Resolvedor de empresas: convierte inputs libres del usuario
-// ("Arcor", "arcor.com", "Arcor Argentina") en filas de
-// public.companies (cache global compartido con v2).
-// - Nunca borra ni modifica empresas existentes: solo lee o inserta.
-// - Detecta frescura del cache y si la cuenta ya se sigue.
-// ═══════════════════════════════════════════════════════════
+type Candidate = {
+  id: string
+  name: string
+  website: string | null
+  country: string | null
+  industry: string | null
+  signalsCount: number
+  score: number
+  matchedBy: "domain" | "alias" | "exact_name" | "ranked"
+  reasons: string[]
+}
 
 function looksLikeDomain(input: string): boolean {
   return /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(input.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, ""))
 }
 
 function extractDomain(input: string): string {
-  return input
-    .trim()
-    .replace(/^https?:\/\//, "")
-    .replace(/^www\./, "")
-    .replace(/\/.*$/, "")
-    .toLowerCase()
+  return input.trim().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "").toLowerCase()
 }
 
-function normalizeName(name: string): string {
-  return name
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
+function normalizedDomain(value: string | null): string | null {
+  if (!value) return null
+  return extractDomain(value)
 }
 
-/**
- * Resuelve un input libre a una empresa del cache global.
- * Si hay múltiples candidatos plausibles, los devuelve para desambiguar
- * en el chat en vez de elegir uno arbitrariamente.
- */
-export async function resolveCompany(
-  input: string,
-  workspaceId: string
-): Promise<CompanyResolution> {
+function countryMatches(actual: string | null, expected: string | null): boolean {
+  if (!expected) return true
+  const left = normalizeCompanyName(actual ?? "")
+  const right = normalizeCompanyName(expected)
+  return left === right || (right === "argentina" && ["ar", "argentina"].includes(left))
+}
+
+async function signalCount(companyId: string): Promise<number> {
+  const admin = createAdminClient()
+  const { count, error } = await admin.from("signals").select("id", { count: "exact", head: true }).eq("company_id", companyId)
+  if (error) return 0
+  return count ?? 0
+}
+
+async function rankCandidates(params: {
+  rows: Array<{ id: string; name: string; website: string | null; country: string | null; industry: string | null }>
+  input: string
+  expectedDomain: string | null
+  expectedCountry: string | null
+  aliasApplied: boolean
+}): Promise<Candidate[]> {
+  const inputName = normalizeCompanyName(params.input)
+  return Promise.all(params.rows.map(async (row) => {
+    const name = normalizeCompanyName(row.name)
+    const domain = normalizedDomain(row.website)
+    const reasons: string[] = []
+    let score = 0
+    let matchedBy: Candidate["matchedBy"] = "ranked"
+
+    if (params.expectedDomain && domain === params.expectedDomain) {
+      score += 70
+      reasons.push("dominio canónico exacto")
+      matchedBy = params.aliasApplied ? "alias" : "domain"
+    }
+    if (name === inputName) {
+      score += 45
+      reasons.push("nombre exacto")
+      if (matchedBy === "ranked") matchedBy = "exact_name"
+    } else if (name.includes(inputName) || inputName.includes(name)) {
+      score += 25
+      reasons.push("nombre compatible")
+    }
+    if (countryMatches(row.country, params.expectedCountry)) {
+      score += params.expectedCountry ? 15 : 5
+      reasons.push("país compatible")
+    } else if (params.expectedCountry) {
+      score -= 100
+      reasons.push("país incompatible")
+    }
+    if (row.website) score += 5
+    if (row.industry) score += 2
+
+    const signalsCount = await signalCount(row.id)
+    if (signalsCount > 0) {
+      score += Math.min(15, Math.log10(signalsCount + 1) * 5)
+      reasons.push(`${signalsCount} señales v2`)
+    }
+
+    return { ...row, signalsCount, score, matchedBy, reasons }
+  })).then((rows) => rows.sort((a, b) => b.score - a.score || b.signalsCount - a.signalsCount))
+}
+
+export async function resolveCompany(input: string, workspaceId: string): Promise<CompanyResolution> {
   const admin = createAdminClient()
   const trimmed = input.trim()
-
   const empty: CompanyResolution = {
-    input: trimmed,
-    companyId: null,
-    name: null,
-    domain: null,
-    country: null,
-    industry: null,
-    cacheFresh: false,
-    lastResearchedAt: null,
-    alreadyFollowed: false,
-    candidates: [],
+    input: trimmed, companyId: null, name: null, domain: null, country: null, industry: null,
+    cacheFresh: false, lastResearchedAt: null, alreadyFollowed: false, candidates: [],
   }
   if (!trimmed) return empty
 
-  let matches: { id: string; name: string; website: string | null; country: string | null; industry: string | null }[] = []
+  const alias = findCompanyAlias(trimmed)
+  const expectedDomain = alias?.canonicalDomain ?? (looksLikeDomain(trimmed) ? extractDomain(trimmed) : null)
+  const expectedCountry = alias?.country ?? null
+  const searchName = alias?.canonicalName ?? trimmed
+  const normalized = normalizeCompanyName(searchName)
+  const candidates = new Map<string, { id: string; name: string; website: string | null; country: string | null; industry: string | null }>()
+  const add = (rows: typeof candidates extends Map<string, infer V> ? V[] : never) => rows.forEach((row) => candidates.set(row.id, row))
 
-  if (looksLikeDomain(trimmed)) {
-    const domain = extractDomain(trimmed)
-    const { data } = await admin
-      .from("companies")
-      .select("id, name, website, country, industry")
-      .ilike("website", `%${domain}%`)
-      .limit(5)
-    matches = data ?? []
+  if (expectedDomain) {
+    const { data } = await admin.from("companies").select("id,name,website,country,industry").ilike("website", `%${expectedDomain}%`).limit(20)
+    add(data ?? [])
   }
 
-  if (matches.length === 0) {
-    const normalized = normalizeName(trimmed)
-    // 1) match exacto por nombre normalizado
-    const { data: exact } = await admin
-      .from("companies")
-      .select("id, name, website, country, industry")
-      .eq("normalized_name", normalized)
-      .limit(5)
-    matches = exact ?? []
+  const [{ data: exact }, { data: partial }] = await Promise.all([
+    admin.from("companies").select("id,name,website,country,industry").eq("normalized_name", normalized).limit(20),
+    normalized.length >= 3
+      ? admin.from("companies").select("id,name,website,country,industry").ilike("name", `%${searchName}%`).limit(20)
+      : Promise.resolve({ data: [] }),
+  ])
+  add(exact ?? [])
+  add(partial ?? [])
 
-    // 2) búsqueda parcial si no hay exacto
-    if (matches.length === 0 && normalized.length >= 3) {
-      const { data: partial } = await admin
-        .from("companies")
-        .select("id, name, website, country, industry")
-        .ilike("name", `%${trimmed}%`)
-        .limit(5)
-      matches = partial ?? []
-    }
-  }
+  if (candidates.size === 0) return empty
+  const ranked = await rankCandidates({ rows: [...candidates.values()], input: searchName, expectedDomain, expectedCountry, aliasApplied: Boolean(alias) })
+  const best = ranked[0]
+  const margin = best.score - (ranked[1]?.score ?? 0)
+  const confident = best.score >= 45 && (ranked.length === 1 || margin >= 12 || best.matchedBy === "alias" || best.matchedBy === "domain")
 
-  if (matches.length === 0) return empty
-
-  // Ambiguo: más de un candidato con nombres distintos → desambiguar en chat
-  const distinctNames = new Set(matches.map((m) => normalizeName(m.name)))
-  if (matches.length > 1 && distinctNames.size > 1) {
+  if (!confident) {
     return {
       ...empty,
-      candidates: matches.map((m) => ({
-        companyId: m.id,
-        name: m.name,
-        domain: m.website,
-        country: m.country,
+      candidates: ranked.slice(0, 5).map((row) => ({
+        companyId: row.id, name: row.name, domain: row.website, country: row.country,
+        confidence: Math.max(0, Math.min(100, Math.round(row.score))), signalsCount: row.signalsCount,
       })),
+      resolutionReason: "Los candidatos no alcanzaron un margen de confianza suficiente.",
     }
   }
 
-  const company = matches[0]
   const [cacheFresh, followed, lastRun] = await Promise.all([
-    isRadarCacheFresh(company.id, LIMITS.CACHE_TTL_DAYS),
-    admin
-      .schema("v3")
-      .from("followed_accounts")
-      .select("id")
-      .eq("workspace_id", workspaceId)
-      .eq("company_id", company.id)
-      .eq("is_active", true)
-      .maybeSingle()
-      .then((r) => Boolean(r.data)),
-    admin
-      .from("radar_research_runs")
-      .select("created_at")
-      .eq("company_id", company.id)
-      .eq("status", "completed")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle()
-      .then((r) => r.data?.created_at ?? null),
+    isRadarCacheFresh(best.id, LIMITS.CACHE_TTL_DAYS),
+    admin.schema("v3").from("followed_accounts").select("id").eq("workspace_id", workspaceId).eq("company_id", best.id).eq("is_active", true).maybeSingle().then((result) => Boolean(result.data)),
+    admin.from("radar_research_runs").select("created_at").eq("company_id", best.id).eq("status", "completed").order("created_at", { ascending: false }).limit(1).maybeSingle().then((result) => result.data?.created_at ?? null),
   ])
 
   return {
     input: trimmed,
-    companyId: company.id,
-    name: company.name,
-    domain: company.website,
-    country: company.country,
-    industry: company.industry,
+    companyId: best.id,
+    name: best.name,
+    domain: best.website,
+    country: best.country,
+    industry: best.industry,
     cacheFresh,
     lastResearchedAt: lastRun,
     alreadyFollowed: followed,
+    matchedBy: best.matchedBy,
+    confidence: Math.max(0, Math.min(100, Math.round(best.score))),
+    resolutionReason: best.reasons.join("; "),
     candidates: [],
   }
 }
 
-/**
- * Crea una empresa nueva en el cache global cuando no existe.
- * Aditivo: nunca modifica filas existentes de v2.
- */
-export async function createCompany(params: {
-  name: string
-  website?: string | null
-  country?: string | null
-  industry?: string | null
-}): Promise<{ companyId: string } | { error: string }> {
+export async function createCompany(params: { name: string; website?: string | null; country?: string | null; industry?: string | null }): Promise<{ companyId: string } | { error: string }> {
   const admin = createAdminClient()
-  const { data, error } = await admin
-    .from("companies")
-    .insert({
-      name: params.name.trim(),
-      normalized_name: normalizeName(params.name),
-      website: params.website ?? null,
-      country: params.country ?? null,
-      industry: params.industry ?? null,
-    })
-    .select("id")
-    .single()
-
+  const { data, error } = await admin.from("companies").insert({
+    name: params.name.trim(), normalized_name: normalizeCompanyName(params.name), website: params.website ?? null,
+    country: params.country ?? null, industry: params.industry ?? null,
+  }).select("id").single()
   if (error || !data) {
     console.error("[v3] Error creando empresa:", error?.message)
     return { error: "No se pudo crear la empresa" }

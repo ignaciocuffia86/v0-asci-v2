@@ -27,9 +27,12 @@ export async function GET(_req: Request, { params }: { params: Promise<{ batchId
       companyId: j.company_id,
       status: j.status,
       currentStep: j.current_step,
+      phase: j.phase,
       progress: j.progress,
+      preliminaryReadyAt: j.preliminary_ready_at,
+      errorCode: j.error_code,
       error: j.error,
     })),
-    done: jobs.length > 0 && jobs.every((j) => ["completed", "failed", "cancelled"].includes(j.status)),
+    done: jobs.length > 0 && jobs.every((j) => ["completed", "completed_with_warnings", "failed_terminal", "cancelled"].includes(j.status)),
   })
 }

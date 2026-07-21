@@ -159,14 +159,31 @@ export interface AccountDetail {
   } | null
   scorecard: {
     id: string
-    score: number
-    fit_score: number
-    buying_signals_score: number
-    accessibility_score: number
-    timing_score: number
+    score: number | null
+    fit_score: number | null
+    buying_signals_score: number | null
+    accessibility_score: number | null
+    timing_score: number | null
+    score_stage: "preliminary" | "final"
+    fit_status: "evaluated" | "fit_not_evaluated"
     rationale: string | null
     created_at: string
     signals_snapshot: Record<string, unknown> | null
+  } | null
+  brief: {
+    id: string
+    stage: "preliminary" | "final"
+    status: "ready" | "partial" | "failed"
+    headline: string
+    why_now: string | null
+    fit_summary: string | null
+    evidence: Array<Record<string, unknown>>
+    recommended_contacts: Array<Record<string, unknown>>
+    next_actions: string[]
+    coverage: Record<string, number>
+    freshness: Record<string, string | null>
+    warnings: string[]
+    created_at: string
   } | null
   previousScore: number | null
   findings: Array<{
@@ -484,7 +501,7 @@ export async function getAccountDetail(companyId: string): Promise<AccountDetail
   const { userId, workspaceId } = await getAuthContext()
   const admin = createAdminClient()
 
-  const [followedList, companyRes, scorecardsRes, findingsRes, icebreakersRes] = await Promise.all([
+  const [followedList, companyRes, scorecardsRes, findingsRes, icebreakersRes, briefRes] = await Promise.all([
     listFollowedAccounts(workspaceId, userId),
     admin
       .from("companies")
@@ -494,7 +511,7 @@ export async function getAccountDetail(companyId: string): Promise<AccountDetail
     admin
       .schema("v3")
       .from("account_scorecards")
-      .select("id, score, fit_score, buying_signals_score, accessibility_score, timing_score, rationale, created_at, signals_snapshot")
+      .select("id, score, fit_score, buying_signals_score, accessibility_score, timing_score, score_stage, fit_status, rationale, created_at, signals_snapshot")
       .eq("workspace_id", workspaceId)
       .eq("company_id", companyId)
       .order("created_at", { ascending: false })
@@ -515,6 +532,15 @@ export async function getAccountDetail(companyId: string): Promise<AccountDetail
       .eq("company_id", companyId)
       .order("created_at", { ascending: false })
       .limit(20),
+    admin
+      .schema("v3")
+      .from("account_briefs")
+      .select("id, stage, status, headline, why_now, fit_summary, evidence, recommended_contacts, next_actions, coverage, freshness, warnings, created_at")
+      .eq("workspace_id", workspaceId)
+      .eq("company_id", companyId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ])
 
   const followedAccount = followedList.find((f) => f.company_id === companyId) ?? null
@@ -538,6 +564,7 @@ export async function getAccountDetail(companyId: string): Promise<AccountDetail
     followedAccount,
     company: companyRes.data ?? null,
     scorecard: scorecards[0] ?? null,
+    brief: (briefRes.data as AccountDetail["brief"]) ?? null,
     previousScore: scorecards[1]?.score ?? null,
     findings: (findingsRes.data ?? []) as AccountDetail["findings"],
     agentLabels,

@@ -15,6 +15,11 @@ import { requireWorkspace } from "@/lib/v3/workspace"
 import { logAiUsage } from "@/lib/v3/usage"
 import { getPrompt } from "@/lib/v3/prompts"
 import {
+  compactMessagesForModel,
+  getConversationMemory,
+  updateConversationMemory,
+} from "@/lib/v3/services/conversation-memory"
+import {
   LIMITS,
   MODELS,
   resolveCompany,
@@ -383,12 +388,19 @@ export async function POST(req: Request) {
   }
 
   const tools = buildTools({ workspaceId: workspace.id, userId: user.id, conversationId })
-  const systemPrompt = await getPrompt("chat.system")
+  const [baseSystemPrompt, memory] = await Promise.all([
+    getPrompt("chat.system"),
+    conversationId ? getConversationMemory(conversationId, workspace.id) : Promise.resolve(null),
+  ])
+  const memoryContext = memory?.summary
+    ? `\n\nMEMORIA COMPACTA DE LA CONVERSACIÓN (no repetir al usuario):\n${memory.summary}`
+    : ""
+  const modelMessages = compactMessagesForModel(messages)
 
   const result = streamText({
     model: MODELS.CHAT,
-    system: systemPrompt,
-    messages: convertToModelMessages(messages),
+    system: `${baseSystemPrompt}${memoryContext}`,
+    messages: convertToModelMessages(modelMessages),
     tools,
     stopWhen: stepCountIs(8),
     temperature: 0.3,
@@ -441,6 +453,11 @@ export async function POST(req: Request) {
           .from("chat_conversations")
           .update({ updated_at: new Date().toISOString() })
           .eq("id", conversationId)
+        await updateConversationMemory({
+          conversationId,
+          workspaceId: workspace.id,
+          messages: finalMessages,
+        })
         void saved
       } catch (err) {
         console.error("[v3] Error persistiendo mensajes del chat:", err)

@@ -5,6 +5,8 @@ import { getRadarFindings } from "./radar"
 import { MODELS, type Scorecard } from "./types"
 import { logAiUsage } from "@/lib/v3/usage"
 import { renderPrompt } from "@/lib/v3/prompts"
+import { getCanonicalContacts } from "./contact-provider"
+import { getWorkspaceFitProfile } from "./workspace-fit-profile"
 
 // ═══════════════════════════════════════════════════════════
 // Scorecard de cuenta (0-100) por workspace:
@@ -81,19 +83,10 @@ export async function computeScorecard(input: ScoreInput): Promise<Scorecard | n
   const dictionary = await loadDictionary()
 
   // ── Contexto: value profile del workspace + señales de la cuenta ──
-  const [profileRes, findings, contactsRes, signalsRes] = await Promise.all([
-    admin
-      .schema("v3")
-      .from("workspace_value_profiles")
-      .select("profile_summary, target_technologies, target_processes, target_industries")
-      .eq("workspace_id", input.workspaceId)
-      .maybeSingle(),
+  const [profile, findings, contactsResult, signalsRes] = await Promise.all([
+    getWorkspaceFitProfile(input.workspaceId),
     getRadarFindings(input.companyId, { limit: 100 }),
-    admin
-      .from("apollo_contacts_cache")
-      .select("id, title, seniority", { count: "exact" })
-      .eq("company_id", input.companyId)
-      .limit(50),
+    getCanonicalContacts({ companyId: input.companyId, limit: 50 }),
     admin
       .from("signals")
       .select("id, signal_type, created_at")
@@ -101,13 +94,8 @@ export async function computeScorecard(input: ScoreInput): Promise<Scorecard | n
       .limit(100),
   ])
 
-  const profile = profileRes.data
-  const targetTechs: string[] = Array.isArray(profile?.target_technologies)
-    ? (profile?.target_technologies as string[])
-    : []
-  const targetProcs: string[] = Array.isArray(profile?.target_processes)
-    ? (profile?.target_processes as string[])
-    : []
+  const targetTechs = profile.targetTechnologies
+  const targetProcs = profile.targetProcesses
 
   // ── FIT: intersección diccionario detectado vs. perfil del workspace ──
   const productNameById = new Map(dictionary.products.map((p) => [p.id, p.name.toLowerCase()]))
@@ -136,12 +124,10 @@ export async function computeScorecard(input: ScoreInput): Promise<Scorecard | n
   )
 
   const totalTargets = targetTechsLower.length + targetProcsLower.length
-  const fitScore =
-    totalTargets > 0
-      ? clamp(((techMatches.length + procMatches.length) / Math.min(totalTargets, 6)) * 100)
-      : detectedTechNames.size > 0
-        ? 50 // sin perfil definido: fit neutro si hay stack detectado
-        : 30
+  const fitEvaluated = profile.available && totalTargets > 0
+  const fitScore = fitEvaluated
+    ? clamp(((techMatches.length + procMatches.length) / Math.min(totalTargets, 6)) * 100)
+    : null
 
   // ── BUYING SIGNALS: hallazgos ponderados por nivel de evidencia ──
   const explicitCount = findings.filter((f) => f.evidence_level === "explicit").length
@@ -150,9 +136,9 @@ export async function computeScorecard(input: ScoreInput): Promise<Scorecard | n
   const buyingSignalsScore = clamp(explicitCount * 12 + inferredCount * 5 + Math.min(legacySignals, 10) * 2)
 
   // ── ACCESSIBILITY: contactos alcanzables en cache ──
-  const contactCount = contactsRes.data?.length ?? 0
-  const seniorCount = (contactsRes.data ?? []).filter((c) =>
-    ["c_suite", "vp", "director", "head", "owner", "founder"].includes((c.seniority ?? "").toLowerCase())
+  const contactCount = contactsResult.contacts.length
+  const seniorCount = contactsResult.contacts.filter((contact) =>
+    ["c_suite", "vp", "director", "head", "owner", "founder"].includes((contact.seniority ?? "").toLowerCase())
   ).length
   const accessibilityScore = clamp(contactCount * 10 + seniorCount * 10)
 
@@ -178,13 +164,16 @@ export async function computeScorecard(input: ScoreInput): Promise<Scorecard | n
   const timingScore = clamp(timingEvents.reduce((sum, e) => sum + e.points, 0))
   const recentFindings = timingEvents.length
 
-  const score = clamp(
-    fitScore * 0.35 + buyingSignalsScore * 0.35 + accessibilityScore * 0.15 + timingScore * 0.15
-  )
+  const score = fitScore === null
+    ? null
+    : clamp(fitScore * 0.35 + buyingSignalsScore * 0.35 + accessibilityScore * 0.15 + timingScore * 0.15)
 
-  // ── Rationale con IA (barato; falla en silencio a un rationale básico) ──
-  let rationale = `Fit ${fitScore}/100 (${techMatches.length + procMatches.length} coincidencias con el perfil), señales ${buyingSignalsScore}/100 (${explicitCount} explícitas, ${inferredCount} inferidas), accesibilidad ${accessibilityScore}/100 (${contactCount} contactos), timing ${timingScore}/100 (${recentFindings} hallazgos recientes).`
+  // ── Rationale con IA solo cuando el fit puede evaluarse ──
+  let rationale = fitScore === null
+    ? `Fit no evaluado: falta completar la propuesta de valor. Hay ${explicitCount} señales explícitas, ${inferredCount} inferidas y ${contactCount} contactos disponibles.`
+    : `Fit ${fitScore}/100 (${techMatches.length + procMatches.length} coincidencias con el perfil), señales ${buyingSignalsScore}/100 (${explicitCount} explícitas, ${inferredCount} inferidas), accesibilidad ${accessibilityScore}/100 (${contactCount} contactos), timing ${timingScore}/100 (${recentFindings} hallazgos recientes).`
   try {
+    if (score === null) throw new Error("Fit no evaluado")
     const topFindings = findings
       .slice(0, 8)
       .map((f) => `- [${f.evidence_level}] ${f.title}: ${f.summary ?? ""}`)
@@ -192,7 +181,7 @@ export async function computeScorecard(input: ScoreInput): Promise<Scorecard | n
     const prompt = await renderPrompt("scoring.rationale", {
       companyName: input.companyName,
       score,
-      vendorProfile: profile?.profile_summary ?? "sin perfil definido",
+      vendorProfile: profile.summary ?? "sin perfil definido",
       targetTechnologies: targetTechs.join(", ") || "ninguna",
       matches: [...techMatches, ...procMatches].join(", ") || "ninguna",
       subScores: `fit ${fitScore}, señales de compra ${buyingSignalsScore}, accesibilidad ${accessibilityScore} (${contactCount} contactos), timing ${timingScore}`,
@@ -225,6 +214,9 @@ export async function computeScorecard(input: ScoreInput): Promise<Scorecard | n
       workspace_id: input.workspaceId,
       company_id: input.companyId,
       research_job_id: input.researchJobId ?? null,
+      score_stage: "final",
+      fit_status: fitEvaluated ? "evaluated" : "fit_not_evaluated",
+      profile_version: profile.version,
       score,
       fit_score: fitScore,
       buying_signals_score: buyingSignalsScore,
