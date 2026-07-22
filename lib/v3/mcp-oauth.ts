@@ -12,12 +12,16 @@ export const MCP_OAUTH_SCOPES = [
   "icebreakers:prepare",
   "icebreakers:submit",
   "usage:read",
+  "documents:read",
+  "documents:write",
+  "recommendations:read",
 ] as const
 
 export const MCP_SCOPE_GROUPS = {
-  read: ["companies:read", "signals:read", "accounts:read", "usage:read"],
+  read: ["companies:read", "signals:read", "accounts:read", "usage:read", "documents:read", "recommendations:read"],
   research: ["research:run", "research:prepare", "research:submit"],
   icebreakers: ["icebreakers:generate", "icebreakers:prepare", "icebreakers:submit"],
+  documents: ["documents:read", "documents:write", "recommendations:read"],
 } as const
 
 export const hashOAuthValue = (value: string) => crypto.createHash("sha256").update(value).digest("hex")

@@ -70,6 +70,7 @@
     "mcp-handler": "^1.1.0",
     "next": "16.0.10",
     "next-themes": "latest",
+    "officeparser": "^7.4.0",
     "papaparse": "latest",
     "parallel-web": "latest",
     "pdf-parse": "^1.1.1",
