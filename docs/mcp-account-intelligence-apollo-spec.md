@@ -7,6 +7,108 @@
 
 ---
 
+## 0. Revisión 2 — Correcciones tras auditoría del schema real
+
+Esta sección tiene **precedencia sobre el resto del documento**. Se agregó después de auditar el schema de Supabase y el código existente, y corrige supuestos de la Revisión 1 que no coincidían con la realidad del proyecto.
+
+### 0.1 Entidades que ya existen y NO deben recrearse
+
+| Concepto del documento | Realidad del proyecto | Acción |
+|---|---|---|
+| `v3.accounts` (cuenta guardada) | **`v3.followed_accounts`** con `is_active`, `unfollowed_at`, `refresh_day`, `last_refreshed_at` | Reutilizar. Guardar = follow. Eliminar = `is_active=false`. |
+| Estado `archived` de cuenta | No existe. El modelo es binario activo/inactivo | Eliminado del diseño. |
+| Límites por plan | **`lib/v3/plans.ts`** ya define `PLAN_CONFIG` con `followedCap`, y `checkFollowQuota` | Extender ese archivo. No crear `plan-limits.ts`. |
+| Planes existentes | `trial`, `silver`, `gold`, **`platinum`** | El plan `platinum` existe y debe contemplarse. |
+| Infraestructura client-assisted | `v3.client_ai_executions` + `v3.client_ai_stage_submissions` con `feature`, `package_hash`, `expires_at`, `reservation_id` | La investigación de cuenta es `feature = 'account_research'`. No requiere tablas nuevas. |
+| Reservas y presupuesto | `v3.mcp_usage_reservations` con `pool`, `units`, `idempotency_key`, `status`, `committed_at`, `released_at` y RPC `reserve_mcp_usage` | Apollo usa `pool = 'apollo_enrichment'`. Verificar si `pool` tiene constraint en base antes de Fase 3. |
+| Hash de búsqueda Apollo | `public.apollo_search_queries` ya tiene `query_hash`, `person_titles`, `person_seniorities`, `reveal_email`, `reveal_phone`, `expires_at` | Documentar lo existente. Si falta un campo en el hash, versionarlo (`v2:`) para no invalidar caché histórico. |
+| Follow / unfollow | `lib/v3/services/accounts.ts` ya implementa `followAccount` (idempotente, reactiva, suscribe al digest) y `unfollowAccount` | Las tools MCP envuelven estos servicios. |
+
+### 0.2 Modelo de contactos (decisión final)
+
+`public.user_company_contacts` tiene el modelo de datos correcto —incluido `phone_status`, `phone_requested_at`, `apollo_request_id`— pero es **per-user** (`user_id NOT NULL`, sin `workspace_id`) y pertenece a v2 en producción. Usarla desde v3 provocaría que un contacto generado por un member no fuera visible para el admin, y que contactos de v3 aparezcan en la UI de v2.
+
+Modelo aprobado:
+
+- **Datos del contacto:** `public.apollo_contacts_cache` (ya es global y compartida).
+- **Asociación y frescura:** nueva tabla puente `v3.account_contacts`:
+
+```text
+workspace_id, company_id, apollo_cache_id, apollo_person_id,
+person_last_verified_at, email_last_verified_at, phone_last_verified_at,
+phone_status, phone_requested_at, apollo_request_id,
+role_origin ('signal_derived' | 'user_input'), matched_role
+```
+
+Cero DDL sobre tablas de v2. La regla de 90 días se evalúa **por campo**, no por fila.
+
+### 0.3 Publicación de hallazgos (decisión final)
+
+Los hallazgos de Claude **no se escriben en `public.company_news`, `signals` ni `company_implementations`**, porque la UI de v2 en producción lee esas tablas.
+
+Se crea `v3.account_evidence` como capa global de v3:
+
+- Global para todos los workspaces de v3, cumpliendo la retroalimentación buscada.
+- Autor no visible, pero auditoría interna obligatoria (`workspace_id`, `user_id`, `source`, URL, cita, estado).
+- La lectura se expone unificada (v2 + v3) mediante vista o composición en el servicio.
+- La promoción hacia tablas de v2 queda fuera de alcance y requiere decisión explícita posterior.
+
+### 0.4 Recomendación de cargos: usar los diccionarios existentes
+
+El documento diseñaba la inferencia de cargos desde cero. Ya existen dos activos:
+
+- `v3.dictionary_job_titles` → `job_title` vinculado a `process_id` / `product_id` / `seniority`.
+- `public.apollo_title_catalog` → `normalized_title`, `aliases`, `seniority`, `department`, `usage_count`, `success_count`, `last_success_entries`.
+
+Cadena determinística aprobada:
+
+```text
+señal → proceso/producto → dictionary_job_titles → apollo_title_catalog
+```
+
+Los cargos se **ordenan por tasa de éxito real en Apollo** (`success_count / usage_count`). Esto reduce búsquedas que devuelven cero resultados y hace que el readiness score refleje probabilidad real de encontrar personas.
+
+### 0.5 Cupo de cuentas guardadas
+
+El cupo ya existe como `PLAN_CONFIG[plan].followedCap`: `trial 2`, `silver 30`, `gold 60`, `platinum 120`.
+
+**Pendiente de decisión de producto:** se propusieron valores mayores (`trial 10 / silver 50 / gold 200`). Cambiar `followedCap` afecta el comportamiento actual del follow y del cron de refresh, por lo que no se modificó. Los valores vigentes son los de `plans.ts` hasta que se apruebe lo contrario.
+
+### 0.6 Límites de enrichment agregados a `PLAN_CONFIG`
+
+```text
+allowsContactEnrichment      trial false, resto true
+monthlyContactEnrichmentUnits trial 0, silver 150, gold 400, platinum 1000
+maxRolesPerEnrichment         10
+maxContactsPerEnrichment      10
+contactFreshnessDays          90
+```
+
+Los valores mensuales son una propuesta inicial y deben validarse contra el costo real que ASCI absorbe.
+
+### 0.7 Orden de fases corregido
+
+1. **Fase 0 — Fundaciones:** límites en `plans.ts`, guard `requireSavedAccount`, errores normalizados, servicios Apollo server-only sin dependencia de cookies.
+2. **Fase 1 — Ciclo de vida de cuentas** sobre `followed_accounts`.
+3. **Fase 2 — Cargos y cobertura** con diccionarios + `apollo_title_catalog` + `v3.account_contacts`. Entrega valor sin gastar un crédito.
+4. **Fase 3 — Apollo con email**, reservando en `mcp_usage_reservations`.
+5. **Fase 4 — Investigación global** sobre `client_ai_executions` + `v3.account_evidence`.
+6. **Fase 5 — Teléfono asincrónico**, precedido por contract tests reales contra Apollo.
+7. **Fase 6 — Endurecimiento**, métricas y runbook.
+
+La investigación se movió después de Apollo-email porque el flujo de contactos funciona sin ella y concentra la mayor incertidumbre de validación.
+
+### 0.8 Estado de implementación
+
+- **Fase 0 y Fase 1: implementadas.**
+  - `lib/v3/plans.ts`: límites de enrichment + `getContactEnrichmentLimits`.
+  - `lib/v3/mcp-account-lifecycle.ts`: `requireSavedAccount`, `assertSavedAccount`, `prepareSaveAccount`, `saveAccount`, `removeWorkspaceAccount`, `listSavedAccounts`.
+  - `lib/v3/mcp-auth.ts`: scope `accounts:write`.
+  - Tools registradas: `list_saved_accounts`, `check_account_access`, `prepare_save_account`, `save_account`, `remove_workspace_account`.
+- Fases 2 a 6: pendientes.
+
+---
+
 ## 1. Objetivo
 
 Diseñar un flujo MCP completo en el que Claude pueda:

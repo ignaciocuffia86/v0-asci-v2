@@ -36,6 +36,18 @@ export interface PlanConfig {
   allowsManualRefresh: boolean
   /** Días de cooldown entre researches de la misma empresa. */
   refreshCooldownDays: number
+
+  // ─── Enrichment de contactos (Apollo, créditos absorbidos por ASCI) ───
+  /** Permite buscar tomadores de decisión vía Apollo desde la app y el MCP. */
+  allowsContactEnrichment: boolean
+  /** Unidades de enrichment de contactos por mes calendario (1 unidad = 1 contacto). */
+  monthlyContactEnrichmentUnits: number
+  /** Máximo de cargos (recomendados + manuales) por ejecución de enrichment. */
+  maxRolesPerEnrichment: number
+  /** Máximo de contactos devueltos por ejecución de enrichment. */
+  maxContactsPerEnrichment: number
+  /** Días tras los cuales un dato de contacto se considera obsoleto (por campo). */
+  contactFreshnessDays: number
 }
 
 export const PLAN_CONFIG: Record<WorkspacePlan, PlanConfig> = {
@@ -49,6 +61,11 @@ export const PLAN_CONFIG: Record<WorkspacePlan, PlanConfig> = {
     allowsApiKeys: false,
     allowsManualRefresh: false,
     refreshCooldownDays: 30,
+    allowsContactEnrichment: false,
+    monthlyContactEnrichmentUnits: 0,
+    maxRolesPerEnrichment: 0,
+    maxContactsPerEnrichment: 0,
+    contactFreshnessDays: 90,
   },
   silver: {
     label: "Silver",
@@ -60,6 +77,11 @@ export const PLAN_CONFIG: Record<WorkspacePlan, PlanConfig> = {
     allowsApiKeys: true,
     allowsManualRefresh: true,
     refreshCooldownDays: 30,
+    allowsContactEnrichment: true,
+    monthlyContactEnrichmentUnits: 150,
+    maxRolesPerEnrichment: 10,
+    maxContactsPerEnrichment: 10,
+    contactFreshnessDays: 90,
   },
   gold: {
     label: "Gold",
@@ -71,6 +93,11 @@ export const PLAN_CONFIG: Record<WorkspacePlan, PlanConfig> = {
     allowsApiKeys: true,
     allowsManualRefresh: true,
     refreshCooldownDays: 30,
+    allowsContactEnrichment: true,
+    monthlyContactEnrichmentUnits: 400,
+    maxRolesPerEnrichment: 10,
+    maxContactsPerEnrichment: 10,
+    contactFreshnessDays: 90,
   },
   platinum: {
     label: "Platinum",
@@ -82,6 +109,11 @@ export const PLAN_CONFIG: Record<WorkspacePlan, PlanConfig> = {
     allowsApiKeys: true,
     allowsManualRefresh: true,
     refreshCooldownDays: 30,
+    allowsContactEnrichment: true,
+    monthlyContactEnrichmentUnits: 1000,
+    maxRolesPerEnrichment: 10,
+    maxContactsPerEnrichment: 10,
+    contactFreshnessDays: 90,
   },
 }
 
@@ -357,6 +389,39 @@ export async function checkSeatQuota(
     }
   }
   return { allowed: true, reason: null, used, cap }
+}
+
+// ─── Límites de enrichment de contactos (Apollo) ─────────────
+
+export interface ContactEnrichmentLimits {
+  plan: WorkspacePlan
+  allowed: boolean
+  reason: string | null
+  monthlyUnits: number
+  maxRoles: number
+  maxContacts: number
+  freshnessDays: number
+}
+
+/**
+ * Límites de enrichment de contactos para un workspace. Fuente única para la app
+ * y para el MCP: ninguna tool debe hardcodear 10 cargos, 10 contactos ni 90 días.
+ * Los créditos de Apollo los absorbe ASCI, por eso el tope es por plan.
+ */
+export async function getContactEnrichmentLimits(workspaceId: string): Promise<ContactEnrichmentLimits> {
+  const plan = await getWorkspacePlan(workspaceId)
+  const config = PLAN_CONFIG[plan]
+  return {
+    plan,
+    allowed: config.allowsContactEnrichment,
+    reason: config.allowsContactEnrichment
+      ? null
+      : `La búsqueda de tomadores de decisión requiere un plan pago (tu plan actual: ${config.label}).`,
+    monthlyUnits: config.monthlyContactEnrichmentUnits,
+    maxRoles: config.maxRolesPerEnrichment,
+    maxContacts: config.maxContactsPerEnrichment,
+    freshnessDays: config.contactFreshnessDays,
+  }
 }
 
 // ─── Check de API keys ───────────────────────────────────────
