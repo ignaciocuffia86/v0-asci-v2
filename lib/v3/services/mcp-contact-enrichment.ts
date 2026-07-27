@@ -36,6 +36,7 @@ import { readSearchCache, writeSearchCache } from "@/lib/apollo/search-cache"
 import { hashSearchParams, type SearchParams } from "@/lib/apollo/query-hash"
 import { sanitizeTitleList } from "@/lib/apollo/title-validator"
 import { normalizeDomain } from "@/lib/apollo/domain"
+import { resolveCompanyOrganizationId } from "@/lib/apollo/organizations"
 import { recordTitleObservations, recordTitleSuccess } from "@/lib/apollo/title-catalog"
 import { requireSavedAccount } from "@/lib/v3/mcp-account-lifecycle"
 
@@ -133,11 +134,35 @@ export async function prepareContactEnrichment(
   if (!company) throw new EnrichmentError("COMPANY_NOT_FOUND", "No encontré esa empresa en el catálogo.")
 
   const domain = normalizeDomain(company.website)?.primary ?? null
-  if (!company.apollo_organization_id && !domain) {
-    throw new EnrichmentError(
-      "COMPANY_NOT_RESOLVABLE",
-      `No puedo buscar contactos de ${company.name}: no tiene ni organization_id de Apollo ni sitio web para derivar el dominio.`,
-    )
+
+  // Muchas empresas del catálogo no tienen website ni organization_id (por ejemplo
+  // "Banco Francés Argentina", cargada desde LinkedIn sin dominio). Antes de
+  // rendirse hay que intentar resolverla contra Apollo: `organizations/enrich`
+  // acepta `name` cuando no hay dominio y cuesta 0 créditos, así que resolver acá
+  // es gratis y evita un COMPANY_NOT_RESOLVABLE innecesario.
+  let organizationId = company.apollo_organization_id ?? null
+  if (!organizationId) {
+    const resolved = await resolveCompanyOrganizationId(input.companyId, { userId: principal.userId })
+    if (resolved.status === "found") {
+      organizationId = resolved.organizationId
+    } else if (resolved.status === "error") {
+      // Falla de infraestructura (API key ausente, 5xx, red), NO un problema de
+      // datos de la empresa. Se distingue con un código propio: si acá se
+      // devolviera COMPANY_NOT_RESOLVABLE, el modelo le pediría al usuario que
+      // "cargue el website" cuando en realidad no hay nada que él pueda arreglar.
+      throw new EnrichmentError(
+        "APOLLO_UNAVAILABLE",
+        `No pude consultar Apollo para resolver ${company.name}: ${resolved.reason}. Es un problema de configuración o del servicio, no de la empresa. No se gastaron créditos.`,
+      )
+    } else if (!domain) {
+      // not_found + sin dominio: no hay forma de anclar la búsqueda a la empresa.
+      // Buscar solo por cargo devolvería gente de cualquier compañía y gastaría
+      // créditos en contactos inútiles, así que se corta acá.
+      throw new EnrichmentError(
+        "COMPANY_NOT_RESOLVABLE",
+        `No puedo buscar contactos de ${company.name}: Apollo no la tiene indexada (${resolved.reason}) y la empresa no tiene sitio web para derivar el dominio. Cargale el website y reintentá.`,
+      )
+    }
   }
 
   // 2) Validar cargos con el límite del plan (nunca hardcodear 10).
@@ -166,7 +191,7 @@ export async function prepareContactEnrichment(
   const effectiveMax = Math.min(maxContacts, remaining)
 
   const searchParams: SearchParams = {
-    organizationId: company.apollo_organization_id ?? null,
+    organizationId,
     domain,
     jobTitles: sanitized.accepted,
     country: company.country ?? null,
