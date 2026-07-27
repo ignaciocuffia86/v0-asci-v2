@@ -103,8 +103,10 @@ const handler = createMcpHandler((server) => {
 const authedHandler = withMcpAuth(handler, async (req: Request, token?: string) => {
   if (!token) return undefined
   const result = await validateMcpRequest(req as NextRequest)
-  if (!result.success || !result.workspaceId || !result.userId || !result.keyId) return undefined
-  const principal: McpPrincipal = { workspaceId: result.workspaceId, userId: result.userId, keyId: result.keyId, scopes: result.scopes ?? [], allowedModes: result.allowedModes ?? ["read"] }
+  if (!result.success || !result.workspaceId || !result.userId || !result.keyId || !result.keyType) return undefined
+  // `keyType` viene de validateMcpRequest y hay que propagarlo: es lo que decide
+  // si keyId se escribe en api_key_id o en oauth_token_id.
+  const principal: McpPrincipal = { workspaceId: result.workspaceId, userId: result.userId, keyId: result.keyId, keyType: result.keyType, scopes: result.scopes ?? [], allowedModes: result.allowedModes ?? ["read"] }
   await logMcpRequest({ principal, method: req.method, statusCode: 200, requestId: crypto.randomUUID() })
   return { token, clientId: result.keyId, scopes: principal.scopes, extra: principal as unknown as Record<string, unknown> }
 }, {

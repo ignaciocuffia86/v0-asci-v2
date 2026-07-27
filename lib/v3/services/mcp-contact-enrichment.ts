@@ -28,6 +28,7 @@ import {
   setReservationStatus,
   getMonthlyPoolUsage,
   requirePaidMcp,
+  principalColumns,
   type McpPrincipal,
 } from "@/lib/v3/mcp-usage"
 import { searchPeople } from "@/lib/apollo/search"
@@ -310,7 +311,7 @@ export async function prepareContactEnrichment(
       {
         workspace_id: principal.workspaceId,
         user_id: principal.userId,
-        api_key_id: principal.keyId,
+        ...principalColumns(principal),
         company_id: company.id,
         plan_hash: planHash,
         plan_payload: planPayload,
