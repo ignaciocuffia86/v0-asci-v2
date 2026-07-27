@@ -97,6 +97,53 @@ export async function requireSavedAccount(
   }
 }
 
+export interface SavedAccountsBlocked {
+  allowed: false
+  reason: "ACCOUNTS_NOT_SAVED"
+  blockedAccounts: SavedAccountGuard[]
+  nextAction: "save_account" | "resolve_company" | "upgrade_plan"
+  message: string
+}
+
+/**
+ * Guard para las tools que TRABAJAN una cuenta (research y icebreakers).
+ *
+ * Devuelve un bloqueo estructurado en lugar de lanzar, para que el modelo pueda
+ * explicar qué falta y pedir confirmación. Es imprescindible llamarlo ANTES de
+ * reservar cuota: si no, la ejecución consume cupo de research sobre cuentas que
+ * el workspace nunca guardó.
+ */
+export async function guardSavedAccounts(
+  principal: McpPrincipal,
+  companyIds: string[]
+): Promise<SavedAccountsBlocked | null> {
+  const guards = await Promise.all(companyIds.map((companyId) => requireSavedAccount(principal, companyId)))
+  const blocked = guards.filter((guard) => guard.state !== "saved")
+  if (!blocked.length) return null
+
+  const missing = blocked.filter((guard) => guard.state === "not_saved")
+  const unresolved = blocked.filter((guard) => guard.state === "company_not_found")
+  const noQuota = blocked.some((guard) => guard.nextAction === "upgrade_plan")
+
+  return {
+    allowed: false,
+    reason: "ACCOUNTS_NOT_SAVED",
+    blockedAccounts: blocked,
+    nextAction: unresolved.length ? "resolve_company" : noQuota ? "upgrade_plan" : "save_account",
+    message: [
+      missing.length
+        ? `Estas cuentas todavía no están guardadas en el workspace: ${missing.map((guard) => guard.companyName ?? guard.companyId).join(", ")}. Guardar cada una ocupa 1 lugar del plan, así que pedí confirmación al usuario y llamá save_account antes de reintentar.`
+        : null,
+      unresolved.length
+        ? `No se encontraron en el catálogo: ${unresolved.map((guard) => guard.companyId).join(", ")}. Volvé a buscarlas con search_companies.`
+        : null,
+      noQuota ? "Además no hay cupo disponible en el plan: liberá un lugar o hacé upgrade." : null,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  }
+}
+
 /** Variante dura del guard, para servicios internos que no dialogan con el modelo. */
 export async function assertSavedAccount(principal: McpPrincipal, companyId: string): Promise<string> {
   const guard = await requireSavedAccount(principal, companyId)

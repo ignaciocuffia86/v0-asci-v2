@@ -6,6 +6,7 @@ import { createAdminClient } from "@/lib/supabase/admin"
 import { resolveCompany } from "./services/company-resolver"
 import { buildInternalAccountSnapshot } from "./services/internal-account-snapshot"
 import { principalColumns, reserveMcpUsage, setReservationStatus, type McpPrincipal } from "./mcp-usage"
+import { guardSavedAccounts } from "./mcp-account-lifecycle"
 
 const PROMPT_VERSION = "mcp-client-research-v1"
 const STAGES = ["internal_analysis", "signal_classification", "fit_scoring", "account_brief"] as const
@@ -48,6 +49,10 @@ export async function prepareAccountResearch(principal: McpPrincipal, inputs: st
   const resolved = await Promise.all(inputs.map((input) => resolveCompany(input, principal.workspaceId)))
   if (resolved.some((item) => !item.companyId || item.candidates.length)) throw new Error("COMPANY_RESOLUTION_REQUIRED")
   const unique = [...new Map(resolved.map((item) => [item.companyId!, item])).values()]
+  // Investigar exige que la cuenta esté guardada. El chequeo va antes de reservar
+  // cuota: sin esto se podía consumir research sobre cuentas nunca guardadas.
+  const blocked = await guardSavedAccounts(principal, unique.map((item) => item.companyId!))
+  if (blocked) return blocked
   const reservation = await reserveMcpUsage({ principal, pool: "research_client", units: unique.length, idempotencyKey, metadata: { companies: unique.map((item) => item.companyId) } })
   if (!reservation.allowed || !reservation.reservationId) return reservation
   const admin = createAdminClient()
@@ -121,8 +126,11 @@ export async function getClientResearchStatus(principal: McpPrincipal, execution
 
 export async function prepareAccountIcebreaker(principal: McpPrincipal, params: { companyId: string; contactName: string; contactTitle?: string; contactCountry?: string; idempotencyKey: string }) {
   const admin = createAdminClient()
-  const { count } = await admin.schema("v3").from("research_jobs").select("id", { count: "exact", head: true }).eq("workspace_id", principal.workspaceId).eq("company_id", params.companyId)
-  if (!count) throw new Error("ACCOUNT_NOT_AVAILABLE_IN_WORKSPACE")
+  // Antes el criterio era "existe un research_job", distinto al de research. Se
+  // unifica en followed_accounts para que "cuenta disponible" signifique lo mismo
+  // en todo el MCP.
+  const blocked = await guardSavedAccounts(principal, [params.companyId])
+  if (blocked) return blocked
   const reservation = await reserveMcpUsage({ principal, pool: "icebreaker_client", units: 1, idempotencyKey: params.idempotencyKey, metadata: { companyId: params.companyId } })
   if (!reservation.allowed || !reservation.reservationId) return reservation
   if (reservation.idempotent && reservation.status === "committed") {
