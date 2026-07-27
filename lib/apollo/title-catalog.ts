@@ -43,8 +43,22 @@ export async function recordTitleSuccess(titles: string[], totalEntries: number)
 
   try {
     const supabase = createAdminClient()
-    for (const title of titles) {
-      await supabase.rpc("apollo_record_title_success", { p_title: title })
+    // CORRECCION (auditoria Fase 3): el RPC real tiene la firma
+    // (p_title text, p_entries integer). Antes se llamaba solo con p_title, asi
+    // que Postgres no encontraba la funcion y el error quedaba atrapado por el
+    // catch de abajo. Esa es la razon por la que apollo_title_catalog esta vacio
+    // y el ordenamiento por tasa de exito de Fase 2 nunca se activo.
+    const results = await Promise.allSettled(
+      titles
+        .filter((t) => t && t.trim().length >= 2)
+        .map((title) =>
+          supabase.rpc("apollo_record_title_success", { p_title: title, p_entries: totalEntries })
+        )
+    )
+    for (const r of results) {
+      if (r.status === "fulfilled" && r.value.error) {
+        console.error("[apollo] recordTitleSuccess rpc error:", r.value.error.message)
+      }
     }
   } catch (err) {
     console.error("[apollo] recordTitleSuccess failed:", err)

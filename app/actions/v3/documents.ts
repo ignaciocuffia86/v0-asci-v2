@@ -192,13 +192,8 @@ export async function checkDocumentUpload(params: {
 }): Promise<{ workspaceId: string | null; error: string | null }> {
   const admin = createAdminClient()
 
-  // Require editor or admin role
-  let workspace
-  try {
-    workspace = await requireWorkspaceEditor()
-  } catch {
-    return { workspaceId: null, error: "Sin permisos para subir documentos" }
-  }
+  // Documents are collaborative knowledge: any active member can upload.
+  const workspace = await getCurrentWorkspace()
 
   if (!workspace) {
     return { workspaceId: null, error: "No hay workspace activo" }
@@ -244,13 +239,8 @@ export async function createWorkspaceDocument(params: {
     return { data: null, error: "No autenticado" }
   }
 
-  // Require editor or admin role
-  let workspace
-  try {
-    workspace = await requireWorkspaceEditor()
-  } catch {
-    return { data: null, error: "Sin permisos para subir documentos" }
-  }
+  // Documents are collaborative knowledge: any active member can create them.
+  const workspace = await getCurrentWorkspace()
 
   if (!workspace) {
     return { data: null, error: "No hay workspace activo" }

@@ -4,7 +4,13 @@ import crypto from "crypto"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { getWorkspacePlan, getWorkspaceUsage } from "@/lib/v3/plans"
 
-export type McpUsagePool = "research_server" | "icebreaker_server" | "research_client" | "icebreaker_client"
+export type McpUsagePool =
+  | "research_server"
+  | "icebreaker_server"
+  | "research_client"
+  | "icebreaker_client"
+  /** Enrichment de contactos vía Apollo. 1 unidad = 1 contacto. */
+  | "apollo_enrichment"
 
 export interface McpPrincipal {
   workspaceId: string
@@ -58,6 +64,33 @@ export async function reserveMcpUsage(params: {
   return data as ReservationResult
 }
 
+/**
+ * Unidades consumidas por el workspace en un pool durante el mes calendario actual.
+ *
+ * El RPC reserve_mcp_usage solo controla ventanas de minuto, día y semana: no tiene
+ * noción de mes. Sin esta función, los topes mensuales por plan serían decorativos.
+ *
+ * Cuenta 'reserved' + 'committed' y excluye 'released', para que un run fallido cuyo
+ * crédito se devolvió no siga ocupando cupo del mes.
+ */
+export async function getMonthlyPoolUsage(workspaceId: string, pool: McpUsagePool): Promise<number> {
+  const admin = createAdminClient()
+  const now = new Date()
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString()
+
+  const { data, error } = await admin
+    .schema("v3")
+    .from("mcp_usage_reservations")
+    .select("units")
+    .eq("workspace_id", workspaceId)
+    .eq("pool", pool)
+    .neq("status", "released")
+    .gte("created_at", monthStart)
+
+  if (error) throw new Error(`MONTHLY_USAGE_FAILED:${error.message}`)
+  return (data ?? []).reduce((sum, row) => sum + (row.units ?? 0), 0)
+}
+
 export async function setReservationStatus(reservationId: string, status: "committed" | "released", metadata?: Record<string, unknown>) {
   const admin = createAdminClient()
   const timestamp = new Date().toISOString()
@@ -66,6 +99,40 @@ export async function setReservationStatus(reservationId: string, status: "commi
     ...(metadata ? { metadata } : {}),
     ...(status === "committed" ? { committed_at: timestamp } : { released_at: timestamp }),
   }).eq("id", reservationId).eq("status", "reserved")
+  if (error) throw new Error(`RESERVATION_UPDATE_FAILED:${error.message}`)
+}
+
+/**
+ * Cierra una reserva cobrando SOLO las unidades realmente consumidas.
+ *
+ * Apollo se reserva por el peor caso (maxContacts) porque no sabemos cuantas
+ * personas va a devolver la busqueda. Si se reservan 10 y se enriquecen 3,
+ * `setReservationStatus` dejaria las 10 unidades ocupando cupo mensual, cobrandole
+ * al workspace creditos que nunca se gastaron. Esta funcion ajusta el consumo.
+ *
+ * Si actualUnits es 0, libera la reserva completa en lugar de committear.
+ */
+export async function commitReservationWithUnits(
+  reservationId: string,
+  actualUnits: number,
+  metadata?: Record<string, unknown>
+) {
+  if (actualUnits <= 0) {
+    await setReservationStatus(reservationId, "released", metadata)
+    return
+  }
+  const admin = createAdminClient()
+  const { error } = await admin
+    .schema("v3")
+    .from("mcp_usage_reservations")
+    .update({
+      status: "committed",
+      units: actualUnits,
+      committed_at: new Date().toISOString(),
+      ...(metadata ? { metadata } : {}),
+    })
+    .eq("id", reservationId)
+    .eq("status", "reserved")
   if (error) throw new Error(`RESERVATION_UPDATE_FAILED:${error.message}`)
 }
 

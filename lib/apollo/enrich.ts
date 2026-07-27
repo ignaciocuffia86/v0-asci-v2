@@ -1,15 +1,21 @@
 /**
- * Enrichment de personas via /people/match.
+ * Enrichment de personas via /people/match. SOLO email + datos basicos.
  *
- * DEPRECATION: El phone reveal fue removido. Apollo aceptaba el request y
- * consumia creditos, pero el delivery asincrono (webhook) nunca llegaba a
- * pesar de agotar todas las variantes documentadas. La feature se quito para
- * evitar estados pending eternos en la UI y consumo inutil de creditos.
- * Mantenemos solo el enrichment de email + datos basicos.
+ * ALCANCE: esta funcion no pide telefono a proposito. NO es que el phone reveal
+ * de Apollo no funcione.
  *
- * Si un contacto ya tiene `mobile_phone` o `phone` en DB (por enrichments
- * previos o por data del search inicial), se siguen mostrando — no borramos
- * data existente, solo desactivamos el flujo de reveal.
+ * CORRECCION (auditoria Fase 3): un comentario previo aca afirmaba que el phone
+ * reveal se habia removido porque "el delivery asincrono nunca llegaba". Los datos
+ * de produccion lo desmienten: en los ultimos 60 dias hubo 81 llamadas a
+ * people/match:phone y 55 webhooks recibidos, con 102 contactos que hoy tienen
+ * telefono. El flujo funciona con ~68% de entrega.
+ *
+ * La implementacion viva del telefono es `revealProspectPhone` en
+ * app/actions/apollo.ts, que envia reveal_phone_number y webhook_url como QUERY
+ * PARAMS (no en el body) — esa es la diferencia que importa.
+ *
+ * Si un contacto ya tiene `mobile_phone` o `phone` en DB, se sigue mostrando:
+ * no borramos data existente.
  */
 
 import { apolloRequest } from "./client"

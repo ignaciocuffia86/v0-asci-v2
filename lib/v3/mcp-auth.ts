@@ -59,7 +59,7 @@ export async function validateMcpRequest(req: NextRequest): Promise<McpAuthResul
   await admin.schema("v3").from("mcp_api_keys").update({ last_used_at: new Date().toISOString(), request_count: (key.request_count ?? 0) + 1 }).eq("id", key.id)
   const storedScopes: string[] = key.scopes ?? []
   const readScopes = ["companies:read", "signals:read", "accounts:read", "usage:read"]
-  const aiScopes = ["research:run", "research:prepare", "research:submit", "icebreakers:generate", "icebreakers:prepare", "icebreakers:submit"]
+  const aiScopes = ["research:run", "research:prepare", "research:submit", "icebreakers:generate", "icebreakers:prepare", "icebreakers:submit", "accounts:write"]
   const scopes = storedScopes.includes("read") ? [...new Set([...storedScopes, ...readScopes])] : storedScopes
   if (storedScopes.includes("write")) scopes.push(...aiScopes)
   const allowedModes = key.allowed_modes?.length === 1 && key.allowed_modes[0] === "read" && storedScopes.includes("write")
