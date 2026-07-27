@@ -4,7 +4,13 @@ import crypto from "crypto"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { getWorkspacePlan, getWorkspaceUsage } from "@/lib/v3/plans"
 
-export type McpUsagePool = "research_server" | "icebreaker_server" | "research_client" | "icebreaker_client"
+export type McpUsagePool =
+  | "research_server"
+  | "icebreaker_server"
+  | "research_client"
+  | "icebreaker_client"
+  /** Enrichment de contactos vía Apollo. 1 unidad = 1 contacto. */
+  | "apollo_enrichment"
 
 export interface McpPrincipal {
   workspaceId: string
@@ -56,6 +62,33 @@ export async function reserveMcpUsage(params: {
   })
   if (error) throw new Error(`RESERVATION_FAILED:${error.message}`)
   return data as ReservationResult
+}
+
+/**
+ * Unidades consumidas por el workspace en un pool durante el mes calendario actual.
+ *
+ * El RPC reserve_mcp_usage solo controla ventanas de minuto, día y semana: no tiene
+ * noción de mes. Sin esta función, los topes mensuales por plan serían decorativos.
+ *
+ * Cuenta 'reserved' + 'committed' y excluye 'released', para que un run fallido cuyo
+ * crédito se devolvió no siga ocupando cupo del mes.
+ */
+export async function getMonthlyPoolUsage(workspaceId: string, pool: McpUsagePool): Promise<number> {
+  const admin = createAdminClient()
+  const now = new Date()
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString()
+
+  const { data, error } = await admin
+    .schema("v3")
+    .from("mcp_usage_reservations")
+    .select("units")
+    .eq("workspace_id", workspaceId)
+    .eq("pool", pool)
+    .neq("status", "released")
+    .gte("created_at", monthStart)
+
+  if (error) throw new Error(`MONTHLY_USAGE_FAILED:${error.message}`)
+  return (data ?? []).reduce((sum, row) => sum + (row.units ?? 0), 0)
 }
 
 export async function setReservationStatus(reservationId: string, status: "committed" | "released", metadata?: Record<string, unknown>) {

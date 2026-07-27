@@ -111,7 +111,12 @@ export async function writeSearchCache(opts: {
       seniorities: opts.params.seniorities ?? [],
       departments: opts.params.departments ?? [],
       use_organization_location: opts.params.useOrganizationLocation ?? false,
-      include_similar_titles: opts.params.includeSimilarTitles ?? true,
+      // `=== true` para reflejar el request real: search.ts solo envia el flag
+      // cuando es true. El `?? true` anterior registraba auditoria incorrecta,
+      // afirmando que se habian pedido similar titles cuando no era el caso.
+      include_similar_titles: opts.params.includeSimilarTitles === true,
+      reveal_email: opts.params.revealEmail === true,
+      reveal_phone: opts.params.revealPhone === true,
       total_entries: opts.totalEntries,
       result_count: opts.contacts.length,
       last_fetched_at: now,
