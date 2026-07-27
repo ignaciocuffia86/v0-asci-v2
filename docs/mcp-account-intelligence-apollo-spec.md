@@ -105,7 +105,37 @@ La investigación se movió después de Apollo-email porque el flujo de contacto
   - `lib/v3/mcp-account-lifecycle.ts`: `requireSavedAccount`, `assertSavedAccount`, `prepareSaveAccount`, `saveAccount`, `removeWorkspaceAccount`, `listSavedAccounts`.
   - `lib/v3/mcp-auth.ts`: scope `accounts:write`.
   - Tools registradas: `list_saved_accounts`, `check_account_access`, `prepare_save_account`, `save_account`, `remove_workspace_account`.
-- Fases 2 a 6: pendientes.
+
+- **Fase 2: implementada.**
+  - Migración `v3_account_contacts_bridge`: tabla puente `v3.account_contacts` con frescura por campo, `phone_status`, `role_origin` y RLS habilitada. Cero DDL sobre tablas de v2.
+  - Migración `v3_seed_dictionary_job_titles`: **83 cargos cubriendo los 23 procesos** de `public.dictionary_processes`. La tabla estaba **vacía**, por lo que la cadena determinística de la sección 0.4 no podía producir un solo cargo. Los títulos se sembraron **en inglés** porque Apollo indexa así. Se agregó índice único parcial `(process_id, job_title)` para que la siembra sea idempotente.
+  - `lib/v3/mcp-contact-coverage.ts`: `recommendContactRoles` y `getCompanyContacts`.
+  - Tools registradas: `recommend_contact_roles`, `get_company_contacts`. Ninguna consume créditos de Apollo.
+
+- Fases 3 a 6: pendientes.
+
+### 0.9 Ponderación de cargos: corrección por tamaño de cuenta
+
+La validación con datos reales mostró que Oracle tiene **13.260 señales** en el driver "Marketing y Ventas" y 6.400 en "Infraestructura y Bases de Datos". Ponderar por conteo absoluto haría que **toda cuenta grande devolviera siempre los mismos cargos genéricos**, sin relación con la propuesta de valor del workspace.
+
+`driverStrength(count, maxCount, latestAt)` normaliza en escala 0..1:
+
+```text
+fuerza = min(1, (count / maxCountDeLaCuenta) * 0.7 + bonusRecencia)
+
+bonusRecencia:  <= 90 días  -> 0.30
+                <= 180 días -> 0.20
+                <= 365 días -> 0.10
+                más antiguo -> 0.00
+```
+
+Esto hace comparables una pyme con 20 señales y una corporación con 40.000, y prioriza áreas con actividad reciente sobre evidencia histórica. Cada justificación expone además `driverShare`: el porcentaje de las señales de la cuenta que apuntan a ese driver, para que el modelo pueda explicar el razonamiento.
+
+Orden final: `peso * 10 + tasaÉxitoApollo * 3`. La evidencia manda; la tasa de éxito solo desempata entre cargos igualmente justificados. Un título sin historial asume 0.5 para no penalizar cargos nunca buscados.
+
+### 0.10 `apollo_title_catalog` está vacío
+
+La tabla existe con `usage_count` / `success_count` pero **no tiene filas**. Hasta que Fase 3 empiece a poblarla, `apolloSuccessRate` será `null` en todos los cargos y el orden dependerá solo de la evidencia de señales. El sistema mejora automáticamente a medida que se acumulan ejecuciones reales: **Fase 3 debe escribir en esa tabla en cada búsqueda**, o el ordenamiento por probabilidad de éxito nunca se activará.
 
 ---
 
