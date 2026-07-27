@@ -38,7 +38,7 @@ export async function getImportBatches(limit = 20) {
 
   const { data, error } = await supabase
     .from("import_batches")
-    .select("id, filename, batch_type, status, total_rows, processed_rows, failed_rows, created_at, updated_at, consecutive_failures, last_error")
+    .select("id, filename, batch_type, status, total_rows, processed_rows, failed_rows, skipped_rows, created_at, updated_at, consecutive_failures, last_error")
     .order("created_at", { ascending: false })
     .limit(limit)
 
@@ -291,4 +291,39 @@ export async function getDictionaryJobStats() {
     totalJobPostingsToProcess, totalJobPostingsProcessed,
     estimatedMinutesRemaining,
   }
+}
+
+// ─── Inconsistent batches (silent-failure detector) ───
+// Surfaces the exact failure mode we hit: a batch reported as "completed" while
+// its rows were never processed. Also catches uploads stranded in "uploading".
+export async function getInconsistentBatches() {
+  const supabase = await createClient()
+
+  const { data, error } = await supabase
+    .from("import_batches_inconsistent")
+    .select("id, filename, batch_type, status, total_rows, processed_rows, failed_rows, skipped_rows, pending_rows, actual_rows, created_at")
+    .order("created_at", { ascending: false })
+    .limit(50)
+
+  if (error) {
+    console.error("Error getting inconsistent batches:", error)
+    return []
+  }
+
+  return data || []
+}
+
+// ─── Requeue a batch that was wrongly marked completed ───
+export async function requeueImportBatch(batchId: string) {
+  const supabase = await createClient()
+
+  const { data, error } = await supabase.rpc("requeue_import_batch", { p_batch_id: batchId })
+
+  if (error) {
+    console.error("Error requeueing batch:", error)
+    return { success: false, error: error.message }
+  }
+
+  const result = typeof data === "string" ? JSON.parse(data) : data
+  return { success: true, ...result }
 }

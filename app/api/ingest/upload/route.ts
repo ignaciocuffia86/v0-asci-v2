@@ -147,6 +147,10 @@ export async function POST(request: Request) {
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
   )
 
+  // Hoisted so the catch-all handler can fail the batch instead of leaving it
+  // stranded in "uploading" forever.
+  let createdBatchId: string | null = null
+
   try {
     // 4. Download CSV from Blob
     const csvResponse = await fetch(blobUrl)
@@ -201,13 +205,20 @@ export async function POST(request: Request) {
       )
     }
 
-    // 8. Create batch record
+    // 8. Create batch record.
+    // IMPORTANT: it starts as "uploading", NOT "processing".
+    // The process-queue cron only picks up ("pending","processing") batches, so
+    // while we are still inserting rows the batch is invisible to it. Before
+    // this, the cron could run mid-insert, see 0 pending rows, conclude the
+    // batch was done and mark it "completed" -> the rows landed afterwards and
+    // were never processed (silent failure). Job postings were hit hardest
+    // because their huge description columns make the inserts much slower.
     const { data: batch, error: batchError } = await supabase
       .from("import_batches")
       .insert({
         user_id: user.id,
         filename,
-        status: "processing",
+        status: "uploading",
         total_rows: totalRows,
         processed_rows: 0,
         batch_type: batchType,
@@ -221,6 +232,7 @@ export async function POST(request: Request) {
     }
 
     const batchId = batch.id
+    createdBatchId = batchId
 
     // 8. Format and insert rows in server-side chunks of 2,000
     const CHUNK_SIZE = 2000
@@ -253,7 +265,41 @@ export async function POST(request: Request) {
       insertedRows += chunk.length
     }
 
-    // 9. Clean up blob - CSV is now in the database
+    // 9. Every row is in. Atomically flip "uploading" -> "pending" so the cron
+    // can now pick it up. The RPC re-counts the rows in the database and fails
+    // the batch on mismatch, so a batch is only ever queued once it is complete.
+    const { data: finalizeResult, error: finalizeError } = await supabase.rpc(
+      "finalize_batch_upload",
+      { p_batch_id: batchId, p_total_rows: insertedRows },
+    )
+
+    if (finalizeError) {
+      await supabase
+        .from("import_batches")
+        .update({ status: "failed", error_message: `Finalize failed: ${finalizeError.message}` })
+        .eq("id", batchId)
+
+      await del(blobUrl).catch(() => {})
+      return NextResponse.json(
+        { error: `Error al finalizar la carga: ${finalizeError.message}`, batchId },
+        { status: 500 },
+      )
+    }
+
+    const finalized = typeof finalizeResult === "string" ? JSON.parse(finalizeResult) : finalizeResult
+
+    if (finalized?.status === "failed") {
+      await del(blobUrl).catch(() => {})
+      return NextResponse.json(
+        {
+          error: `Inconsistencia al cargar: se esperaban ${finalized.expected} filas y se encontraron ${finalized.found}. El lote fue marcado como fallido.`,
+          batchId,
+        },
+        { status: 500 },
+      )
+    }
+
+    // 10. Clean up blob - CSV is now in the database
     await del(blobUrl).catch(() => {})
 
     return NextResponse.json({
@@ -263,6 +309,24 @@ export async function POST(request: Request) {
       message: `${insertedRows} filas cargadas. El procesamiento comenzará automáticamente.`,
     })
   } catch (err: any) {
+    // Never leave a batch stuck in "uploading": the cron ignores that status,
+    // so it would be invisible forever. Mark it failed so it shows up in
+    // /admin/processing and can be retried.
+    if (createdBatchId) {
+      try {
+        await supabase
+          .from("import_batches")
+          .update({
+            status: "failed",
+            error_message: `Upload aborted: ${err.message}`,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", createdBatchId)
+      } catch {
+        // best effort
+      }
+    }
+
     // Clean up blob on any error
     await del(blobUrl).catch(() => {})
     return NextResponse.json({ error: err.message }, { status: 500 })
