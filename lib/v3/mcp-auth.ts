@@ -2,7 +2,14 @@ import crypto from "crypto"
 import { NextRequest } from "next/server"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { hashOAuthValue } from "@/lib/v3/mcp-oauth"
-import type { McpPrincipal } from "./mcp-usage"
+import { principalColumns, type McpPrincipal } from "./mcp-usage"
+
+/**
+ * Tope de requests por minuto para tokens OAuth. Las API keys lo tienen por fila
+ * (`rate_limit_per_minute`); los tokens OAuth no tienen esa columna, así que se
+ * usa el mismo default que las keys (60).
+ */
+const OAUTH_RATE_LIMIT_PER_MINUTE = 60
 
 export interface McpAuthResult extends Partial<McpPrincipal> {
   success: boolean
@@ -38,9 +45,19 @@ export async function validateMcpRequest(req: NextRequest): Promise<McpAuthResul
     const { data: membership } = await admin.schema("v3").from("workspace_members")
       .select("id").eq("workspace_id", token.workspace_id).eq("user_id", token.user_id).eq("status", "active").maybeSingle()
     if (!membership) return failure("MEMBERSHIP_INACTIVE", "El usuario ya no pertenece al workspace", 403)
+    // Rate limiting para OAuth. Esta rama retornaba antes de cualquier chequeo,
+    // así que el tráfico OAuth no tenía tope de requests: solo lo tenían las API
+    // keys. Se cuenta sobre principal_id, que cubre los dos tipos de credencial.
+    const oauthWindowStart = new Date(Date.now() - 60000).toISOString()
+    const { count: oauthCount } = await admin.schema("v3").from("mcp_request_logs")
+      .select("id", { count: "exact", head: true })
+      .eq("principal_id", token.id).gte("created_at", oauthWindowStart)
+    if ((oauthCount ?? 0) >= OAUTH_RATE_LIMIT_PER_MINUTE) {
+      return failure("RATE_LIMITED", "Se excedió el límite general de requests por minuto", 429)
+    }
     await admin.schema("v3").from("mcp_oauth_tokens").update({ last_used_at: new Date().toISOString() }).eq("id", token.id)
     const scopes: string[] = token.scopes ?? []
-    return { success: true, workspaceId: token.workspace_id, userId: token.user_id, keyId: token.id, scopes, allowedModes: resolveAllowedModes(scopes) }
+    return { success: true, workspaceId: token.workspace_id, userId: token.user_id, keyId: token.id, keyType: "oauth_token", scopes, allowedModes: resolveAllowedModes(scopes) }
   }
 
   if (!rawKey.startsWith("asci_")) return failure("INVALID_KEY_FORMAT", "Formato de credencial inválido", 401)
@@ -70,6 +87,7 @@ export async function validateMcpRequest(req: NextRequest): Promise<McpAuthResul
     workspaceId: key.workspace_id,
     userId: key.owner_user_id,
     keyId: key.id,
+    keyType: "api_key",
     scopes: [...new Set(scopes.length ? scopes : readScopes)],
     allowedModes,
   }
@@ -77,7 +95,14 @@ export async function validateMcpRequest(req: NextRequest): Promise<McpAuthResul
 
 function resolveAllowedModes(scopes: string[]) {
   const modes = ["read"]
-  if (scopes.some((scope) => scope.endsWith(":run") || scope.endsWith(":generate"))) modes.push("server_managed")
+  // Los scopes de escritura (accounts:write, contacts:write) terminan en `:write`,
+  // que no matcheaba ningún sufijo de acá. Resultado: un token OAuth con
+  // contacts:write pasaba el chequeo de scope y moría después con
+  // MODE_NOT_ALLOWED:server_managed. Guardar una cuenta o enriquecer contactos son
+  // operaciones que el server ejecuta de punta a punta, así que son server_managed.
+  if (scopes.some((s) => s.endsWith(":run") || s.endsWith(":generate") || s.endsWith(":write"))) {
+    modes.push("server_managed")
+  }
   if (scopes.some((scope) => scope.endsWith(":prepare") || scope.endsWith(":submit"))) modes.push("client_assisted")
   return modes
 }
@@ -100,8 +125,11 @@ export async function logMcpRequest(params: {
   metadata?: Record<string, unknown>
 }) {
   const admin = createAdminClient()
-  await admin.schema("v3").from("mcp_request_logs").insert({
-    api_key_id: params.principal.keyId,
+  // Antes se escribía siempre en api_key_id, así que para principales OAuth el
+  // insert violaba la FK y el request quedaba sin auditoría. El error además se
+  // tragaba (nadie chequeaba `error`), por eso la falla era invisible.
+  const { error } = await admin.schema("v3").from("mcp_request_logs").insert({
+    ...principalColumns(params.principal),
     workspace_id: params.principal.workspaceId,
     user_id: params.principal.userId,
     endpoint: "/api/v3/mcp/server",
@@ -116,4 +144,8 @@ export async function logMcpRequest(params: {
     error_code: params.errorCode,
     metadata: params.metadata ?? {},
   })
+  // No se lanza: perder una línea de auditoría no debe tumbar una tool que ya
+  // hizo su trabajo. Pero se deja rastro, para que la próxima falla no vuelva a
+  // pasar inadvertida meses como pasó con los logs OAuth.
+  if (error) console.error("[v0] logMcpRequest falló:", error.message)
 }

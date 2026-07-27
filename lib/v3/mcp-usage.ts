@@ -15,9 +15,30 @@ export type McpUsagePool =
 export interface McpPrincipal {
   workspaceId: string
   userId: string
+  /**
+   * Id de la credencial. Vive en v3.mcp_api_keys o en v3.mcp_oauth_tokens según
+   * `keyType`, así que NUNCA se puede escribir a ciegas en una columna con FK a
+   * una de las dos tablas: hay que discriminar primero.
+   */
   keyId: string
+  /**
+   * Tipo de credencial. Sin este discriminador, las reservas y los logs asumían
+   * que todo principal era una API key: las reservas OAuth fallaban con
+   * INVALID_MCP_PRINCIPAL y los logs OAuth se descartaban en silencio.
+   */
+  keyType: "api_key" | "oauth_token"
   scopes: string[]
   allowedModes: string[]
+}
+
+/** Mapea el principal a la columna correcta de reservas/logs. */
+export function principalColumns(principal: McpPrincipal): {
+  api_key_id: string | null
+  oauth_token_id: string | null
+} {
+  return principal.keyType === "api_key"
+    ? { api_key_id: principal.keyId, oauth_token_id: null }
+    : { api_key_id: null, oauth_token_id: principal.keyId }
 }
 
 export interface ReservationResult {
@@ -50,10 +71,12 @@ export async function reserveMcpUsage(params: {
   if (!params.idempotencyKey.trim()) throw new Error("IDEMPOTENCY_KEY_REQUIRED")
   const admin = createAdminClient()
   const requestId = crypto.randomUUID()
+  const cols = principalColumns(params.principal)
   const { data, error } = await admin.schema("v3").rpc("reserve_mcp_usage", {
     p_workspace_id: params.principal.workspaceId,
     p_user_id: params.principal.userId,
-    p_api_key_id: params.principal.keyId,
+    p_api_key_id: cols.api_key_id,
+    p_oauth_token_id: cols.oauth_token_id,
     p_request_id: requestId,
     p_idempotency_key: params.idempotencyKey,
     p_pool: params.pool,
