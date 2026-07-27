@@ -5,7 +5,7 @@ import { z } from "zod"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { resolveCompany } from "./services/company-resolver"
 import { buildInternalAccountSnapshot } from "./services/internal-account-snapshot"
-import { reserveMcpUsage, setReservationStatus, type McpPrincipal } from "./mcp-usage"
+import { principalColumns, reserveMcpUsage, setReservationStatus, type McpPrincipal } from "./mcp-usage"
 
 const PROMPT_VERSION = "mcp-client-research-v1"
 const STAGES = ["internal_analysis", "signal_classification", "fit_scoring", "account_brief"] as const
@@ -60,7 +60,7 @@ export async function prepareAccountResearch(principal: McpPrincipal, inputs: st
     for (const company of unique) {
       const snapshot = await buildInternalAccountSnapshot({ workspaceId: principal.workspaceId, company: { id: company.companyId!, name: company.name ?? "", domain: company.domain, country: company.country, industry: company.industry }, researchJobId: null })
       const promptPackage = packageFor("internal_analysis", snapshot)
-      const { data, error } = await admin.schema("v3").from("client_ai_executions").insert({ workspace_id: principal.workspaceId, user_id: principal.userId, api_key_id: principal.keyId, reservation_id: reservation.reservationId, feature: "account_research", company_id: company.companyId, current_stage: "internal_analysis", prompt_version: PROMPT_VERSION, package_hash: promptPackage.packageHash, package_payload: promptPackage, expires_at: promptPackage.expiresAt }).select("id").single()
+      const { data, error } = await admin.schema("v3").from("client_ai_executions").insert({ workspace_id: principal.workspaceId, user_id: principal.userId, ...principalColumns(principal), reservation_id: reservation.reservationId, feature: "account_research", company_id: company.companyId, current_stage: "internal_analysis", prompt_version: PROMPT_VERSION, package_hash: promptPackage.packageHash, package_payload: promptPackage, expires_at: promptPackage.expiresAt }).select("id").single()
       if (error) throw new Error(`CLIENT_EXECUTION_CREATE_FAILED:${error.message}`)
       executions.push({ executionId: data.id, company: { id: company.companyId, name: company.name }, stage: "internal_analysis", promptPackage })
     }
@@ -132,7 +132,7 @@ export async function prepareAccountIcebreaker(principal: McpPrincipal, params: 
   try {
     const snapshot = await admin.schema("v3").from("account_internal_snapshots").select("evidence,contacts").eq("workspace_id", principal.workspaceId).eq("company_id", params.companyId).order("generated_at", { ascending: false }).limit(1).maybeSingle()
     const promptPackage = packageFor("icebreaker", { companyId: params.companyId, contact: { name: params.contactName, title: params.contactTitle, country: params.contactCountry }, snapshot: snapshot.data })
-    const { data, error } = await admin.schema("v3").from("client_ai_executions").insert({ workspace_id: principal.workspaceId, user_id: principal.userId, api_key_id: principal.keyId, reservation_id: reservation.reservationId, feature: "icebreaker", company_id: params.companyId, contact_id: params.contactName, current_stage: "icebreaker", prompt_version: PROMPT_VERSION, package_hash: promptPackage.packageHash, package_payload: promptPackage, expires_at: promptPackage.expiresAt }).select("id").single()
+    const { data, error } = await admin.schema("v3").from("client_ai_executions").insert({ workspace_id: principal.workspaceId, user_id: principal.userId, ...principalColumns(principal), reservation_id: reservation.reservationId, feature: "icebreaker", company_id: params.companyId, contact_id: params.contactName, current_stage: "icebreaker", prompt_version: PROMPT_VERSION, package_hash: promptPackage.packageHash, package_payload: promptPackage, expires_at: promptPackage.expiresAt }).select("id").single()
     if (error) throw new Error(`CLIENT_EXECUTION_CREATE_FAILED:${error.message}`)
     await setReservationStatus(reservation.reservationId, "committed")
     return { allowed: true, executionId: data.id, promptPackage }
