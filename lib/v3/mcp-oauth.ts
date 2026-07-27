@@ -5,6 +5,13 @@ export const MCP_OAUTH_SCOPES = [
   "companies:read",
   "signals:read",
   "accounts:read",
+  // `accounts:write` ya lo exigían save_account y remove_workspace_account, pero
+  // faltaba en este catálogo: ningún cliente OAuth podía pedirlo, así que esas
+  // tools solo funcionaban con API keys de scope "*".
+  "accounts:write",
+  // Enrichment de contactos vía Apollo (Fase 3). Separado de accounts:write
+  // porque gasta créditos de Apollo, no solo cupo de cuentas del plan.
+  "contacts:write",
   "research:run",
   "research:prepare",
   "research:submit",
@@ -19,6 +26,10 @@ export const MCP_OAUTH_SCOPES = [
 
 export const MCP_SCOPE_GROUPS = {
   read: ["companies:read", "signals:read", "accounts:read", "usage:read", "documents:read", "recommendations:read"],
+  // Escrituras que consumen cupo o créditos. Se agrupan aparte de `read` para
+  // que otorgar lectura nunca habilite gasto por accidente.
+  accounts: ["accounts:write"],
+  contacts: ["contacts:write"],
   research: ["research:run", "research:prepare", "research:submit"],
   icebreakers: ["icebreakers:generate", "icebreakers:prepare", "icebreakers:submit"],
   documents: ["documents:read", "documents:write", "recommendations:read"],

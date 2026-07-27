@@ -57,10 +57,31 @@ export type SearchCacheHit = {
 
 export type SearchCacheMiss = { hit: false }
 
+export type ReadSearchCacheOpts = {
+  /**
+   * Opt-in EXPLÍCITO para servir resultados cacheados.
+   *
+   * Por qué existe: arreglar la escritura del caché cambia el comportamiento de
+   * v2 en producción. `app/actions/apollo.ts` ya llamaba a `readSearchCache`,
+   * pero como la tabla estaba vacía siempre recibía miss y pegaba a Apollo.
+   * Al corregir la escritura, v2 empezaría a servir contactos de hasta 14 días
+   * sin que nadie lo haya pedido.
+   *
+   * Con este flag la escritura queda activa para todos (puebla el caché, sin
+   * cambio de comportamiento) pero la lectura solo la habilita v3. v2 llama
+   * `readSearchCache(hash)` sin opts y mantiene datos frescos, igual que hoy.
+   */
+  enabled?: boolean
+}
+
 export async function readSearchCache(
   queryHash: string,
   ttlDays: number = DEFAULT_TTL_DAYS,
+  opts: ReadSearchCacheOpts = {},
 ): Promise<SearchCacheHit | SearchCacheMiss> {
+  // Sin opt-in no se lee. Preserva el comportamiento de v2 intacto.
+  if (opts.enabled !== true) return { hit: false }
+
   const supabase = createAdminClient()
 
   const cutoff = new Date(Date.now() - ttlDays * 24 * 60 * 60 * 1000).toISOString()
