@@ -15,7 +15,11 @@ export async function GET() {
 
   const { data, error } = await supabase
     .from("landing_stats")
-    .select("contacts_analyzed, companies_indexed, technologies_processes, signals_detected, last_refreshed_at")
+    // NOTE: the column is `refreshed_at` (see scripts/162_landing_stats.sql).
+    // Selecting a non-existent `last_refreshed_at` made PostgREST reject the
+    // whole query, so this endpoint returned 500 and the landing silently fell
+    // back to its hardcoded April snapshot.
+    .select("contacts_analyzed, companies_indexed, technologies_processes, signals_detected, refreshed_at")
     .eq("id", 1)
     .maybeSingle()
 

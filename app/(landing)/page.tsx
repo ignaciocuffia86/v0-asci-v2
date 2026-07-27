@@ -148,13 +148,13 @@ function StepCard({ number, title, description, index }: { number: number; title
 /* ═══════════════════════════════════════════════════
    MAIN PAGE
    ═══════════════════════════════════════════════════ */
-// Valores de fallback (snapshot manual de la DB al 29-Abr-2026).
+// Valores de fallback (snapshot manual de la DB al 27-Jul-2026).
 // Si el fetch a /api/landing-stats falla, se muestran estos.
 const STATS_FALLBACK = {
-  contacts_analyzed: 393198,
-  companies_indexed: 398459,
-  technologies_processes: 89,
-  signals_detected: 1091130,
+  contacts_analyzed: 484942,
+  companies_indexed: 483561,
+  technologies_processes: 96,
+  signals_detected: 1528291,
 }
 
 export default function HomePage() {
@@ -202,7 +202,7 @@ export default function HomePage() {
 
   return (
     <div className="min-h-screen" style={{ backgroundColor: DARK, color: OFF_WHITE }}>
-      {/* ─── Navbar ─── */}
+      {/* ──�� Navbar ─── */}
       <header
         className="fixed top-0 z-50 w-full transition-all duration-500"
         style={{
