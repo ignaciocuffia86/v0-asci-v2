@@ -102,6 +102,40 @@ export async function setReservationStatus(reservationId: string, status: "commi
   if (error) throw new Error(`RESERVATION_UPDATE_FAILED:${error.message}`)
 }
 
+/**
+ * Cierra una reserva cobrando SOLO las unidades realmente consumidas.
+ *
+ * Apollo se reserva por el peor caso (maxContacts) porque no sabemos cuantas
+ * personas va a devolver la busqueda. Si se reservan 10 y se enriquecen 3,
+ * `setReservationStatus` dejaria las 10 unidades ocupando cupo mensual, cobrandole
+ * al workspace creditos que nunca se gastaron. Esta funcion ajusta el consumo.
+ *
+ * Si actualUnits es 0, libera la reserva completa en lugar de committear.
+ */
+export async function commitReservationWithUnits(
+  reservationId: string,
+  actualUnits: number,
+  metadata?: Record<string, unknown>
+) {
+  if (actualUnits <= 0) {
+    await setReservationStatus(reservationId, "released", metadata)
+    return
+  }
+  const admin = createAdminClient()
+  const { error } = await admin
+    .schema("v3")
+    .from("mcp_usage_reservations")
+    .update({
+      status: "committed",
+      units: actualUnits,
+      committed_at: new Date().toISOString(),
+      ...(metadata ? { metadata } : {}),
+    })
+    .eq("id", reservationId)
+    .eq("status", "reserved")
+  if (error) throw new Error(`RESERVATION_UPDATE_FAILED:${error.message}`)
+}
+
 export async function getMcpUsage(principal: McpPrincipal) {
   const admin = createAdminClient()
   const [planUsage, reservations, aiUsage] = await Promise.all([
