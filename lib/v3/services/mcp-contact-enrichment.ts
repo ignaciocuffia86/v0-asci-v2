@@ -57,10 +57,34 @@ export type PrepareInput = {
   idempotencyKey?: string
 }
 
+/**
+ * Identidad de la organización de Apollo contra la que se va a buscar.
+ *
+ * Existe por el caso de empresas fusionadas o renombradas (ej: "Banco Francés
+ * Argentina" es el nombre viejo de BBVA Argentina). Cuando la fila no tiene
+ * dominio y se resuelve POR NOMBRE, Apollo hace fuzzy match y puede devolver la
+ * entidad vieja, la sucesora, o una empresa parecida de otro país — en silencio.
+ * El usuario tiene que poder verificar CONTRA QUIÉN se va a gastar antes del run.
+ */
+export type ResolvedOrgIdentity = {
+  /** Cómo se llegó al organization_id. `name_lookup` es el de menor confianza. */
+  method: "stored" | "domain" | "name_lookup"
+  apolloName: string | null
+  apolloDomain: string | null
+  employees: number | null
+  industry: string | null
+  country: string | null
+  linkedinUrl: string | null
+  /** Presente solo cuando la identidad requiere confirmación humana. */
+  warning: string | null
+}
+
 export type PreparedPlan = {
   planHash: string
   companyId: string
   companyName: string
+  /** null solo si la empresa se va a buscar por dominio sin org_id. */
+  resolvedOrganization: ResolvedOrgIdentity | null
   roles: string[]
   rejectedRoles: Array<{ input: string; reason: string }>
   maxContacts: number
@@ -141,10 +165,59 @@ export async function prepareContactEnrichment(
   // acepta `name` cuando no hay dominio y cuesta 0 créditos, así que resolver acá
   // es gratis y evita un COMPANY_NOT_RESOLVABLE innecesario.
   let organizationId = company.apollo_organization_id ?? null
+  let resolvedOrganization: ResolvedOrgIdentity | null = organizationId
+    ? {
+        method: "stored",
+        apolloName: null,
+        apolloDomain: null,
+        employees: null,
+        industry: null,
+        country: null,
+        linkedinUrl: null,
+        // El resolvedor persiste en `companies` el org_id que obtuvo, incluso si
+        // lo resolvió por nombre. Sin este warning, la SEGUNDA preparación de una
+        // empresa mal matcheada caería en "stored" y el riesgo quedaría oculto.
+        // Si hay org_id guardado pero la empresa sigue sin website, lo más
+        // probable es que aquella resolución haya sido por nombre.
+        warning: domain
+          ? null
+          : `Hay un organization_id de Apollo guardado para "${company.name}", pero la empresa no tiene sitio web cargado, así que probablemente fue resuelto por nombre en el pasado. Si la empresa fue fusionada o renombrada, puede apuntar a la entidad equivocada. Confirmá con el usuario antes de ejecutar.`,
+      }
+    : null
+
   if (!organizationId) {
     const resolved = await resolveCompanyOrganizationId(input.companyId, { userId: principal.userId })
     if (resolved.status === "found") {
       organizationId = resolved.organizationId
+
+      // Sin dominio, la resolución fue POR NOMBRE: el match es difuso y puede
+      // apuntar a la entidad equivocada (fusiones, renombres, homónimos).
+      // Se expone la identidad y se marca para confirmación humana.
+      const viaName = !domain
+      const org = resolved.organization
+      const identityBits = [
+        org?.name ?? null,
+        org?.primaryDomain ? `dominio ${org.primaryDomain}` : null,
+        org?.employeesCount != null ? `${org.employeesCount} empleados` : null,
+        org?.country ?? null,
+      ]
+        .filter(Boolean)
+        .join(", ")
+
+      resolvedOrganization = {
+        method: viaName ? "name_lookup" : "domain",
+        apolloName: org?.name ?? null,
+        apolloDomain: org?.primaryDomain ?? null,
+        employees: org?.employeesCount ?? null,
+        industry: org?.industry ?? null,
+        country: org?.country ?? null,
+        linkedinUrl: org?.linkedinUrl ?? null,
+        warning: viaName
+          ? `La empresa no tiene sitio web cargado, así que se resolvió por NOMBRE contra Apollo${
+              identityBits ? ` y el match fue: ${identityBits}` : ""
+            }. Si "${company.name}" fue fusionada o renombrada (nombre viejo), este match puede apuntar a la entidad equivocada. Mostrale esta identidad al usuario y confirmá que es la empresa correcta ANTES de ejecutar el run.`
+          : null,
+      }
     } else if (resolved.status === "error") {
       // Falla de infraestructura (API key ausente, 5xx, red), NO un problema de
       // datos de la empresa. Se distingue con un código propio: si acá se
@@ -261,6 +334,7 @@ export async function prepareContactEnrichment(
     planHash,
     companyId: company.id,
     companyName: company.name,
+    resolvedOrganization,
     roles: sanitized.accepted,
     rejectedRoles: sanitized.rejected,
     maxContacts: effectiveMax,
