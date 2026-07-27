@@ -81,11 +81,19 @@ const isShortAcronym = (keyword: string) =>
 function keywordPattern(keyword: string): RegExp {
   const cached = keywordPatternCache.get(keyword)
   if (cached) return cached
-  // Límites propios en lugar de \b: \b no sirve para keywords que empiezan o
-  // terminan en símbolo (".NET", "C++") y no contempla acentos, justamente el
-  // caso que generaba los falsos positivos en textos en español.
+  // Límites propios en lugar de \b, porque \b no contempla acentos (que es lo que
+  // generaba los falsos positivos en español) ni sirve en keywords que empiezan o
+  // terminan en símbolo.
+  //
+  // El límite se exige solo en los extremos alfanuméricos de la keyword. Si el
+  // extremo ya es un símbolo, el símbolo mismo actúa de separador y exigir límite
+  // sería contraproducente: ".NET" no matchearía dentro de "ASP.NET" y "C++" no
+  // matchearía en "C++11".
+  const boundary = "[\\p{L}\\p{N}]"
+  const prefix = new RegExp(`^${boundary}`, "u").test(keyword) ? `(?<!${boundary})` : ""
+  const suffix = new RegExp(`${boundary}$`, "u").test(keyword) ? `(?!${boundary})` : ""
   const pattern = new RegExp(
-    `(?<![\\p{L}\\p{N}])${escapeRegex(keyword)}(?![\\p{L}\\p{N}])`,
+    `${prefix}${escapeRegex(keyword)}${suffix}`,
     isShortAcronym(keyword) ? "u" : "iu"
   )
   keywordPatternCache.set(keyword, pattern)
