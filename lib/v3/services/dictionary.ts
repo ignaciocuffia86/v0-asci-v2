@@ -46,35 +46,92 @@ export async function loadDictionary(): Promise<DictionaryData> {
   return data
 }
 
+// ─── Matching determinístico ─────────────────────────────────
+//
+// El matching era `indexOf` sobre el texto en minúsculas, sin límites de palabra.
+// Con keywords de 3 caracteres eso produce falsos positivos sistemáticos en
+// español, porque el acrónimo aparece DENTRO de palabras comunes:
+//   "ORM" (Django)          → inf-ORM-ación, f-ORM-ación
+//   "OCI" (Oracle Database) → neg-OCI-o, as-OCI-ado
+//   "Lex" (AWS)             → f-LEX-ibilidad
+//   "PAN" (Palo Alto)       → ex-PAN-sión
+// Por eso una fábrica de golosinas aparecía usando Django con 72 menciones: eran
+// 72 apariciones de la palabra "información".
+//
+// Se corrige con dos reglas: todo match exige límite de palabra, y los acrónimos
+// cortos exigen además la grafía exacta en mayúsculas.
+
+/**
+ * Cache de patrones por keyword. matchTextAgainstDictionary se llama una vez por
+ * señal (cientos por cuenta) contra todo el diccionario, así que recompilar la
+ * expresión en cada llamada sería caro.
+ */
+const keywordPatternCache = new Map<string, RegExp>()
+
+const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+
+/**
+ * Un acrónimo corto en mayúsculas es ambiguo si se compara ignorando el caso:
+ * "información" contiene "orm" y "negocio" contiene "oci". Para estos exigimos
+ * la grafía exacta, que es como se escriben de verdad (AWS, SAP, ORM, ERP).
+ */
+const isShortAcronym = (keyword: string) =>
+  keyword.length <= 4 && keyword === keyword.toUpperCase() && /[A-Z]/.test(keyword)
+
+function keywordPattern(keyword: string): RegExp {
+  const cached = keywordPatternCache.get(keyword)
+  if (cached) return cached
+  // Límites propios en lugar de \b, porque \b no contempla acentos (que es lo que
+  // generaba los falsos positivos en español) ni sirve en keywords que empiezan o
+  // terminan en símbolo.
+  //
+  // El límite se exige solo en los extremos alfanuméricos de la keyword. Si el
+  // extremo ya es un símbolo, el símbolo mismo actúa de separador y exigir límite
+  // sería contraproducente: ".NET" no matchearía dentro de "ASP.NET" y "C++" no
+  // matchearía en "C++11".
+  const boundary = "[\\p{L}\\p{N}]"
+  const prefix = new RegExp(`^${boundary}`, "u").test(keyword) ? `(?<!${boundary})` : ""
+  const suffix = new RegExp(`${boundary}$`, "u").test(keyword) ? `(?!${boundary})` : ""
+  const pattern = new RegExp(
+    `${prefix}${escapeRegex(keyword)}${suffix}`,
+    isShortAcronym(keyword) ? "u" : "iu"
+  )
+  keywordPatternCache.set(keyword, pattern)
+  return pattern
+}
+
 /**
  * Matching determinístico de un texto contra el diccionario.
- * Devuelve productos y procesos matcheados con la keyword y un snippet
- * de evidencia (± 60 chars alrededor del match).
+ * Devuelve productos y procesos matcheados con la keyword tal como aparece en el
+ * texto y un snippet de evidencia (± 60 chars alrededor del match real).
  */
 export function matchTextAgainstDictionary(
   text: string,
   dictionary: DictionaryData
 ): DictionaryMatch[] {
   if (!text) return []
-  const lower = text.toLowerCase()
   const matches: DictionaryMatch[] = []
   const seen = new Set<string>()
 
-  const findSnippet = (keyword: string): string | null => {
-    const idx = lower.indexOf(keyword.toLowerCase())
-    if (idx === -1) return null
-    const start = Math.max(0, idx - 60)
-    const end = Math.min(text.length, idx + keyword.length + 60)
-    return (start > 0 ? "…" : "") + text.slice(start, end).trim() + (end < text.length ? "…" : "")
+  /** Devuelve la coincidencia real (con su grafía original) y su contexto. */
+  const findMatch = (keyword: string): { keyword: string; snippet: string } | null => {
+    const found = keywordPattern(keyword).exec(text)
+    if (!found) return null
+    const start = Math.max(0, found.index - 60)
+    const end = Math.min(text.length, found.index + found[0].length + 60)
+    return {
+      keyword: found[0],
+      snippet: (start > 0 ? "…" : "") + text.slice(start, end).trim() + (end < text.length ? "…" : ""),
+    }
   }
 
   for (const product of dictionary.products) {
     for (const keyword of product.keywords) {
       if (!keyword || keyword.length < 3) continue
-      const snippet = findSnippet(keyword)
-      if (snippet && !seen.has(`product:${product.id}`)) {
+      const found = findMatch(keyword)
+      if (found && !seen.has(`product:${product.id}`)) {
         seen.add(`product:${product.id}`)
-        matches.push({ type: "product", id: product.id, name: product.name, keyword, snippet })
+        matches.push({ type: "product", id: product.id, name: product.name, ...found })
         break
       }
     }
@@ -83,10 +140,10 @@ export function matchTextAgainstDictionary(
   for (const process of dictionary.processes) {
     for (const keyword of process.keywords) {
       if (!keyword || keyword.length < 3) continue
-      const snippet = findSnippet(keyword)
-      if (snippet && !seen.has(`process:${process.id}`)) {
+      const found = findMatch(keyword)
+      if (found && !seen.has(`process:${process.id}`)) {
         seen.add(`process:${process.id}`)
-        matches.push({ type: "process", id: process.id, name: process.name, keyword, snippet })
+        matches.push({ type: "process", id: process.id, name: process.name, ...found })
         break
       }
     }

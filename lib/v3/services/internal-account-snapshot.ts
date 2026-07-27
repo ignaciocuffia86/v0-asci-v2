@@ -15,7 +15,22 @@ export interface InternalEvidenceItem {
   term: string
   count: number
   latestAt: string | null
-  sources: Array<{ kind: "contact-signal" | "job-posting"; title: string; snippet: string | null; date: string | null; url: string | null }>
+  sources: Array<{
+    kind: "contact-signal" | "job-posting"
+    /** Etiqueta de la fuente: keyword de la señal o título de la vacante. */
+    title: string
+    /**
+     * Texto exacto que disparó ESTE término, tal como aparece en la fuente.
+     * Sin este campo era imposible saber por qué un término estaba en la lista:
+     * el título mostraba el keyword propio de la señal, no el término matcheado,
+     * y una misma señal que matchea tres términos parecía evidencia sin relación.
+     */
+    matchedKeyword: string
+    /** Contexto acotado alrededor del match, no el snippet completo de la fuente. */
+    snippet: string | null
+    date: string | null
+    url: string | null
+  }>
 }
 
 export interface InternalAccountSnapshot {
@@ -34,6 +49,13 @@ export interface InternalAccountSnapshot {
   warnings: string[]
 }
 
+/**
+ * Señales que se traen para hacer matching. Antes eran 200 mientras
+ * coverage.signals informaba el total real (p. ej. 1.382), así que los counts de
+ * cada término se calculaban sobre una fracción del universo sin avisarlo.
+ */
+const SIGNAL_MATCHING_LIMIT = 1000
+
 const latest = (values: Array<string | null | undefined>) => values.filter(Boolean).sort().at(-1) ?? null
 const text = (value: unknown) => typeof value === "string" ? value : value ? JSON.stringify(value) : ""
 
@@ -47,7 +69,7 @@ export async function buildInternalAccountSnapshot(params: {
   const profile = await getWorkspaceFitProfile(params.workspaceId)
 
   const [signalResult, dictionary, jobsResult, contactsResult] = await Promise.all([
-    getLegacySignals(params.company.id, 200),
+    getLegacySignals(params.company.id, SIGNAL_MATCHING_LIMIT),
     loadDictionary(),
     cacheV2JobPostingProvider.fetch(params.company, { freshnessHours: 24, maxItems: 50, correlationId: params.researchJobId ?? `mcp-${params.company.id}` }),
     getCanonicalContacts({ companyId: params.company.id, recommendedTitles: profile.recommendedJobTitles, limit: 8 }),
@@ -56,6 +78,13 @@ export async function buildInternalAccountSnapshot(params: {
   const warnings = [...jobsResult.warnings, ...contactsResult.warnings]
   if (signalResult.warning) warnings.push(signalResult.warning)
   const signals = signalResult.signals
+  // Si aun así quedan señales afuera, hay que decirlo: los counts por término
+  // son sobre las señales analizadas, no sobre el total de la empresa.
+  if (signalResult.total > signals.length) {
+    warnings.push(
+      `Se analizaron las ${signals.length} señales más recientes de ${signalResult.total} totales. Las menciones por tecnología o proceso corresponden a esa muestra, no al total histórico.`
+    )
+  }
   const evidence = new Map<string, InternalEvidenceItem>()
 
   const add = (match: { id: string; name: string; type: "product" | "process" }, source: InternalEvidenceItem["sources"][number]) => {
@@ -68,13 +97,17 @@ export async function buildInternalAccountSnapshot(params: {
     evidence.set(key, existing)
   }
 
+  // La evidencia de cada término tiene que ser el fragmento que disparó ESE
+  // término (match.keyword / match.snippet), no el keyword ni el snippet de la
+  // señal completa: eso es lo que hacía aparecer "Reporting" como fuente de SAP.
   for (const signal of signals) {
     const combined = [signal.keyword, signal.snippet, signal.sourceField].filter(Boolean).join(" · ")
     for (const match of matchTextAgainstDictionary(combined, dictionary)) {
       add(match, {
         kind: "contact-signal",
         title: signal.keyword ?? signal.type,
-        snippet: signal.snippet?.slice(0, 280) ?? (combined.slice(0, 280) || null),
+        matchedKeyword: match.keyword,
+        snippet: match.snippet.slice(0, 280),
         date: signal.occurredAt,
         url: signal.sourceUrl,
       })
@@ -84,7 +117,14 @@ export async function buildInternalAccountSnapshot(params: {
   for (const posting of jobsResult.postings) {
     const combined = `${posting.title}\n${posting.description ?? ""}`
     for (const match of matchTextAgainstDictionary(combined, dictionary)) {
-      add(match, { kind: "job-posting", title: posting.title, snippet: posting.description?.slice(0, 280) ?? null, date: posting.postedAt, url: posting.url })
+      add(match, {
+        kind: "job-posting",
+        title: posting.title,
+        matchedKeyword: match.keyword,
+        snippet: match.snippet.slice(0, 280),
+        date: posting.postedAt,
+        url: posting.url,
+      })
     }
   }
 

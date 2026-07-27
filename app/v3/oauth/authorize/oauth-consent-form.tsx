@@ -12,10 +12,17 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrig
 import { MCP_SCOPE_GROUPS } from "@/lib/v3/mcp-oauth"
 
 type Workspace = { id: string; name: string; role: string }
+// Todo grupo de MCP_SCOPE_GROUPS tiene que estar acá. Faltaban accounts,
+// contacts y documents: sus scopes existían en el catálogo pero ningún usuario
+// podía tildarlos, así que ningún token OAuth llegaba a tenerlos y las tools
+// correspondientes fallaban con "scope insuficiente" por más que se reconectara.
 const groups = [
   { id: "read", label: "Lectura", description: "Empresas, señales, cuentas y uso", scopes: [...MCP_SCOPE_GROUPS.read] },
+  { id: "accounts", label: "Guardar cuentas", description: "Guardar y quitar cuentas del workspace. Ocupa lugares del plan.", scopes: [...MCP_SCOPE_GROUPS.accounts] },
   { id: "research", label: "Research", description: "Preparar, ejecutar y guardar investigaciones", scopes: [...MCP_SCOPE_GROUPS.research] },
   { id: "icebreakers", label: "Icebreakers", description: "Preparar, generar y guardar icebreakers", scopes: [...MCP_SCOPE_GROUPS.icebreakers] },
+  { id: "contacts", label: "Contactos", description: "Buscar tomadores de decisión en Apollo. Gasta créditos de enrichment.", scopes: [...MCP_SCOPE_GROUPS.contacts] },
+  { id: "documents", label: "Documentos", description: "Cargar documentación comercial y pedir cuentas recomendadas", scopes: [...MCP_SCOPE_GROUPS.documents] },
 ]
 
 export function OAuthConsentForm(props: { clientId: string; redirectUri: string; state?: string; codeChallenge: string; requestedScope: string }) {
