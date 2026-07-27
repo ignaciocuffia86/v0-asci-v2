@@ -87,6 +87,8 @@ function StatusBadge({ status }: { status: string }) {
       return <Badge className="bg-amber-600 text-white gap-1"><AlertTriangle className="h-3 w-3" />Alerta</Badge>
     case "critical":
       return <Badge variant="destructive" className="gap-1"><XCircle className="h-3 w-3" />Critico</Badge>
+    case "uploading":
+      return <Badge className="gap-1 bg-slate-600 text-white"><Hourglass className="h-3 w-3" />Cargando</Badge>
     case "pending":
       return <Badge variant="secondary" className="gap-1"><Clock className="h-3 w-3" />Pendiente</Badge>
     case "processing":
