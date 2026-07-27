@@ -37,6 +37,8 @@ import {
   getDictionaryJobStats,
   getPendingImportRowsCount,
   getBatchErrors,
+  getInconsistentBatches,
+  requeueImportBatch,
 } from "@/app/actions/processing"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -53,6 +55,7 @@ type ImportBatch = Awaited<ReturnType<typeof getImportBatches>>[number]
 type DictionaryJob = Awaited<ReturnType<typeof getDictionaryJobs>>[number]
 type ActivityEvent = Awaited<ReturnType<typeof getRecentActivity>>[number]
 type DictJobStats = Awaited<ReturnType<typeof getDictionaryJobStats>>
+type InconsistentBatch = Awaited<ReturnType<typeof getInconsistentBatches>>[number]
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
@@ -107,13 +110,14 @@ export default function ProcessingPage() {
   const [dictStats, setDictStats] = useState<DictJobStats | null>(null)
   const [activity, setActivity] = useState<ActivityEvent[]>([])
   const [pendingRows, setPendingRows] = useState(0)
+  const [inconsistent, setInconsistent] = useState<InconsistentBatch[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [lastRefresh, setLastRefresh] = useState(new Date())
 
   const fetchAll = useCallback(async () => {
     setIsLoading(true)
     try {
-      const [c, cr, b, dj, ds, act, pr] = await Promise.all([
+      const [c, cr, b, dj, ds, act, pr, inc] = await Promise.all([
         getDashboardCounts(),
         getCronHealth(),
         getImportBatches(30),
@@ -121,6 +125,7 @@ export default function ProcessingPage() {
         getDictionaryJobStats(),
         getRecentActivity(50),
         getPendingImportRowsCount(),
+        getInconsistentBatches(),
       ])
       if (c) setCounts(c)
       setCrons(cr)
@@ -129,6 +134,7 @@ export default function ProcessingPage() {
       setDictStats(ds)
       setActivity(act)
       setPendingRows(pr)
+      setInconsistent(inc)
       setLastRefresh(new Date())
     } catch (e) {
       console.error("Error fetching:", e)
@@ -177,6 +183,9 @@ export default function ProcessingPage() {
           </Button>
         </div>
       </div>
+
+      {/* Silent-failure detector: batches reported as done whose rows were never processed */}
+      <InconsistentBatchesAlert batches={inconsistent} onRefresh={fetchAll} />
 
       {/* Top Stats */}
       <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
@@ -444,6 +453,76 @@ function CronRow({ cron }: { cron: CronEntry }) {
   )
 }
 
+// ─── Silent-failure detector ─────────────────────────────────────────────
+// Catches the failure mode where a batch was marked "completado" while its rows
+// stayed pending (the jobpostings ingest bug), plus uploads stranded mid-insert.
+function InconsistentBatchesAlert({
+  batches,
+  onRefresh,
+}: {
+  batches: InconsistentBatch[]
+  onRefresh: () => void
+}) {
+  const [busyId, setBusyId] = useState<string | null>(null)
+
+  if (batches.length === 0) return null
+
+  const handleRequeue = async (id: string) => {
+    setBusyId(id)
+    try {
+      await requeueImportBatch(id)
+      onRefresh()
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  return (
+    <Alert variant="destructive">
+      <ShieldAlert className="h-4 w-4" />
+      <AlertTitle>
+        {batches.length} batch(es) con estado inconsistente
+      </AlertTitle>
+      <AlertDescription className="mt-2">
+        <p className="text-xs mb-3">
+          Estos lotes figuran como finalizados pero tienen filas sin procesar, o quedaron
+          trabados durante la carga. Sus señales no se generaron.
+        </p>
+        <div className="space-y-2">
+          {batches.map((b) => (
+            <div key={b.id} className="flex items-center justify-between gap-2 text-xs">
+              <div className="min-w-0">
+                <span className="font-mono truncate block max-w-xs" title={b.filename}>
+                  {b.filename}
+                </span>
+                <span className="text-muted-foreground">
+                  {b.batch_type} · estado {b.status} ·{" "}
+                  {formatNumber(b.pending_rows)} de {formatNumber(b.total_rows)} filas sin procesar
+                </span>
+              </div>
+              {(b.pending_rows || 0) > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-6 text-xs shrink-0"
+                  disabled={busyId === b.id}
+                  onClick={() => handleRequeue(b.id)}
+                >
+                  {busyId === b.id ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    "Reprocesar"
+                  )}
+                </Button>
+              )}
+            </div>
+          ))}
+        </div>
+      </AlertDescription>
+    </Alert>
+  )
+}
+
 function BatchTable({ batches, onRefresh }: { batches: ImportBatch[]; onRefresh: () => void }) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [errors, setErrors] = useState<{ message: string; count: number }[]>([])
@@ -523,10 +602,14 @@ function BatchTable({ batches, onRefresh }: { batches: ImportBatch[]; onRefresh:
           </TableHeader>
           <TableBody>
             {batches.map((b) => {
-              const pct = b.total_rows > 0 ? Math.round(((b.processed_rows || 0) + (b.failed_rows || 0)) / b.total_rows * 100) : 0
+              // Real progress: every row that reached a terminal state counts.
+              const accounted = (b.processed_rows || 0) + (b.failed_rows || 0) + (b.skipped_rows || 0)
+              const pct = b.total_rows > 0 ? Math.round((accounted / b.total_rows) * 100) : 0
               const hasFailed = (b.failed_rows || 0) > 0
               const isExpanded = expandedId === b.id
               const isSkipped = (b.consecutive_failures || 0) >= 5 && (b.status === "processing" || b.status === "pending")
+              // "Completado" but the numbers don't add up -> this is the silent failure.
+              const isInconsistent = b.status === "completed" && b.total_rows > 0 && accounted < b.total_rows
 
               return (
                 <TableRow key={b.id} className={`group ${isSkipped ? "bg-red-50/50 dark:bg-red-950/10" : ""}`}>
@@ -557,11 +640,19 @@ function BatchTable({ batches, onRefresh }: { batches: ImportBatch[]; onRefresh:
                   <TableCell className="text-right text-sm">{formatNumber(b.total_rows)}</TableCell>
                   <TableCell className="text-right text-sm text-green-600">{formatNumber(b.processed_rows)}</TableCell>
                   <TableCell className="text-right text-sm text-red-600">{(b.failed_rows || 0) > 0 ? formatNumber(b.failed_rows) : "-"}</TableCell>
-                  <TableCell className="w-32">
+                  <TableCell className="w-36">
                     <div className="flex items-center gap-2">
                       <Progress value={pct} className="h-2 flex-1" />
-                      <span className="text-xs text-muted-foreground w-8 text-right">{pct}%</span>
+                      <span
+                        className={`text-xs w-8 text-right ${isInconsistent ? "text-red-600 font-medium" : "text-muted-foreground"}`}
+                      >
+                        {pct}%
+                      </span>
                     </div>
+                    <span className="text-[10px] text-muted-foreground">
+                      {formatNumber(accounted)} / {formatNumber(b.total_rows)}
+                      {(b.skipped_rows || 0) > 0 && ` · ${formatNumber(b.skipped_rows)} omitidas`}
+                    </span>
                   </TableCell>
                   <TableCell className="text-right text-xs text-muted-foreground whitespace-nowrap">{formatTimeAgo(b.created_at)}</TableCell>
                 </TableRow>

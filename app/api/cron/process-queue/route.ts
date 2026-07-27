@@ -36,17 +36,26 @@ export async function GET(request: Request) {
     .eq("status", "running")
     .lt("started_at", new Date(Date.now() - 120_000).toISOString())
 
-  // Concurrency guard
-  const { data: running } = await supabase
-    .from("cron_executions")
-    .select("id")
-    .eq("cron_name", "process-queue")
-    .eq("status", "running")
-    .gte("started_at", new Date(Date.now() - 120_000).toISOString())
-    .limit(1)
+  // ── Concurrency guard: distributed lease lock ──
+  // The previous guard (SELECT running executions, then INSERT) had its own race:
+  // two simultaneous invocations both read "none running" and both proceeded. We
+  // observed two different deployments processing the same queue at once, which
+  // is why reported counts disagreed with the RPC results.
+  // acquire_cron_lock does a single atomic conditional UPDATE, so exactly one
+  // caller can win regardless of how many deployments hit this endpoint.
+  const holder = crypto.randomUUID()
+  const { data: lockAcquired, error: lockError } = await supabase.rpc("acquire_cron_lock", {
+    p_lock_name: "process-queue",
+    p_holder: holder,
+    p_ttl_secs: 120,
+  })
 
-  if (running && running.length > 0) {
-    return NextResponse.json({ skipped: true, reason: "concurrent execution" })
+  if (lockError) {
+    return NextResponse.json({ error: `Lock error: ${lockError.message}` }, { status: 500 })
+  }
+
+  if (!lockAcquired) {
+    return NextResponse.json({ skipped: true, reason: "concurrent execution (lock held)" })
   }
 
   // Register execution
@@ -69,7 +78,7 @@ export async function GET(request: Request) {
       // ── PHASE 3: FIFO order (oldest first) + skip failing batches ──
       const { data: batch, error: fetchErr } = await supabase
         .from("import_batches")
-        .select("id, batch_type, filename, status, consecutive_failures")
+        .select("id, batch_type, filename, status, consecutive_failures, total_rows")
         .in("status", ["pending", "processing"])
         .lt("consecutive_failures", MAX_CONSECUTIVE_FAILURES)
         .order("created_at", { ascending: true })  // FIFO: oldest batch first
@@ -110,11 +119,44 @@ export async function GET(request: Request) {
         .eq("status", "pending")
 
       if (!pendingBefore || pendingBefore === 0) {
+        // ── THE BUG THIS GUARD FIXES ──
+        // "0 pending rows" used to be treated as "batch finished". That is wrong
+        // while rows are still being inserted: the batch got marked "completed"
+        // with 0 processed rows and was never looked at again (silent failure).
+        // Uploads now stay in "uploading" (invisible here), but we still verify
+        // that every expected row is accounted for before declaring completion.
+        const { count: accountedRows } = await supabase
+          .from("import_rows")
+          .select("*", { count: "exact", head: true })
+          .eq("batch_id", batch.id)
+          .in("status", ["processed", "failed", "skipped"])
+
+        const accounted = accountedRows || 0
+        const expected = batch.total_rows || 0
+
+        if (expected > 0 && accounted < expected) {
+          // Rows are missing entirely - do NOT mark completed. Count it as a
+          // failure so it eventually trips the skip threshold instead of
+          // looping forever, and surface it loudly.
+          debugLogs.push(
+            `Batch ${batch.id.slice(0, 8)} INCONSISTENT: 0 pending but only ${accounted}/${expected} rows accounted for. Not completing.`,
+          )
+          await supabase.rpc("increment_batch_failures", {
+            p_batch_id: batch.id,
+            p_error: `Inconsistent batch: 0 pending rows but ${accounted}/${expected} accounted for (rows missing)`,
+          })
+          continue
+        }
+
         await supabase
           .from("import_batches")
+          // Counters are maintained by process_import_batch (it recounts rows by
+          // status), so we only flip the status here.
           .update({ status: "completed", updated_at: new Date().toISOString() })
           .eq("id", batch.id)
-        debugLogs.push(`Batch ${batch.id.slice(0, 8)} completed (0 pending)`)
+        debugLogs.push(
+          `Batch ${batch.id.slice(0, 8)} completed (0 pending, ${accounted}/${expected} accounted)`,
+        )
         continue
       }
 
@@ -200,6 +242,14 @@ export async function GET(request: Request) {
     const details = { error: err.message, calls, totalProcessed, debugLogs }
     await finishExecution(supabase, executionId, "failed", totalProcessed, details)
     return NextResponse.json({ error: err.message }, { status: 500 })
+  } finally {
+    // Always hand the lease back so the next minute's run can start immediately.
+    // If this fails, the TTL (120s) releases it anyway.
+    try {
+      await supabase.rpc("release_cron_lock", { p_lock_name: "process-queue", p_holder: holder })
+    } catch {
+      // best effort - the lease expires on its own
+    }
   }
 }
 
