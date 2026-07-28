@@ -14,6 +14,7 @@ export type UsageFeature =
   | "scoring"
   | "icebreaker"
   | "doc-analysis"
+  | "dedupe"
   | "other"
 
 /**

@@ -52,48 +52,31 @@ AS $$
   );
 $$;
 
--- ── Nombre base: nucleo sin el pais ────────────────────────────────────────
---
--- Decision del usuario: "Accenture Argentina" y "Accenture" son la MISMA
--- empresa, igual que el mismo nombre en paises distintos. El nucleo no alcanza
--- para eso ("accenture argentina" != "accenture"), asi que hace falta un pase
--- que saque el sufijo geografico.
---
--- Esto es mas agresivo que el resto y tiene un falso positivo conocido:
--- "Banco Nacion Argentina" -> "banco nacion", donde el pais es parte del
--- nombre real. Por eso el pase `geo` SIEMPRE se clasifica como ambiguo y
--- nunca se auto-mergea: lo revisa la IA o una persona.
-
-CREATE OR REPLACE FUNCTION public.company_base_name(p_name TEXT)
-RETURNS TEXT
-LANGUAGE sql
-STABLE
-SET search_path = public, extensions, pg_catalog
-AS $$
-  SELECT nullif(btrim(regexp_replace(
-    public.company_core_name(p_name),
-    '\s+(argentina|arg|brasil|brazil|chile|mexico|peru|uruguay|paraguay|bolivia|ecuador|colombia|venezuela|espana|spain|usa|us|uk|latam|latinoamerica|america latina|sudamerica|cono sur|group|international|global|holdings?)$',
-    '', 'g')), '');
-$$;
+-- NOTA sobre filiales (decision revisada del usuario):
+-- "Accenture Argentina" y "Accenture" son empresas DISTINTAS y NO se unifican.
+-- Por eso el nucleo NO saca sufijos geograficos: se quiere que
+-- "accenture argentina" != "accenture" y que nunca caigan en el mismo grupo.
+-- Como consecuencia, el pais pasa a ser un discriminador: ver la
+-- clasificacion mas abajo.
 
 -- ── Cache de candidatos ─────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS v3.company_dup_candidates (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   group_key      TEXT NOT NULL,
-  method         TEXT NOT NULL CHECK (method IN ('exact','core','trgm','geo')),
+  method         TEXT NOT NULL CHECK (method IN ('exact','core','trgm')),
   company_ids    UUID[] NOT NULL,
   master_id      UUID NOT NULL,
   -- 'seguro'  -> se puede auto-mergear, no paga IA
   -- 'ambiguo' -> va a la cola de IA
   --
-  -- Lo que vuelve ambiguo a un grupo es tener DOS linkedin_url distintas:
-  -- son dos entidades que LinkedIn considera separadas.
+  -- Un grupo es ambiguo si pasa CUALQUIERA de estas dos cosas:
+  --   1. dos linkedin_url distintas -> LinkedIn las considera entidades
+  --      separadas;
+  --   2. dos paises distintos -> al no unificar filiales, el pais discrimina:
+  --      "Banco X" (AR) y "Banco X" (ES) pueden ser operaciones distintas.
   --
-  -- El pais NO lo vuelve ambiguo, por decision explicita del usuario: el mismo
-  -- nombre en paises distintos se unifica. Es la contracara de esa decision que
-  -- se pierda la granularidad por pais en senales y contactos; es reversible
-  -- desde v3.company_merges.
+  -- Ninguna de las dos se auto-mergea; las decide la IA o una persona.
   classification TEXT NOT NULL CHECK (classification IN ('seguro','ambiguo')),
   -- Datos ya listos para la UI y para el prompt, para no re-consultar.
   payload        JSONB NOT NULL,
@@ -135,7 +118,6 @@ SET search_path = public, v3, extensions, pg_catalog
 AS $$
 DECLARE
   v_core INT := 0;
-  v_geo  INT := 0;
   v_trgm INT := 0;
 BEGIN
   SET LOCAL statement_timeout = '300s';
@@ -145,8 +127,7 @@ BEGIN
   -- dato asociado, o sea sin nada que perder ni que ganar en un merge.
   CREATE TEMP TABLE tmp_rel ON COMMIT DROP AS
   SELECT c.id, c.name, c.linkedin_url, c.country, c.created_at,
-         public.company_core_name(c.name) AS core,
-         public.company_base_name(c.name) AS base
+         public.company_core_name(c.name) AS core
   FROM public.companies c
   WHERE (
       EXISTS (SELECT 1 FROM public.contacts ct WHERE ct.current_company_id = c.id)
@@ -156,14 +137,14 @@ BEGIN
     AND length(btrim(c.name)) >= 3;
 
   CREATE INDEX ON tmp_rel (core);
-  CREATE INDEX ON tmp_rel (base);
   ANALYZE tmp_rel;
 
   -- ── Pase 1: nombre nucleo ────────────────────────────────────────────────
   WITH grp AS (
     SELECT r.core AS group_key, array_agg(r.id ORDER BY r.created_at) AS ids,
            count(*) AS n,
-           count(DISTINCT r.linkedin_url) AS li_distintas
+           count(DISTINCT r.linkedin_url) AS li_distintas,
+           count(DISTINCT nullif(btrim(lower(r.country)), '')) AS paises_distintos
     FROM tmp_rel r
     WHERE r.core IS NOT NULL AND length(r.core) >= 3
     GROUP BY r.core
@@ -186,7 +167,10 @@ BEGIN
     'core',
     r.ids,
     public.pick_merge_master(r.ids),
-    CASE WHEN r.li_distintas >= 2 THEN 'ambiguo' ELSE 'seguro' END,
+    CASE
+      WHEN r.li_distintas >= 2 OR r.paises_distintos >= 2 THEN 'ambiguo'
+      ELSE 'seguro'
+    END,
     v3.build_dup_payload(r.ids)
   FROM ranked r
   ON CONFLICT (group_key, method) DO NOTHING;
