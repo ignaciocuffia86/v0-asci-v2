@@ -15,9 +15,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { Linkedin, Loader2, Mail, Search, Sparkles, Target, Users } from "lucide-react"
+import { Briefcase, Linkedin, Loader2, Mail, RefreshCw, Search, Sparkles, Target, Users } from "lucide-react"
 import {
   searchAccountDecisionMakers,
+  refreshAccountJobPostings,
   type AccountSignalsData,
 } from "@/app/actions/v3/accounts"
 
@@ -69,6 +70,11 @@ export function SignalsTab({
   const [confirmRole, setConfirmRole] = useState<string | null>(null)
   const [searchingRole, setSearchingRole] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<{ role: string; message: string; ok: boolean } | null>(null)
+  // Transición propia para el refresco de vacantes: si compartiera `isPending`
+  // con Apollo, buscar vacantes deshabilitaría también los botones de decisores.
+  const [isRefreshingJobs, startJobsTransition] = useTransition()
+  const [confirmJobs, setConfirmJobs] = useState(false)
+  const [jobsFeedback, setJobsFeedback] = useState<{ message: string; ok: boolean } | null>(null)
 
   if (!signals) {
     return (
@@ -100,6 +106,28 @@ export function SignalsTab({
       } else {
         setFeedback({ role, ok: false, message: result.error ?? "Error en la búsqueda" })
       }
+    })
+  }
+
+  const handleRefreshJobs = () => {
+    setConfirmJobs(false)
+    setJobsFeedback(null)
+    startJobsTransition(async () => {
+      const result = await refreshAccountJobPostings(companyId)
+      if (!result.success) {
+        setJobsFeedback({ ok: false, message: result.error ?? "No se pudieron traer las vacantes." })
+        return
+      }
+      // El descarte por pertenencia se informa siempre que ocurra: es normal que
+      // sea alto y sin explicarlo el número de vacantes cargadas parece un error.
+      const partes = [
+        result.queued
+          ? `${result.queued} vacante${result.queued === 1 ? "" : "s"} en cola de importación.`
+          : "No se encontraron vacantes nuevas de esta empresa.",
+        ...(result.warnings ?? []),
+      ]
+      setJobsFeedback({ ok: true, message: partes.join(" ") })
+      router.refresh()
     })
   }
 
@@ -152,6 +180,46 @@ export function SignalsTab({
                 </div>
               </div>
             ))
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Vacantes de LinkedIn: alimentan las señales fit de arriba */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Briefcase className="size-4" />
+            Vacantes de LinkedIn
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-center justify-between gap-3">
+          <p className="max-w-prose text-xs text-muted-foreground text-pretty">
+            Trae las vacantes publicadas por esta empresa y las procesa por el importador, que
+            genera las señales de arriba. Consume créditos de scraping, así que se puede refrescar
+            una vez cada 12 horas. Tarda hasta un minuto y las señales nuevas aparecen cuando el
+            importador termina el lote.
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={isRefreshingJobs}
+            onClick={() => setConfirmJobs(true)}
+            className="shrink-0"
+          >
+            {isRefreshingJobs ? (
+              <Loader2 className="size-4 animate-spin" data-icon="inline-start" />
+            ) : (
+              <RefreshCw data-icon="inline-start" />
+            )}
+            {isRefreshingJobs ? "Buscando vacantes…" : "Refrescar vacantes"}
+          </Button>
+          {jobsFeedback && (
+            <p
+              className={`w-full text-xs ${jobsFeedback.ok ? "text-green-600" : "text-red-600"} text-pretty`}
+              role="status"
+            >
+              {jobsFeedback.message}
+            </p>
           )}
         </CardContent>
       </Card>
@@ -272,6 +340,23 @@ export function SignalsTab({
           </CardContent>
         </Card>
       )}
+
+      <AlertDialog open={confirmJobs} onOpenChange={setConfirmJobs}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Refrescar vacantes de LinkedIn</AlertDialogTitle>
+            <AlertDialogDescription>
+              Esta acción scrapea las vacantes publicadas por la empresa y consume créditos. Las
+              vacantes entran por el importador de ASCI, así que quedan visibles también en la app
+              principal. ¿Continuar?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={handleRefreshJobs}>Refrescar</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={confirmRole !== null} onOpenChange={(open) => !open && setConfirmRole(null)}>
         <AlertDialogContent>

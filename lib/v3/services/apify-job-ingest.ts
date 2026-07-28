@@ -37,6 +37,24 @@ const CHUNK_SIZE = 2000
 /** Prefijo del filename. Es el marcador de procedencia y la clave para auditar. */
 export const APIFY_FILENAME_PREFIX = "apify://"
 
+/**
+ * Filename del batch: `apify://<companyId>/<runId>`.
+ *
+ * El `companyId` va en el nombre a propósito. `import_batches` no tiene columna
+ * de empresa (es una tabla de v2 que no se puede tocar), así que sin esto no hay
+ * forma de preguntar "¿cuándo se scrapeó esta cuenta por última vez?" sin abrir
+ * el `row_data` de las filas. Con el prefijo alcanza un `LIKE`, y eso es lo que
+ * sostiene el rate limit por cuenta y la reversión en bloque.
+ */
+export function apifyBatchFilename(companyId: string, runId: string): string {
+  return `${APIFY_FILENAME_PREFIX}${companyId}/${runId}`
+}
+
+/** Prefijo para buscar todos los batches de Apify de una cuenta (`LIKE ...%`). */
+export function apifyBatchFilenamePrefix(companyId: string): string {
+  return `${APIFY_FILENAME_PREFIX}${companyId}/`
+}
+
 export interface ApifyJobItem {
   [key: string]: unknown
 }
@@ -126,7 +144,7 @@ export async function ingestApifyJobPostings(params: {
 }): Promise<ApifyIngestResult> {
   const admin = createAdminClient()
   const warnings: string[] = []
-  const filename = `${APIFY_FILENAME_PREFIX}${params.runId}`
+  const filename = apifyBatchFilename(params.companyId, params.runId)
 
   // Identidad canónica de la empresa destino. Es la salvaguarda contra duplicar
   // la empresa en v2: al pasar el linkedin_url y el nombre tal como están

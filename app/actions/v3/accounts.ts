@@ -12,6 +12,8 @@ import {
   type FollowedAccountWithCompany,
 } from "@/lib/v3/services/accounts"
 import { getMicroAgentLabels } from "@/lib/v3/services/radar-agents"
+import { runLinkedinJobsActor, companyNameVariants } from "@/lib/v3/services/apify-client"
+import { ingestApifyJobPostings, apifyBatchFilenamePrefix } from "@/lib/v3/services/apify-job-ingest"
 
 // ═══════════════════════════════════════════════════════════
 // Server actions de cuentas seguidas (vistas /v3/accounts).
@@ -495,6 +497,114 @@ export async function searchAccountDecisionMakers(
 
   revalidatePath(`/v3/accounts/${companyId}`)
   return { success: true, found: result.people.length }
+}
+
+// ─── Vacantes de LinkedIn vía Apify ──────────────────────────
+//
+// Espejo por UI de la tool MCP `scrape_company_job_postings`. Comparte servicio
+// (`ingestApifyJobPostings`), así que las dos vías entran por el mismo ETL de v2
+// y respetan los mismos guardrails de pertenencia y deduplicación.
+
+/**
+ * Ventana mínima entre scrapings de la misma cuenta.
+ *
+ * Cada corrida se paga en Apify y las vacantes de LinkedIn no rotan tan rápido,
+ * así que refrescar dos veces el mismo día gasta plata para reingestar las mismas
+ * filas. Mismo criterio que la búsqueda en Apollo, que se limita a 1 por día.
+ */
+const APIFY_REFRESH_COOLDOWN_HOURS = 12
+
+export async function refreshAccountJobPostings(companyId: string): Promise<{
+  success: boolean
+  batchId?: string | null
+  queued?: number
+  skippedOtherCompany?: number
+  warnings?: string[]
+  error?: string
+}> {
+  const { userId, workspaceId } = await getAuthContext()
+  const admin = createAdminClient()
+
+  // Aislamiento multitenant: el scraping escribe en tablas de producción que lee
+  // v2, así que solo se permite sobre cuentas que este workspace sigue. Sin esto,
+  // cualquier miembro podría gastar cuota sobre una empresa arbitraria del catálogo.
+  const { data: followed } = await admin
+    .schema("v3")
+    .from("followed_accounts")
+    .select("id")
+    .eq("workspace_id", workspaceId)
+    .eq("company_id", companyId)
+    .eq("is_active", true)
+    .maybeSingle()
+
+  if (!followed) {
+    return { success: false, error: "Esta cuenta no está en las cuentas seguidas de tu workspace." }
+  }
+
+  const { data: company } = await admin
+    .from("companies")
+    .select("name, linkedin_url, country")
+    .eq("id", companyId)
+    .maybeSingle()
+
+  if (!company) return { success: false, error: "No se encontró la empresa." }
+
+  // Cooldown: se mira el último batch de Apify de ESTA cuenta. Los `failed` no
+  // cuentan, para no dejar la cuenta bloqueada 12 horas por un run que se cayó.
+  const { data: lastBatch } = await admin
+    .from("import_batches")
+    .select("created_at, status")
+    .like("filename", `${apifyBatchFilenamePrefix(companyId)}%`)
+    .neq("status", "failed")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (lastBatch?.created_at) {
+    const elapsedHours = (Date.now() - new Date(lastBatch.created_at).getTime()) / 3_600_000
+    if (elapsedHours < APIFY_REFRESH_COOLDOWN_HOURS) {
+      const remaining = Math.ceil(APIFY_REFRESH_COOLDOWN_HOURS - elapsedHours)
+      return {
+        success: false,
+        error: `Ya se refrescaron las vacantes de esta cuenta hace menos de ${APIFY_REFRESH_COOLDOWN_HOURS} h. Probá en ${remaining} h.`,
+      }
+    }
+  }
+
+  try {
+    const run = await runLinkedinJobsActor({
+      companyNames: companyNameVariants(company.name, company.linkedin_url),
+      // `||` y no `??`: hay filas con country = "" (string vacío).
+      location: company.country?.trim() || undefined,
+    })
+
+    const ingest = await ingestApifyJobPostings({
+      companyId,
+      userId,
+      runId: run.runId,
+      items: run.items,
+    })
+
+    revalidatePath(`/v3/accounts/${companyId}`)
+    return {
+      success: true,
+      batchId: ingest.batchId,
+      queued: ingest.queued,
+      skippedOtherCompany: ingest.skippedOtherCompany,
+      warnings: ingest.warnings,
+    }
+  } catch (error) {
+    const raw = error instanceof Error ? error.message : "Error desconocido"
+    console.error("[v3] Error refrescando vacantes de Apify:", raw)
+    // Los códigos internos no le dicen nada al usuario: se traducen a algo accionable.
+    if (raw.startsWith("APIFY_TOKEN_MISSING")) {
+      return { success: false, error: "Falta configurar APIFY_TOKEN en el proyecto." }
+    }
+    if (raw.startsWith("APIFY_RUN_")) {
+      return { success: false, error: "El scraping de LinkedIn falló o no devolvió resultados. Reintentá más tarde." }
+    }
+    return { success: false, error: "No se pudieron ingestar las vacantes. Revisá el detalle en /admin/processing." }
+  }
 }
 
 export async function getAccountDetail(companyId: string): Promise<AccountDetail> {

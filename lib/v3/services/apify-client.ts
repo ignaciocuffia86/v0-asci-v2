@@ -114,9 +114,10 @@ export interface ApifyRunResult {
 /**
  * Corre el actor y espera el dataset.
  *
- * Usa `run-sync-get-dataset-items`, que corre y devuelve los items en una sola
- * llamada. El timeout se pasa también como query param porque el del actor por
- * defecto es 3600s: sin acotarlo, un run colgado bloquearía el request.
+ * Arranca el run, espera a que termine y lee el dataset (tres llamadas). NO usa
+ * `run-sync-get-dataset-items`: ver la nota del encabezado sobre el 502.
+ * El timeout se pasa como query param porque el del actor por defecto es 3600s:
+ * sin acotarlo, un run colgado dejaría el request esperando.
  */
 export async function runLinkedinJobsActor(params: {
   /**
