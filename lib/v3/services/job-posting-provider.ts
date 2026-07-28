@@ -34,11 +34,24 @@ export interface JobPostingProviderResult {
 export interface JobPostingProvider {
   provider: "cache-v2" | "apify-linkedin"
   fetch(company: CanonicalCompanyIdentity, options: {
-    freshnessHours: number
+    /**
+     * Ventana, en horas, para rotular una vacante como `recent` o `historical`.
+     *
+     * NO es un filtro: antes este campo se llamaba `freshnessHours` y el provider
+     * de caché lo ignoraba por completo, así que la frescura era decorativa.
+     * Tampoco puede ser un filtro duro: en la base real hay cuentas con 117
+     * vacantes y 0 en las últimas 24 horas, así que recortar por ventana dejaría
+     * la evidencia en cero. Un provider que sí consulta en vivo (Apify) puede
+     * usarlo para decidir si vale la pena refrescar.
+     */
+    recentWindowHours: number
     maxItems: number
     correlationId: string
   }): Promise<JobPostingProviderResult>
 }
+
+/** Seis meses: la ventana con la que ya se venía rotulando `recent`. */
+export const DEFAULT_RECENT_WINDOW_HOURS = 180 * 24
 
 export const cacheV2JobPostingProvider: JobPostingProvider = {
   provider: "cache-v2",
@@ -51,7 +64,8 @@ export const cacheV2JobPostingProvider: JobPostingProvider = {
       .order("posted_at", { ascending: false, nullsFirst: false })
       .limit(options.maxItems)
 
-    const recentCutoff = Date.now() - 180 * 24 * 60 * 60 * 1000
+    // Ahora la ventana la decide quien llama, en vez de estar clavada acá.
+    const recentCutoff = Date.now() - options.recentWindowHours * 60 * 60 * 1000
     const postings = (data ?? []).map((row) => ({
       id: row.id,
       title: row.title,

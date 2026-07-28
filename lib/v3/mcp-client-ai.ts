@@ -8,9 +8,32 @@ import { buildInternalAccountSnapshot } from "./services/internal-account-snapsh
 import { principalColumns, reserveMcpUsage, setReservationStatus, type McpPrincipal } from "./mcp-usage"
 import { guardSavedAccounts } from "./mcp-account-lifecycle"
 
-const PROMPT_VERSION = "mcp-client-research-v1"
+// v2: el paquete ya no arrastra la evidencia completa en cada etapa (ahora viaja
+// el panorama liviano) y el TTL escala con el tamaño del lote. Cambia la forma del
+// payload, así que la versión sube para invalidar los paquetes viejos.
+import { persistClientSuccessCases, persistClientNews, DEFAULT_NEWS_WINDOW_DAYS } from "./services/external-drilldown"
+
+const PROMPT_VERSION = "mcp-client-research-v2"
 const STAGES = ["internal_analysis", "signal_classification", "fit_scoring", "account_brief"] as const
 type Stage = (typeof STAGES)[number]
+
+/**
+ * TTL del paquete según el tamaño del lote.
+ *
+ * Con 60 minutos fijos, un lote de 10 cuentas obligaba al cliente a completar 40
+ * submits (4 etapas × 10) dentro de la misma hora; si el usuario se distraía, los
+ * paquetes vencían y la cuota ya estaba consumida. Se agregan 20 minutos por
+ * cuenta extra, con techo de 6 horas para que un paquete abandonado no quede vivo
+ * indefinidamente.
+ */
+const TTL_BASE_MINUTES = 60
+const TTL_PER_EXTRA_ACCOUNT_MINUTES = 20
+const TTL_MAX_MINUTES = 360
+
+export function packageTtlMinutes(batchSize: number) {
+  const extra = Math.max(0, batchSize - 1) * TTL_PER_EXTRA_ACCOUNT_MINUTES
+  return Math.min(TTL_BASE_MINUTES + extra, TTL_MAX_MINUTES)
+}
 
 const schemas = {
   internal_analysis: z.object({ summary: z.string().min(20).max(3000), technologies: z.array(z.string()).max(50), processes: z.array(z.string()).max(50), evidenceIds: z.array(z.string()).max(100) }),
@@ -18,31 +41,94 @@ const schemas = {
   fit_scoring: z.object({ score: z.number().int().min(0).max(100), fitScore: z.number().int().min(0).max(100), buyingSignalsScore: z.number().int().min(0).max(100), accessibilityScore: z.number().int().min(0).max(100), timingScore: z.number().int().min(0).max(100), rationale: z.string().min(20).max(3000), evidenceIds: z.array(z.string()).max(100) }),
   account_brief: z.object({ headline: z.string().min(10).max(300), whyNow: z.string().max(3000), fitSummary: z.string().max(3000), nextActions: z.array(z.string().max(500)).max(10), evidenceIds: z.array(z.string()).max(100) }),
   icebreaker: z.object({ content: z.string().min(20).max(1200), evidenceIds: z.array(z.string()).min(1).max(10) }),
+  // Casos de éxito y noticias NO llevan evidenceIds: no describen la evidencia
+  // interna, la traen de afuera. Su control no es el set de ids autorizados sino
+  // los guardrails (URL viva + mención real de la empresa + ventana temporal),
+  // así que `sourceUrl` es obligatoria y con formato de URL.
+  success_cases: z.object({
+    cases: z.array(z.object({
+      title: z.string().min(5).max(300),
+      providerName: z.string().max(240).nullish(),
+      technology: z.string().max(240).nullish(),
+      summary: z.string().max(2000).nullish(),
+      results: z.string().max(800).nullish(),
+      sourceUrl: z.string().url(),
+      sourceName: z.string().max(120).nullish(),
+      publishedAt: z.string().nullish(),
+      evidenceLevel: z.string().max(40).nullish(),
+      supportingSourceUrls: z.array(z.string().url()).max(5).optional(),
+    })).min(1).max(20),
+  }),
+  company_news: z.object({
+    items: z.array(z.object({
+      title: z.string().min(5).max(500),
+      summary: z.string().max(2000).nullish(),
+      category: z.string().min(2).max(100),
+      direction: z.string().max(40).nullish(),
+      sourceUrl: z.string().url(),
+      sourceName: z.string().max(120).nullish(),
+      publishedAt: z.string().nullish(),
+    })).min(1).max(30),
+  }),
 }
 
 function hash(value: unknown) { return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex") }
-function jsonSchemaFor(stage: Stage | "icebreaker") {
+/** Etapas de una sola pasada: no forman parte del pipeline de 4 etapas. */
+type SingleShotStage = "icebreaker" | "success_cases" | "company_news"
+
+function jsonSchemaFor(stage: Stage | SingleShotStage) {
   const descriptions: Record<string, unknown> = {
     internal_analysis: { summary: "string", technologies: ["string"], processes: ["string"], evidenceIds: ["string"] },
     signal_classification: { signals: [{ evidenceId: "string", category: "string", relevance: "number 0..1", rationale: "string" }] },
     fit_scoring: { score: "integer 0..100", fitScore: "integer 0..100", buyingSignalsScore: "integer 0..100", accessibilityScore: "integer 0..100", timingScore: "integer 0..100", rationale: "string", evidenceIds: ["string"] },
     account_brief: { headline: "string", whyNow: "string", fitSummary: "string", nextActions: ["string"], evidenceIds: ["string"] },
     icebreaker: { content: "string", evidenceIds: ["string"] },
+    success_cases: { cases: [{ title: "string", providerName: "string|null", technology: "string|null", summary: "string|null", results: "string|null", sourceUrl: "url obligatoria y accesible", sourceName: "string|null", publishedAt: "ISO date|null", evidenceLevel: "Confirmado|Probable|Inferido", supportingSourceUrls: ["url"] }] },
+    company_news: { items: [{ title: "string", summary: "string|null", category: "string", direction: "expansion|contraccion|neutro", sourceUrl: "url obligatoria y accesible", sourceName: "string|null", publishedAt: "ISO date|null" }] },
   }
   return descriptions[stage]
 }
 
-function packageFor(stage: Stage | "icebreaker", evidence: unknown, previous: unknown[] = []) {
+/**
+ * Instrucción por etapa. Para las etapas externas se explicita que hay que BUSCAR
+ * con fuentes reales y que las URLs se verifican del lado del servidor: si el
+ * modelo no sabe que se van a comprobar, tiende a completar el campo con una URL
+ * plausible pero inexistente.
+ */
+function userPromptFor(stage: Stage | SingleShotStage) {
+  if (stage === "icebreaker") return "Generá un icebreaker breve, específico y regionalizado, anclado en evidencia."
+  if (stage === "success_cases") {
+    return "Buscá casos de éxito reales y verificables de esta empresa con la tecnología indicada. Cada caso DEBE incluir una sourceUrl real y accesible: el servidor comprueba que responda y que la página mencione a la empresa, y descarta lo que no pase. No inventes URLs ni completes el campo con una dirección probable."
+  }
+  if (stage === "company_news") {
+    return "Buscá noticias recientes y verificables de esta empresa dentro de la ventana indicada. Cada noticia DEBE incluir una sourceUrl real y accesible: el servidor la verifica y descarta lo que no responda o no mencione a la empresa. Clasificá `direction` como expansion, contraccion o neutro según si el hecho amplía o achica la operación."
+  }
+  return `Completá la etapa ${stage} del research de cuenta.`
+}
+
+function packageFor(
+  stage: Stage | SingleShotStage,
+  evidence: unknown,
+  previous: unknown[] = [],
+  options: { batchSize?: number } = {}
+) {
+  const ttl = packageTtlMinutes(options.batchSize ?? 1)
   const payload = {
     promptVersion: PROMPT_VERSION,
     stage,
-    systemPrompt: "Sos un analista B2B de ASCI. Usá exclusivamente la evidencia provista. No inventes hechos, IDs ni fuentes. Respondé solo JSON válido conforme al schema.",
-    userPrompt: stage === "icebreaker" ? "Generá un icebreaker breve, específico y regionalizado, anclado en evidencia." : `Completá la etapa ${stage} del research de cuenta.`,
+    systemPrompt:
+      "Sos un analista B2B de ASCI. Usá exclusivamente la evidencia provista. No inventes hechos, IDs ni fuentes. Respondé solo JSON válido conforme al schema. La evidencia trae un nivel por término (Confirmado, Probable o Inferido): no presentes como confirmado algo que sea Probable o Inferido, y si una mención proviene de un ex-empleado no afirmes que la cuenta usa esa tecnología hoy. Si necesitás las fuentes textuales de un término, pedilas con get_account_evidence_detail en vez de suponerlas.",
+    userPrompt: userPromptFor(stage),
     responseSchema: jsonSchemaFor(stage),
     evidence,
     previousStages: previous,
   }
-  return { ...payload, packageHash: hash(payload), expiresAt: new Date(Date.now() + 60 * 60_000).toISOString() }
+  return {
+    ...payload,
+    packageHash: hash(payload),
+    expiresAt: new Date(Date.now() + ttl * 60_000).toISOString(),
+    ttlMinutes: ttl,
+  }
 }
 
 export async function prepareAccountResearch(principal: McpPrincipal, inputs: string[], idempotencyKey: string) {
@@ -64,8 +150,10 @@ export async function prepareAccountResearch(principal: McpPrincipal, inputs: st
   try {
     for (const company of unique) {
       const snapshot = await buildInternalAccountSnapshot({ workspaceId: principal.workspaceId, company: { id: company.companyId!, name: company.name ?? "", domain: company.domain, country: company.country, industry: company.industry }, researchJobId: null })
-      const promptPackage = packageFor("internal_analysis", snapshot)
-      const { data, error } = await admin.schema("v3").from("client_ai_executions").insert({ workspace_id: principal.workspaceId, user_id: principal.userId, ...principalColumns(principal), reservation_id: reservation.reservationId, feature: "account_research", company_id: company.companyId, current_stage: "internal_analysis", prompt_version: PROMPT_VERSION, package_hash: promptPackage.packageHash, package_payload: promptPackage, expires_at: promptPackage.expiresAt }).select("id").single()
+      // El TTL se calcula sobre el lote entero: si son 10 cuentas, el cliente tiene
+      // que poder completar las 40 etapas sin que le venza el paquete.
+      const promptPackage = packageFor("internal_analysis", snapshot, [], { batchSize: unique.length })
+      const { data, error } = await admin.schema("v3").from("client_ai_executions").insert({ workspace_id: principal.workspaceId, user_id: principal.userId, ...principalColumns(principal), reservation_id: reservation.reservationId, feature: "account_research", company_id: company.companyId, current_stage: "internal_analysis", prompt_version: PROMPT_VERSION, package_hash: promptPackage.packageHash, package_payload: promptPackage, expires_at: promptPackage.expiresAt, batch_size: unique.length }).select("id").single()
       if (error) throw new Error(`CLIENT_EXECUTION_CREATE_FAILED:${error.message}`)
       executions.push({ executionId: data.id, company: { id: company.companyId, name: company.name }, stage: "internal_analysis", promptPackage })
     }
@@ -87,8 +175,10 @@ export async function submitResearchStage(principal: McpPrincipal, params: { exe
     return { accepted: replay.status === "accepted", idempotent: true, completed: execution.status === "completed", currentStage: execution.current_stage }
   }
   if (execution.status === "completed") throw new Error("CLIENT_EXECUTION_COMPLETED")
-  if (new Date(execution.expires_at).getTime() < Date.now()) throw new Error("CLIENT_PACKAGE_EXPIRED")
-  if (execution.current_stage !== params.stage || execution.package_hash !== params.packageHash) throw new Error("CLIENT_PACKAGE_MISMATCH")
+  // El error dice qué hacer: la cuota ya está consumida y refresh_prompt_package
+  // reemite el paquete sin volver a cobrar.
+  if (new Date(execution.expires_at).getTime() < Date.now()) throw new Error("CLIENT_PACKAGE_EXPIRED:El paquete venció. Llamá a refresh_prompt_package con este executionId para reemitirlo sin consumir cuota, y reintentá el submit con el packageHash nuevo.")
+  if (execution.current_stage !== params.stage || execution.package_hash !== params.packageHash) throw new Error(`CLIENT_PACKAGE_MISMATCH:La ejecución espera la etapa "${execution.current_stage}" con el packageHash vigente. Consultá get_client_research_status para obtener el paquete actual.`)
   const parsed = schemas[params.stage].safeParse(params.result)
   if (!parsed.success) throw new Error(`CLIENT_RESULT_INVALID:${parsed.error.issues.map((i) => i.message).join(", ")}`)
   const allowedEvidence = new Set<string>()
@@ -112,9 +202,49 @@ export async function submitResearchStage(principal: McpPrincipal, params: { exe
     return { accepted: true, completed: true }
   }
   const nextStage = STAGES[index + 1]
-  const nextPackage = packageFor(nextStage, execution.package_payload.evidence, [...(prior ?? []).map((row) => row.result), parsed.data])
+  const nextPackage = packageFor(nextStage, execution.package_payload.evidence, [...(prior ?? []).map((row) => row.result), parsed.data], { batchSize: execution.batch_size ?? 1 })
   await admin.schema("v3").from("client_ai_executions").update({ status: "in_progress", current_stage: nextStage, package_hash: nextPackage.packageHash, package_payload: nextPackage, expires_at: nextPackage.expiresAt }).eq("id", execution.id)
   return { accepted: true, completed: false, nextStage, promptPackage: nextPackage }
+}
+
+/**
+ * Revive una ejecución cuyo paquete venció, SIN volver a cobrar cuota.
+ *
+ * Antes un paquete vencido dejaba la ejecución muerta con la cuota ya consumida:
+ * la única salida era gastar otro lugar del plan con prepare_account_research. Acá
+ * se reemite el paquete de la etapa actual con la misma evidencia y las etapas ya
+ * aceptadas, así que no se recalcula nada ni se vuelve a investigar.
+ */
+const MAX_PACKAGE_REFRESHES = 5
+
+export async function refreshPromptPackage(principal: McpPrincipal, executionId: string) {
+  const admin = createAdminClient()
+  const { data: execution } = await admin.schema("v3").from("client_ai_executions").select("*").eq("id", executionId).eq("workspace_id", principal.workspaceId).eq("user_id", principal.userId).maybeSingle()
+  if (!execution) throw new Error("CLIENT_EXECUTION_NOT_FOUND")
+  if (execution.status === "completed") throw new Error("CLIENT_EXECUTION_COMPLETED")
+  // Techo para que un cliente que nunca completa no pueda mantener vivo un paquete
+  // para siempre y esquivar el consumo de cuota.
+  if ((execution.refresh_count ?? 0) >= MAX_PACKAGE_REFRESHES) {
+    throw new Error(`PACKAGE_REFRESH_LIMIT_REACHED:Se alcanzó el máximo de ${MAX_PACKAGE_REFRESHES} refrescos. Volvé a preparar el research para esta cuenta.`)
+  }
+
+  const { data: prior } = await admin.schema("v3").from("client_ai_stage_submissions").select("result").eq("execution_id", execution.id).eq("status", "accepted").order("created_at")
+  const refreshed = packageFor(
+    execution.current_stage as Stage | "icebreaker",
+    execution.package_payload.evidence,
+    (prior ?? []).map((row) => row.result),
+    { batchSize: execution.batch_size ?? 1 }
+  )
+  const { error } = await admin.schema("v3").from("client_ai_executions").update({ package_hash: refreshed.packageHash, package_payload: refreshed, expires_at: refreshed.expiresAt, refresh_count: (execution.refresh_count ?? 0) + 1 }).eq("id", execution.id)
+  if (error) throw new Error(`PACKAGE_REFRESH_FAILED:${error.message}`)
+
+  return {
+    executionId: execution.id,
+    stage: execution.current_stage,
+    promptPackage: refreshed,
+    refreshesRemaining: MAX_PACKAGE_REFRESHES - ((execution.refresh_count ?? 0) + 1),
+    note: "Paquete reemitido sin consumir cuota. Usá este packageHash en el próximo submit.",
+  }
 }
 
 export async function getClientResearchStatus(principal: McpPrincipal, executionId: string) {
@@ -160,7 +290,7 @@ export async function submitAccountIcebreaker(principal: McpPrincipal, params: {
     return { accepted: replay.status === "accepted", idempotent: true }
   }
   if (execution.package_hash !== params.packageHash || execution.status === "completed") throw new Error("CLIENT_PACKAGE_MISMATCH")
-  if (new Date(execution.expires_at).getTime() < Date.now()) throw new Error("CLIENT_PACKAGE_EXPIRED")
+  if (new Date(execution.expires_at).getTime() < Date.now()) throw new Error("CLIENT_PACKAGE_EXPIRED:El paquete venció. Llamá a refresh_prompt_package con este executionId para reemitirlo sin consumir cuota.")
   const parsed = schemas.icebreaker.safeParse(params.result)
   if (!parsed.success) throw new Error(`CLIENT_RESULT_INVALID:${parsed.error.message}`)
   const evidence = execution.package_payload.evidence.snapshot?.evidence
@@ -172,6 +302,150 @@ export async function submitAccountIcebreaker(principal: McpPrincipal, params: {
   await admin.schema("v3").from("client_ai_stage_submissions").insert({ execution_id: execution.id, workspace_id: principal.workspaceId, stage: "icebreaker", package_hash: params.packageHash, idempotency_key: params.idempotencyKey, result: parsed.data, validation_report: { valid: true }, client_model: params.clientModel, status: "accepted" })
   await admin.schema("v3").from("client_ai_executions").update({ status: "completed", completed_at: new Date().toISOString() }).eq("id", execution.id)
   return { accepted: true, icebreaker: data }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Drilldown externo client-assisted: casos de éxito y noticias.
+//
+// Reusa el pool `research_client` en vez de crear pools nuevos: eso exigiría
+// migrar el CHECK de `pool`, definir límites por plan y versionar la UI de
+// consumo. Son trabajo de research sobre una cuenta, así que comparten cupo.
+// ═══════════════════════════════════════════════════════════
+
+type ExternalFeature = "success_cases" | "company_news"
+
+async function prepareExternalDrilldown(
+  principal: McpPrincipal,
+  feature: ExternalFeature,
+  params: { companyId: string; term?: string; windowDays?: number; idempotencyKey: string }
+) {
+  const admin = createAdminClient()
+  const blocked = await guardSavedAccounts(principal, [params.companyId])
+  if (blocked) return blocked
+
+  const reservation = await reserveMcpUsage({ principal, pool: "research_client", units: 1, idempotencyKey: params.idempotencyKey, metadata: { companyId: params.companyId, feature } })
+  if (!reservation.allowed || !reservation.reservationId) return reservation
+  if (reservation.idempotent && reservation.status === "committed") {
+    const { data } = await admin.schema("v3").from("client_ai_executions").select("id,package_payload").eq("reservation_id", reservation.reservationId).eq("feature", feature).maybeSingle()
+    if (data) return { allowed: true, idempotent: true, executionId: data.id, promptPackage: data.package_payload }
+  }
+
+  try {
+    const { data: company } = await admin.from("companies").select("id,name,website,country,industry").eq("id", params.companyId).maybeSingle()
+    if (!company) throw new Error("COMPANY_NOT_FOUND")
+
+    const promptPackage = packageFor(feature, {
+      companyId: params.companyId,
+      companyName: company.name,
+      companyWebsite: company.website,
+      companyCountry: company.country,
+      companyIndustry: company.industry,
+      term: params.term ?? null,
+      windowDays: feature === "company_news" ? (params.windowDays ?? DEFAULT_NEWS_WINDOW_DAYS) : null,
+    })
+
+    const { data, error } = await admin.schema("v3").from("client_ai_executions").insert({ workspace_id: principal.workspaceId, user_id: principal.userId, ...principalColumns(principal), reservation_id: reservation.reservationId, feature, company_id: params.companyId, current_stage: feature, prompt_version: PROMPT_VERSION, package_hash: promptPackage.packageHash, package_payload: promptPackage, expires_at: promptPackage.expiresAt }).select("id").single()
+    if (error) throw new Error(`CLIENT_EXECUTION_CREATE_FAILED:${error.message}`)
+    await setReservationStatus(reservation.reservationId, "committed")
+    return { allowed: true, executionId: data.id, promptPackage }
+  } catch (error) {
+    await setReservationStatus(reservation.reservationId, "released")
+    throw error
+  }
+}
+
+async function submitExternalDrilldown(
+  principal: McpPrincipal,
+  feature: ExternalFeature,
+  params: { executionId: string; packageHash: string; result: unknown; clientModel?: string; idempotencyKey: string }
+) {
+  const admin = createAdminClient()
+  const { data: execution } = await admin.schema("v3").from("client_ai_executions").select("*").eq("id", params.executionId).eq("workspace_id", principal.workspaceId).eq("user_id", principal.userId).eq("feature", feature).maybeSingle()
+  if (!execution) throw new Error("CLIENT_EXECUTION_NOT_FOUND")
+
+  const { data: replay } = await admin.schema("v3").from("client_ai_stage_submissions").select("result,status,validation_report").eq("execution_id", params.executionId).eq("stage", feature).eq("idempotency_key", params.idempotencyKey).maybeSingle()
+  if (replay) {
+    if (hash(replay.result) !== hash(params.result)) throw new Error("IDEMPOTENCY_KEY_REUSED")
+    return { accepted: replay.status === "accepted", idempotent: true, report: replay.validation_report }
+  }
+
+  if (execution.package_hash !== params.packageHash || execution.status === "completed") throw new Error(`CLIENT_PACKAGE_MISMATCH:La ejecución espera el packageHash vigente. Consultá get_client_research_status.`)
+  if (new Date(execution.expires_at).getTime() < Date.now()) throw new Error("CLIENT_PACKAGE_EXPIRED:El paquete venció. Llamá a refresh_prompt_package con este executionId para reemitirlo sin consumir cuota.")
+
+  const parsed = schemas[feature].safeParse(params.result)
+  if (!parsed.success) throw new Error(`CLIENT_RESULT_INVALID:${parsed.error.message}`)
+
+  const evidence = execution.package_payload.evidence as { companyName: string; windowDays: number | null; term: string | null }
+
+  // Los guardrails corren ACÁ, del lado del servidor, antes de persistir. Es el
+  // punto en el que se descartan URLs muertas y contenido que no menciona a la
+  // empresa: sin esto estaríamos escribiendo alucinaciones en tablas que v2 lee.
+  const report = feature === "success_cases"
+    ? await persistClientSuccessCases({
+        companyId: execution.company_id,
+        companyName: evidence.companyName,
+        userId: principal.userId,
+        searchContext: evidence.term ?? "v3-drilldown",
+        // Normalización explícita: zod devuelve `undefined` para lo ausente y el
+        // servicio exige `null`. Se convierte acá, en el límite, para no relajar
+        // el contrato de la capa que escribe en tablas de v2.
+        cases: (parsed.data as z.infer<typeof schemas.success_cases>).cases.map((item) => ({
+          title: item.title,
+          providerName: item.providerName ?? null,
+          technology: item.technology ?? null,
+          summary: item.summary ?? null,
+          results: item.results ?? null,
+          sourceUrl: item.sourceUrl,
+          sourceName: item.sourceName ?? null,
+          publishedAt: item.publishedAt ?? null,
+          evidenceLevel: item.evidenceLevel ?? null,
+          supportingSourceUrls: item.supportingSourceUrls ?? [],
+        })),
+      })
+    : await persistClientNews({
+        companyId: execution.company_id,
+        companyName: evidence.companyName,
+        workspaceId: principal.workspaceId,
+        userId: principal.userId,
+        windowDays: evidence.windowDays ?? DEFAULT_NEWS_WINDOW_DAYS,
+        items: (parsed.data as z.infer<typeof schemas.company_news>).items.map((item) => ({
+          title: item.title,
+          summary: item.summary ?? null,
+          category: item.category,
+          direction: item.direction ?? null,
+          sourceUrl: item.sourceUrl,
+          sourceName: item.sourceName ?? null,
+          publishedAt: item.publishedAt ?? null,
+        })),
+      })
+
+  // Se registra incluso cuando los guardrails rechazan todo: el rechazo es
+  // información útil (dice que el modelo del cliente está inventando fuentes) y
+  // sin registro no habría manera de detectar ese patrón.
+  await admin.schema("v3").from("client_ai_stage_submissions").insert({ execution_id: execution.id, workspace_id: principal.workspaceId, stage: feature, package_hash: params.packageHash, idempotency_key: params.idempotencyKey, result: parsed.data, validation_report: report, client_model: params.clientModel, status: report.accepted > 0 ? "accepted" : "rejected" })
+  await admin.schema("v3").from("client_ai_executions").update({ status: "completed", completed_at: new Date().toISOString() }).eq("id", execution.id)
+
+  return {
+    accepted: report.accepted,
+    rejected: report.rejected,
+    note: report.accepted === 0
+      ? "Ninguna fuente pasó la verificación: se descartaron todas. Revisá que las URLs existan y que las páginas mencionen a la empresa."
+      : `${report.accepted} de ${report.accepted + report.rejected.length} fuentes verificadas y guardadas.`,
+    ...("directions" in report ? { directions: report.directions } : {}),
+  }
+}
+
+export function prepareCompanySuccessCases(principal: McpPrincipal, params: { companyId: string; term?: string; idempotencyKey: string }) {
+  return prepareExternalDrilldown(principal, "success_cases", params)
+}
+export function submitCompanySuccessCases(principal: McpPrincipal, params: { executionId: string; packageHash: string; result: unknown; clientModel?: string; idempotencyKey: string }) {
+  return submitExternalDrilldown(principal, "success_cases", params)
+}
+export function prepareCompanyNews(principal: McpPrincipal, params: { companyId: string; term?: string; windowDays?: number; idempotencyKey: string }) {
+  return prepareExternalDrilldown(principal, "company_news", params)
+}
+export function submitCompanyNews(principal: McpPrincipal, params: { executionId: string; packageHash: string; result: unknown; clientModel?: string; idempotencyKey: string }) {
+  return submitExternalDrilldown(principal, "company_news", params)
 }
 
 export { schemas as clientResultSchemas }

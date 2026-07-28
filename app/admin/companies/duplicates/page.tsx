@@ -1,121 +1,102 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Loader2, RefreshCw, Sparkles, Zap, Undo2, AlertTriangle } from "lucide-react"
+import { toast } from "sonner"
+import { DuplicateGroupCard } from "@/components/admin/duplicate-group-card"
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog"
-import { ArrowRight, Loader2, ChevronDown, ChevronUp, AlertTriangle } from "lucide-react"
-import { getPotentialDuplicates, mergeCompanies, autoMergeDuplicates } from "@/app/actions/companies"
-import { toast } from "@/hooks/use-toast"
+  getDupCandidates,
+  getDupSummary,
+  refreshDupCandidates,
+  applyDupCandidate,
+  applyDupCandidates,
+  previewDupCandidate,
+  dismissDupCandidate,
+  excludeFromDupCandidate,
+  autoMergeSafe,
+  classifyAmbiguous,
+  getRecentMerges,
+  revertMerge,
+  type DupCandidateRow,
+  type DupSummary,
+} from "@/app/actions/dedupe"
 
-interface Company {
-  id: string
-  name: string
-  linkedin_url: string | null
-  created_at: string
-}
-
-interface DuplicateGroup {
-  normalized_name: string
-  count: number
-  companies: Company[]
-}
-
-const MAX_COMPANIES_SHOWN = 10
-const MAX_MERGE_BUTTONS = 5
+type Merge = Awaited<ReturnType<typeof getRecentMerges>>[number]
 
 export default function CompanyDuplicatesPage() {
-  const [duplicates, setDuplicates] = useState<DuplicateGroup[]>([])
-  const [loading, setLoading] = useState(true)
-  const [processing, setProcessing] = useState(false)
+  const [resumen, setResumen] = useState<DupSummary | null>(null)
+  const [seguros, setSeguros] = useState<DupCandidateRow[]>([])
+  const [ambiguos, setAmbiguos] = useState<DupCandidateRow[]>([])
+  const [conVeredicto, setConVeredicto] = useState<DupCandidateRow[]>([])
+  const [historial, setHistorial] = useState<Merge[]>([])
+  const [seleccion, setSeleccion] = useState<Set<string>>(new Set())
+  const [cargando, setCargando] = useState(true)
+  const [ocupado, setOcupado] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
-  const [hideUnknown, setHideUnknown] = useState(true)
 
-  const fetchDuplicates = async () => {
-    setLoading(true)
+  const cargar = useCallback(async () => {
+    setCargando(true)
     setError(null)
     try {
-      const data = await getPotentialDuplicates()
-      setDuplicates(data)
+      const [s, seg, amb, ia, hist] = await Promise.all([
+        getDupSummary(),
+        getDupCandidates({ classification: "seguro", status: "pending", limit: 200 }),
+        getDupCandidates({ classification: "ambiguo", status: "pending", limit: 200 }),
+        getDupCandidates({ status: "ai_same", limit: 200 }),
+        getRecentMerges(50),
+      ])
+      setResumen(s)
+      setSeguros(seg)
+      setAmbiguos(amb)
+      setConVeredicto(ia)
+      setHistorial(hist)
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Error fetching duplicates")
+      setError(e instanceof Error ? e.message : "Error cargando duplicados")
     } finally {
-      setLoading(false)
+      setCargando(false)
     }
-  }
-
-  const handleAutoMerge = async () => {
-    try {
-      setProcessing(true)
-      const result = await autoMergeDuplicates()
-      toast({
-        title: "Auto-merge complete",
-        description: `Merged ${result.merged} company pairs`,
-      })
-      fetchDuplicates()
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to auto-merge duplicates",
-        variant: "destructive",
-      })
-    } finally {
-      setProcessing(false)
-    }
-  }
-
-  const handleMerge = async (masterId: string, duplicateId: string) => {
-    try {
-      await mergeCompanies(masterId, duplicateId)
-      toast({
-        title: "Success",
-        description: "Companies merged successfully",
-      })
-      fetchDuplicates()
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to merge companies",
-        variant: "destructive",
-      })
-    }
-  }
-
-  const toggleExpanded = (name: string) => {
-    setExpandedGroups((prev) => {
-      const next = new Set(prev)
-      if (next.has(name)) {
-        next.delete(name)
-      } else {
-        next.add(name)
-      }
-      return next
-    })
-  }
-
-  useEffect(() => {
-    fetchDuplicates()
   }, [])
 
-  const filteredDuplicates = hideUnknown
-    ? duplicates.filter((g) => g.normalized_name !== "unknown company")
-    : duplicates
+  useEffect(() => {
+    cargar()
+  }, [cargar])
 
-  const unknownCount = duplicates.find((g) => g.normalized_name === "unknown company")?.count || 0
+  const correr = async (clave: string, fn: () => Promise<string>) => {
+    setOcupado(clave)
+    try {
+      const mensaje = await fn()
+      toast.success(mensaje)
+      await cargar()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Fallo la operacion")
+    } finally {
+      setOcupado(null)
+    }
+  }
 
-  if (loading) {
+  const toggleSeleccion = (id: string) =>
+    setSeleccion((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+
+  const aplicarSeleccion = () =>
+    correr("bloque", async () => {
+      const ids = [...seleccion]
+      const r = await applyDupCandidates(ids)
+      setSeleccion(new Set())
+      return `${r.aplicados} grupos unificados, ${r.movidas} registros movidos${
+        r.errores.length ? `, ${r.errores.length} con error` : ""
+      }`
+    })
+
+  if (cargando) {
     return (
       <div className="flex justify-center p-8">
         <Loader2 className="h-8 w-8 animate-spin" />
@@ -127,145 +108,236 @@ export default function CompanyDuplicatesPage() {
     return (
       <div className="p-6">
         <Card>
-          <CardContent className="p-8 text-center text-destructive">Error loading duplicates: {error}</CardContent>
+          <CardContent className="p-8 text-center text-destructive">{error}</CardContent>
         </Card>
       </div>
     )
   }
 
+  const listas: Record<string, DupCandidateRow[]> = {
+    seguros,
+    ambiguos,
+    ia: conVeredicto,
+  }
+
   return (
-    <div className="space-y-6 p-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold">Company Deduplication</h1>
-        <div className="space-x-2">
-          <Button onClick={fetchDuplicates} variant="outline" disabled={loading || processing}>
-            Refresh
+    <main className="flex flex-col gap-6 p-6">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl font-bold">Unificacion de empresas</h1>
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            La deteccion agrupa por nombre nucleo, asi entran casos como ARCOR y Grupo Arcor. Los grupos seguros se
+            unifican solos; los ambiguos los resuelve la IA o vos.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            onClick={() =>
+              correr("refresh", async () => {
+                const r = await refreshDupCandidates({ limit: 500 })
+                return `${r.grupos_core} grupos detectados sobre ${r.relevantes.toLocaleString("es-AR")} empresas`
+              })
+            }
+            disabled={ocupado !== null}
+          >
+            {ocupado === "refresh" ? (
+              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-1 h-4 w-4" />
+            )}
+            Volver a detectar
           </Button>
-          <Button onClick={handleAutoMerge} disabled={loading || processing || filteredDuplicates.length === 0}>
-            {processing ? "Processing..." : "Auto-Merge Safe Matches"}
+          <Button
+            variant="outline"
+            onClick={() =>
+              correr("ia", async () => {
+                const r = await classifyAmbiguous(20)
+                return `${r.processed} grupos analizados. Misma: ${r.same}, distintas: ${r.different}, dudosos: ${
+                  r.unsure
+                }. Costo: US$${r.costUsd.toFixed(4)}`
+              })
+            }
+            disabled={ocupado !== null || (resumen?.ambiguos_pendientes ?? 0) === 0}
+          >
+            {ocupado === "ia" ? (
+              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+            ) : (
+              <Sparkles className="mr-1 h-4 w-4" />
+            )}
+            Analizar ambiguos con IA
+          </Button>
+          <Button
+            onClick={() =>
+              correr("auto", async () => {
+                const r = await autoMergeSafe({ limit: 100 })
+                return `${r.groups} grupos unificados, ${r.rows_moved} registros movidos`
+              })
+            }
+            disabled={ocupado !== null || (resumen?.seguros_pendientes ?? 0) === 0}
+          >
+            {ocupado === "auto" ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Zap className="mr-1 h-4 w-4" />}
+            Unificar seguros
           </Button>
         </div>
-      </div>
+      </header>
 
-      {unknownCount > 0 && (
-        <Card className="border-amber-500/50 bg-amber-500/10">
-          <CardContent className="p-4 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-amber-500" />
-              <span>
-                Hay <strong>{unknownCount}</strong> compañías sin nombre ("Unknown Company"). Estas requieren limpieza
-                manual en la base de datos.
-              </span>
+      {resumen && (
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <Metrica etiqueta="Seguros pendientes" valor={resumen.seguros_pendientes} />
+          <Metrica etiqueta="Ambiguos pendientes" valor={resumen.ambiguos_pendientes} />
+          <Metrica etiqueta="Unificados" valor={resumen.mergeados} />
+          <Metrica etiqueta="Costo IA" valor={`US$${Number(resumen.costo_ia_usd).toFixed(4)}`} />
+        </div>
+      )}
+
+      {seleccion.size > 0 && (
+        <Card className="border-primary/50 bg-primary/5">
+          <CardContent className="flex flex-wrap items-center justify-between gap-2 p-4">
+            <span className="text-sm">
+              {seleccion.size} {seleccion.size === 1 ? "grupo seleccionado" : "grupos seleccionados"}
+            </span>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => setSeleccion(new Set())}>
+                Limpiar
+              </Button>
+              <Button size="sm" onClick={aplicarSeleccion} disabled={ocupado !== null}>
+                {ocupado === "bloque" && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+                Unificar seleccionados
+              </Button>
             </div>
-            <Button variant="outline" size="sm" onClick={() => setHideUnknown(!hideUnknown)}>
-              {hideUnknown ? "Mostrar" : "Ocultar"}
-            </Button>
           </CardContent>
         </Card>
       )}
 
-      {filteredDuplicates.length === 0 ? (
-        <Card>
-          <CardContent className="p-8 text-center text-muted-foreground">
-            {duplicates.length === 0 ? "No duplicates found! Great job." : "No duplicates to show (filtered)."}
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-4">
-          {filteredDuplicates.map((group) => {
-            const isExpanded = expandedGroups.has(group.normalized_name)
-            const visibleCompanies = isExpanded ? group.companies : group.companies.slice(0, MAX_COMPANIES_SHOWN)
-            const hasMore = group.companies.length > MAX_COMPANIES_SHOWN
+      <Tabs defaultValue="ia">
+        <TabsList>
+          <TabsTrigger value="ia">Con veredicto de IA ({conVeredicto.length})</TabsTrigger>
+          <TabsTrigger value="ambiguos">Ambiguos ({ambiguos.length})</TabsTrigger>
+          <TabsTrigger value="seguros">Seguros ({seguros.length})</TabsTrigger>
+          <TabsTrigger value="historial">Historial ({historial.length})</TabsTrigger>
+        </TabsList>
 
-            return (
-              <Card key={group.normalized_name}>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-lg flex items-center gap-2">
-                    <Badge variant="outline">{group.count} Matches</Badge>
-                    Normalized: "{group.normalized_name}"
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    {visibleCompanies.map((company) => {
-                      const mergeTargets = group.companies
-                        .filter((c) => c.id !== company.id)
-                        .slice(0, MAX_MERGE_BUTTONS)
-
-                      return (
-                        <div key={company.id} className="flex items-center justify-between p-3 bg-muted/50 rounded-md">
-                          <div>
-                            <div className="font-medium">{company.name}</div>
-                            <div className="text-sm text-muted-foreground">
-                              {company.linkedin_url || "No LinkedIn URL"}
-                            </div>
-                            <div className="text-xs text-muted-foreground">
-                              Created: {new Date(company.created_at).toLocaleDateString()}
-                            </div>
-                          </div>
-
-                          <div className="flex gap-2 flex-wrap justify-end">
-                            {mergeTargets.map((target) => (
-                              <AlertDialog key={target.id}>
-                                <AlertDialogTrigger asChild>
-                                  <Button size="sm" variant="secondary" className="gap-1">
-                                    Merge into <ArrowRight className="h-3 w-3" />
-                                    <span className="max-w-[100px] truncate">{target.name}</span>
-                                  </Button>
-                                </AlertDialogTrigger>
-                                <AlertDialogContent>
-                                  <AlertDialogHeader>
-                                    <AlertDialogTitle>Confirm Merge</AlertDialogTitle>
-                                    <AlertDialogDescription>
-                                      Are you sure you want to merge <strong>{company.name}</strong> into{" "}
-                                      <strong>{target.name}</strong>?
-                                      <br />
-                                      <br />
-                                      This will move all contacts, signals, and bookmarks to {target.name} and delete{" "}
-                                      {company.name}. This action cannot be undone.
-                                    </AlertDialogDescription>
-                                  </AlertDialogHeader>
-                                  <AlertDialogFooter>
-                                    <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                    <AlertDialogAction onClick={() => handleMerge(target.id, company.id)}>
-                                      Confirm Merge
-                                    </AlertDialogAction>
-                                  </AlertDialogFooter>
-                                </AlertDialogContent>
-                              </AlertDialog>
-                            ))}
-                            {group.companies.length > MAX_MERGE_BUTTONS + 1 && (
-                              <span className="text-xs text-muted-foreground self-center">
-                                +{group.companies.length - MAX_MERGE_BUTTONS - 1} more
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      )
-                    })}
-
-                    {hasMore && (
-                      <Button variant="ghost" className="w-full" onClick={() => toggleExpanded(group.normalized_name)}>
-                        {isExpanded ? (
-                          <>
-                            <ChevronUp className="h-4 w-4 mr-2" />
-                            Mostrar menos
-                          </>
-                        ) : (
-                          <>
-                            <ChevronDown className="h-4 w-4 mr-2" />
-                            Mostrar {group.companies.length - MAX_COMPANIES_SHOWN} más
-                          </>
-                        )}
-                      </Button>
-                    )}
-                  </div>
+        {(["ia", "ambiguos", "seguros"] as const).map((clave) => (
+          <TabsContent key={clave} value={clave} className="flex flex-col gap-3">
+            {listas[clave].length === 0 ? (
+              <Card>
+                <CardContent className="p-8 text-center text-muted-foreground">
+                  No hay grupos en esta lista.
                 </CardContent>
               </Card>
-            )
-          })}
-        </div>
+            ) : (
+              <>
+                <div className="flex justify-end">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSeleccion(new Set(listas[clave].map((g) => g.id)))}
+                  >
+                    Seleccionar todos
+                  </Button>
+                </div>
+                {listas[clave].map((g) => (
+                  <DuplicateGroupCard
+                    key={g.id}
+                    grupo={g}
+                    seleccionado={seleccion.has(g.id)}
+                    onToggleSeleccion={toggleSeleccion}
+                    onPrevisualizar={previewDupCandidate}
+                    onAplicar={async (id) => {
+                      const r = await applyDupCandidate(id)
+                      toast.success(`Unificado: ${r.rows_moved} registros movidos`)
+                      await cargar()
+                    }}
+                    onDescartar={async (id) => {
+                      await dismissDupCandidate(id)
+                      toast.success("Descartado: quedo marcado como empresas distintas")
+                      await cargar()
+                    }}
+                    onExcluir={async (candidatoId, empresaId) => {
+                      const r = await excludeFromDupCandidate(candidatoId, empresaId)
+                      toast.success(
+                        r.dismissed
+                          ? "Quedo una sola empresa: el grupo se descarto"
+                          : `Sacada del grupo. Quedan ${r.remaining} empresas.`,
+                      )
+                      await cargar()
+                    }}
+                  />
+                ))}
+              </>
+            )}
+          </TabsContent>
+        ))}
+
+        <TabsContent value="historial" className="flex flex-col gap-3">
+          {historial.length === 0 ? (
+            <Card>
+              <CardContent className="p-8 text-center text-muted-foreground">
+                Todavia no se unifico ninguna empresa.
+              </CardContent>
+            </Card>
+          ) : (
+            historial.map((m) => (
+              <Card key={m.id}>
+                <CardContent className="flex flex-wrap items-center justify-between gap-2 p-4">
+                  <div className="flex min-w-0 flex-col gap-1">
+                    <span className="text-sm">
+                      <strong>{m.duplicate_name}</strong> se unifico dentro de <strong>{m.master_name}</strong>
+                    </span>
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      <Badge variant="outline">{m.method}</Badge>
+                      <span>{m.rows_moved} registros movidos</span>
+                      <span>{new Date(m.created_at).toLocaleString("es-AR")}</span>
+                    </div>
+                    {m.reasoning && <span className="text-xs text-muted-foreground">{m.reasoning}</span>}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      correr(`revert-${m.id}`, async () => {
+                        const r = await revertMerge(m.id)
+                        return `Se restauro ${r.restored_name} con ${r.rows_restored} registros`
+                      })
+                    }
+                    disabled={ocupado !== null}
+                  >
+                    {ocupado === `revert-${m.id}` ? (
+                      <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                    ) : (
+                      <Undo2 className="mr-1 h-3 w-3" />
+                    )}
+                    Deshacer
+                  </Button>
+                </CardContent>
+              </Card>
+            ))
+          )}
+        </TabsContent>
+      </Tabs>
+
+      {resumen && resumen.fallidos > 0 && (
+        <Card className="border-destructive/50 bg-destructive/5">
+          <CardContent className="flex items-center gap-2 p-4 text-sm">
+            <AlertTriangle className="h-4 w-4 text-destructive" />
+            <span>
+              {resumen.fallidos} grupos quedaron con error y no se unificaron. Volve a detectar para reintentarlos.
+            </span>
+          </CardContent>
+        </Card>
       )}
-    </div>
+    </main>
+  )
+}
+
+function Metrica({ etiqueta, valor }: { etiqueta: string; valor: number | string }) {
+  return (
+    <Card>
+      <CardContent className="flex flex-col gap-1 p-4">
+        <span className="text-xs text-muted-foreground">{etiqueta}</span>
+        <span className="text-2xl font-bold">{typeof valor === "number" ? valor.toLocaleString("es-AR") : valor}</span>
+      </CardContent>
+    </Card>
   )
 }

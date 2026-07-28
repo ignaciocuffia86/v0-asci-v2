@@ -6,8 +6,10 @@ import { z } from "zod"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { validateMcpRequest, logMcpRequest } from "@/lib/v3/mcp-auth"
 import { requirePaidMcp, reserveMcpUsage, setReservationStatus, getMcpUsage, type McpPrincipal } from "@/lib/v3/mcp-usage"
-import { searchCompanies, getCompanyProfile, getCompanySignals, listWorkspaceAccounts, getAccountIntelligence, getResearchStatus } from "@/lib/v3/mcp-read-tools"
-import { prepareAccountResearch, submitResearchStage, getClientResearchStatus, prepareAccountIcebreaker, submitAccountIcebreaker } from "@/lib/v3/mcp-client-ai"
+import { searchCompanies, getCompanyProfile, getCompanySignals, listWorkspaceAccounts, getAccountIntelligence, getResearchStatus, getAccountEvidenceDetailTool } from "@/lib/v3/mcp-read-tools"
+import { prepareAccountResearch, submitResearchStage, getClientResearchStatus, prepareAccountIcebreaker, submitAccountIcebreaker, refreshPromptPackage, prepareCompanySuccessCases, submitCompanySuccessCases, prepareCompanyNews, submitCompanyNews } from "@/lib/v3/mcp-client-ai"
+import { runLinkedinJobsActor, companyNameVariants } from "@/lib/v3/services/apify-client"
+import { ingestApifyJobPostings } from "@/lib/v3/services/apify-job-ingest"
 import { prepareSaveAccount, saveAccount, removeWorkspaceAccount, listSavedAccounts, requireSavedAccount, guardSavedAccounts } from "@/lib/v3/mcp-account-lifecycle"
 import { recommendContactRoles, getCompanyContacts } from "@/lib/v3/mcp-contact-coverage"
 import { prepareContactEnrichment, runContactEnrichment } from "@/lib/v3/services/mcp-contact-enrichment"
@@ -36,6 +38,7 @@ const handler = createMcpHandler((server) => {
   server.tool("get_company_profile", "Obtiene identidad y cobertura global de señales de una empresa. Solo lectura.", { companyId: z.string().uuid() }, async ({ companyId }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "companies:read", "read"); return getCompanyProfile(companyId) }))
   server.tool("get_company_signals", "Obtiene señales v2 normalizadas para un companyId exacto. Solo lectura y sin generación implícita.", { companyId: z.string().uuid(), limit: z.number().int().min(1).max(100).default(50) }, async ({ companyId, limit }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "signals:read", "read"); return getCompanySignals(companyId, limit) }))
   server.tool("get_company_signal_summary", "Resume evidencia v2 de una empresa consolidando aliases relacionados: señales tecnológicas y de procesos, implementaciones y vacantes. Cada evidencia conserva su entidad de origen; las vacantes sin señales vinculadas son indicios, no confirmaciones. Usa esta tool cuando el usuario pregunte qué tecnologías, procesos o señales tenemos de una empresa.", { companyId: z.string().uuid() }, async ({ companyId }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "signals:read", "read"); return getCompanySignalSummary(companyId) }))
+  server.tool("get_account_evidence_detail", "Profundiza en UN término del panorama (una tecnología o un proceso) y devuelve sus fuentes con el fragmento de texto exacto, la fecha y el link. Cuando la señal sale del perfil de una persona incluye su LinkedIn para que el vendedor pueda verificar de quién se está infiriendo, y aclara si es empleado actual o ex-empleado. Usala después de get_account_panorama, cuando el usuario pregunte por qué aparece una tecnología o pida más detalle sobre una. Lee evidencia ya persistida: NO consume cuota ni vuelve a investigar.", { companyId: z.string().uuid(), term: z.string().min(2).max(120).optional(), termIds: z.array(z.string().uuid()).max(10).optional() }, async ({ companyId, term, termIds }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "signals:read", "read"); return getAccountEvidenceDetailTool(auth, { companyId, term, termIds }) }))
   server.tool("list_workspace_accounts", "Lista cuentas investigadas por el workspace de la API key.", { limit: z.number().int().min(1).max(100).default(50) }, async ({ limit }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "accounts:read", "read"); return listWorkspaceAccounts(auth, limit) }))
   server.tool("get_account_intelligence", "Lee snapshot, scorecard, brief e icebreakers privados ya materializados.", { companyId: z.string().uuid() }, async ({ companyId }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "accounts:read", "read"); return getAccountIntelligence(auth, companyId) }))
   server.tool("list_saved_accounts", "Lista las cuentas guardadas activas del workspace y el cupo del plan. Buscar una empresa no la guarda: usá esta tool para saber cuáles ya se pueden trabajar.", { limit: z.number().int().min(1).max(100).default(50) }, async ({ limit }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "accounts:read", "read"); return listSavedAccounts(auth, limit) }))
@@ -77,6 +80,59 @@ const handler = createMcpHandler((server) => {
 
   server.tool("prepare_account_research", "Prepara research completo para ejecutar con el modelo y tokens del cliente MCP. ASCI no llama AI Gateway. Requiere que todas las cuentas estén guardadas en el workspace: si alguna no lo está, devuelve el detalle sin consumir cuota y hay que llamar save_account antes de reintentar.", { companies: z.array(z.string().min(2)).min(1).max(10), idempotencyKey: z.string().min(8).max(200) }, async ({ companies, idempotencyKey }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:prepare", "client_assisted"); return prepareAccountResearch(auth, companies, idempotencyKey) }))
   server.tool("submit_account_research_stage", "Valida y persiste una etapa estructurada generada por el modelo del cliente.", { executionId: z.string().uuid(), stage: z.enum(["internal_analysis", "signal_classification", "fit_scoring", "account_brief"]), packageHash: z.string().length(64), result: z.unknown(), clientModel: z.string().max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async (args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:submit", "client_assisted"); return submitResearchStage(auth, args) }))
+  server.tool("prepare_company_success_cases", "Paso 1 de 2 para buscar casos de éxito de una cuenta con una tecnología concreta. Devuelve el prompt package para que el cliente BUSQUE con sus propios tokens. Consume 1 unidad de cuota de research. Usala después de get_account_panorama, cuando el usuario quiera evidencia externa de una tecnología puntual. Cada caso debe traer una sourceUrl real: el servidor verifica que responda y que la página mencione a la empresa antes de guardar, y descarta lo que no pase.", { companyId: z.string().uuid(), term: z.string().min(2).max(120).optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, term, idempotencyKey }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:prepare", "client_assisted"); return prepareCompanySuccessCases(auth, { companyId, term, idempotencyKey }) }))
+  server.tool("submit_company_success_cases", "Paso 2 de 2: entrega los casos de éxito que encontró el cliente. El servidor aplica los guardrails (URL viva y mención real de la empresa) y descarta lo que no pase, así que la respuesta informa cuántos se aceptaron y cuántos se rechazaron con su motivo. No consume cuota adicional.", { executionId: z.string().uuid(), packageHash: z.string().length(64), result: z.unknown(), clientModel: z.string().max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async (args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:submit", "client_assisted"); return submitCompanySuccessCases(auth, args) }))
+  server.tool("prepare_company_news", "Paso 1 de 2 para buscar noticias recientes de una cuenta. Devuelve el prompt package para que el cliente BUSQUE con sus propios tokens, con una ventana temporal explícita (180 días por defecto) para que no traiga notas viejas como si fueran novedad. Consume 1 unidad de cuota de research.", { companyId: z.string().uuid(), term: z.string().min(2).max(120).optional(), windowDays: z.number().int().min(1).max(730).optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, term, windowDays, idempotencyKey }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:prepare", "client_assisted"); return prepareCompanyNews(auth, { companyId, term, windowDays, idempotencyKey }) }))
+  server.tool("submit_company_news", "Paso 2 de 2: entrega las noticias que encontró el cliente. El servidor verifica URLs y relevancia, descarta lo que no pase, y clasifica cada noticia como expansion, contraccion o neutro para que una mala noticia (un cierre de planta, una desinversión) no sume puntaje de timing como si fuera una oportunidad. No consume cuota adicional.", { executionId: z.string().uuid(), packageHash: z.string().length(64), result: z.unknown(), clientModel: z.string().max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async (args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:submit", "client_assisted"); return submitCompanyNews(auth, args) }))
+  server.tool("scrape_company_job_postings", "Trae vacantes frescas de LinkedIn para una cuenta guardada y las ingesta por el pipeline de importación de ASCI, que las normaliza y deduplica. El filtro por empresa se aplica en el buscador usando el nombre y el país que ya tenemos guardados de la cuenta, así que no hace falta pasarlos. Consume cuota de research server-managed porque el scraping corre con recursos de ASCI. Dos cosas a tener en cuenta: (1) `titleQuery` es OPCIONAL y sirve para acotar por título de puesto DENTRO de la empresa (por ejemplo 'SAP'); si lo omitís se traen todas las vacantes de la empresa, que es lo habitual. (2) La ventana sólo puede ser 1, 7 o 30 días; si pedís más, se busca sin límite de fecha y se te avisa. La ingesta es asincrónica: las vacantes aparecen cuando el importador procesa el lote, no de inmediato.", { companyId: z.string().uuid(), titleQuery: z.string().min(2).max(120).optional(), location: z.string().min(2).max(120).optional(), windowDays: z.number().int().min(1).max(365).optional(), maxRows: z.number().int().min(1).max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, titleQuery, location, windowDays, maxRows, idempotencyKey }, extra) => safely(async () => {
+    const auth = authOf(extra); await requirePaidMcp(auth, "research:run", "server_managed")
+    const blocked = await guardSavedAccounts(auth, [companyId])
+    if (blocked) return blocked
+    const reservation = await reserveMcpUsage({ principal: auth, pool: "research_server", units: 1, idempotencyKey, metadata: { companyId, titleQuery: titleQuery ?? null } })
+    if (!reservation.allowed || !reservation.reservationId) return reservation
+    // Replay: la cuota ya se cobró y el batch ya existe. Devolver lo mismo evita
+    // un segundo scraping (que se paga) y un segundo batch con las mismas filas.
+    if (reservation.idempotent && reservation.status === "committed" && reservation.metadata?.batchId) return { ...reservation.metadata, idempotent: true }
+    try {
+      // El nombre y el país salen de nuestra tabla `companies`, no del input: son
+      // exactamente los dos valores que el actor necesita para filtrar en origen,
+      // y son los que ya tenemos confirmados. Así el filtrado no depende de que
+      // quien llama escriba bien el nombre de la empresa.
+      const admin = createAdminClient()
+      const { data: company } = await admin.from("companies").select("name,linkedin_url,country").eq("id", companyId).maybeSingle()
+      if (!company) throw new Error("COMPANY_NOT_FOUND")
+      const run = await runLinkedinJobsActor({
+        companyNames: companyNameVariants(company.name, company.linkedin_url),
+        // `||` y no `??`: hay filas con country = "" (string vacío), que `??` deja pasar.
+        location: location?.trim() || company.country?.trim() || undefined,
+        titleQuery: titleQuery ?? null,
+        windowDays: windowDays ?? null,
+        maxRows,
+      })
+      const ingest = await ingestApifyJobPostings({ companyId, userId: auth.userId, runId: run.runId, items: run.items })
+      const response = {
+        ...ingest,
+        // La ventana real puede ser más amplia que la pedida: el actor no soporta
+        // nada entre 30 días e infinito. Decirlo evita que el usuario crea que
+        // filtró por un período que en realidad no se aplicó.
+        appliedWindow: run.appliedWindow,
+        warnings: run.truncatedWindow
+          ? [...ingest.warnings, `LinkedIn sólo permite ventanas de 1, 7 o 30 días: se pidió ${windowDays} y se buscó sin límite de fecha.`]
+          : ingest.warnings,
+        note: ingest.batchId
+          ? "Las vacantes quedaron en cola. Consultá get_account_panorama en unos minutos para verlas ya normalizadas."
+          : "No se encontraron vacantes de esta empresa con esa búsqueda.",
+      }
+      await setReservationStatus(reservation.reservationId, "committed", { batchId: ingest.batchId, queued: ingest.queued })
+      return response
+    } catch (error) {
+      // Se libera la reserva: si el scraping falló, el usuario no gastó nada útil.
+      await setReservationStatus(reservation.reservationId, "released")
+      throw error
+    }
+  }))
+
+  server.tool("refresh_prompt_package", "Reemite el prompt package de una ejecución client-assisted cuya vigencia venció, SIN consumir cuota ni volver a investigar. Usala cuando un submit falle con CLIENT_PACKAGE_EXPIRED: la cuota ya se consumió al preparar, así que no hay que llamar de nuevo a prepare_account_research. Devuelve el packageHash nuevo con el que hay que reintentar el submit. Tiene un máximo de refrescos por ejecución.", { executionId: z.string().uuid() }, async ({ executionId }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "accounts:read", "read"); return refreshPromptPackage(auth, executionId) }))
   server.tool("get_client_research_status", "Consulta estado y próximo package del research client-assisted.", { executionId: z.string().uuid() }, async ({ executionId }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "accounts:read", "read"); return getClientResearchStatus(auth, executionId) }))
 
   server.tool("generate_account_icebreaker", "Genera un icebreaker server-managed con AI Gateway de ASCI y límites separados.", { companyId: z.string().uuid(), contactName: z.string().min(2), contactTitle: z.string().optional(), contactCountry: z.string().optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, contactName, contactTitle, contactCountry, idempotencyKey }, extra) => safely(async () => {
