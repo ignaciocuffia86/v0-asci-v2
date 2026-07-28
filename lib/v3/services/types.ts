@@ -3,6 +3,8 @@
 // Consumidos por: chat web, MCP server, cron de refresh.
 // ═══════════════════════════════════════════════════════════
 
+import type { EvidenceLevel } from "./evidence-level"
+
 export type RadarType = "tech" | "news" | "jobs-interpretation"
 
 export type ResearchJobStatus =
@@ -59,7 +61,12 @@ export interface RadarFinding {
   url: string | null
   source_name: string | null
   source_date: string | null
-  evidence_level: "explicit" | "inferred"
+  /**
+   * Valor crudo de la base. Conserva los binarios históricos ('explicit' |
+   * 'inferred') y admite los canónicos nuevos. Para presentar o puntuar hay que
+   * pasarlo siempre por `toEvidenceLevel()`, nunca compararlo a mano.
+   */
+  evidence_level: "explicit" | "inferred" | EvidenceLevel
   confidence: number | null
   dictionary_product_ids: string[]
   dictionary_process_ids: string[]
