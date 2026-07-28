@@ -2,6 +2,7 @@ import "server-only"
 
 import { createAdminClient } from "@/lib/supabase/admin"
 import { getLegacySignals } from "./services/legacy-signal-provider"
+import { getAccountEvidenceDetail } from "./services/internal-account-snapshot"
 import type { McpPrincipal } from "./mcp-usage"
 
 /**
@@ -80,8 +81,94 @@ export async function getCompanyProfile(companyId: string) {
   return { ...company, signalCoverage: { total: signals.total, latestAt: signals.latestAt, status: signals.status } }
 }
 
+/**
+ * Señales de una empresa, con atribución de persona.
+ *
+ * Se aclara explícitamente que esta vista NO incluye vacantes: `signals` solo
+ * tiene lo derivado de perfiles y documentos. Antes esa omisión era silenciosa y
+ * el modelo concluía que la cuenta no tenía evidencia de una tecnología cuando en
+ * realidad estaba en las vacantes. Para el panorama completo hay que usar
+ * `get_account_panorama`.
+ */
 export async function getCompanySignals(companyId: string, limit = 50) {
-  return getLegacySignals(companyId, Math.min(limit, 100))
+  const result = await getLegacySignals(companyId, Math.min(limit, 100))
+  const fromFormerEmployees = result.signals.filter((s) => s.person && !s.person.isCurrentEmployee).length
+
+  return {
+    ...result,
+    scope: "contact-signals-only" as const,
+    note:
+      "Estas señales provienen de perfiles y documentos, no de vacantes. Para el panorama completo (que incluye vacantes) usá get_account_panorama.",
+    // Aviso cuantificado: en esta base ~30% de las señales son de ex-empleados y
+    // no prueban uso actual de la tecnología.
+    formerEmployeeWarning:
+      fromFormerEmployees > 0
+        ? `${fromFormerEmployees} de ${result.signals.length} señales provienen de ex-empleados: prueban que la persona trabajó con esa tecnología, no que la cuenta la use hoy.`
+        : null,
+  }
+}
+
+/**
+ * Drilldown de evidencia por término.
+ *
+ * Segunda mitad del panorama liviano: el panorama entrega tags sin snippets y
+ * esta función devuelve las fuentes de un término puntual, con el LinkedIn de la
+ * persona cuando la señal sale de un perfil. Lee de lo ya persistido, así que no
+ * consume cuota ni re-investiga.
+ */
+export async function getAccountEvidenceDetailTool(
+  principal: McpPrincipal,
+  params: { companyId: string; term?: string; termIds?: string[] }
+) {
+  await assertWorkspaceAccount(principal, params.companyId)
+  const details = await getAccountEvidenceDetail({
+    workspaceId: principal.workspaceId,
+    companyId: params.companyId,
+    termIds: params.termIds,
+    termQuery: params.term,
+  })
+
+  if (!details.length) {
+    return {
+      terms: [],
+      note: params.term
+        ? `No hay evidencia detallada para "${params.term}". Puede que el término no esté en el panorama o que el snapshot no se haya generado todavía (corré prepare_account_research).`
+        : "No hay evidencia detallada persistida para esta cuenta todavía.",
+    }
+  }
+
+  return {
+    terms: details.map((detail) => ({
+      term: detail.term,
+      termId: detail.termId,
+      kind: detail.termKind,
+      evidenceLevel: detail.evidenceLevel,
+      mentionCount: detail.mentionCount,
+      latestAt: detail.latestAt,
+      sources: detail.sources.map((source) => ({
+        kind: source.kind,
+        title: source.title,
+        matchedKeyword: source.matchedKeyword,
+        snippet: source.snippet,
+        date: source.date,
+        url: source.url,
+        evidenceLevel: source.evidenceLevel,
+        // Trazabilidad: si la señal sale de un perfil, se comparte el LinkedIn
+        // para que el vendedor pueda verificar de quién se está infiriendo.
+        person: source.person
+          ? {
+              name: source.person.fullName,
+              title: source.person.title,
+              linkedinUrl: source.person.linkedinUrl,
+              isCurrentEmployee: source.person.isCurrentEmployee,
+              attribution: source.person.isCurrentEmployee
+                ? "Empleado actual"
+                : "Ex-empleado: no prueba uso actual en la cuenta",
+            }
+          : null,
+      })),
+    })),
+  }
 }
 
 async function assertWorkspaceAccount(principal: McpPrincipal, companyId: string) {

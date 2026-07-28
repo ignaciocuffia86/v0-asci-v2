@@ -266,10 +266,24 @@ export async function buildInternalAccountSnapshot(params: {
     sources: item.sources ?? [],
   }))
   if (detailRows.length) {
-    const { error: detailError } = await admin
+    // Reemplazo explícito en vez de upsert. Un ON CONFLICT no puede usar un índice
+    // único PARCIAL como árbitro sin repetir su predicado, y Supabase solo permite
+    // pasar nombres de columnas en onConflict: el upsert fallaba en runtime.
+    // Borrar-e-insertar además es la semántica correcta, porque regenerar el
+    // snapshot reemplaza el detalle vigente y deja de arrastrar términos que ya no
+    // tienen evidencia.
+    const { error: cleanupError } = await admin
       .schema("v3")
       .from("account_evidence_details")
-      .upsert(detailRows, { onConflict: "workspace_id,company_id,term_id,execution_id" })
+      .delete()
+      .eq("workspace_id", params.workspaceId)
+      .eq("company_id", params.company.id)
+      .is("execution_id", null)
+
+    const { error: detailError } = cleanupError
+      ? { error: cleanupError }
+      : await admin.schema("v3").from("account_evidence_details").insert(detailRows)
+
     // El detalle es auxiliar: si falla, el panorama sigue siendo válido y solo se
     // pierde la capacidad de profundizar.
     if (detailError) {

@@ -70,6 +70,15 @@ alter table v3.client_ai_executions
   add constraint client_ai_executions_feature_check
   check (feature in ('account_research','icebreaker','success_cases','company_news'));
 
+-- El TTL del prompt package escala con el tamaño del lote (un lote de 10 cuentas
+-- exige 40 submits y no entraba en la hora fija anterior), así que hay que
+-- recordar el lote para poder recalcular el TTL al refrescar un paquete vencido.
+alter table v3.client_ai_executions
+  add column if not exists batch_size integer not null default 1;
+
+alter table v3.client_ai_executions
+  add column if not exists refresh_count integer not null default 0;
+
 -- ── 5. Drilldown: snapshot completo separado del panorama ──
 -- El panorama liviano viaja al cliente; la evidencia detallada queda acá y se
 -- consulta por término a pedido, sin re-investigar ni gastar cuota.
@@ -87,9 +96,20 @@ create table if not exists v3.account_evidence_details (
   latest_at timestamptz,
   -- Detalle completo: snippets + attribution (incluye linkedin_url del contacto)
   sources jsonb not null default '[]'::jsonb,
-  created_at timestamptz not null default now(),
-  unique (workspace_id, company_id, term_id, execution_id)
+  created_at timestamptz not null default now()
 );
+
+-- Unicidad: NO se usa un UNIQUE sobre (workspace, company, term, execution_id)
+-- porque execution_id es nullable y en Postgres NULL != NULL, de modo que el
+-- constraint no aplicaba justo en el caso más común (la evidencia vigente) y los
+-- upserts insertaban duplicados. Se resuelve con dos índices parciales.
+create unique index if not exists uq_account_evidence_details_current
+  on v3.account_evidence_details (workspace_id, company_id, term_id)
+  where execution_id is null;
+
+create unique index if not exists uq_account_evidence_details_by_execution
+  on v3.account_evidence_details (workspace_id, company_id, term_id, execution_id)
+  where execution_id is not null;
 
 create index if not exists idx_account_evidence_details_lookup
   on v3.account_evidence_details(workspace_id, company_id, term_id);

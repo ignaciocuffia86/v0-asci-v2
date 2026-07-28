@@ -8,9 +8,30 @@ import { buildInternalAccountSnapshot } from "./services/internal-account-snapsh
 import { principalColumns, reserveMcpUsage, setReservationStatus, type McpPrincipal } from "./mcp-usage"
 import { guardSavedAccounts } from "./mcp-account-lifecycle"
 
-const PROMPT_VERSION = "mcp-client-research-v1"
+// v2: el paquete ya no arrastra la evidencia completa en cada etapa (ahora viaja
+// el panorama liviano) y el TTL escala con el tamaño del lote. Cambia la forma del
+// payload, así que la versión sube para invalidar los paquetes viejos.
+const PROMPT_VERSION = "mcp-client-research-v2"
 const STAGES = ["internal_analysis", "signal_classification", "fit_scoring", "account_brief"] as const
 type Stage = (typeof STAGES)[number]
+
+/**
+ * TTL del paquete según el tamaño del lote.
+ *
+ * Con 60 minutos fijos, un lote de 10 cuentas obligaba al cliente a completar 40
+ * submits (4 etapas × 10) dentro de la misma hora; si el usuario se distraía, los
+ * paquetes vencían y la cuota ya estaba consumida. Se agregan 20 minutos por
+ * cuenta extra, con techo de 6 horas para que un paquete abandonado no quede vivo
+ * indefinidamente.
+ */
+const TTL_BASE_MINUTES = 60
+const TTL_PER_EXTRA_ACCOUNT_MINUTES = 20
+const TTL_MAX_MINUTES = 360
+
+export function packageTtlMinutes(batchSize: number) {
+  const extra = Math.max(0, batchSize - 1) * TTL_PER_EXTRA_ACCOUNT_MINUTES
+  return Math.min(TTL_BASE_MINUTES + extra, TTL_MAX_MINUTES)
+}
 
 const schemas = {
   internal_analysis: z.object({ summary: z.string().min(20).max(3000), technologies: z.array(z.string()).max(50), processes: z.array(z.string()).max(50), evidenceIds: z.array(z.string()).max(100) }),
@@ -32,17 +53,29 @@ function jsonSchemaFor(stage: Stage | "icebreaker") {
   return descriptions[stage]
 }
 
-function packageFor(stage: Stage | "icebreaker", evidence: unknown, previous: unknown[] = []) {
+function packageFor(
+  stage: Stage | "icebreaker",
+  evidence: unknown,
+  previous: unknown[] = [],
+  options: { batchSize?: number } = {}
+) {
+  const ttl = packageTtlMinutes(options.batchSize ?? 1)
   const payload = {
     promptVersion: PROMPT_VERSION,
     stage,
-    systemPrompt: "Sos un analista B2B de ASCI. Usá exclusivamente la evidencia provista. No inventes hechos, IDs ni fuentes. Respondé solo JSON válido conforme al schema.",
+    systemPrompt:
+      "Sos un analista B2B de ASCI. Usá exclusivamente la evidencia provista. No inventes hechos, IDs ni fuentes. Respondé solo JSON válido conforme al schema. La evidencia trae un nivel por término (Confirmado, Probable o Inferido): no presentes como confirmado algo que sea Probable o Inferido, y si una mención proviene de un ex-empleado no afirmes que la cuenta usa esa tecnología hoy. Si necesitás las fuentes textuales de un término, pedilas con get_account_evidence_detail en vez de suponerlas.",
     userPrompt: stage === "icebreaker" ? "Generá un icebreaker breve, específico y regionalizado, anclado en evidencia." : `Completá la etapa ${stage} del research de cuenta.`,
     responseSchema: jsonSchemaFor(stage),
     evidence,
     previousStages: previous,
   }
-  return { ...payload, packageHash: hash(payload), expiresAt: new Date(Date.now() + 60 * 60_000).toISOString() }
+  return {
+    ...payload,
+    packageHash: hash(payload),
+    expiresAt: new Date(Date.now() + ttl * 60_000).toISOString(),
+    ttlMinutes: ttl,
+  }
 }
 
 export async function prepareAccountResearch(principal: McpPrincipal, inputs: string[], idempotencyKey: string) {
@@ -64,8 +97,10 @@ export async function prepareAccountResearch(principal: McpPrincipal, inputs: st
   try {
     for (const company of unique) {
       const snapshot = await buildInternalAccountSnapshot({ workspaceId: principal.workspaceId, company: { id: company.companyId!, name: company.name ?? "", domain: company.domain, country: company.country, industry: company.industry }, researchJobId: null })
-      const promptPackage = packageFor("internal_analysis", snapshot)
-      const { data, error } = await admin.schema("v3").from("client_ai_executions").insert({ workspace_id: principal.workspaceId, user_id: principal.userId, ...principalColumns(principal), reservation_id: reservation.reservationId, feature: "account_research", company_id: company.companyId, current_stage: "internal_analysis", prompt_version: PROMPT_VERSION, package_hash: promptPackage.packageHash, package_payload: promptPackage, expires_at: promptPackage.expiresAt }).select("id").single()
+      // El TTL se calcula sobre el lote entero: si son 10 cuentas, el cliente tiene
+      // que poder completar las 40 etapas sin que le venza el paquete.
+      const promptPackage = packageFor("internal_analysis", snapshot, [], { batchSize: unique.length })
+      const { data, error } = await admin.schema("v3").from("client_ai_executions").insert({ workspace_id: principal.workspaceId, user_id: principal.userId, ...principalColumns(principal), reservation_id: reservation.reservationId, feature: "account_research", company_id: company.companyId, current_stage: "internal_analysis", prompt_version: PROMPT_VERSION, package_hash: promptPackage.packageHash, package_payload: promptPackage, expires_at: promptPackage.expiresAt, batch_size: unique.length }).select("id").single()
       if (error) throw new Error(`CLIENT_EXECUTION_CREATE_FAILED:${error.message}`)
       executions.push({ executionId: data.id, company: { id: company.companyId, name: company.name }, stage: "internal_analysis", promptPackage })
     }
@@ -87,8 +122,10 @@ export async function submitResearchStage(principal: McpPrincipal, params: { exe
     return { accepted: replay.status === "accepted", idempotent: true, completed: execution.status === "completed", currentStage: execution.current_stage }
   }
   if (execution.status === "completed") throw new Error("CLIENT_EXECUTION_COMPLETED")
-  if (new Date(execution.expires_at).getTime() < Date.now()) throw new Error("CLIENT_PACKAGE_EXPIRED")
-  if (execution.current_stage !== params.stage || execution.package_hash !== params.packageHash) throw new Error("CLIENT_PACKAGE_MISMATCH")
+  // El error dice qué hacer: la cuota ya está consumida y refresh_prompt_package
+  // reemite el paquete sin volver a cobrar.
+  if (new Date(execution.expires_at).getTime() < Date.now()) throw new Error("CLIENT_PACKAGE_EXPIRED:El paquete venció. Llamá a refresh_prompt_package con este executionId para reemitirlo sin consumir cuota, y reintentá el submit con el packageHash nuevo.")
+  if (execution.current_stage !== params.stage || execution.package_hash !== params.packageHash) throw new Error(`CLIENT_PACKAGE_MISMATCH:La ejecución espera la etapa "${execution.current_stage}" con el packageHash vigente. Consultá get_client_research_status para obtener el paquete actual.`)
   const parsed = schemas[params.stage].safeParse(params.result)
   if (!parsed.success) throw new Error(`CLIENT_RESULT_INVALID:${parsed.error.issues.map((i) => i.message).join(", ")}`)
   const allowedEvidence = new Set<string>()
@@ -112,9 +149,49 @@ export async function submitResearchStage(principal: McpPrincipal, params: { exe
     return { accepted: true, completed: true }
   }
   const nextStage = STAGES[index + 1]
-  const nextPackage = packageFor(nextStage, execution.package_payload.evidence, [...(prior ?? []).map((row) => row.result), parsed.data])
+  const nextPackage = packageFor(nextStage, execution.package_payload.evidence, [...(prior ?? []).map((row) => row.result), parsed.data], { batchSize: execution.batch_size ?? 1 })
   await admin.schema("v3").from("client_ai_executions").update({ status: "in_progress", current_stage: nextStage, package_hash: nextPackage.packageHash, package_payload: nextPackage, expires_at: nextPackage.expiresAt }).eq("id", execution.id)
   return { accepted: true, completed: false, nextStage, promptPackage: nextPackage }
+}
+
+/**
+ * Revive una ejecución cuyo paquete venció, SIN volver a cobrar cuota.
+ *
+ * Antes un paquete vencido dejaba la ejecución muerta con la cuota ya consumida:
+ * la única salida era gastar otro lugar del plan con prepare_account_research. Acá
+ * se reemite el paquete de la etapa actual con la misma evidencia y las etapas ya
+ * aceptadas, así que no se recalcula nada ni se vuelve a investigar.
+ */
+const MAX_PACKAGE_REFRESHES = 5
+
+export async function refreshPromptPackage(principal: McpPrincipal, executionId: string) {
+  const admin = createAdminClient()
+  const { data: execution } = await admin.schema("v3").from("client_ai_executions").select("*").eq("id", executionId).eq("workspace_id", principal.workspaceId).eq("user_id", principal.userId).maybeSingle()
+  if (!execution) throw new Error("CLIENT_EXECUTION_NOT_FOUND")
+  if (execution.status === "completed") throw new Error("CLIENT_EXECUTION_COMPLETED")
+  // Techo para que un cliente que nunca completa no pueda mantener vivo un paquete
+  // para siempre y esquivar el consumo de cuota.
+  if ((execution.refresh_count ?? 0) >= MAX_PACKAGE_REFRESHES) {
+    throw new Error(`PACKAGE_REFRESH_LIMIT_REACHED:Se alcanzó el máximo de ${MAX_PACKAGE_REFRESHES} refrescos. Volvé a preparar el research para esta cuenta.`)
+  }
+
+  const { data: prior } = await admin.schema("v3").from("client_ai_stage_submissions").select("result").eq("execution_id", execution.id).eq("status", "accepted").order("created_at")
+  const refreshed = packageFor(
+    execution.current_stage as Stage | "icebreaker",
+    execution.package_payload.evidence,
+    (prior ?? []).map((row) => row.result),
+    { batchSize: execution.batch_size ?? 1 }
+  )
+  const { error } = await admin.schema("v3").from("client_ai_executions").update({ package_hash: refreshed.packageHash, package_payload: refreshed, expires_at: refreshed.expiresAt, refresh_count: (execution.refresh_count ?? 0) + 1 }).eq("id", execution.id)
+  if (error) throw new Error(`PACKAGE_REFRESH_FAILED:${error.message}`)
+
+  return {
+    executionId: execution.id,
+    stage: execution.current_stage,
+    promptPackage: refreshed,
+    refreshesRemaining: MAX_PACKAGE_REFRESHES - ((execution.refresh_count ?? 0) + 1),
+    note: "Paquete reemitido sin consumir cuota. Usá este packageHash en el próximo submit.",
+  }
 }
 
 export async function getClientResearchStatus(principal: McpPrincipal, executionId: string) {
@@ -160,7 +237,7 @@ export async function submitAccountIcebreaker(principal: McpPrincipal, params: {
     return { accepted: replay.status === "accepted", idempotent: true }
   }
   if (execution.package_hash !== params.packageHash || execution.status === "completed") throw new Error("CLIENT_PACKAGE_MISMATCH")
-  if (new Date(execution.expires_at).getTime() < Date.now()) throw new Error("CLIENT_PACKAGE_EXPIRED")
+  if (new Date(execution.expires_at).getTime() < Date.now()) throw new Error("CLIENT_PACKAGE_EXPIRED:El paquete venció. Llamá a refresh_prompt_package con este executionId para reemitirlo sin consumir cuota.")
   const parsed = schemas.icebreaker.safeParse(params.result)
   if (!parsed.success) throw new Error(`CLIENT_RESULT_INVALID:${parsed.error.message}`)
   const evidence = execution.package_payload.evidence.snapshot?.evidence
