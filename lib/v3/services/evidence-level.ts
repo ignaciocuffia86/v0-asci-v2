@@ -40,6 +40,12 @@ const RANK: Record<EvidenceLevel, number> = { Confirmado: 3, Probable: 2, Inferi
 export function toEvidenceLevel(value: string | null | undefined): EvidenceLevel {
   if (!value) return "Inferido"
   switch (value.trim().toLowerCase()) {
+    // `sin_evidencia` es un cuarto valor del vocabulario de tech-radar que v2
+    // NO publica ("no publicamos esos por default"). Colapsarlo a Inferido lo
+    // convertiría en evidencia presentable, que es justamente lo que v2 evita.
+    // Se mapea al nivel más débil pero se expone aparte con isPublishable().
+    case "sin_evidencia":
+      return "Inferido"
     // v3 radar_findings + v2 migrado + v2 original
     case "explicit":
     case "directa":
@@ -69,6 +75,33 @@ export function toEvidenceLevel(value: string | null | undefined): EvidenceLevel
  */
 export function toRadarEvidenceLevel(level: EvidenceLevel): "explicit" | "inferred" {
   return level === "Inferido" ? "inferred" : "explicit"
+}
+
+/**
+ * ¿Este valor legacy es publicable como evidencia?
+ *
+ * Solo `sin_evidencia` no lo es. Existe como función aparte porque el enum
+ * canónico tiene tres niveles a propósito: agregar un cuarto "SinEvidencia"
+ * obligaría a todo consumidor a manejar un caso que nunca debería mostrarse.
+ * La regla la fija tech-radar de v2 y acá se respeta, no se reinterpreta.
+ */
+export function isPublishableEvidence(value: string | null | undefined): boolean {
+  return value?.trim().toLowerCase() !== "sin_evidencia"
+}
+
+/**
+ * Traduce del canónico al vocabulario de v2 `company_implementations`
+ * (`directa|convergente|inferencia`).
+ *
+ * Obligatorio al escribir casos de éxito en esa tabla: la UI de v2 ya rotula
+ * esos tres valores. Escribir "Confirmado" ahí dejaría filas que v2 no sabe
+ * mostrar, y v2 está en producción. La traducción va en la escritura para que
+ * v2 siga leyendo exactamente el vocabulario que espera.
+ */
+export function toV2EvidenceLevel(level: EvidenceLevel): "directa" | "convergente" | "inferencia" {
+  if (level === "Confirmado") return "directa"
+  if (level === "Probable") return "convergente"
+  return "inferencia"
 }
 
 /** El más fuerte de un conjunto. Un término con una vacante citable y diez inferencias es Confirmado. */

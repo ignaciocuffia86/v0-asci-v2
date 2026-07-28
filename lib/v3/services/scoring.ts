@@ -47,15 +47,22 @@ const TIMING_RULES: { type: string; weight: number; direction: SignalDirection; 
     type: "Contracción / desinversión",
     weight: 22,
     direction: "contraccion",
+    // Cubre sustantivo Y verbo. Un test sobre titulares reales mostró que
+    // "vende la unidad de negocio" NO matcheaba, porque solo estaba "venta de":
+    // los titulares usan el verbo más seguido que el sustantivo, así que una
+    // desinversión se estaba contando como noticia neutra.
     patterns:
-      /cierre de (planta|f[aá]brica|operaciones)|cierra su|despido|desvincula|reestructuraci[oó]n|venta de (la )?(unidad|divisi[oó]n|negocio)|desinversi[oó]n|se retira de|salida de(l)? (pa[ií]s|mercado)|abandona el mercado|default|concurso de acreedores|quiebra|suspensi[oó]n de pagos|aumento de (la )?deuda|endeudamiento|p[eé]rdidas|ca[ií]da de (ventas|ingresos)|recorte/i,
+      /cierre de (planta|f[aá]brica|operaciones)|cierra su|despido|desvincula|reestructuraci[oó]n|(venta|vende|vendi[oó]|desprende)\s+(de\s+)?(la\s+|su\s+)?(unidad|divisi[oó]n|negocio|filial|participaci[oó]n)|desinversi[oó]n|se retira de|salida de(l)? (pa[ií]s|mercado)|abandona el mercado|default|concurso de acreedores|quiebra|suspensi[oó]n de pagos|aumento de (la )?deuda|endeudamiento|p[eé]rdidas|ca[ií]da de (ventas|ingresos)|recorte/i,
   },
   {
     type: "Expansión / inversión",
     weight: 25,
     direction: "expansion",
+    // Mismo criterio que contracción: "adquiere competidor" no matcheaba porque
+    // solo estaba el sustantivo "adquisición". Se agregan las formas verbales
+    // frecuentes en titulares (adquiere, invierte, inaugura, se fusiona).
     patterns:
-      /expansi[oó]n|inversi[oó]n|planta|f[aá]brica|apertura|nuevo mercado|adquisici[oó]n|fusi[oó]n|m&a|centro de distribuci[oó]n|licitaci[oó]n|rfp/i,
+      /expansi[oó]n|inversi[oó]n|invierte|planta|f[aá]brica|apertura|inaugura|nuevo mercado|adquisici[oó]n|adquiere|adquiri[oó]|compra (la )?(empresa|competidor|participaci[oó]n)|fusi[oó]n|se fusiona|m&a|centro de distribuci[oó]n|licitaci[oó]n|rfp/i,
   },
   {
     type: "Cambio ejecutivo",

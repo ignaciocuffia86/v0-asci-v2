@@ -4,7 +4,7 @@ import { createHash } from "node:crypto"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { loadDictionary, matchTextAgainstDictionary } from "./dictionary"
 import { getCanonicalContacts, type CanonicalContact } from "./contact-provider"
-import { cacheV2JobPostingProvider, type CanonicalCompanyIdentity, type NormalizedJobPosting } from "./job-posting-provider"
+import { cacheV2JobPostingProvider, DEFAULT_RECENT_WINDOW_HOURS, type CanonicalCompanyIdentity, type NormalizedJobPosting } from "./job-posting-provider"
 import { getWorkspaceFitProfile } from "./workspace-fit-profile"
 import { getLegacySignals, LEGACY_SIGNAL_ADAPTER_VERSION, type SignalPerson } from "./legacy-signal-provider"
 import { strongestEvidenceLevel, toEvidenceLevel, type EvidenceLevel } from "./evidence-level"
@@ -97,7 +97,10 @@ export async function buildInternalAccountSnapshot(params: {
   const [signalResult, dictionary, jobsResult, contactsResult] = await Promise.all([
     getLegacySignals(params.company.id, SIGNAL_MATCHING_LIMIT),
     loadDictionary(),
-    cacheV2JobPostingProvider.fetch(params.company, { freshnessHours: 24, maxItems: 50, correlationId: params.researchJobId ?? `mcp-${params.company.id}` }),
+    // Antes pasaba 24 horas y el provider lo ignoraba. Si se hubiera honrado como
+    // filtro, la evidencia de vacantes caía a cero (hay cuentas con 117 vacantes y
+    // ninguna del último día). Se pasa la ventana real de rotulado: 6 meses.
+    cacheV2JobPostingProvider.fetch(params.company, { recentWindowHours: DEFAULT_RECENT_WINDOW_HOURS, maxItems: 50, correlationId: params.researchJobId ?? `mcp-${params.company.id}` }),
     getCanonicalContacts({ companyId: params.company.id, recommendedTitles: profile.recommendedJobTitles, limit: 8 }),
   ])
 
