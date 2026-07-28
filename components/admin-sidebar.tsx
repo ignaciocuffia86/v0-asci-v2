@@ -236,6 +236,18 @@ export function AdminSidebar() {
                         Export Compañías por Señal
                       </Button>
                     </Link>
+                    <Link href="/admin/export/job-postings">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className={cn(
+                          "w-full justify-start text-sm",
+                          pathname === "/admin/export/job-postings" && "bg-sidebar-accent/50"
+                        )}
+                      >
+                        Export Jobpostings
+                      </Button>
+                    </Link>
                   </div>
                 )}
               </div>
