@@ -8,6 +8,8 @@ import { validateMcpRequest, logMcpRequest } from "@/lib/v3/mcp-auth"
 import { requirePaidMcp, reserveMcpUsage, setReservationStatus, getMcpUsage, type McpPrincipal } from "@/lib/v3/mcp-usage"
 import { searchCompanies, getCompanyProfile, getCompanySignals, listWorkspaceAccounts, getAccountIntelligence, getResearchStatus, getAccountEvidenceDetailTool } from "@/lib/v3/mcp-read-tools"
 import { prepareAccountResearch, submitResearchStage, getClientResearchStatus, prepareAccountIcebreaker, submitAccountIcebreaker, refreshPromptPackage, prepareCompanySuccessCases, submitCompanySuccessCases, prepareCompanyNews, submitCompanyNews } from "@/lib/v3/mcp-client-ai"
+import { runLinkedinJobsActor } from "@/lib/v3/services/apify-client"
+import { ingestApifyJobPostings } from "@/lib/v3/services/apify-job-ingest"
 import { prepareSaveAccount, saveAccount, removeWorkspaceAccount, listSavedAccounts, requireSavedAccount, guardSavedAccounts } from "@/lib/v3/mcp-account-lifecycle"
 import { recommendContactRoles, getCompanyContacts } from "@/lib/v3/mcp-contact-coverage"
 import { prepareContactEnrichment, runContactEnrichment } from "@/lib/v3/services/mcp-contact-enrichment"
@@ -82,6 +84,40 @@ const handler = createMcpHandler((server) => {
   server.tool("submit_company_success_cases", "Paso 2 de 2: entrega los casos de éxito que encontró el cliente. El servidor aplica los guardrails (URL viva y mención real de la empresa) y descarta lo que no pase, así que la respuesta informa cuántos se aceptaron y cuántos se rechazaron con su motivo. No consume cuota adicional.", { executionId: z.string().uuid(), packageHash: z.string().length(64), result: z.unknown(), clientModel: z.string().max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async (args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:submit", "client_assisted"); return submitCompanySuccessCases(auth, args) }))
   server.tool("prepare_company_news", "Paso 1 de 2 para buscar noticias recientes de una cuenta. Devuelve el prompt package para que el cliente BUSQUE con sus propios tokens, con una ventana temporal explícita (180 días por defecto) para que no traiga notas viejas como si fueran novedad. Consume 1 unidad de cuota de research.", { companyId: z.string().uuid(), term: z.string().min(2).max(120).optional(), windowDays: z.number().int().min(1).max(730).optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, term, windowDays, idempotencyKey }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:prepare", "client_assisted"); return prepareCompanyNews(auth, { companyId, term, windowDays, idempotencyKey }) }))
   server.tool("submit_company_news", "Paso 2 de 2: entrega las noticias que encontró el cliente. El servidor verifica URLs y relevancia, descarta lo que no pase, y clasifica cada noticia como expansion, contraccion o neutro para que una mala noticia (un cierre de planta, una desinversión) no sume puntaje de timing como si fuera una oportunidad. No consume cuota adicional.", { executionId: z.string().uuid(), packageHash: z.string().length(64), result: z.unknown(), clientModel: z.string().max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async (args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:submit", "client_assisted"); return submitCompanyNews(auth, args) }))
+  server.tool("scrape_company_job_postings", "Trae vacantes frescas de LinkedIn para una cuenta guardada y las ingesta por el pipeline de importación de ASCI, que se encarga de normalizar y deduplicar. Consume cuota de research server-managed porque el scraping corre con recursos de ASCI. Dos límites del buscador de LinkedIn que conviene saber: (1) busca por TÍTULO DE PUESTO, no por empresa, así que la mayoría de los resultados suele ser de otras empresas y se descarta automáticamente; usá `query` con el nombre de la empresa o con una tecnología. (2) La ventana sólo puede ser 1, 7 o 30 días; si pedís más, trae sin límite de fecha y te lo avisa. La ingesta es asincrónica: las vacantes aparecen cuando el importador procesa el lote, no de inmediato.", { companyId: z.string().uuid(), query: z.string().min(2).max(120), location: z.string().min(2).max(120).optional(), windowDays: z.number().int().min(1).max(365).optional(), maxRows: z.number().int().min(1).max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, query, location, windowDays, maxRows, idempotencyKey }, extra) => safely(async () => {
+    const auth = authOf(extra); await requirePaidMcp(auth, "research:run", "server_managed")
+    const blocked = await guardSavedAccounts(auth, [companyId])
+    if (blocked) return blocked
+    const reservation = await reserveMcpUsage({ principal: auth, pool: "research_server", units: 1, idempotencyKey, metadata: { companyId, query } })
+    if (!reservation.allowed || !reservation.reservationId) return reservation
+    // Replay: la cuota ya se cobró y el batch ya existe. Devolver lo mismo evita
+    // un segundo scraping (que se paga) y un segundo batch con las mismas filas.
+    if (reservation.idempotent && reservation.status === "committed" && reservation.metadata?.batchId) return { ...reservation.metadata, idempotent: true }
+    try {
+      const run = await runLinkedinJobsActor({ query, location, windowDays: windowDays ?? null, maxRows })
+      const ingest = await ingestApifyJobPostings({ companyId, userId: auth.userId, runId: run.runId, items: run.items })
+      const response = {
+        ...ingest,
+        // La ventana real puede ser más amplia que la pedida: el actor no soporta
+        // nada entre 30 días e infinito. Decirlo evita que el usuario crea que
+        // filtró por un período que en realidad no se aplicó.
+        appliedWindow: run.appliedWindow,
+        warnings: run.truncatedWindow
+          ? [...ingest.warnings, `LinkedIn sólo permite ventanas de 1, 7 o 30 días: se pidió ${windowDays} y se buscó sin límite de fecha.`]
+          : ingest.warnings,
+        note: ingest.batchId
+          ? "Las vacantes quedaron en cola. Consultá get_account_panorama en unos minutos para verlas ya normalizadas."
+          : "No se encontraron vacantes de esta empresa con esa búsqueda.",
+      }
+      await setReservationStatus(reservation.reservationId, "committed", { batchId: ingest.batchId, queued: ingest.queued })
+      return response
+    } catch (error) {
+      // Se libera la reserva: si el scraping falló, el usuario no gastó nada útil.
+      await setReservationStatus(reservation.reservationId, "released")
+      throw error
+    }
+  }))
+
   server.tool("refresh_prompt_package", "Reemite el prompt package de una ejecución client-assisted cuya vigencia venció, SIN consumir cuota ni volver a investigar. Usala cuando un submit falle con CLIENT_PACKAGE_EXPIRED: la cuota ya se consumió al preparar, así que no hay que llamar de nuevo a prepare_account_research. Devuelve el packageHash nuevo con el que hay que reintentar el submit. Tiene un máximo de refrescos por ejecución.", { executionId: z.string().uuid() }, async ({ executionId }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "accounts:read", "read"); return refreshPromptPackage(auth, executionId) }))
   server.tool("get_client_research_status", "Consulta estado y próximo package del research client-assisted.", { executionId: z.string().uuid() }, async ({ executionId }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "accounts:read", "read"); return getClientResearchStatus(auth, executionId) }))
 

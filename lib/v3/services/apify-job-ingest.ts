@@ -24,6 +24,11 @@ import { createAdminClient } from "@/lib/supabase/admin"
  *    Si se dejara que el nombre lo ponga el scraper, una variante como "Arcor SA"
  *    crearía una empresa DUPLICADA en la tabla de producción de v2. Por eso se
  *    inyecta la identidad exacta de la empresa destino en cada fila.
+ * 5. El actor de LinkedIn busca por TÍTULO DE PUESTO, no por empresa: con
+ *    title="Arcor" devolvió 20 vacantes y solo 5 eran de Grupo Arcor. Como el
+ *    punto 4 impone el nombre de la cuenta a cada fila, sin filtrar por
+ *    pertenencia se le atribuirían a la cuenta vacantes de sus competidores.
+ *    De ahí el guardrail `belongsToCompany`, que es lo primero que corre.
  */
 
 /** Tamaño de chunk del INSERT: el mismo que usa el upload de CSV de v2. */
@@ -43,6 +48,8 @@ export interface ApifyIngestResult {
   queued: number
   skippedWithoutUrl: number
   skippedDuplicateInPayload: number
+  /** Vacantes descartadas por pertenecer a otra empresa. Suele ser la mayoría. */
+  skippedOtherCompany: number
   filename: string
   warnings: string[]
 }
@@ -60,6 +67,55 @@ function extractJobUrl(item: ApifyJobItem): string | null {
     if (typeof value === "string" && value.trim()) return value.trim()
   }
   return null
+}
+
+/** Normaliza para comparar nombres de empresa: sin sufijos legales ni acentos. */
+function normalizeCompanyName(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\b(s\.?a\.?i\.?c\.?|s\.?a\.?s\.?|s\.?a\.?|s\.?r\.?l\.?|grupo|holding|inc|llc|ltd|corp|company|argentina)\b/g, "")
+    .replace(/[^a-z0-9]/g, "")
+    .trim()
+}
+
+/** Extrae el slug de empresa de una URL de LinkedIn (`/company/grupo-arcor`). */
+function linkedinCompanySlug(url: string | null | undefined): string | null {
+  if (!url) return null
+  const match = url.match(/\/company\/([^/?#]+)/i)
+  return match ? match[1].toLowerCase() : null
+}
+
+/**
+ * ¿Esta vacante es realmente de la empresa destino?
+ *
+ * Guardrail no negociable. El actor de LinkedIn busca por TÍTULO de puesto, no por
+ * empresa: en una prueba real con title="Arcor" devolvió 20 vacantes de las cuales
+ * solo 5 eran de Grupo Arcor — el resto era de Medifé, ArcelorMittal y Worley.
+ * Sin este filtro, y como la ingesta impone el nombre de la empresa destino en cada
+ * fila, esas 15 vacantes ajenas quedarían atribuidas a la cuenta en la tabla de
+ * producción que lee v2. Es decir: evidencia falsa sobre una cuenta real.
+ *
+ * Se compara primero por slug de LinkedIn (identificador estable) y recién después
+ * por nombre normalizado, que es más laxo.
+ */
+function belongsToCompany(
+  item: ApifyJobItem,
+  company: { name: string; linkedin_url: string | null }
+): boolean {
+  const itemSlug = linkedinCompanySlug(typeof item.companyUrl === "string" ? item.companyUrl : null)
+  const companySlug = linkedinCompanySlug(company.linkedin_url)
+  if (itemSlug && companySlug) return itemSlug === companySlug
+
+  const itemName = typeof item.companyName === "string" ? item.companyName : ""
+  if (!itemName) return false
+  const a = normalizeCompanyName(itemName)
+  const b = normalizeCompanyName(company.name)
+  if (!a || !b) return false
+  // Se admite la contención en un sentido u otro ("Arcor" vs "Grupo Arcor"), pero
+  // exigiendo una longitud mínima para que un fragmento corto no matchee de casualidad.
+  return a === b || (a.length >= 4 && b.length >= 4 && (a.includes(b) || b.includes(a)))
 }
 
 export async function ingestApifyJobPostings(params: {
@@ -90,9 +146,18 @@ export async function ingestApifyJobPostings(params: {
   const seen = new Set<string>()
   let skippedWithoutUrl = 0
   let skippedDuplicateInPayload = 0
+  let skippedOtherCompany = 0
   const rows: { batch_id: string; row_data: Record<string, unknown> }[] = []
 
   for (const item of params.items) {
+    // Primero el filtro de pertenencia: el actor busca por título de puesto y
+    // devuelve vacantes de muchas empresas. Lo que no es de la cuenta destino no
+    // entra, porque más abajo se le impone el nombre de la cuenta a cada fila.
+    if (!belongsToCompany(item, company)) {
+      skippedOtherCompany++
+      continue
+    }
+
     const jobUrl = extractJobUrl(item)
     if (!jobUrl) {
       skippedWithoutUrl++
@@ -127,6 +192,11 @@ export async function ingestApifyJobPostings(params: {
     })
   }
 
+  if (skippedOtherCompany > 0) {
+    warnings.push(
+      `${skippedOtherCompany} vacantes eran de otras empresas y fueron descartadas: el buscador de LinkedIn filtra por título de puesto, no por empresa.`
+    )
+  }
   if (skippedWithoutUrl > 0) {
     warnings.push(`${skippedWithoutUrl} vacantes sin URL fueron descartadas (no se pueden deduplicar).`)
   }
@@ -144,6 +214,7 @@ export async function ingestApifyJobPostings(params: {
       queued: 0,
       skippedWithoutUrl,
       skippedDuplicateInPayload,
+      skippedOtherCompany,
       filename,
       warnings: [...warnings, "No quedaron vacantes utilizables: no se creó ningún batch."],
     }
@@ -215,6 +286,7 @@ export async function ingestApifyJobPostings(params: {
     queued: rows.length,
     skippedWithoutUrl,
     skippedDuplicateInPayload,
+    skippedOtherCompany,
     filename,
     warnings,
   }
