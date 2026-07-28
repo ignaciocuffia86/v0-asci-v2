@@ -52,16 +52,48 @@ AS $$
   );
 $$;
 
+-- ── Nombre base: nucleo sin el pais ────────────────────────────────────────
+--
+-- Decision del usuario: "Accenture Argentina" y "Accenture" son la MISMA
+-- empresa, igual que el mismo nombre en paises distintos. El nucleo no alcanza
+-- para eso ("accenture argentina" != "accenture"), asi que hace falta un pase
+-- que saque el sufijo geografico.
+--
+-- Esto es mas agresivo que el resto y tiene un falso positivo conocido:
+-- "Banco Nacion Argentina" -> "banco nacion", donde el pais es parte del
+-- nombre real. Por eso el pase `geo` SIEMPRE se clasifica como ambiguo y
+-- nunca se auto-mergea: lo revisa la IA o una persona.
+
+CREATE OR REPLACE FUNCTION public.company_base_name(p_name TEXT)
+RETURNS TEXT
+LANGUAGE sql
+STABLE
+SET search_path = public, extensions, pg_catalog
+AS $$
+  SELECT nullif(btrim(regexp_replace(
+    public.company_core_name(p_name),
+    '\s+(argentina|arg|brasil|brazil|chile|mexico|peru|uruguay|paraguay|bolivia|ecuador|colombia|venezuela|espana|spain|usa|us|uk|latam|latinoamerica|america latina|sudamerica|cono sur|group|international|global|holdings?)$',
+    '', 'g')), '');
+$$;
+
 -- ── Cache de candidatos ─────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS v3.company_dup_candidates (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   group_key      TEXT NOT NULL,
-  method         TEXT NOT NULL CHECK (method IN ('exact','core','trgm')),
+  method         TEXT NOT NULL CHECK (method IN ('exact','core','trgm','geo')),
   company_ids    UUID[] NOT NULL,
   master_id      UUID NOT NULL,
   -- 'seguro'  -> se puede auto-mergear, no paga IA
-  -- 'ambiguo' -> hay dos linkedin_url distintas, va a la cola de IA
+  -- 'ambiguo' -> va a la cola de IA
+  --
+  -- Lo que vuelve ambiguo a un grupo es tener DOS linkedin_url distintas:
+  -- son dos entidades que LinkedIn considera separadas.
+  --
+  -- El pais NO lo vuelve ambiguo, por decision explicita del usuario: el mismo
+  -- nombre en paises distintos se unifica. Es la contracara de esa decision que
+  -- se pierda la granularidad por pais en senales y contactos; es reversible
+  -- desde v3.company_merges.
   classification TEXT NOT NULL CHECK (classification IN ('seguro','ambiguo')),
   -- Datos ya listos para la UI y para el prompt, para no re-consultar.
   payload        JSONB NOT NULL,
@@ -103,6 +135,7 @@ SET search_path = public, v3, extensions, pg_catalog
 AS $$
 DECLARE
   v_core INT := 0;
+  v_geo  INT := 0;
   v_trgm INT := 0;
 BEGIN
   SET LOCAL statement_timeout = '300s';
@@ -112,7 +145,8 @@ BEGIN
   -- dato asociado, o sea sin nada que perder ni que ganar en un merge.
   CREATE TEMP TABLE tmp_rel ON COMMIT DROP AS
   SELECT c.id, c.name, c.linkedin_url, c.country, c.created_at,
-         public.company_core_name(c.name) AS core
+         public.company_core_name(c.name) AS core,
+         public.company_base_name(c.name) AS base
   FROM public.companies c
   WHERE (
       EXISTS (SELECT 1 FROM public.contacts ct WHERE ct.current_company_id = c.id)
@@ -122,6 +156,7 @@ BEGIN
     AND length(btrim(c.name)) >= 3;
 
   CREATE INDEX ON tmp_rel (core);
+  CREATE INDEX ON tmp_rel (base);
   ANALYZE tmp_rel;
 
   -- ── Pase 1: nombre nucleo ────────────────────────────────────────────────
