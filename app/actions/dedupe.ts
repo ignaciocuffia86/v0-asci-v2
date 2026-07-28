@@ -101,9 +101,8 @@ export async function getDupCandidates(options?: {
   return (data ?? []) as DupCandidateRow[]
 }
 
-/** Recalcula la cache de candidatos. Gratis: no usa IA. */
 /**
- * Trae el siguiente lote de grupos a la cola de revision.
+ * Trae el siguiente lote de grupos a la cola de revision. Gratis: no usa IA.
  *
  * Lee de v3.company_dup_groups, que ya viene precalculada. No agrupa las 485k
  * empresas en el clic: eso costaba 16s con cache frio y hacia fallar el boton
@@ -141,10 +140,12 @@ export async function refreshDupCandidates(options?: {
 /**
  * Resincroniza el indice de nombres contra public.companies.
  *
- * Es la parte cara (recalcula nucleos y regrupa) y por eso NO va en el mismo
- * clic que la deteccion. Se corre despues de cada ETL. Si tarda mas que el
- * limite de la conexion, hay que correrla con `scripts/run-sql.mjs`, que usa
- * conexion directa sin tope de tiempo.
+ * NO se llama desde la UI a proposito: tarda ~56s medidos y una llamada por RPC
+ * muere a los 8s (limite del rol de PostgREST). Corre por pg_cron todas las
+ * noches a las 07:10 UTC, agendada en `scripts/410_v3_name_index.sql`.
+ *
+ * Queda expuesta para forzar una resincronizacion a mano. Si el RPC da timeout,
+ * usar `node scripts/run-sql.mjs` (conexion directa, sin tope de tiempo).
  */
 export async function syncNameIndex(limit = 50000) {
   await requireAdmin()

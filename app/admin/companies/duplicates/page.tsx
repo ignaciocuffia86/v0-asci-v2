@@ -127,7 +127,8 @@ export default function CompanyDuplicatesPage() {
           <h1 className="text-2xl font-bold">Unificacion de empresas</h1>
           <p className="text-sm text-muted-foreground leading-relaxed">
             La deteccion agrupa por nombre nucleo, asi entran casos como ARCOR y Grupo Arcor. Los grupos seguros se
-            unifican solos; los ambiguos los resuelve la IA o vos.
+            unifican solos; los ambiguos los resuelve la IA o vos. La cola se llena por lotes: usá
+            &quot;Traer mas grupos&quot; para seguir avanzando.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -135,8 +136,15 @@ export default function CompanyDuplicatesPage() {
             variant="outline"
             onClick={() =>
               correr("refresh", async () => {
-                const r = await refreshDupCandidates({ limit: 500 })
-                return `${r.grupos_core} grupos detectados sobre ${r.relevantes.toLocaleString("es-AR")} empresas`
+                const r = await refreshDupCandidates({ limit: 100 })
+                if (r.nuevos_grupos === 0) {
+                  return r.grupos_restantes === 0
+                    ? "No quedan grupos nuevos por revisar. Resincronizá el índice si cargaste datos nuevos."
+                    : "No se agregaron grupos nuevos en este lote."
+                }
+                return `${r.nuevos_grupos} grupos agregados a la cola. Quedan ${r.grupos_restantes.toLocaleString(
+                  "es-AR",
+                )} de ${r.grupos_totales.toLocaleString("es-AR")}.`
               })
             }
             disabled={ocupado !== null}
@@ -146,8 +154,9 @@ export default function CompanyDuplicatesPage() {
             ) : (
               <RefreshCw className="mr-1 h-4 w-4" />
             )}
-            Volver a detectar
+            Traer mas grupos
           </Button>
+
           <Button
             variant="outline"
             onClick={() =>

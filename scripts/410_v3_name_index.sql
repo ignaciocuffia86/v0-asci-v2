@@ -43,8 +43,18 @@ CREATE TABLE IF NOT EXISTS v3.company_name_index (
   name_snapshot TEXT NOT NULL,   -- para detectar renombres sin tocar v2
   core          TEXT,
   weight        INTEGER NOT NULL DEFAULT 0,  -- contactos + vacantes, para priorizar
+  -- Counts desagregados, para que armar el payload de la UI no tenga que
+  -- consultar contacts/job_postings/company_news por empresa.
+  n_jobs        INTEGER NOT NULL DEFAULT 0,
+  n_contacts    INTEGER NOT NULL DEFAULT 0,
+  n_news        INTEGER NOT NULL DEFAULT 0,
   refreshed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Para bases donde la tabla ya existia sin estas columnas.
+ALTER TABLE v3.company_name_index ADD COLUMN IF NOT EXISTS n_jobs     INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE v3.company_name_index ADD COLUMN IF NOT EXISTS n_contacts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE v3.company_name_index ADD COLUMN IF NOT EXISTS n_news     INTEGER NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS company_name_index_core_idx
   ON v3.company_name_index (core)
@@ -161,23 +171,40 @@ BEGIN
   )
   SELECT count(*) INTO v_bajas FROM borradas;
 
-  -- 4. Pesos: con agregados en una sola pasada. Buscar empresa por empresa
+  -- 4. Counts: con agregados en una sola pasada. Buscar empresa por empresa
   --    costaba 9s (484.895 lookups); asi cuesta ~2s.
-  WITH pesos AS (
-    SELECT id, sum(n)::int AS total FROM (
-      SELECT current_company_id AS id, count(*) AS n
+  --    Se guardan desagregados porque `build_dup_payload` los necesita para la
+  --    UI, y consultarlos por empresa era lo que hacia fallar el boton.
+  WITH counts AS (
+    SELECT id,
+           sum(jobs)::int     AS jobs,
+           sum(contactos)::int AS contactos,
+           sum(noticias)::int  AS noticias
+    FROM (
+      SELECT current_company_id AS id, 0 AS jobs, count(*) AS contactos, 0 AS noticias
       FROM public.contacts WHERE current_company_id IS NOT NULL
       GROUP BY current_company_id
       UNION ALL
-      SELECT company_id AS id, count(*) AS n
+      SELECT company_id AS id, count(*) AS jobs, 0 AS contactos, 0 AS noticias
       FROM public.job_postings WHERE company_id IS NOT NULL
+      GROUP BY company_id
+      UNION ALL
+      SELECT company_id AS id, 0 AS jobs, 0 AS contactos, count(*) AS noticias
+      FROM public.company_news WHERE company_id IS NOT NULL
       GROUP BY company_id
     ) u GROUP BY id
   ), upd AS (
     UPDATE v3.company_name_index i
-    SET weight = p.total
-    FROM pesos p
-    WHERE i.company_id = p.id AND i.weight <> p.total
+    SET weight     = c.contactos + c.jobs,
+        n_jobs     = c.jobs,
+        n_contacts = c.contactos,
+        n_news     = c.noticias
+    FROM counts c
+    WHERE i.company_id = c.id
+      AND (i.weight <> c.contactos + c.jobs
+        OR i.n_jobs <> c.jobs
+        OR i.n_contacts <> c.contactos
+        OR i.n_news <> c.noticias)
     RETURNING 1
   )
   SELECT count(*) INTO v_pesos FROM upd;
@@ -231,6 +258,47 @@ BEGIN
   );
 END;
 $$;
+
+-- ── Payload de la UI ────────────────────────────────────────────────────────
+--
+-- Reemplaza la version de 408. La original hacia 3 subqueries correlacionadas
+-- por empresa (jobs, contacts, news). Con lotes de 100 grupos eso eran ~1.400
+-- subqueries por clic y era el ultimo cuello de botella: el timeout apuntaba
+-- exactamente aca ("SQL function build_dup_payload statement 1").
+--
+-- Ahora lee los counts ya precalculados del indice. Mismo JSON de salida, asi
+-- que la UI y las funciones de 409 no cambian.
+
+CREATE OR REPLACE FUNCTION v3.build_dup_payload(p_ids UUID[])
+RETURNS JSONB
+LANGUAGE sql
+STABLE
+SET search_path = public, v3, pg_catalog
+AS $$
+  SELECT coalesce(jsonb_agg(x ORDER BY x->>'name'), '[]'::jsonb)
+  FROM (
+    SELECT jsonb_build_object(
+      'id',       c.id,
+      'name',     c.name,
+      'country',  nullif(btrim(coalesce(c.country, '')), ''),
+      'industry', c.industry,
+      'linkedin', nullif(regexp_replace(coalesce(c.linkedin_url, ''),
+                    '^https?://([a-z]{2,3}\.)?linkedin\.com/company/', ''), ''),
+      'website',  nullif(regexp_replace(coalesce(c.website, ''),
+                    '^https?://(www\.)?', ''), ''),
+      -- coalesce por si la empresa todavia no fue indexada (ETL recien corrido)
+      'jobs',     coalesce(i.n_jobs, 0),
+      'contacts', coalesce(i.n_contacts, 0),
+      'news',     coalesce(i.n_news, 0)
+    ) AS x
+    FROM public.companies c
+    LEFT JOIN v3.company_name_index i ON i.company_id = c.id
+    WHERE c.id = ANY(p_ids)
+  ) s;
+$$;
+
+REVOKE ALL ON FUNCTION v3.build_dup_payload(UUID[]) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION v3.build_dup_payload(UUID[]) TO authenticated, service_role;
 
 -- ── Deteccion ───────────────────────────────────────────────────────────────
 --
@@ -337,6 +405,28 @@ BEGIN
   );
 END;
 $$;
+
+-- ── Agenda ──────────────────────────────────────────────────────────────────
+--
+-- La sincronizacion tarda ~56s medidos, asi que NO puede correr desde la UI:
+-- una llamada por RPC muere a los 8s. Va por pg_cron, que corre dentro de la
+-- base sin el statement_timeout de los roles de PostgREST.
+--
+-- 07:10 UTC = 04:10 en Argentina, despues del ETL nocturno.
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
+    PERFORM cron.unschedule('v3-sync-company-name-index')
+    WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'v3-sync-company-name-index');
+
+    PERFORM cron.schedule(
+      'v3-sync-company-name-index',
+      '10 7 * * *',
+      $cmd$ SELECT v3.sync_company_name_index(50000); $cmd$
+    );
+  END IF;
+END $$;
 
 REVOKE ALL ON FUNCTION v3.sync_company_name_index(INTEGER) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION v3.refresh_company_dup_candidates(INTEGER, BOOLEAN) FROM PUBLIC, anon;
