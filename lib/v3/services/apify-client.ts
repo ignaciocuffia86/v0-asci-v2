@@ -14,8 +14,16 @@ import "server-only"
  *   de 180 días, así que cualquier pedido más amplio que 30 días se traduce a ""
  *   (sin límite) en lugar de fallar o de mentir sobre la ventana aplicada.
  * - `title` es el término de búsqueda por TÍTULO DE PUESTO, no un filtro de
- *   empresa. Es la razón por la que la ingesta filtra por pertenencia después.
- * - `rows` es un techo, no una cantidad exacta: con rows=25 devolvió 20.
+ *   empresa. Buscar con title="Arcor" devolvió 20 vacantes de las cuales solo 5
+ *   eran de Grupo Arcor: el resto era de Medifé, ArcelorMittal y Worley.
+ * - `companyName` SÍ existe y acepta un ARRAY de nombres. Filtra en origen: dos
+ *   corridas con `["Grupo Arcor","Arcor"]` devolvieron 10/10 y 15/15 vacantes de
+ *   Grupo Arcor, 100% de pureza contra el 25% de `title`. Por eso es el input que
+ *   se usa: el nombre sale de nuestra tabla `companies`, no de una adivinanza.
+ * - `rows` es un techo, no una cantidad exacta: con rows=25 devolvió 15.
+ * - `rows: 1000` con `proxy.useApifyProxy: false` EXPIRA (run TIMED-OUT a los
+ *   260s, con solo 10 items rescatados del parcial). De ahí el techo de `rows` y
+ *   el proxy residencial, que sí completó.
  */
 
 const ACTOR_FALLBACK = "bebity~linkedin-jobs-scraper"
@@ -45,6 +53,40 @@ export function toPublishedWindow(days: number | null | undefined): ApifyPublish
   return "any"
 }
 
+/**
+ * Variantes del nombre de empresa para pasarle al filtro `companyName`.
+ *
+ * LinkedIn indexa el nombre de fantasía, que no siempre coincide con el razón
+ * social que guardamos: nuestra fila dice "Grupo Arcor" pero también existe
+ * "Arcor". Como `companyName` acepta un array, se mandan las variantes razonables
+ * en vez de apostar a una sola y volver con cero resultados.
+ *
+ * NO se inventan variantes agresivas (siglas, traducciones): cada variante extra
+ * amplía lo que el actor considera aceptable, y de ahí podría entrar una empresa
+ * ajena. La verificación de pertenencia de la ingesta sigue siendo la red final.
+ */
+export function companyNameVariants(name: string, linkedinUrl?: string | null): string[] {
+  const out: string[] = []
+  const push = (v: string) => {
+    const t = v.trim()
+    if (t.length >= 3 && !out.some((e) => e.toLowerCase() === t.toLowerCase())) out.push(t)
+  }
+
+  push(name)
+
+  // Sin prefijo societario ("Grupo Arcor" -> "Arcor").
+  push(name.replace(/^\s*(grupo|group|holding)\s+/i, ""))
+  // Sin sufijo societario ("ARCOR S.A.I.C." -> "ARCOR").
+  push(name.replace(/\s*(s\.?a\.?i\.?c\.?|s\.?a\.?s\.?|s\.?a\.?|s\.?r\.?l\.?|inc\.?|llc|ltd\.?|corp\.?)\s*$/i, ""))
+
+  // El slug de LinkedIn es la forma que LinkedIn mismo usa, así que es la
+  // variante más confiable de todas cuando está disponible.
+  const slug = linkedinUrl?.match(/\/company\/([^/?#]+)/i)?.[1]
+  if (slug) push(slug.replace(/-/g, " "))
+
+  return out.slice(0, 4)
+}
+
 export interface ApifyRunResult {
   runId: string
   items: Record<string, unknown>[]
@@ -61,9 +103,18 @@ export interface ApifyRunResult {
  * defecto es 3600s: sin acotarlo, un run colgado bloquearía el request.
  */
 export async function runLinkedinJobsActor(params: {
-  /** Término de búsqueda. Es el título del puesto o una tecnología, no la empresa. */
-  query: string
+  /**
+   * Nombres de la empresa objetivo. Filtra en origen: es lo que evita traer
+   * vacantes de otras empresas. Sale de `companies.name`, no de input libre.
+   */
+  companyNames: string[]
+  /** País o región de la empresa, de `companies.country`. */
   location?: string
+  /**
+   * Término opcional para acotar por título de puesto DENTRO de la empresa.
+   * Sin esto se traen todas las vacantes de la empresa, que es lo habitual.
+   */
+  titleQuery?: string | null
   windowDays?: number | null
   maxRows?: number
   timeoutSecs?: number
@@ -77,13 +128,21 @@ export async function runLinkedinJobsActor(params: {
   const requestedWindow = toPublishedWindow(params.windowDays)
   const timeoutSecs = params.timeoutSecs ?? 180
 
-  const input = {
-    title: params.query,
+  const companyNames = params.companyNames.map((n) => n.trim()).filter((n) => n.length >= 3)
+  if (companyNames.length === 0) throw new Error("APIFY_COMPANY_NAMES_REQUIRED")
+
+  const input: Record<string, unknown> = {
+    companyName: companyNames,
     location: params.location ?? "Argentina",
     publishedAt: PUBLISHED_AT_VALUES[requestedWindow],
-    rows: params.maxRows ?? 50,
+    // Techo deliberadamente bajo: con rows=1000 el run expira sin devolver nada
+    // útil. Es mejor traer 50 vacantes reales que perder el run entero.
+    rows: Math.min(params.maxRows ?? 50, 200),
     proxy: { useApifyProxy: true, apifyProxyGroups: ["RESIDENTIAL"] },
   }
+  // `title` solo se manda si se pidió acotar: mandarlo vacío angosta la búsqueda
+  // sin que nadie lo haya pedido.
+  if (params.titleQuery?.trim()) input.title = params.titleQuery.trim()
 
   const url = `https://api.apify.com/v2/acts/${actor}/run-sync-get-dataset-items?timeout=${timeoutSecs}`
 

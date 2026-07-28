@@ -84,17 +84,30 @@ const handler = createMcpHandler((server) => {
   server.tool("submit_company_success_cases", "Paso 2 de 2: entrega los casos de éxito que encontró el cliente. El servidor aplica los guardrails (URL viva y mención real de la empresa) y descarta lo que no pase, así que la respuesta informa cuántos se aceptaron y cuántos se rechazaron con su motivo. No consume cuota adicional.", { executionId: z.string().uuid(), packageHash: z.string().length(64), result: z.unknown(), clientModel: z.string().max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async (args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:submit", "client_assisted"); return submitCompanySuccessCases(auth, args) }))
   server.tool("prepare_company_news", "Paso 1 de 2 para buscar noticias recientes de una cuenta. Devuelve el prompt package para que el cliente BUSQUE con sus propios tokens, con una ventana temporal explícita (180 días por defecto) para que no traiga notas viejas como si fueran novedad. Consume 1 unidad de cuota de research.", { companyId: z.string().uuid(), term: z.string().min(2).max(120).optional(), windowDays: z.number().int().min(1).max(730).optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, term, windowDays, idempotencyKey }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:prepare", "client_assisted"); return prepareCompanyNews(auth, { companyId, term, windowDays, idempotencyKey }) }))
   server.tool("submit_company_news", "Paso 2 de 2: entrega las noticias que encontró el cliente. El servidor verifica URLs y relevancia, descarta lo que no pase, y clasifica cada noticia como expansion, contraccion o neutro para que una mala noticia (un cierre de planta, una desinversión) no sume puntaje de timing como si fuera una oportunidad. No consume cuota adicional.", { executionId: z.string().uuid(), packageHash: z.string().length(64), result: z.unknown(), clientModel: z.string().max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async (args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:submit", "client_assisted"); return submitCompanyNews(auth, args) }))
-  server.tool("scrape_company_job_postings", "Trae vacantes frescas de LinkedIn para una cuenta guardada y las ingesta por el pipeline de importación de ASCI, que se encarga de normalizar y deduplicar. Consume cuota de research server-managed porque el scraping corre con recursos de ASCI. Dos límites del buscador de LinkedIn que conviene saber: (1) busca por TÍTULO DE PUESTO, no por empresa, así que la mayoría de los resultados suele ser de otras empresas y se descarta automáticamente; usá `query` con el nombre de la empresa o con una tecnología. (2) La ventana sólo puede ser 1, 7 o 30 días; si pedís más, trae sin límite de fecha y te lo avisa. La ingesta es asincrónica: las vacantes aparecen cuando el importador procesa el lote, no de inmediato.", { companyId: z.string().uuid(), query: z.string().min(2).max(120), location: z.string().min(2).max(120).optional(), windowDays: z.number().int().min(1).max(365).optional(), maxRows: z.number().int().min(1).max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, query, location, windowDays, maxRows, idempotencyKey }, extra) => safely(async () => {
+  server.tool("scrape_company_job_postings", "Trae vacantes frescas de LinkedIn para una cuenta guardada y las ingesta por el pipeline de importación de ASCI, que las normaliza y deduplica. El filtro por empresa se aplica en el buscador usando el nombre y el país que ya tenemos guardados de la cuenta, así que no hace falta pasarlos. Consume cuota de research server-managed porque el scraping corre con recursos de ASCI. Dos cosas a tener en cuenta: (1) `titleQuery` es OPCIONAL y sirve para acotar por título de puesto DENTRO de la empresa (por ejemplo 'SAP'); si lo omitís se traen todas las vacantes de la empresa, que es lo habitual. (2) La ventana sólo puede ser 1, 7 o 30 días; si pedís más, se busca sin límite de fecha y se te avisa. La ingesta es asincrónica: las vacantes aparecen cuando el importador procesa el lote, no de inmediato.", { companyId: z.string().uuid(), titleQuery: z.string().min(2).max(120).optional(), location: z.string().min(2).max(120).optional(), windowDays: z.number().int().min(1).max(365).optional(), maxRows: z.number().int().min(1).max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, titleQuery, location, windowDays, maxRows, idempotencyKey }, extra) => safely(async () => {
     const auth = authOf(extra); await requirePaidMcp(auth, "research:run", "server_managed")
     const blocked = await guardSavedAccounts(auth, [companyId])
     if (blocked) return blocked
-    const reservation = await reserveMcpUsage({ principal: auth, pool: "research_server", units: 1, idempotencyKey, metadata: { companyId, query } })
+    const reservation = await reserveMcpUsage({ principal: auth, pool: "research_server", units: 1, idempotencyKey, metadata: { companyId, titleQuery: titleQuery ?? null } })
     if (!reservation.allowed || !reservation.reservationId) return reservation
     // Replay: la cuota ya se cobró y el batch ya existe. Devolver lo mismo evita
     // un segundo scraping (que se paga) y un segundo batch con las mismas filas.
     if (reservation.idempotent && reservation.status === "committed" && reservation.metadata?.batchId) return { ...reservation.metadata, idempotent: true }
     try {
-      const run = await runLinkedinJobsActor({ query, location, windowDays: windowDays ?? null, maxRows })
+      // El nombre y el país salen de nuestra tabla `companies`, no del input: son
+      // exactamente los dos valores que el actor necesita para filtrar en origen,
+      // y son los que ya tenemos confirmados. Así el filtrado no depende de que
+      // quien llama escriba bien el nombre de la empresa.
+      const admin = createAdminClient()
+      const { data: company } = await admin.from("companies").select("name,linkedin_url,country").eq("id", companyId).maybeSingle()
+      if (!company) throw new Error("COMPANY_NOT_FOUND")
+      const run = await runLinkedinJobsActor({
+        companyNames: companyNameVariants(company.name, company.linkedin_url),
+        location: location ?? company.country ?? undefined,
+        titleQuery: titleQuery ?? null,
+        windowDays: windowDays ?? null,
+        maxRows,
+      })
       const ingest = await ingestApifyJobPostings({ companyId, userId: auth.userId, runId: run.runId, items: run.items })
       const response = {
         ...ingest,
