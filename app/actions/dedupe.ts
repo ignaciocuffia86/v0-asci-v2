@@ -102,6 +102,17 @@ export async function getDupCandidates(options?: {
 }
 
 /** Recalcula la cache de candidatos. Gratis: no usa IA. */
+/**
+ * Trae el siguiente lote de grupos a la cola de revision.
+ *
+ * Lee de v3.company_dup_groups, que ya viene precalculada. No agrupa las 485k
+ * empresas en el clic: eso costaba 16s con cache frio y hacia fallar el boton
+ * con "canceling statement due to statement timeout" (el limite real es 8s,
+ * heredado del rol `authenticated`).
+ *
+ * El lote es chico a proposito. Son 21.508 grupos en total y la cola se revisa
+ * a mano: traerlos todos de una no aporta nada y solo agrega riesgo de timeout.
+ */
 export async function refreshDupCandidates(options?: {
   limit?: number
   includeTrgm?: boolean
@@ -110,19 +121,48 @@ export async function refreshDupCandidates(options?: {
   const admin = createAdminClient()
 
   const { data, error } = await admin.schema("v3").rpc("refresh_company_dup_candidates", {
-    p_limit: options?.limit ?? 500,
+    p_limit: options?.limit ?? 100,
     p_include_trgm: options?.includeTrgm ?? false,
   })
 
   if (error) throw new Error(error.message)
   revalidatePath(RUTA)
   return data as {
-    relevantes: number
-    grupos_core: number
-    grupos_trgm: number
+    indexadas: number
+    grupos_totales: number
+    grupos_restantes: number
+    nuevos_grupos: number
     pendientes: number
     seguros: number
     ambiguos: number
+  }
+}
+
+/**
+ * Resincroniza el indice de nombres contra public.companies.
+ *
+ * Es la parte cara (recalcula nucleos y regrupa) y por eso NO va en el mismo
+ * clic que la deteccion. Se corre despues de cada ETL. Si tarda mas que el
+ * limite de la conexion, hay que correrla con `scripts/run-sql.mjs`, que usa
+ * conexion directa sin tope de tiempo.
+ */
+export async function syncNameIndex(limit = 50000) {
+  await requireAdmin()
+  const admin = createAdminClient()
+
+  const { data, error } = await admin.schema("v3").rpc("sync_company_name_index", {
+    p_limit: limit,
+  })
+
+  if (error) throw new Error(error.message)
+  revalidatePath(RUTA)
+  return data as {
+    altas: number
+    renombres: number
+    bajas: number
+    grupos_detectados: number
+    total_indexadas: number
+    quedan_pendientes: number
   }
 }
 

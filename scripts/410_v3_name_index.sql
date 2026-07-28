@@ -62,6 +62,40 @@ CREATE POLICY company_name_index_service_only
 REVOKE ALL ON TABLE v3.company_name_index FROM PUBLIC, anon, authenticated;
 GRANT ALL ON TABLE v3.company_name_index TO service_role;
 
+-- ── Tabla de grupos ya detectados ───────────────────────────────────────────
+--
+-- Segundo nivel de precalculo, y el que hace que el boton sea confiable.
+--
+-- Medicion que lo motivo: agrupar las 485k costaba 16s con cache frio y 4,7s
+-- con cache caliente. O sea que el primer clic del dia fallaba igual, aunque
+-- el segundo pasara. Un boton que depende del cache de disco no sirve.
+--
+-- Con los grupos precalculados quedan 21.508 filas: el boton lee un lote de ahi
+-- en milisegundos y el tiempo deja de depender del cache.
+
+CREATE TABLE IF NOT EXISTS v3.company_dup_groups (
+  group_key    TEXT PRIMARY KEY,
+  company_ids  UUID[] NOT NULL,
+  n            INTEGER NOT NULL,
+  peso         BIGINT  NOT NULL DEFAULT 0,
+  promoted_at  TIMESTAMPTZ,          -- ya paso a company_dup_candidates
+  detected_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Indice para la consulta exacta del boton: pendientes, mas pesados primero.
+CREATE INDEX IF NOT EXISTS company_dup_groups_pendientes_idx
+  ON v3.company_dup_groups (peso DESC, n DESC)
+  WHERE promoted_at IS NULL;
+
+ALTER TABLE v3.company_dup_groups ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS company_dup_groups_service_only ON v3.company_dup_groups;
+CREATE POLICY company_dup_groups_service_only
+  ON v3.company_dup_groups FOR ALL TO service_role USING (true) WITH CHECK (true);
+
+REVOKE ALL ON TABLE v3.company_dup_groups FROM PUBLIC, anon, authenticated;
+GRANT ALL ON TABLE v3.company_dup_groups TO service_role;
+
 -- ── Sincronizacion ──────────────────────────────────────────────────────────
 --
 -- Cuesta ~4s medidos (tres comparaciones de 485k contra 485k), asi que NO va
@@ -81,6 +115,8 @@ DECLARE
   v_cambios  INT := 0;
   v_bajas    INT := 0;
   v_pesos    INT := 0;
+  v_grupos   INT := 0;
+  v_inicio   TIMESTAMPTZ := clock_timestamp();
 BEGIN
   -- 1. Altas: empresas nuevas que el ETL trajo y todavia no estan indexadas.
   WITH nuevas AS (
@@ -146,9 +182,45 @@ BEGIN
   )
   SELECT count(*) INTO v_pesos FROM upd;
 
+  -- 5. Recalcular los grupos. Es la parte cara (16s con cache frio) y por eso
+  --    vive aca, en la sincronizacion pesada, y no en el clic del boton.
+  --    Se preserva `promoted_at` para no volver a proponer lo ya decidido.
+  WITH nuevos AS (
+    SELECT core AS group_key,
+           array_agg(company_id ORDER BY company_id) AS ids,
+           count(*)::int AS n,
+           sum(weight)::bigint AS peso
+    FROM v3.company_name_index
+    WHERE core IS NOT NULL AND length(core) >= 3
+    GROUP BY core
+    HAVING count(*) > 1
+  ), up AS (
+    INSERT INTO v3.company_dup_groups (group_key, company_ids, n, peso)
+    SELECT group_key, ids, n, peso FROM nuevos
+    ON CONFLICT (group_key) DO UPDATE
+      SET company_ids = EXCLUDED.company_ids,
+          n           = EXCLUDED.n,
+          peso        = EXCLUDED.peso,
+          detected_at = now()
+    RETURNING 1
+  )
+  SELECT count(*) INTO v_grupos FROM up;
+
+  -- Grupos que dejaron de serlo (quedo una sola empresa tras un merge).
+  -- El UPSERT de arriba puso `detected_at = now()` en todos los vigentes, asi
+  -- que los que quedaron con timestamp viejo ya no son grupos. Es un filtro por
+  -- fecha y nada mas.
+  --
+  -- La primera version hacia `NOT EXISTS (... GROUP BY ... HAVING count(*)>1)`
+  -- correlacionado: un agregado sobre el indice por cada uno de los 21.508
+  -- grupos. Se colgo a los 120s.
+  DELETE FROM v3.company_dup_groups
+  WHERE promoted_at IS NULL AND detected_at < v_inicio;
+
   RETURN jsonb_build_object(
     'altas', v_altas, 'renombres', v_cambios,
     'bajas', v_bajas, 'pesos_actualizados', v_pesos,
+    'grupos_detectados', v_grupos,
     'total_indexadas', (SELECT count(*) FROM v3.company_name_index),
     -- Si quedan pendientes, hay que volver a llamar: el lote esta acotado.
     'quedan_pendientes', (
@@ -177,49 +249,59 @@ SECURITY DEFINER
 SET search_path = public, v3, extensions, pg_catalog
 AS $$
 DECLARE
-  v_nuevos INT := 0;
-  v_trgm   INT := 0;
+  v_nuevos  INT := 0;
+  v_trgm    INT := 0;
 BEGIN
-  -- Grupos por nucleo, priorizando los que tienen mas datos asociados.
-  -- Se recorren TODAS las empresas (decision del usuario), pero las que no
-  -- tienen contactos ni vacantes quedan al final de la cola por su weight.
-  WITH grupos AS (
-    SELECT core AS group_key,
-           array_agg(company_id ORDER BY company_id) AS ids,
-           count(*) AS n,
-           sum(weight) AS peso
-    FROM v3.company_name_index
-    WHERE core IS NOT NULL AND length(core) >= 3
-    GROUP BY core
-    HAVING count(*) > 1
-  ),
-  elegidos AS (
-    SELECT g.*
-    FROM grupos g
-    -- No re-proponer lo que ya se decidio (mergeado, descartado, en IA).
-    WHERE NOT EXISTS (
-      SELECT 1 FROM v3.company_dup_candidates d
-      WHERE d.group_key = g.group_key AND d.method = 'core'
-    )
+  -- Ya no se agrupa nada aca: los grupos vienen precalculados por
+  -- `sync_company_name_index()`. Esta funcion solo toma un lote pendiente,
+  -- ordenado por peso, y arma el payload de esos pocos grupos.
+  --
+  -- Historial de lo que se probo y descarto, todo medido:
+  --   - agrupar las 485k en el clic: 16s cache frio / 4,7s caliente -> el
+  --     primer clic del dia fallaba igual. Inaceptable.
+  --   - tablas temporales: 15s. Sin stats el planner degrada el join.
+  WITH elegidos AS MATERIALIZED (
+    SELECT g.group_key, g.company_ids AS ids, g.n, g.peso
+    FROM v3.company_dup_groups g
+    WHERE g.promoted_at IS NULL
+      -- No re-proponer lo que ya se decidio (mergeado, descartado, en IA).
+      AND NOT EXISTS (
+        SELECT 1 FROM v3.company_dup_candidates d
+        WHERE d.group_key = g.group_key AND d.method = 'core'
+      )
+    -- Se recorren TODAS las empresas (decision del usuario), pero las que no
+    -- tienen contactos ni vacantes quedan al final de la cola por su peso.
     ORDER BY g.peso DESC, g.n DESC
     LIMIT p_limit
+  ),
+  miembros AS (
+    SELECT e.group_key, c.id, c.linkedin_url, c.country, i.weight
+    FROM elegidos e
+    JOIN public.companies c ON c.id = ANY(e.ids)
+    LEFT JOIN v3.company_name_index i ON i.company_id = c.id
   ),
   -- Los atributos que deciden si el grupo es ambiguo salen de companies, pero
   -- solo para los miembros de los grupos elegidos: pocas filas, por PK.
   atributos AS (
-    SELECT e.group_key,
-           count(DISTINCT c.linkedin_url) AS li_distintas,
-           count(DISTINCT nullif(btrim(lower(c.country)), '')) AS paises
-    FROM elegidos e
-    JOIN public.companies c ON c.id = ANY(e.ids)
-    GROUP BY e.group_key
+    SELECT group_key,
+           count(DISTINCT linkedin_url) AS li_distintas,
+           count(DISTINCT nullif(btrim(lower(country)), '')) AS paises
+    FROM miembros
+    GROUP BY group_key
+  ),
+  -- Master elegido con el `weight` ya precalculado, en una sola pasada.
+  -- `public.pick_merge_master()` hacia 3 subqueries por empresa (~4.500
+  -- lookups por lote). No se la toca porque la usan los merges de v2.
+  masters AS (
+    SELECT DISTINCT ON (group_key) group_key, id AS master_id
+    FROM miembros
+    ORDER BY group_key, weight DESC NULLS LAST, id
   ),
   ins AS (
     INSERT INTO v3.company_dup_candidates
       (group_key, method, company_ids, master_id, classification, payload)
     SELECT
-      e.group_key, 'core', e.ids,
-      public.pick_merge_master(e.ids),
+      e.group_key, 'core', e.ids, m.master_id,
       CASE
         WHEN a.li_distintas >= 2 OR a.paises >= 2 THEN 'ambiguo'
         ELSE 'seguro'
@@ -227,17 +309,24 @@ BEGIN
       v3.build_dup_payload(e.ids)
     FROM elegidos e
     JOIN atributos a ON a.group_key = e.group_key
+    JOIN masters   m ON m.group_key = e.group_key
     ON CONFLICT (group_key, method) DO NOTHING
+    RETURNING group_key
+  ),
+  -- Marcar los grupos ya promovidos: el indice parcial de la tabla los saca de
+  -- la cola, asi el proximo clic arranca donde quedo este.
+  marcados AS (
+    UPDATE v3.company_dup_groups g
+    SET promoted_at = now()
+    WHERE g.group_key IN (SELECT group_key FROM ins)
     RETURNING 1
   )
-  SELECT count(*) INTO v_nuevos FROM ins;
+  SELECT count(*) INTO v_nuevos FROM marcados;
 
   RETURN jsonb_build_object(
     'indexadas',       (SELECT count(*) FROM v3.company_name_index),
-    'grupos_totales',  (SELECT count(*) FROM (
-                          SELECT 1 FROM v3.company_name_index
-                          WHERE core IS NOT NULL AND length(core) >= 3
-                          GROUP BY core HAVING count(*) > 1) x),
+    'grupos_totales',  (SELECT count(*) FROM v3.company_dup_groups),
+    'grupos_restantes',(SELECT count(*) FROM v3.company_dup_groups WHERE promoted_at IS NULL),
     'nuevos_grupos',   v_nuevos,
     'grupos_trgm',     v_trgm,
     'pendientes',      (SELECT count(*) FROM v3.company_dup_candidates WHERE status = 'pending'),
