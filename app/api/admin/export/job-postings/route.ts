@@ -151,8 +151,6 @@ export async function GET(request: Request) {
             break
           }
         }
-
-        console.log("[v0] Export de jobpostings finalizado:", totalRows, "filas")
       } catch (err) {
         console.error("[v0] Error inesperado en export:", err)
         controller.enqueue(encoder.encode('\n"ERROR: export interrumpido"\n'))

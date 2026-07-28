@@ -316,3 +316,37 @@ AS $function$
 $function$;
 
 GRANT EXECUTE ON FUNCTION public.export_job_postings_stats() TO authenticated, service_role;
+
+-- ============================================================================
+-- HARDENING DE SEGURIDAD
+--
+-- Postgres otorga EXECUTE a PUBLIC por defecto en toda funcion nueva. Como
+-- estas funciones son SECURITY DEFINER (saltean RLS), dejarlas accesibles a
+-- PUBLIC/anon permitiria volcar los 35k jobpostings sin autenticacion desde
+-- la API REST de Supabase. Se revoca explicitamente.
+-- ============================================================================
+REVOKE ALL ON FUNCTION public.export_job_postings(
+  text, text[], text[], text[], date, date, text, text, boolean, boolean, boolean, integer, integer
+) FROM PUBLIC, anon;
+
+REVOKE ALL ON FUNCTION public.export_job_postings_count(
+  text, text[], text[], text[], date, date, text, text, boolean, boolean
+) FROM PUBLIC, anon;
+
+REVOKE ALL ON FUNCTION public.export_job_postings_countries() FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.export_job_postings_industries() FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.export_job_postings_stats() FROM PUBLIC, anon;
+
+-- Se reafirma el acceso para los roles legitimos (REVOKE ... FROM PUBLIC no
+-- toca los grants explicitos, pero se repite para que el archivo sea idempotente).
+GRANT EXECUTE ON FUNCTION public.export_job_postings(
+  text, text[], text[], text[], date, date, text, text, boolean, boolean, boolean, integer, integer
+) TO authenticated, service_role;
+
+GRANT EXECUTE ON FUNCTION public.export_job_postings_count(
+  text, text[], text[], text[], date, date, text, text, boolean, boolean
+) TO authenticated, service_role;
+
+GRANT EXECUTE ON FUNCTION public.export_job_postings_countries() TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.export_job_postings_industries() TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.export_job_postings_stats() TO authenticated, service_role;
