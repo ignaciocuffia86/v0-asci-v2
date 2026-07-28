@@ -90,6 +90,26 @@ export const EVIDENCE_WEIGHTS: Record<EvidenceLevel, number> = {
   Inferido: 5,
 }
 
+// ─── Dirección de la señal ───────────────────────────────────
+//
+// Eje independiente de la categoría. Una noticia de "venta de unidad de negocio"
+// es categoría `ma` igual que una adquisición, pero apunta al lado opuesto.
+// Sin este eje, TIMING_RULES solo sumaba y una cuenta en crisis puntuaba igual
+// que una en expansión.
+
+export const SIGNAL_DIRECTIONS = ["expansion", "contraccion", "neutro"] as const
+
+export type SignalDirection = (typeof SIGNAL_DIRECTIONS)[number]
+
+/** Normaliza el valor de `company_news.direction`, tolerando nulos y acentos. */
+export function toSignalDirection(value: string | null | undefined): SignalDirection {
+  if (!value) return "neutro"
+  const normalized = value.trim().toLowerCase()
+  if (normalized === "expansion" || normalized === "expansión") return "expansion"
+  if (normalized === "contraccion" || normalized === "contracción") return "contraccion"
+  return "neutro"
+}
+
 /** Etiqueta para mostrar al usuario junto al motivo de la clasificación. */
 export const EVIDENCE_LEVEL_HINTS: Record<EvidenceLevel, string> = {
   Confirmado: "Sostenido por una fuente citable de la propia cuenta.",

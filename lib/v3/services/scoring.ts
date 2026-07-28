@@ -7,6 +7,7 @@ import { logAiUsage } from "@/lib/v3/usage"
 import { renderPrompt } from "@/lib/v3/prompts"
 import { getCanonicalContacts } from "./contact-provider"
 import { getWorkspaceFitProfile } from "./workspace-fit-profile"
+import { toEvidenceLevel, EVIDENCE_WEIGHTS, toSignalDirection, type SignalDirection } from "./evidence-level"
 
 // ═══════════════════════════════════════════════════════════
 // Scorecard de cuenta (0-100) por workspace:
@@ -33,34 +34,64 @@ export interface TimingEvent {
   decay: number
   points: number
   date: string | null
+  /** Dirección del evento. Un evento de contracción resta en vez de sumar. */
+  direction: SignalDirection
 }
 
-const TIMING_RULES: { type: string; weight: number; patterns: RegExp }[] = [
+const TIMING_RULES: { type: string; weight: number; direction: SignalDirection; patterns: RegExp }[] = [
+  // ── Contracción: va PRIMERO porque comparte vocabulario con expansión ──
+  // "venta de la unidad de negocio" o "cierre de planta" matchean los patrones de
+  // expansión ("planta", "unidad"). Al evaluarse antes, la contracción gana el
+  // desempate y no se cuenta como una buena noticia.
+  {
+    type: "Contracción / desinversión",
+    weight: 22,
+    direction: "contraccion",
+    patterns:
+      /cierre de (planta|f[aá]brica|operaciones)|cierra su|despido|desvincula|reestructuraci[oó]n|venta de (la )?(unidad|divisi[oó]n|negocio)|desinversi[oó]n|se retira de|salida de(l)? (pa[ií]s|mercado)|abandona el mercado|default|concurso de acreedores|quiebra|suspensi[oó]n de pagos|aumento de (la )?deuda|endeudamiento|p[eé]rdidas|ca[ií]da de (ventas|ingresos)|recorte/i,
+  },
   {
     type: "Expansión / inversión",
     weight: 25,
+    direction: "expansion",
     patterns:
       /expansi[oó]n|inversi[oó]n|planta|f[aá]brica|apertura|nuevo mercado|adquisici[oó]n|fusi[oó]n|m&a|centro de distribuci[oó]n|licitaci[oó]n|rfp/i,
   },
   {
     type: "Cambio ejecutivo",
     weight: 20,
+    direction: "neutro",
     patterns: /\bcio\b|\bcto\b|\bcdo\b|\bcfo\b|\bceo\b|nombramiento|nuevo director|nueva director|gerente de|ejecutiv/i,
   },
   {
     type: "Implementación tecnológica",
     weight: 15,
+    direction: "expansion",
     patterns: /implementaci[oó]n|migraci[oó]n|moderniza|transformaci[oó]n digital|erp|crm|sap|oracle|cloud|nube/i,
   },
 ]
 
-function classifyTimingEvent(title: string, summary: string | null, evidenceLevel: string | null) {
-  if (evidenceLevel === "inferred") return { type: "Inferido", weight: 5 }
+/**
+ * Clasifica un evento de timing. `storedDirection` es la dirección ya persistida
+ * (company_news.direction); si viene, manda sobre la heurística de texto.
+ */
+function classifyTimingEvent(
+  title: string,
+  summary: string | null,
+  evidenceLevel: string | null,
+  storedDirection?: SignalDirection | null
+) {
   const text = `${title} ${summary ?? ""}`
-  for (const rule of TIMING_RULES) {
-    if (rule.patterns.test(text)) return { type: rule.type, weight: rule.weight }
+  const matched = TIMING_RULES.find((rule) => rule.patterns.test(text))
+  const direction = storedDirection ?? matched?.direction ?? "neutro"
+
+  // La evidencia inferida pesa poco, pero si apunta a contracción igual tiene que
+  // restar: no queremos que una señal negativa débil sume timing.
+  if (toEvidenceLevel(evidenceLevel) === "Inferido") {
+    return { type: matched ? `${matched.type} (inferido)` : "Inferido", weight: 5, direction }
   }
-  return { type: "Noticia general", weight: 8 }
+  if (matched) return { type: matched.type, weight: matched.weight, direction }
+  return { type: "Noticia general", weight: 8, direction }
 }
 
 function timingDecay(dateMs: number): number {
@@ -83,7 +114,7 @@ export async function computeScorecard(input: ScoreInput): Promise<Scorecard | n
   const dictionary = await loadDictionary()
 
   // ── Contexto: value profile del workspace + señales de la cuenta ──
-  const [profile, findings, contactsResult, signalsRes] = await Promise.all([
+  const [profile, findings, contactsResult, signalsRes, newsRes] = await Promise.all([
     getWorkspaceFitProfile(input.workspaceId),
     getRadarFindings(input.companyId, { limit: 100 }),
     getCanonicalContacts({ companyId: input.companyId, limit: 50 }),
@@ -92,6 +123,13 @@ export async function computeScorecard(input: ScoreInput): Promise<Scorecard | n
       .select("id, signal_type, created_at")
       .eq("company_id", input.companyId)
       .limit(100),
+    // Noticias con dirección ya clasificada: alimentan timing con signo.
+    admin
+      .from("company_news")
+      .select("title, summary, published_at, direction, evidence_level")
+      .eq("company_id", input.companyId)
+      .order("published_at", { ascending: false })
+      .limit(50),
   ])
 
   const targetTechs = profile.targetTechnologies
@@ -130,10 +168,25 @@ export async function computeScorecard(input: ScoreInput): Promise<Scorecard | n
     : null
 
   // ── BUYING SIGNALS: hallazgos ponderados por nivel de evidencia ──
-  const explicitCount = findings.filter((f) => f.evidence_level === "explicit").length
-  const inferredCount = findings.filter((f) => f.evidence_level === "inferred").length
+  //
+  // Se clasifica con toEvidenceLevel para que convivan los valores binarios
+  // históricos ('explicit'/'inferred') y los canónicos nuevos. El nivel
+  // intermedio (Probable) se pondera en 8: entre Confirmado (12) e Inferido (5),
+  // así una cuenta con evidencia convergente no puntúa como si fuera una
+  // corazonada del modelo ni como un hecho verificado.
+  const byLevel = { Confirmado: 0, Probable: 0, Inferido: 0 }
+  for (const finding of findings) byLevel[toEvidenceLevel(finding.evidence_level)] += 1
+  // Alias retro-compatibles: el rationale y el breakdown ya los exponían así.
+  const explicitCount = byLevel.Confirmado
+  const probableCount = byLevel.Probable
+  const inferredCount = byLevel.Inferido
   const legacySignals = signalsRes.data?.length ?? 0
-  const buyingSignalsScore = clamp(explicitCount * 12 + inferredCount * 5 + Math.min(legacySignals, 10) * 2)
+  const buyingSignalsScore = clamp(
+    explicitCount * EVIDENCE_WEIGHTS.Confirmado +
+      probableCount * EVIDENCE_WEIGHTS.Probable +
+      inferredCount * EVIDENCE_WEIGHTS.Inferido +
+      Math.min(legacySignals, 10) * 2
+  )
 
   // ── ACCESSIBILITY: contactos alcanzables en cache ──
   const contactCount = contactsResult.contacts.length
@@ -144,34 +197,78 @@ export async function computeScorecard(input: ScoreInput): Promise<Scorecard | n
 
   // ── TIMING: eventos ponderados por tipo con decaimiento por antigüedad ──
   const timingEvents: TimingEvent[] = []
-  for (const f of findings) {
-    const dateStr = f.source_date ?? f.detected_at
-    const dateMs = new Date(dateStr).getTime()
-    if (Number.isNaN(dateMs)) continue
+  const pushTimingEvent = (args: {
+    title: string
+    summary: string | null
+    evidenceLevel: string | null
+    dateStr: string | null
+    storedDirection?: SignalDirection | null
+  }) => {
+    if (!args.dateStr) return
+    const dateMs = new Date(args.dateStr).getTime()
+    if (Number.isNaN(dateMs)) return
     const decay = timingDecay(dateMs)
-    if (decay === 0) continue
-    const { type, weight } = classifyTimingEvent(f.title, f.summary ?? null, f.evidence_level ?? null)
+    if (decay === 0) return
+    const { type, weight, direction } = classifyTimingEvent(
+      args.title,
+      args.summary,
+      args.evidenceLevel,
+      args.storedDirection
+    )
+    // El signo es lo que hace que una cuenta en crisis no puntúe como una en
+    // crecimiento. Antes TIMING_RULES solo sumaba y ambas quedaban igual.
+    const sign = direction === "contraccion" ? -1 : 1
     timingEvents.push({
-      title: f.title,
+      title: args.title,
       eventType: type,
       weight,
       decay,
-      points: Math.round(weight * decay * 10) / 10,
-      date: f.source_date ?? null,
+      points: Math.round(weight * decay * sign * 10) / 10,
+      date: args.dateStr,
+      direction,
     })
   }
-  timingEvents.sort((a, b) => b.points - a.points)
-  const timingScore = clamp(timingEvents.reduce((sum, e) => sum + e.points, 0))
+
+  for (const f of findings) {
+    pushTimingEvent({
+      title: f.title,
+      summary: f.summary ?? null,
+      evidenceLevel: f.evidence_level ?? null,
+      dateStr: f.source_date ?? f.detected_at,
+    })
+  }
+  // Las noticias ya traen dirección clasificada y persistida, así que alimentan
+  // timing sin volver a inferirla desde el texto.
+  for (const news of newsRes.data ?? []) {
+    pushTimingEvent({
+      title: news.title,
+      summary: news.summary ?? null,
+      evidenceLevel: news.evidence_level ?? null,
+      dateStr: news.published_at,
+      storedDirection: news.direction ? toSignalDirection(news.direction) : null,
+    })
+  }
+
+  timingEvents.sort((a, b) => Math.abs(b.points) - Math.abs(a.points))
+  // clamp acota a 0-100: una cuenta con contracción neta cae a 0, no a negativo.
+  const timingRaw = timingEvents.reduce((sum, e) => sum + e.points, 0)
+  const timingScore = clamp(timingRaw)
   const recentFindings = timingEvents.length
+  const contractionEvents = timingEvents.filter((e) => e.direction === "contraccion")
 
   const score = fitScore === null
     ? null
     : clamp(fitScore * 0.35 + buyingSignalsScore * 0.35 + accessibilityScore * 0.15 + timingScore * 0.15)
 
   // ── Rationale con IA solo cuando el fit puede evaluarse ──
+  // Aviso explícito de contracción: sin esto un timing bajo parecía falta de
+  // novedades cuando en realidad hay señales negativas.
+  const contractionNote = contractionEvents.length
+    ? ` Atención: ${contractionEvents.length} señal(es) de contracción detectadas (${contractionEvents.slice(0, 2).map((e) => e.eventType).join(", ")}), que restan al timing.`
+    : ""
   let rationale = fitScore === null
-    ? `Fit no evaluado: falta completar la propuesta de valor. Hay ${explicitCount} señales explícitas, ${inferredCount} inferidas y ${contactCount} contactos disponibles.`
-    : `Fit ${fitScore}/100 (${techMatches.length + procMatches.length} coincidencias con el perfil), señales ${buyingSignalsScore}/100 (${explicitCount} explícitas, ${inferredCount} inferidas), accesibilidad ${accessibilityScore}/100 (${contactCount} contactos), timing ${timingScore}/100 (${recentFindings} hallazgos recientes).`
+    ? `Fit no evaluado: falta completar la propuesta de valor. Hay ${explicitCount} señales confirmadas, ${probableCount} probables, ${inferredCount} inferidas y ${contactCount} contactos disponibles.${contractionNote}`
+    : `Fit ${fitScore}/100 (${techMatches.length + procMatches.length} coincidencias con el perfil), señales ${buyingSignalsScore}/100 (${explicitCount} confirmadas, ${probableCount} probables, ${inferredCount} inferidas), accesibilidad ${accessibilityScore}/100 (${contactCount} contactos), timing ${timingScore}/100 (${recentFindings} eventos recientes).${contractionNote}`
   try {
     if (score === null) throw new Error("Fit no evaluado")
     const topFindings = findings
@@ -230,10 +327,12 @@ export async function computeScorecard(input: ScoreInput): Promise<Scorecard | n
       },
       signals_snapshot: {
         explicit: explicitCount,
+        probable: probableCount,
         inferred: inferredCount,
         legacy_signals: legacySignals,
         contacts: contactCount,
         recent_findings: recentFindings,
+        contraction_events: contractionEvents.length,
         // Desglose auditable por pilar (para los tooltips del scorecard)
         breakdown: {
           fit: {
@@ -244,9 +343,10 @@ export async function computeScorecard(input: ScoreInput): Promise<Scorecard | n
           },
           signals: {
             explicit: explicitCount,
+            probable: probableCount,
             inferred: inferredCount,
             legacy: legacySignals,
-            formula: `${explicitCount} explícitas ×12 + ${inferredCount} inferidas ×5 + ${Math.min(legacySignals, 10)} legacy ×2`,
+            formula: `${explicitCount} confirmadas ×${EVIDENCE_WEIGHTS.Confirmado} + ${probableCount} probables ×${EVIDENCE_WEIGHTS.Probable} + ${inferredCount} inferidas ×${EVIDENCE_WEIGHTS.Inferido} + ${Math.min(legacySignals, 10)} legacy ×2`,
             top_titles: findings.slice(0, 5).map((f) => f.title),
           },
           accessibility: {
@@ -257,6 +357,12 @@ export async function computeScorecard(input: ScoreInput): Promise<Scorecard | n
           timing: {
             events: timingEvents.slice(0, 8),
             total_events: timingEvents.length,
+            // raw puede ser negativo aunque el score final sea 0: deja ver que la
+            // cuenta tiene contracción neta y no simplemente ausencia de señales.
+            raw_points: Math.round(timingRaw * 10) / 10,
+            expansion_events: timingEvents.filter((e) => e.direction === "expansion").length,
+            contraction_events: contractionEvents.length,
+            contraction_titles: contractionEvents.slice(0, 5).map((e) => e.title),
           },
         },
       },
