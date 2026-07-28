@@ -64,20 +64,36 @@ export function toPublishedWindow(days: number | null | undefined): ApifyPublish
  * NO se inventan variantes agresivas (siglas, traducciones): cada variante extra
  * amplía lo que el actor considera aceptable, y de ahí podría entrar una empresa
  * ajena. La verificación de pertenencia de la ingesta sigue siendo la red final.
+ *
+ * Los nombres de `companies` vienen sucios de la ingesta CSV: hay filas reales
+ * como `- Ing. Tangari S.A.`, `"Boston Cafe" - Iturdesi Cafe S.A.`,
+ * `«Russkiy Svet» S.A.` y `- Ormas SA / Benito Roggio e Hijos SA`. Mandarlos tal
+ * cual al filtro devuelve cero resultados y gasta la cuota en un run inútil, así
+ * que se limpian antes de armar las variantes.
  */
 export function companyNameVariants(name: string, linkedinUrl?: string | null): string[] {
   const out: string[] = []
   const push = (v: string) => {
-    const t = v.trim()
+    const t = v.replace(/\s+/g, " ").trim()
     if (t.length >= 3 && !out.some((e) => e.toLowerCase() === t.toLowerCase())) out.push(t)
   }
 
-  push(name)
+  // Se quitan comillas de todo tipo y la puntuación de los bordes, y se corta en
+  // `/` porque esas filas traen dos empresas y la primera es la principal.
+  const clean = name
+    .replace(/["'«»“”‘’]/g, " ")
+    .split("/")[0]
+    .replace(/^[^\p{L}\p{N}]+/u, "")
+    .replace(/[^\p{L}\p{N}.]+$/u, "")
+    .replace(/\s+/g, " ")
+    .trim()
+
+  push(clean)
 
   // Sin prefijo societario ("Grupo Arcor" -> "Arcor").
-  push(name.replace(/^\s*(grupo|group|holding)\s+/i, ""))
+  push(clean.replace(/^\s*(grupo|group|holding)\s+/i, ""))
   // Sin sufijo societario ("ARCOR S.A.I.C." -> "ARCOR").
-  push(name.replace(/\s*(s\.?a\.?i\.?c\.?|s\.?a\.?s\.?|s\.?a\.?|s\.?r\.?l\.?|inc\.?|llc|ltd\.?|corp\.?)\s*$/i, ""))
+  push(clean.replace(/\s*(s\.?a\.?i\.?c\.?|s\.?a\.?s\.?|s\.?a\.?|s\.?r\.?l\.?|inc\.?|llc|ltd\.?|corp\.?)\s*$/i, ""))
 
   // El slug de LinkedIn es la forma que LinkedIn mismo usa, así que es la
   // variante más confiable de todas cuando está disponible.
@@ -131,9 +147,14 @@ export async function runLinkedinJobsActor(params: {
   const companyNames = params.companyNames.map((n) => n.trim()).filter((n) => n.length >= 3)
   if (companyNames.length === 0) throw new Error("APIFY_COMPANY_NAMES_REQUIRED")
 
+  // `companies.country` viene como STRING VACÍO en filas reales (la cuenta
+  // "ARCOR" tiene country: ""), y `??` no captura "" porque no es null. Sin este
+  // trim explícito se le mandaría `location: ""` al actor.
+  const location = params.location?.trim() || "Argentina"
+
   const input: Record<string, unknown> = {
     companyName: companyNames,
-    location: params.location ?? "Argentina",
+    location,
     publishedAt: PUBLISHED_AT_VALUES[requestedWindow],
     // Techo deliberadamente bajo: con rows=1000 el run expira sin devolver nada
     // útil. Es mejor traer 50 vacantes reales que perder el run entero.
@@ -144,43 +165,76 @@ export async function runLinkedinJobsActor(params: {
   // sin que nadie lo haya pedido.
   if (params.titleQuery?.trim()) input.title = params.titleQuery.trim()
 
-  const url = `https://api.apify.com/v2/acts/${actor}/run-sync-get-dataset-items?timeout=${timeoutSecs}`
+  const auth = { Authorization: `Bearer ${token}` }
 
-  let response: Response
+  // ── Paso 1: arrancar el run y quedarse con el runId ──────────────────────
+  //
+  // Se usa el endpoint asincrónico en vez de `run-sync-get-dataset-items` porque
+  // el gateway sincrónico es frágil: en una prueba real devolvió 502 mientras el
+  // run terminaba SUCCEEDED en 19 segundos. Con el endpoint sync eso significa
+  // pagar el scraping y perder los datos, sin forma de recuperarlos. Teniendo el
+  // runId, un fallo de red durante la espera no pierde nada.
+  let startResponse: Response
   try {
-    response = await fetch(url, {
+    startResponse = await fetch(`https://api.apify.com/v2/acts/${actor}/runs?timeout=${timeoutSecs}`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      headers: { ...auth, "Content-Type": "application/json" },
       body: JSON.stringify(input),
-      // El actor puede tardar: se le da margen sobre su propio timeout.
-      signal: AbortSignal.timeout((timeoutSecs + 30) * 1000),
+      signal: AbortSignal.timeout(30_000),
     })
   } catch (error) {
-    // Se distingue el timeout del resto para que la capa de arriba pueda sugerir
-    // reintentar con una ventana más chica en lugar de mostrar un error opaco.
-    if (error instanceof Error && error.name === "TimeoutError") {
-      throw new Error("APIFY_RUN_TIMEOUT:El scraping tardó demasiado. Probá una ventana más corta o menos filas.")
+    throw new Error(`APIFY_RUN_START_FAILED:${error instanceof Error ? error.message : "error de red"}`)
+  }
+  if (!startResponse.ok) {
+    const body = await startResponse.text().catch(() => "")
+    // El cuerpo del error de Apify es informativo (enumera los valores válidos de
+    // los enums), así que se propaga recortado. Nunca incluye el token.
+    throw new Error(`APIFY_RUN_HTTP_${startResponse.status}:${body.slice(0, 300)}`)
+  }
+
+  const started = (await startResponse.json()) as { data?: { id?: string; defaultDatasetId?: string } }
+  const runId = started.data?.id
+  const datasetId = started.data?.defaultDatasetId
+  if (!runId || !datasetId) throw new Error("APIFY_RUN_NO_ID:Apify no devolvió el id del run")
+
+  // ── Paso 2: esperar a que termine ────────────────────────────────────────
+  const deadline = Date.now() + (timeoutSecs + 30) * 1000
+  let status = "READY"
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 3000))
+    try {
+      const poll = await fetch(`https://api.apify.com/v2/actor-runs/${runId}`, { headers: auth, signal: AbortSignal.timeout(20_000) })
+      if (!poll.ok) continue // Un error puntual del gateway no invalida el run.
+      status = ((await poll.json()) as { data?: { status?: string } }).data?.status ?? status
+    } catch {
+      continue // Idem: se reintenta hasta la fecha límite.
     }
-    throw new Error(`APIFY_RUN_FAILED:${error instanceof Error ? error.message : "error de red"}`)
+    if (status !== "RUNNING" && status !== "READY") break
   }
 
-  if (!response.ok) {
-    const body = await response.text().catch(() => "")
-    // El cuerpo del error de Apify es informativo (enumera los valores válidos),
-    // así que se propaga recortado en vez de descartarlo. Nunca incluye el token.
-    throw new Error(`APIFY_RUN_HTTP_${response.status}:${body.slice(0, 300)}`)
+  // ── Paso 3: leer el dataset ──────────────────────────────────────────────
+  //
+  // Se leen los items incluso si el run no terminó en SUCCEEDED: un run
+  // TIMED-OUT suele dejar resultados parciales válidos, y descartarlos sería
+  // tirar vacantes reales que ya se pagaron.
+  let items: Record<string, unknown>[] = []
+  try {
+    const data = await fetch(`https://api.apify.com/v2/datasets/${datasetId}/items?limit=1000`, { headers: auth, signal: AbortSignal.timeout(60_000) })
+    if (data.ok) {
+      const payload = (await data.json()) as unknown
+      if (Array.isArray(payload)) items = payload as Record<string, unknown>[]
+    }
+  } catch {
+    // Se cae al chequeo de abajo, que da un mensaje accionable con el runId.
   }
 
-  const payload = (await response.json()) as unknown
-  if (!Array.isArray(payload)) {
-    throw new Error("APIFY_RUN_UNEXPECTED_PAYLOAD:el actor no devolvió una lista de items")
+  if (items.length === 0 && status !== "SUCCEEDED") {
+    throw new Error(`APIFY_RUN_${status}:El scraping terminó en ${status} sin resultados. runId ${runId}.`)
   }
 
   return {
-    // El endpoint sync no devuelve el runId en el body, así que se compone uno
-    // trazable con el actor y el instante: alcanza para auditar el batch.
-    runId: `${actor}-${Date.now()}`,
-    items: payload as Record<string, unknown>[],
+    runId,
+    items,
     appliedWindow: requestedWindow,
     truncatedWindow: params.windowDays != null && params.windowDays > 30,
   }

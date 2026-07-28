@@ -8,7 +8,7 @@ import { validateMcpRequest, logMcpRequest } from "@/lib/v3/mcp-auth"
 import { requirePaidMcp, reserveMcpUsage, setReservationStatus, getMcpUsage, type McpPrincipal } from "@/lib/v3/mcp-usage"
 import { searchCompanies, getCompanyProfile, getCompanySignals, listWorkspaceAccounts, getAccountIntelligence, getResearchStatus, getAccountEvidenceDetailTool } from "@/lib/v3/mcp-read-tools"
 import { prepareAccountResearch, submitResearchStage, getClientResearchStatus, prepareAccountIcebreaker, submitAccountIcebreaker, refreshPromptPackage, prepareCompanySuccessCases, submitCompanySuccessCases, prepareCompanyNews, submitCompanyNews } from "@/lib/v3/mcp-client-ai"
-import { runLinkedinJobsActor } from "@/lib/v3/services/apify-client"
+import { runLinkedinJobsActor, companyNameVariants } from "@/lib/v3/services/apify-client"
 import { ingestApifyJobPostings } from "@/lib/v3/services/apify-job-ingest"
 import { prepareSaveAccount, saveAccount, removeWorkspaceAccount, listSavedAccounts, requireSavedAccount, guardSavedAccounts } from "@/lib/v3/mcp-account-lifecycle"
 import { recommendContactRoles, getCompanyContacts } from "@/lib/v3/mcp-contact-coverage"
@@ -103,7 +103,8 @@ const handler = createMcpHandler((server) => {
       if (!company) throw new Error("COMPANY_NOT_FOUND")
       const run = await runLinkedinJobsActor({
         companyNames: companyNameVariants(company.name, company.linkedin_url),
-        location: location ?? company.country ?? undefined,
+        // `||` y no `??`: hay filas con country = "" (string vacío), que `??` deja pasar.
+        location: location?.trim() || company.country?.trim() || undefined,
         titleQuery: titleQuery ?? null,
         windowDays: windowDays ?? null,
         maxRows,
