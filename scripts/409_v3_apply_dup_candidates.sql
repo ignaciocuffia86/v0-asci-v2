@@ -163,6 +163,58 @@ AS $$
   WHERE id = p_candidate_id;
 $$;
 
+-- ── Excluir una empresa de un grupo ─────────────────────────────────────────
+-- Caso real que motivo esto: el grupo "arcor" juntaba 4 filas de Grupo Arcor
+-- (Argentina, golosinas) con una telco alemana homonima (arcor.de). Descartar
+-- el grupo entero desperdiciaba los 4 duplicados verdaderos; mergearlo entero
+-- corrompia los datos. Hacia falta poder sacar al intruso y mergear el resto.
+
+CREATE OR REPLACE FUNCTION v3.exclude_from_dup_candidate(
+  p_candidate_id UUID,
+  p_company_id   UUID
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, v3, pg_catalog
+AS $$
+DECLARE
+  v_ids   UUID[];
+  v_nuevo UUID[];
+BEGIN
+  SELECT company_ids INTO v_ids
+  FROM v3.company_dup_candidates WHERE id = p_candidate_id;
+
+  IF v_ids IS NULL THEN
+    RAISE EXCEPTION 'exclude_from_dup_candidate: no existe el candidato %', p_candidate_id;
+  END IF;
+
+  SELECT array_agg(x) INTO v_nuevo
+  FROM unnest(v_ids) AS x WHERE x <> p_company_id;
+
+  -- Con menos de 2 miembros ya no hay nada que comparar: el grupo se descarta.
+  IF v_nuevo IS NULL OR array_length(v_nuevo, 1) < 2 THEN
+    UPDATE v3.company_dup_candidates
+    SET status = 'dismissed', resolved_at = now()
+    WHERE id = p_candidate_id;
+
+    RETURN jsonb_build_object('candidate_id', p_candidate_id,
+      'remaining', 0, 'dismissed', true);
+  END IF;
+
+  -- Recalcular master y payload: al sacar un miembro puede cambiar quien es
+  -- la ficha mas rica del grupo.
+  UPDATE v3.company_dup_candidates
+  SET company_ids = v_nuevo,
+      master_id   = public.pick_merge_master(v_nuevo),
+      payload     = v3.build_dup_payload(v_nuevo)
+  WHERE id = p_candidate_id;
+
+  RETURN jsonb_build_object('candidate_id', p_candidate_id,
+    'remaining', array_length(v_nuevo, 1), 'dismissed', false);
+END;
+$$;
+
 -- ── Resumen para el encabezado de la UI ─────────────────────────────────────
 
 CREATE OR REPLACE FUNCTION public.get_dup_candidates_summary()
@@ -226,12 +278,14 @@ $$;
 REVOKE ALL ON FUNCTION v3.apply_dup_candidate(UUID, BOOLEAN, UUID) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION v3.auto_merge_safe_candidates(INTEGER, BOOLEAN, UUID) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION v3.dismiss_dup_candidate(UUID) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION v3.exclude_from_dup_candidate(UUID, UUID) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.get_dup_candidates_summary() FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.get_recent_company_merges(INTEGER) FROM PUBLIC, anon;
 
 GRANT EXECUTE ON FUNCTION v3.apply_dup_candidate(UUID, BOOLEAN, UUID) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION v3.auto_merge_safe_candidates(INTEGER, BOOLEAN, UUID) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION v3.dismiss_dup_candidate(UUID) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION v3.exclude_from_dup_candidate(UUID, UUID) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.get_dup_candidates_summary() TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.get_recent_company_merges(INTEGER) TO authenticated, service_role;
 

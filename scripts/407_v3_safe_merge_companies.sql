@@ -320,6 +320,7 @@ DECLARE
   v_ids      JSONB;
   v_restored INT := 0;
   v_cols     TEXT;
+  v_cand     INT := 0;
 BEGIN
   SET LOCAL statement_timeout = '180s';
 
@@ -376,11 +377,33 @@ BEGIN
 
   UPDATE v3.company_merges SET reverted_at = now() WHERE id = p_merge_id;
 
+  -- 4. Devolver el candidato a la cola de pendientes.
+  --    Sin esto (bug encontrado al probar la reversion sobre datos reales) el
+  --    grupo quedaba en 'merged' despues de revertirse: no volvia a aparecer
+  --    nunca mas y era imposible re-decidirlo.
+  --    Solo se reabre cuando ya no queda ningun merge vivo del grupo, porque un
+  --    grupo de 3+ empresas genera varios merges y revertir uno solo no deshace
+  --    el resto.
+  WITH reabrir AS (
+    UPDATE v3.company_dup_candidates d
+    SET status = 'pending', merge_ids = NULL, resolved_at = NULL
+    WHERE d.merge_ids @> ARRAY[p_merge_id]
+      AND NOT EXISTS (
+        SELECT 1 FROM v3.company_merges m
+        WHERE m.id = ANY(d.merge_ids)
+          AND m.id <> p_merge_id
+          AND m.reverted_at IS NULL
+      )
+    RETURNING 1
+  )
+  SELECT count(*) INTO v_cand FROM reabrir;
+
   RETURN jsonb_build_object(
-    'merge_id',       p_merge_id,
-    'restored_id',    v_log.duplicate_id,
-    'restored_name',  v_log.duplicate_snapshot->>'name',
-    'rows_restored',  v_restored
+    'merge_id',            p_merge_id,
+    'restored_id',         v_log.duplicate_id,
+    'restored_name',       v_log.duplicate_snapshot->>'name',
+    'rows_restored',       v_restored,
+    'candidates_reopened', v_cand
   );
 END;
 $$;

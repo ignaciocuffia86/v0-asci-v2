@@ -219,6 +219,26 @@ export async function dismissDupCandidate(candidateId: string) {
   revalidatePath(RUTA)
 }
 
+/**
+ * Saca una empresa de un grupo sin descartar el grupo entero.
+ * Para el caso homonimo: "Grupo Arcor" (golosinas, AR) venia agrupado con una
+ * telco alemana llamada "Arcor". Sin esto habia que elegir entre descartar los
+ * 4 duplicados verdaderos o corromper los datos mergeando el intruso.
+ */
+export async function excludeFromDupCandidate(candidateId: string, companyId: string) {
+  await requireAdmin()
+  const admin = createAdminClient()
+
+  const { data, error } = await admin.schema("v3").rpc("exclude_from_dup_candidate", {
+    p_candidate_id: candidateId,
+    p_company_id: companyId,
+  })
+
+  if (error) throw new Error(error.message)
+  revalidatePath(RUTA)
+  return data as { candidate_id: string; remaining: number; dismissed: boolean }
+}
+
 /** Manda un lote de grupos ambiguos a la IA. Unico paso que cuesta plata. */
 export async function classifyAmbiguous(batchSize?: number) {
   const userId = await requireAdmin()

@@ -6,7 +6,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Loader2, RefreshCw, Sparkles, Zap, Undo2, AlertTriangle } from "lucide-react"
-import { toast } from "@/hooks/use-toast"
+import { toast } from "sonner"
 import { DuplicateGroupCard } from "@/components/admin/duplicate-group-card"
 import {
   getDupCandidates,
@@ -68,14 +68,10 @@ export default function CompanyDuplicatesPage() {
     setOcupado(clave)
     try {
       const mensaje = await fn()
-      toast({ title: "Listo", description: mensaje })
+      toast.success(mensaje)
       await cargar()
     } catch (e) {
-      toast({
-        title: "Error",
-        description: e instanceof Error ? e.message : "Fallo la operacion",
-        variant: "destructive",
-      })
+      toast.error(e instanceof Error ? e.message : "Fallo la operacion")
     } finally {
       setOcupado(null)
     }
@@ -249,12 +245,12 @@ export default function CompanyDuplicatesPage() {
                     onPrevisualizar={previewDupCandidate}
                     onAplicar={async (id) => {
                       const r = await applyDupCandidate(id)
-                      toast({ title: "Unificado", description: `${r.rows_moved} registros movidos` })
+                      toast.success(`Unificado: ${r.rows_moved} registros movidos`)
                       await cargar()
                     }}
                     onDescartar={async (id) => {
                       await dismissDupCandidate(id)
-                      toast({ title: "Descartado", description: "El grupo quedo marcado como empresas distintas" })
+                      toast.success("Descartado: quedo marcado como empresas distintas")
                       await cargar()
                     }}
                   />

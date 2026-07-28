@@ -24,6 +24,7 @@ interface Props {
   onToggleSeleccion: (id: string) => void
   onAplicar: (id: string) => Promise<void>
   onDescartar: (id: string) => Promise<void>
+  onExcluir: (candidatoId: string, empresaId: string) => Promise<void>
   onPrevisualizar: (id: string) => Promise<{ rows_moved: number; rows_deleted: number }>
 }
 
@@ -49,6 +50,7 @@ export function DuplicateGroupCard({
   onToggleSeleccion,
   onAplicar,
   onDescartar,
+  onExcluir,
   onPrevisualizar,
 }: Props) {
   const [ocupado, setOcupado] = useState(false)
@@ -116,7 +118,19 @@ export function DuplicateGroupCard({
         <div className="flex flex-col gap-2">
           {master && <FilaEmpresa empresa={master} esMaster />}
           {aMergear.map((c) => (
-            <FilaEmpresa key={c.id} empresa={c} />
+            <FilaEmpresa
+              key={c.id}
+              empresa={c}
+              onExcluir={async () => {
+                setOcupado(true)
+                try {
+                  await onExcluir(grupo.id, c.id)
+                } finally {
+                  setOcupado(false)
+                }
+              }}
+              deshabilitado={ocupado}
+            />
           ))}
           {excluidas.length > 0 && (
             <div className="flex flex-col gap-2 rounded-md border border-dashed p-2">
