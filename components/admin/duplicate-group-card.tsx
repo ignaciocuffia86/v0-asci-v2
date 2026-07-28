@@ -202,10 +202,14 @@ function FilaEmpresa({
   empresa,
   esMaster,
   atenuada,
+  onExcluir,
+  deshabilitado,
 }: {
   empresa: DupCandidateRow["companies"][number]
   esMaster?: boolean
   atenuada?: boolean
+  onExcluir?: () => Promise<void>
+  deshabilitado?: boolean
 }) {
   return (
     <div
@@ -238,6 +242,19 @@ function FilaEmpresa({
           <Newspaper className="h-3 w-3" />
           {empresa.news}
         </span>
+        {onExcluir && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6"
+            disabled={deshabilitado}
+            onClick={onExcluir}
+            title="Sacar del grupo: no es la misma empresa"
+          >
+            <X className="h-3 w-3" />
+            <span className="sr-only">Sacar {empresa.name} del grupo</span>
+          </Button>
+        )}
       </div>
     </div>
   )

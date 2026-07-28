@@ -16,6 +16,7 @@ import {
   applyDupCandidates,
   previewDupCandidate,
   dismissDupCandidate,
+  excludeFromDupCandidate,
   autoMergeSafe,
   classifyAmbiguous,
   getRecentMerges,
@@ -251,6 +252,15 @@ export default function CompanyDuplicatesPage() {
                     onDescartar={async (id) => {
                       await dismissDupCandidate(id)
                       toast.success("Descartado: quedo marcado como empresas distintas")
+                      await cargar()
+                    }}
+                    onExcluir={async (candidatoId, empresaId) => {
+                      const r = await excludeFromDupCandidate(candidatoId, empresaId)
+                      toast.success(
+                        r.dismissed
+                          ? "Quedo una sola empresa: el grupo se descarto"
+                          : `Sacada del grupo. Quedan ${r.remaining} empresas.`,
+                      )
                       await cargar()
                     }}
                   />
