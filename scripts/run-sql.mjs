@@ -9,13 +9,25 @@
  *   El trabajo pesado y por unica vez (backfill del indice de nombres,
  *   ANALYZE, migraciones grandes) necesita una conexion sin esa restriccion.
  *
+ * SEGURIDAD: por defecto NO escribe. Todo corre dentro de una transaccion que
+ * termina en ROLLBACK. Para persistir hay que pasar --commit explicitamente.
+ *
+ * Existe porque ya paso: una consulta de MEDICION a la que se le olvido el
+ * `RAISE EXCEPTION 'ROLLBACK INTENCIONAL'` aplico 950 merges reales en
+ * produccion. Con este default, olvidarse el rollback no puede escribir nada.
+ *
  * Uso:
  *   set -a && source /vercel/share/.env.project && set +a
- *   node scripts/run-sql.mjs scripts/410_v3_name_index.sql
- *   node scripts/run-sql.mjs --stmt "ANALYZE v3.company_name_index;"
+ *   node scripts/run-sql.mjs scripts/410_v3_name_index.sql --commit
+ *   node scripts/run-sql.mjs --stmt "SELECT count(*) FROM foo;"
+ *   node scripts/run-sql.mjs --stmt "UPDATE ..." --commit
  *
  * Nota: NO usa pooler a proposito. VACUUM y ANALYZE fallan a traves de
  * pgbouncer en modo transaction.
+ *
+ * Ojo: VACUUM, CREATE INDEX CONCURRENTLY y ALTER TYPE ... ADD VALUE no pueden
+ * correr dentro de una transaccion. Para esos hace falta --sin-transaccion,
+ * que implica escritura directa y por eso pide --commit tambien.
  */
 import { readFile } from "node:fs/promises"
 import pg from "pg"
@@ -38,6 +50,14 @@ if (!cadena) {
 
 const args = process.argv.slice(2)
 const idxStmt = args.indexOf("--stmt")
+const commit = args.includes("--commit")
+const sinTransaccion = args.includes("--sin-transaccion")
+
+if (sinTransaccion && !commit) {
+  console.error("[v0] --sin-transaccion escribe directo, sin red de seguridad.")
+  console.error("[v0] Si es lo que queres, agrega tambien --commit.")
+  process.exit(1)
+}
 
 let sql
 let origen
@@ -50,9 +70,9 @@ if (idxStmt !== -1) {
     process.exit(1)
   }
 } else {
-  const ruta = args[0]
+  const ruta = args.find((a) => !a.startsWith("--"))
   if (!ruta) {
-    console.error("[v0] Uso: node scripts/run-sql.mjs <archivo.sql> | --stmt \"SQL\"")
+    console.error('[v0] Uso: node scripts/run-sql.mjs <archivo.sql> | --stmt "SQL" [--commit]')
     process.exit(1)
   }
   sql = await readFile(ruta, "utf8")
@@ -93,9 +113,18 @@ async function ejecutar(etiqueta, url) {
   })
 
   const t0 = Date.now()
+  const enTransaccion = !sinTransaccion
+  let abierta = false
+
   try {
     await cliente.connect()
-    console.log(`[v0] Conectado (${etiqueta}). Ejecutando: ${origen}`)
+    const modo = sinTransaccion ? "SIN TRANSACCION, escribe" : commit ? "COMMIT, escribe" : "DRY RUN, revierte al final"
+    console.log(`[v0] Conectado (${etiqueta}) [${modo}]. Ejecutando: ${origen}`)
+
+    if (enTransaccion) {
+      await cliente.query("BEGIN")
+      abierta = true
+    }
 
     const resultado = await cliente.query(sql)
     const bloques = Array.isArray(resultado) ? resultado : [resultado]
@@ -109,9 +138,22 @@ async function ejecutar(etiqueta, url) {
       }
     }
 
+    // El cierre va ANTES del log de exito: si el COMMIT falla (por un constraint
+    // diferido, por ejemplo) no se puede haber dicho "Listo".
+    if (enTransaccion) {
+      await cliente.query(commit ? "COMMIT" : "ROLLBACK")
+      abierta = false
+    }
+
     console.log(`[v0] Listo en ${((Date.now() - t0) / 1000).toFixed(1)}s (${etiqueta})`)
+    if (!commit) {
+      console.log("[v0] DRY RUN: nada quedo guardado. Agrega --commit para persistir.")
+    }
     return { ok: true }
   } catch (e) {
+    if (abierta) {
+      await cliente.query("ROLLBACK").catch(() => {})
+    }
     // Fallos de conexion/credenciales: vale reintentar por otra via.
     const esDeConexion =
       e.code === "EAUTHQUERY" ||
