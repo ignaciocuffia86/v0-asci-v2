@@ -24,6 +24,11 @@
 --
 -- SOLUCION
 --
+-- ORDEN DE APLICACION: este script depende del 414 (usa la columna
+-- `bookmark_merge` y la funcion `v3.premerge_bookmarks`). Aplicar 414 primero.
+-- El cuerpo de una funcion plpgsql no se valida al crearla, asi que al revés
+-- crea sin error y recién falla al ejecutar el primer merge.
+--
 -- 1. `v3.snapshot_cascade()` — antes de borrar una fila, se guardan todos sus
 --    descendientes en cascada, recursivamente, en orden padre-primero.
 -- 2. `v3.premerge_followed_accounts()` — caso especial de las cuentas seguidas:
@@ -268,6 +273,7 @@ DECLARE
   v_deleted    JSONB := '{}'::jsonb;
   v_cascade    JSONB := '[]'::jsonb;   -- [NUEVO]
   v_follow     JSONB := '[]'::jsonb;   -- [NUEVO]
+  v_bookmarks  JSONB := '[]'::jsonb;   -- [414]
   v_tiene_cascada BOOLEAN;             -- [NUEVO]
   v_ids        JSONB;
   v_rows       JSONB;
@@ -302,6 +308,12 @@ BEGIN
     -- [NUEVO] (a) Salvar suscriptores y conciliar el follow del master antes de
     -- que el camino generico borre el follow duplicado.
     v_follow := v3.premerge_followed_accounts(p_master_company_id, p_duplicate_company_id);
+
+    -- [414] Consolidar los bookmarks que quedarian repetidos. Solo toca los de
+    -- contexto IDENTICO (mismas señales del diccionario + mismo filterType):
+    -- dos bookmarks de la misma empresa con filtros distintos son busquedas
+    -- distintas y se mueven los dos, sin tocarse. Ver script 414.
+    v_bookmarks := v3.premerge_bookmarks(p_master_company_id, p_duplicate_company_id);
 
     FOR v_child IN
       SELECT (con.conrelid::regclass)::text AS tbl, a.attname AS col
@@ -393,11 +405,11 @@ BEGIN
 
     INSERT INTO v3.company_merges (
       master_id, duplicate_id, duplicate_snapshot, moved, deleted,
-      cascade_deleted, follow_merge,
+      cascade_deleted, follow_merge, bookmark_merge,
       method, confidence, reasoning, decided_by
     ) VALUES (
       p_master_company_id, p_duplicate_company_id, v_snapshot, v_moved, v_deleted,
-      v_cascade, v_follow,
+      v_cascade, v_follow, v_bookmarks,
       p_method, p_confidence, p_reasoning, p_decided_by
     )
     RETURNING id INTO v_merge_id;
@@ -412,6 +424,8 @@ BEGIN
       'deleted',        v_deleted,
       'cascade_deleted', v_cascade,
       'follow_merge',   v_follow,
+      'bookmark_merge', v_bookmarks,
+      'bookmarks_consolidados', jsonb_array_length(v_bookmarks),
       'moved_total',    (SELECT coalesce(sum(jsonb_array_length(value)), 0)
                          FROM jsonb_each(v_moved)),
       'deleted_total',  (SELECT coalesce(sum(jsonb_array_length(value)), 0)
@@ -450,6 +464,8 @@ DECLARE
   v_cand     INT := 0;
   v_elem     JSONB;
   v_fm       JSONB;
+  v_bm       JSONB;   -- [414]
+  v_bm_tbl   RECORD;  -- [414]
 BEGIN
   SELECT * INTO v_log FROM v3.company_merges WHERE id = p_merge_id;
   IF v_log.id IS NULL THEN
@@ -539,6 +555,54 @@ BEGIN
         unfollowed_by     = (v_fm->'master_prev'->>'unfollowed_by')::uuid,
         updated_at        = now()
     WHERE f.id = (v_fm->>'master_fa')::uuid;
+  END LOOP;
+
+  -- [414] Deshacer la consolidacion de bookmarks: reponer la fila borrada, y
+  -- recien despues devolverle las hijas. El orden importa: las hijas tienen FK
+  -- al bookmark, asi que si se mueven antes de reinsertarlo fallan.
+  FOR v_bm IN
+    SELECT value FROM jsonb_array_elements(coalesce(v_log.bookmark_merge, '[]'::jsonb))
+  LOOP
+    SELECT string_agg(quote_ident(key), ', ') INTO v_cols
+    FROM jsonb_each_text(v_bm->'drop_row');
+
+    EXECUTE format(
+      'INSERT INTO public.bookmarks (%s)
+       SELECT %s FROM jsonb_populate_record(NULL::public.bookmarks, $1)
+       ON CONFLICT DO NOTHING',
+      v_cols, v_cols
+    ) USING v_bm->'drop_row';
+
+    -- Hijas que se habian movido al sobreviviente.
+    FOR v_bm_tbl IN SELECT key AS tbl, value AS ids FROM jsonb_each(coalesce(v_bm->'moved','{}'::jsonb))
+    LOOP
+      EXECUTE format(
+        'UPDATE %s SET bookmark_id = $1 WHERE id = ANY (SELECT (value #>> ''{}'')::uuid
+           FROM jsonb_array_elements($2))',
+        v_bm_tbl.tbl
+      ) USING (v_bm->'drop_row'->>'id')::uuid, v_bm_tbl.ids;
+    END LOOP;
+
+    -- Hijas que se habian borrado por choque de unique (resumenes, estrategias).
+    FOR v_bm_tbl IN SELECT key AS tbl, value AS rows FROM jsonb_each(coalesce(v_bm->'deleted','{}'::jsonb))
+    LOOP
+      SELECT string_agg(quote_ident(key), ', ') INTO v_cols
+      FROM jsonb_each_text(v_bm_tbl.rows->0);
+
+      EXECUTE format(
+        'INSERT INTO %s (%s) SELECT %s FROM jsonb_populate_recordset(NULL::%s, $1)
+         ON CONFLICT DO NOTHING',
+        v_bm_tbl.tbl, v_cols, v_cols, v_bm_tbl.tbl
+      ) USING v_bm_tbl.rows;
+    END LOOP;
+
+    -- Y devolver las notas / estado / prioridad que tenia el sobreviviente.
+    UPDATE public.bookmarks b
+    SET notes      = v_bm->'keep_prev'->>'notes',
+        status     = v_bm->'keep_prev'->>'status',
+        priority   = v_bm->'keep_prev'->>'priority',
+        updated_at = (v_bm->'keep_prev'->>'updated_at')::timestamptz
+    WHERE b.id = (v_bm->>'keep_id')::uuid;
   END LOOP;
 
   UPDATE v3.company_merges SET reverted_at = now() WHERE id = p_merge_id;
