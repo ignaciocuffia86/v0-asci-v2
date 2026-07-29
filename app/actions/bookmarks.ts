@@ -7,20 +7,24 @@ export async function bookmarkCompany(userId: string, companyId: string, searchC
   const supabase = await createClient()
 
   try {
-    const { data, error } = await supabase
-      .from("bookmarks")
-      .insert({
-        user_id: userId,
-        company_id: companyId,
-        search_context: searchContext,
-      })
-      .select("id")
-      .single()
+    // Via RPC en lugar de un INSERT directo. La identidad de un bookmark es
+    // usuario + empresa + contexto de señales (ver abajo `alreadyExists`), y la
+    // valida la base: hay un UNIQUE sobre esa combinacion. Un INSERT crudo se
+    // rompe contra ese constraint si el usuario toca guardar dos veces, mientras
+    // que la RPC es idempotente y devuelve el bookmark que ya existia.
+    const { data, error } = await supabase.rpc("create_bookmarks", {
+      p_user_id: userId,
+      p_company_ids: [companyId],
+      p_search_context: searchContext,
+    })
 
     if (error) throw error
 
+    const row = data?.[0]
+    if (!row) throw new Error("create_bookmarks no devolvio el bookmark")
+
     // El drawer maneja su propio estado con optimistic updates
-    return { success: true, bookmarkId: data.id }
+    return { success: true, bookmarkId: row.bookmark_id, alreadyExists: !row.was_created }
   } catch (error) {
     console.error("Error bookmarking company:", error)
     return { success: false, error }
@@ -446,21 +450,32 @@ export async function bookmarkCompanyBatch(userId: string, companyIds: string[],
   }
 
   try {
-    const bookmarksData = companyIds.map((companyId) => ({
-      user_id: userId,
-      company_id: companyId,
-      search_context: searchContext,
-    }))
-
-    const { data, error } = await supabase.from("bookmarks").insert(bookmarksData).select("id, company_id")
+    // Antes esto armaba un array y lo mandaba en un solo INSERT. Con el UNIQUE de
+    // contexto eso es peligroso: un INSERT multi-fila es atomico, asi que si UNA
+    // de las empresas ya estaba guardada, fallaba el statement entero y no se
+    // guardaba NINGUNA. El usuario seleccionaba 50, ya tenia 1, y perdia las 50.
+    //
+    // La RPC inserta de a una, cada una aislada, asi que las repetidas se saltean
+    // y las nuevas se guardan igual.
+    const { data, error } = await supabase.rpc("create_bookmarks", {
+      p_user_id: userId,
+      p_company_ids: companyIds,
+      p_search_context: searchContext,
+    })
 
     if (error) throw error
 
+    const rows = data || []
+    const created = rows.filter((r: any) => r.was_created)
+
     return {
       success: true,
-      bookmarkIds: data?.map((b) => b.id) || [],
-      companiesCount: companyIds.length,
-      results: data || [],
+      bookmarkIds: rows.map((r: any) => r.bookmark_id),
+      // Cuenta las que realmente se crearon, no las que se pidieron: antes esto
+      // era companyIds.length y le mentia al usuario cuando habia repetidas.
+      companiesCount: created.length,
+      alreadyExistedCount: rows.length - created.length,
+      results: rows.map((r: any) => ({ id: r.bookmark_id, company_id: r.company_id })),
     }
   } catch (error: any) {
     console.error("Error creating bookmarks batch:", error)
