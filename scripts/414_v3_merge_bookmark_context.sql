@@ -142,7 +142,9 @@ BEGIN
 
     SELECT jsonb_build_object(
              'notes', b.notes, 'status', b.status,
-             'priority', b.priority, 'updated_at', b.updated_at)
+             'priority', b.priority, 'updated_at', b.updated_at,
+             -- Se guarda entero para poder revertir la herencia de countryFilter.
+             'search_context', b.search_context)
       INTO v_prev
       FROM public.bookmarks b WHERE b.id = v_par.keep_id;
 
@@ -207,6 +209,19 @@ BEGIN
         -- 'alta' / 'transaccional' / 'baja' no son una escala comparable, asi
         -- que solo se completa si el sobreviviente no tenia nada.
         priority = coalesce(k.priority, d.priority),
+        -- countryFilter tambien vive en search_context pero NO forma parte de la
+        -- identidad del bookmark (la app decide duplicado solo por
+        -- filterSignalIds + filterType, ver app/actions/bookmarks.ts:99). Es una
+        -- preferencia de vista, asi que se hereda solo si el sobreviviente nunca
+        -- eligio. Ojo con la convencion: la key presente con valor null significa
+        -- "Todos los paises" elegido a proposito, distinto de no haber elegido.
+        search_context = CASE
+          WHEN (k.search_context ? 'countryFilter') THEN k.search_context
+          WHEN (d.search_context ? 'countryFilter')
+            THEN coalesce(k.search_context, '{}'::jsonb)
+                 || jsonb_build_object('countryFilter', d.search_context->'countryFilter')
+          ELSE k.search_context
+        END,
         updated_at = now()
     FROM public.bookmarks d
     WHERE k.id = v_par.keep_id AND d.id = v_par.drop_id;

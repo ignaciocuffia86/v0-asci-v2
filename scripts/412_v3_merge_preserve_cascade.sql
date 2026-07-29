@@ -601,6 +601,16 @@ BEGIN
     SET notes      = v_bm->'keep_prev'->>'notes',
         status     = v_bm->'keep_prev'->>'status',
         priority   = v_bm->'keep_prev'->>'priority',
+        -- Deshace la herencia de countryFilter (ver script 414). Se restaura el
+        -- objeto entero: es el estado exacto que tenia antes del merge.
+        -- Ojo: en jsonb, ausente y 'null'::jsonb son distintos, y la app
+        -- distingue "no elegido" de "Todos los paises". Los merges viejos no
+        -- guardaron esta key, asi que en ese caso no se toca la columna.
+        search_context = CASE
+          WHEN NOT (v_bm->'keep_prev' ? 'search_context') THEN b.search_context
+          WHEN v_bm->'keep_prev'->'search_context' = 'null'::jsonb THEN NULL
+          ELSE v_bm->'keep_prev'->'search_context'
+        END,
         updated_at = (v_bm->'keep_prev'->>'updated_at')::timestamptz
     WHERE b.id = (v_bm->>'keep_id')::uuid;
   END LOOP;

@@ -14,6 +14,7 @@ DECLARE
   v_bm_drop UUID;  -- duplicada, contexto X  -> redundante
   v_bm_otro UUID;  -- duplicada, contexto Y  -> legitimo
   v_ice     UUID;
+  v_dueno   UUID;
   v_res     JSONB;
   v_merge   UUID;
   v_ctx_x   JSONB := '{"filterSignalIds":["11111111-1111-1111-1111-111111111111"],"filterType":"technology"}';
@@ -59,15 +60,16 @@ BEGIN
   END IF;
 
   -- B) el de contexto distinto sobrevive, ahora bajo el master
-  SELECT company_id INTO v_master FROM public.bookmarks WHERE id = v_bm_otro;
-  IF v_master IS NULL THEN
+  SELECT company_id INTO v_dueno FROM public.bookmarks WHERE id = v_bm_otro;
+  IF v_dueno IS NULL THEN
     RAISE EXCEPTION 'FALLO: se borro el bookmark de contexto DISTINTO';
+  END IF;
+  IF v_dueno <> v_master THEN
+    RAISE EXCEPTION 'FALLO: el bookmark de contexto distinto no quedo en el master';
   END IF;
   RAISE NOTICE 'OK contexto distinto: sobrevive aparte';
 
   -- Notas concatenadas, no descartadas
-  SELECT notes, status, priority INTO v_txt, v_res, v_res
-  FROM public.bookmarks WHERE id = v_bm_keep;
   SELECT notes INTO v_txt FROM public.bookmarks WHERE id = v_bm_keep;
   IF v_txt NOT LIKE '%nota del master%' OR v_txt NOT LIKE '%nota de la duplicada%' THEN
     RAISE EXCEPTION 'FALLO: se perdio una nota del usuario -> %', v_txt;
@@ -108,7 +110,7 @@ BEGIN
   RAISE NOTICE 'OK resumen en conflicto guardado en el log';
 
   -- ---- REVERT ----
-  PERFORM v3.revert_company_merge(v_merge);
+  PERFORM public.revert_company_merge(v_merge);
 
   IF NOT EXISTS (SELECT 1 FROM public.bookmarks WHERE id = v_bm_drop) THEN
     RAISE EXCEPTION 'FALLO revert: no volvio el bookmark redundante';
