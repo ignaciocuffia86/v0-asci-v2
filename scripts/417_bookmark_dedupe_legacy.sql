@@ -184,6 +184,23 @@ BEGIN
     v_cols, v_cols
   ) USING p_entry->'drop_row';
 
+  -- Si el INSERT no repuso nada, fue el UNIQUE de contexto (script 420). Pasa
+  -- solo al revertir una consolidacion LEGACY: ahi los dos bookmarks estaban en
+  -- la MISMA empresa, asi que reponer el borrado recrea exactamente el duplicado
+  -- que ese indice prohibe. (Revertir un merge de empresas no tiene este
+  -- problema: la fila vuelve a su empresa original, que el revert restaura.)
+  --
+  -- Sin este chequeo el DO NOTHING pasaba desapercibido y el error salia varias
+  -- lineas despues, como violacion de FK al mover las hijas a un id inexistente.
+  IF NOT EXISTS (
+    SELECT 1 FROM public.bookmarks WHERE id = (p_entry->'drop_row'->>'id')::uuid
+  ) THEN
+    RAISE EXCEPTION
+      'No se pudo reponer el bookmark %: choca contra bookmarks_user_company_context_uniq. '
+      'Para revertir esta consolidacion hay que dropear ese indice, revertir, y recrearlo.',
+      p_entry->'drop_row'->>'id';
+  END IF;
+
   -- Hijas que se habian movido al sobreviviente.
   FOR v_tbl IN SELECT key AS tbl, value AS ids FROM jsonb_each(coalesce(p_entry->'moved','{}'::jsonb))
   LOOP
@@ -197,8 +214,15 @@ BEGIN
   -- Hijas borradas por choque de unique.
   FOR v_tbl IN SELECT key AS tbl, value AS rows FROM jsonb_each(coalesce(p_entry->'deleted','{}'::jsonb))
   LOOP
-    SELECT string_agg(quote_ident(key), ', ') INTO v_cols
-    FROM jsonb_each_text(v_tbl.rows->0);
+    -- Mismo filtro de columnas generadas que arriba, por las mismas razones.
+    SELECT string_agg(quote_ident(k.key), ', ') INTO v_cols
+    FROM jsonb_object_keys(v_tbl.rows->0) AS k(key)
+    JOIN pg_attribute a
+      ON a.attrelid = v_tbl.tbl::regclass
+     AND a.attname = k.key
+     AND a.attnum > 0
+     AND NOT a.attisdropped
+     AND a.attgenerated = '';
 
     EXECUTE format(
       'INSERT INTO %s (%s) SELECT %s FROM jsonb_populate_recordset(NULL::%s, $1)
