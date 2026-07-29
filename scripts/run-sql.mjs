@@ -59,6 +59,91 @@ if (sinTransaccion && !commit) {
   process.exit(1)
 }
 
+/**
+ * Parte el SQL en sentencias sueltas, respetando comillas, comentarios y bloques
+ * dollar-quoted ($$ ... $$ / $tag$ ... $tag$), donde los ';' no separan nada.
+ *
+ * Hace falta solo para --sin-transaccion: node-pg manda el archivo entero en un
+ * simple query, y Postgres trata un multi-statement como UNA transaccion
+ * implicita. Ahi `CREATE INDEX CONCURRENTLY` falla con "cannot run inside a
+ * transaction block" aunque no haya ningun BEGIN escrito.
+ */
+function partirSentencias(texto) {
+  const out = []
+  let buf = ""
+  let i = 0
+  let comilla = null // "'" | '"' | tag dollar-quoted
+
+  while (i < texto.length) {
+    const dos = texto.slice(i, i + 2)
+
+    if (!comilla) {
+      // Comentario de linea
+      if (dos === "--") {
+        const fin = texto.indexOf("\n", i)
+        const corte = fin === -1 ? texto.length : fin
+        buf += texto.slice(i, corte)
+        i = corte
+        continue
+      }
+      // Comentario de bloque
+      if (dos === "/*") {
+        const fin = texto.indexOf("*/", i + 2)
+        const corte = fin === -1 ? texto.length : fin + 2
+        buf += texto.slice(i, corte)
+        i = corte
+        continue
+      }
+      // Apertura dollar-quoted
+      const dollar = /^\$[A-Za-z_]*\$/.exec(texto.slice(i))
+      if (dollar) {
+        comilla = dollar[0]
+        buf += comilla
+        i += comilla.length
+        continue
+      }
+      if (texto[i] === "'" || texto[i] === '"') {
+        comilla = texto[i]
+        buf += texto[i]
+        i += 1
+        continue
+      }
+      if (texto[i] === ";") {
+        if (buf.trim()) out.push(buf.trim())
+        buf = ""
+        i += 1
+        continue
+      }
+    } else if (comilla.startsWith("$")) {
+      if (texto.startsWith(comilla, i)) {
+        buf += comilla
+        i += comilla.length
+        comilla = null
+        continue
+      }
+    } else {
+      // '' y "" escapan la comilla dentro del literal
+      if (texto[i] === comilla && texto[i + 1] === comilla) {
+        buf += texto[i] + texto[i + 1]
+        i += 2
+        continue
+      }
+      if (texto[i] === comilla) {
+        buf += texto[i]
+        i += 1
+        comilla = null
+        continue
+      }
+    }
+
+    buf += texto[i]
+    i += 1
+  }
+
+  if (buf.trim()) out.push(buf.trim())
+  return out
+}
+
 let sql
 let origen
 
@@ -126,8 +211,18 @@ async function ejecutar(etiqueta, url) {
       abierta = true
     }
 
-    const resultado = await cliente.query(sql)
-    const bloques = Array.isArray(resultado) ? resultado : [resultado]
+    // Sin transaccion se manda UNA sentencia por vez: ver partirSentencias().
+    // Con transaccion se manda todo junto, que es mas rapido y ya es atomico.
+    const sentencias = sinTransaccion ? partirSentencias(sql) : [sql]
+    const bloques = []
+
+    for (const s of sentencias) {
+      if (sinTransaccion && sentencias.length > 1) {
+        console.log(`[v0] (${bloques.length + 1}/${sentencias.length}) ${s.split("\n")[0].slice(0, 90)}`)
+      }
+      const r = await cliente.query(s)
+      bloques.push(...(Array.isArray(r) ? r : [r]))
+    }
 
     for (const r of bloques) {
       if (r?.rows?.length) {
