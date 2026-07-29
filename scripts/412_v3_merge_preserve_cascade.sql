@@ -24,10 +24,10 @@
 --
 -- SOLUCION
 --
--- ORDEN DE APLICACION: este script depende del 414 (usa la columna
--- `bookmark_merge` y la funcion `v3.premerge_bookmarks`). Aplicar 414 primero.
--- El cuerpo de una funcion plpgsql no se valida al crearla, asi que al revés
--- crea sin error y recién falla al ejecutar el primer merge.
+-- ORDEN DE APLICACION: 414 → 417 → 412. Este script usa la columna
+-- `bookmark_merge` y `v3.premerge_bookmarks` (414), y `v3.restore_bookmark_pair`
+-- (417). El cuerpo de una funcion plpgsql no se valida al crearla, asi que en
+-- otro orden se crea sin error y recien falla al ejecutar el primer merge.
 --
 -- 1. `v3.snapshot_cascade()` — antes de borrar una fila, se guardan todos sus
 --    descendientes en cascada, recursivamente, en orden padre-primero.
@@ -465,7 +465,6 @@ DECLARE
   v_elem     JSONB;
   v_fm       JSONB;
   v_bm       JSONB;   -- [414]
-  v_bm_tbl   RECORD;  -- [414]
 BEGIN
   SELECT * INTO v_log FROM v3.company_merges WHERE id = p_merge_id;
   IF v_log.id IS NULL THEN
@@ -557,62 +556,14 @@ BEGIN
     WHERE f.id = (v_fm->>'master_fa')::uuid;
   END LOOP;
 
-  -- [414] Deshacer la consolidacion de bookmarks: reponer la fila borrada, y
-  -- recien despues devolverle las hijas. El orden importa: las hijas tienen FK
-  -- al bookmark, asi que si se mueven antes de reinsertarlo fallan.
+  -- [414/417] Deshacer la consolidacion de bookmarks. La logica vive en
+  -- v3.restore_bookmark_pair (script 417) porque la comparte con el revert de
+  -- la limpieza historica: son ~40 lineas de EXECUTE format sobre 8 tablas
+  -- hijas y tener dos copias garantizaba que se desincronicen.
   FOR v_bm IN
     SELECT value FROM jsonb_array_elements(coalesce(v_log.bookmark_merge, '[]'::jsonb))
   LOOP
-    SELECT string_agg(quote_ident(key), ', ') INTO v_cols
-    FROM jsonb_each_text(v_bm->'drop_row');
-
-    EXECUTE format(
-      'INSERT INTO public.bookmarks (%s)
-       SELECT %s FROM jsonb_populate_record(NULL::public.bookmarks, $1)
-       ON CONFLICT DO NOTHING',
-      v_cols, v_cols
-    ) USING v_bm->'drop_row';
-
-    -- Hijas que se habian movido al sobreviviente.
-    FOR v_bm_tbl IN SELECT key AS tbl, value AS ids FROM jsonb_each(coalesce(v_bm->'moved','{}'::jsonb))
-    LOOP
-      EXECUTE format(
-        'UPDATE %s SET bookmark_id = $1 WHERE id = ANY (SELECT (value #>> ''{}'')::uuid
-           FROM jsonb_array_elements($2))',
-        v_bm_tbl.tbl
-      ) USING (v_bm->'drop_row'->>'id')::uuid, v_bm_tbl.ids;
-    END LOOP;
-
-    -- Hijas que se habian borrado por choque de unique (resumenes, estrategias).
-    FOR v_bm_tbl IN SELECT key AS tbl, value AS rows FROM jsonb_each(coalesce(v_bm->'deleted','{}'::jsonb))
-    LOOP
-      SELECT string_agg(quote_ident(key), ', ') INTO v_cols
-      FROM jsonb_each_text(v_bm_tbl.rows->0);
-
-      EXECUTE format(
-        'INSERT INTO %s (%s) SELECT %s FROM jsonb_populate_recordset(NULL::%s, $1)
-         ON CONFLICT DO NOTHING',
-        v_bm_tbl.tbl, v_cols, v_cols, v_bm_tbl.tbl
-      ) USING v_bm_tbl.rows;
-    END LOOP;
-
-    -- Y devolver las notas / estado / prioridad que tenia el sobreviviente.
-    UPDATE public.bookmarks b
-    SET notes      = v_bm->'keep_prev'->>'notes',
-        status     = v_bm->'keep_prev'->>'status',
-        priority   = v_bm->'keep_prev'->>'priority',
-        -- Deshace la herencia de countryFilter (ver script 414). Se restaura el
-        -- objeto entero: es el estado exacto que tenia antes del merge.
-        -- Ojo: en jsonb, ausente y 'null'::jsonb son distintos, y la app
-        -- distingue "no elegido" de "Todos los paises". Los merges viejos no
-        -- guardaron esta key, asi que en ese caso no se toca la columna.
-        search_context = CASE
-          WHEN NOT (v_bm->'keep_prev' ? 'search_context') THEN b.search_context
-          WHEN v_bm->'keep_prev'->'search_context' = 'null'::jsonb THEN NULL
-          ELSE v_bm->'keep_prev'->'search_context'
-        END,
-        updated_at = (v_bm->'keep_prev'->>'updated_at')::timestamptz
-    WHERE b.id = (v_bm->>'keep_id')::uuid;
+    PERFORM v3.restore_bookmark_pair(v_bm);
   END LOOP;
 
   UPDATE v3.company_merges SET reverted_at = now() WHERE id = p_merge_id;
