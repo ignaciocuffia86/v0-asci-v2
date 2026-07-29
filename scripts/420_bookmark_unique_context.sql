@@ -26,25 +26,24 @@
 -- duplicar libremente y el constraint no serviria en ese caso. Hoy no hay filas
 -- con NULL, pero se cierra el hueco de una vez. Requiere PG15+ (hay 17.6).
 --
--- ORDEN: aplicar despues de 414 y 417, y despues de correr
--- `v3.dedupe_bookmarks_legacy(500, false)`. Si quedan grupos redundantes, la
--- creacion del indice falla (a proposito: avisa en vez de borrar datos sola).
+-- ORDEN DE DESPLIEGUE (importante). Este script trae SOLO la RPC; el indice
+-- unico va aparte, en el 421. No es capricho: v2 esta en produccion y el codigo
+-- deployado hoy hace INSERT crudos. Si el indice se crea antes de que salga el
+-- deploy con la RPC, `bookmarkCompanyBatch` (que manda las 50 empresas en un
+-- unico INSERT) pasa de duplicar en silencio a fallar entero: el usuario
+-- selecciona 50, ya tenia 1 guardada, y no se guarda NINGUNA.
+--
+-- Por eso la secuencia es:
+--   1. 417 + dedupe_bookmarks_legacy  -> limpiar los redundantes (hecho)
+--   2. 420 (este)                     -> crear la RPC. Inofensivo: nadie la usa aun
+--   3. deploy del cambio en app/actions/bookmarks.ts
+--   4. 421                            -> recien ahi el indice unico
+--
+-- La RPC funciona con o sin el indice puesto (ver la nota de abajo), asi que los
+-- pasos 2 y 3 no dependen del 4.
 
 -- ---------------------------------------------------------------------------
--- 1. El constraint
--- ---------------------------------------------------------------------------
-CREATE UNIQUE INDEX IF NOT EXISTS bookmarks_user_company_context_uniq
-  ON public.bookmarks (user_id, company_id, v3.bookmark_context_key(search_context))
-  NULLS NOT DISTINCT;
-
-COMMENT ON INDEX public.bookmarks_user_company_context_uniq IS
-  'Identidad del bookmark: usuario + empresa + contexto de señales. Dos bookmarks '
-  'de la misma empresa con filtros de diccionario DISTINTOS son busquedas distintas '
-  'y conviven; lo que se impide es el duplicado exacto. Espeja la regla de '
-  'app/actions/bookmarks.ts:99. Para insertar usar public.create_bookmarks().';
-
--- ---------------------------------------------------------------------------
--- 2. API de creacion: un solo camino, a prueba de carreras
+-- API de creacion: un solo camino, a prueba de carreras
 -- ---------------------------------------------------------------------------
 --
 -- Reemplaza los dos INSERT crudos de la app, que con el constraint puesto
@@ -71,33 +70,61 @@ LANGUAGE plpgsql
 SECURITY INVOKER
 SET search_path = public, v3, pg_catalog
 AS $$
+DECLARE
+  v_cid  UUID;
+  v_id   UUID;
+  v_ck   TEXT := v3.bookmark_context_key(p_search_context);
 BEGIN
-  RETURN QUERY
-  WITH entrada AS (
-    -- DISTINCT porque si el array trae la misma empresa dos veces, el ON CONFLICT
-    -- no la puede frenar: el conflicto es contra filas ya existentes, no contra
-    -- otra fila del mismo INSERT.
-    SELECT DISTINCT unnest(p_company_ids) AS cid
-  ),
-  creados AS (
-    INSERT INTO public.bookmarks (user_id, company_id, search_context)
-    SELECT p_user_id, e.cid, p_search_context
-    FROM entrada e
-    ON CONFLICT (user_id, company_id, v3.bookmark_context_key(search_context))
-      DO NOTHING
-    RETURNING bookmarks.id, bookmarks.company_id
-  )
-  SELECT c.id, c.company_id, true FROM creados c
-  UNION ALL
-  -- Los que ya estaban: se devuelve el id igual, asi el caller no necesita
-  -- distinguir "lo cree" de "ya existia" para poder navegar al bookmark.
-  SELECT b.id, b.company_id, false
-  FROM public.bookmarks b
-  WHERE b.user_id = p_user_id
-    AND b.company_id = ANY (p_company_ids)
-    AND v3.bookmark_context_key(b.search_context)
-        = v3.bookmark_context_key(p_search_context)
-    AND NOT EXISTS (SELECT 1 FROM creados c WHERE c.id = b.id);
+  -- Se recorre empresa por empresa, cada INSERT en su propio bloque con
+  -- EXCEPTION. Dos motivos para hacerlo asi en vez de un INSERT ... ON CONFLICT:
+  --
+  --  1. Aislamiento: un choque no puede tumbar a las otras 49. Cada bloque
+  --     BEGIN/EXCEPTION es una subtransaccion, asi que si una empresa falla, esa
+  --     sola se descarta y el resto se guarda igual. Ese era exactamente el bug
+  --     de bookmarkCompanyBatch.
+  --  2. No depende del indice. `ON CONFLICT (expresion)` exige que exista un
+  --     indice unico que matchee, asi que la RPC no se podria crear antes del
+  --     421. Con el handler, esto funciona con el indice y sin el, y por eso se
+  --     puede deployar la app sin haber creado todavia el constraint.
+  --
+  -- El DISTINCT importa: si el array trae la misma empresa repetida, el segundo
+  -- INSERT choca contra el primero de esta misma llamada.
+  FOR v_cid IN SELECT DISTINCT unnest(p_company_ids) LOOP
+    v_id := NULL;
+
+    -- Camino feliz: no existe, se crea.
+    BEGIN
+      INSERT INTO public.bookmarks (user_id, company_id, search_context)
+      SELECT p_user_id, v_cid, p_search_context
+      WHERE NOT EXISTS (
+        SELECT 1 FROM public.bookmarks b
+        WHERE b.user_id = p_user_id
+          AND b.company_id = v_cid
+          AND v3.bookmark_context_key(b.search_context) = v_ck
+      )
+      RETURNING id INTO v_id;
+    EXCEPTION WHEN unique_violation THEN
+      -- Perdio la carrera contra otra pestaña entre el NOT EXISTS y el INSERT.
+      -- No es un error para el usuario: el bookmark existe, que es lo que pedia.
+      v_id := NULL;
+    END;
+
+    IF v_id IS NOT NULL THEN
+      RETURN QUERY SELECT v_id, v_cid, true;
+    ELSE
+      -- Ya estaba (o lo acaba de crear el otro request). Se devuelve el id igual,
+      -- asi el caller no necesita distinguir "lo cree" de "ya existia" para poder
+      -- navegar al bookmark.
+      RETURN QUERY
+      SELECT b.id, v_cid, false
+      FROM public.bookmarks b
+      WHERE b.user_id = p_user_id
+        AND b.company_id = v_cid
+        AND v3.bookmark_context_key(b.search_context) = v_ck
+      ORDER BY b.created_at, b.id
+      LIMIT 1;
+    END IF;
+  END LOOP;
 END $$;
 
 COMMENT ON FUNCTION public.create_bookmarks(UUID, UUID[], JSONB) IS
@@ -111,30 +138,21 @@ REVOKE ALL ON FUNCTION public.create_bookmarks(UUID, UUID[], JSONB) FROM PUBLIC,
 GRANT EXECUTE ON FUNCTION public.create_bookmarks(UUID, UUID[], JSONB) TO authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
--- 3. Verificacion
+-- Verificacion
 -- ---------------------------------------------------------------------------
 DO $$
-DECLARE
-  v_dups INTEGER;
 BEGIN
-  SELECT count(*) INTO v_dups FROM (
-    SELECT 1 FROM public.bookmarks
-    GROUP BY user_id, company_id, v3.bookmark_context_key(search_context)
-    HAVING count(*) > 1
-  ) x;
-
-  IF v_dups > 0 THEN
-    RAISE EXCEPTION 'Quedan % grupos redundantes: el indice no se pudo crear', v_dups;
-  END IF;
-
   IF NOT EXISTS (
-    SELECT 1 FROM pg_index
-    WHERE indrelid = 'public.bookmarks'::regclass
-      AND indexrelid = 'public.bookmarks_user_company_context_uniq'::regclass
-      AND indisunique
+    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.proname = 'create_bookmarks'
   ) THEN
-    RAISE EXCEPTION 'El indice unico no quedo creado';
+    RAISE EXCEPTION 'create_bookmarks no quedo creada';
   END IF;
 
-  RAISE NOTICE 'OK: UNIQUE de contexto activo y sin redundantes';
+  IF has_function_privilege('anon',
+       'public.create_bookmarks(UUID, UUID[], JSONB)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'create_bookmarks quedo abierta a anon';
+  END IF;
+
+  RAISE NOTICE 'OK: create_bookmarks lista (el indice unico va en el 421)';
 END $$;

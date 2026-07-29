@@ -26,14 +26,21 @@ BEGIN
 
   -- Dos con contexto IDENTICO pero con las señales en orden distinto: la clave
   -- las ordena, asi que tienen que reconocerse como el mismo contexto.
-  INSERT INTO public.bookmarks (user_id, company_id, search_context, notes, status, priority)
-  VALUES (v_user, v_comp, v_ctx, 'nota del sobreviviente', 'nuevo', NULL)
+  --
+  -- created_at va explicito a proposito. El sobreviviente se elige con
+  -- `ORDER BY created_at, id`, y dentro de una misma transaccion `now()` es
+  -- constante: los tres nacerian con el MISMO timestamp y el desempate caeria en
+  -- el id, que es un uuid aleatorio. O sea que sin esto el test es flaky (pasa o
+  -- falla segun que uuid salio mas chico). Con fechas distintas el sobreviviente
+  -- es siempre v_keep.
+  INSERT INTO public.bookmarks (user_id, company_id, search_context, notes, status, priority, created_at)
+  VALUES (v_user, v_comp, v_ctx, 'nota del sobreviviente', 'nuevo', NULL, now() - interval '2 days')
   RETURNING id INTO v_keep;
 
-  INSERT INTO public.bookmarks (user_id, company_id, search_context, notes, status, priority)
+  INSERT INTO public.bookmarks (user_id, company_id, search_context, notes, status, priority, created_at)
   VALUES (v_user, v_comp,
           '{"filterType":"technology","filterSignalIds":["s2","s1"]}'::jsonb,
-          'nota de la redundante', 'reunion', 'alta')
+          'nota de la redundante', 'reunion', 'alta', now() - interval '1 day')
   RETURNING id INTO v_drop;
 
   -- Y una con contexto DISTINTO, que NO se debe tocar.
