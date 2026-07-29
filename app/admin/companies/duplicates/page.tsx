@@ -127,7 +127,8 @@ export default function CompanyDuplicatesPage() {
           <h1 className="text-2xl font-bold">Unificacion de empresas</h1>
           <p className="text-sm text-muted-foreground leading-relaxed">
             La deteccion agrupa por nombre nucleo, asi entran casos como ARCOR y Grupo Arcor. Los grupos seguros se
-            unifican solos; los ambiguos los resuelve la IA o vos.
+            unifican solos; los ambiguos los resuelve la IA o vos. La cola se llena por lotes: usá
+            &quot;Traer mas grupos&quot; para seguir avanzando.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -135,8 +136,15 @@ export default function CompanyDuplicatesPage() {
             variant="outline"
             onClick={() =>
               correr("refresh", async () => {
-                const r = await refreshDupCandidates({ limit: 500 })
-                return `${r.grupos_core} grupos detectados sobre ${r.relevantes.toLocaleString("es-AR")} empresas`
+                const r = await refreshDupCandidates({ limit: 100 })
+                if (r.nuevos_grupos === 0) {
+                  return r.grupos_restantes === 0
+                    ? "No quedan grupos nuevos por revisar. Resincronizá el índice si cargaste datos nuevos."
+                    : "No se agregaron grupos nuevos en este lote."
+                }
+                return `${r.nuevos_grupos} grupos agregados a la cola. Quedan ${r.grupos_restantes.toLocaleString(
+                  "es-AR",
+                )} de ${r.grupos_totales.toLocaleString("es-AR")}.`
               })
             }
             disabled={ocupado !== null}
@@ -146,8 +154,9 @@ export default function CompanyDuplicatesPage() {
             ) : (
               <RefreshCw className="mr-1 h-4 w-4" />
             )}
-            Volver a detectar
+            Traer mas grupos
           </Button>
+
           <Button
             variant="outline"
             onClick={() =>
@@ -170,8 +179,18 @@ export default function CompanyDuplicatesPage() {
           <Button
             onClick={() =>
               correr("auto", async () => {
-                const r = await autoMergeSafe({ limit: 100 })
-                return `${r.groups} grupos unificados, ${r.rows_moved} registros movidos`
+                const r = await autoMergeSafe()
+                const base = `${r.groups} grupos unificados, ${r.rows_moved} registros movidos`
+                const fallidos = r.errors.length > 0 ? `. ${r.errors.length} fallaron` : ""
+                // Los trabados no son un error: estaban bloqueados por el ETL y
+                // siguen pendientes, se reintentan en la proxima pasada.
+                const trabados = r.trabados > 0 ? `. ${r.trabados} en uso, se reintentan` : ""
+                // Corta por presupuesto de tiempo para no chocar con el limite de
+                // la conexion. Lo hecho ya quedo guardado, asi que alcanza con
+                // volver a tocar el boton.
+                return r.corto_por_tiempo
+                  ? `${base}${fallidos}${trabados}. Quedan ${r.restantes.toLocaleString("es-AR")}: tocá de nuevo para seguir.`
+                  : `${base}${fallidos}${trabados}`
               })
             }
             disabled={ocupado !== null || (resumen?.seguros_pendientes ?? 0) === 0}

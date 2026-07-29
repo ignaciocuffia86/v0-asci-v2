@@ -101,7 +101,17 @@ export async function getDupCandidates(options?: {
   return (data ?? []) as DupCandidateRow[]
 }
 
-/** Recalcula la cache de candidatos. Gratis: no usa IA. */
+/**
+ * Trae el siguiente lote de grupos a la cola de revision. Gratis: no usa IA.
+ *
+ * Lee de v3.company_dup_groups, que ya viene precalculada. No agrupa las 485k
+ * empresas en el clic: eso costaba 16s con cache frio y hacia fallar el boton
+ * con "canceling statement due to statement timeout" (el limite real es 8s,
+ * heredado del rol `authenticated`).
+ *
+ * El lote es chico a proposito. Son 21.508 grupos en total y la cola se revisa
+ * a mano: traerlos todos de una no aporta nada y solo agrega riesgo de timeout.
+ */
 export async function refreshDupCandidates(options?: {
   limit?: number
   includeTrgm?: boolean
@@ -110,19 +120,50 @@ export async function refreshDupCandidates(options?: {
   const admin = createAdminClient()
 
   const { data, error } = await admin.schema("v3").rpc("refresh_company_dup_candidates", {
-    p_limit: options?.limit ?? 500,
+    p_limit: options?.limit ?? 100,
     p_include_trgm: options?.includeTrgm ?? false,
   })
 
   if (error) throw new Error(error.message)
   revalidatePath(RUTA)
   return data as {
-    relevantes: number
-    grupos_core: number
-    grupos_trgm: number
+    indexadas: number
+    grupos_totales: number
+    grupos_restantes: number
+    nuevos_grupos: number
     pendientes: number
     seguros: number
     ambiguos: number
+  }
+}
+
+/**
+ * Resincroniza el indice de nombres contra public.companies.
+ *
+ * NO se llama desde la UI a proposito: tarda ~56s medidos y una llamada por RPC
+ * muere a los 8s (limite del rol de PostgREST). Corre por pg_cron todas las
+ * noches a las 07:10 UTC, agendada en `scripts/410_v3_name_index.sql`.
+ *
+ * Queda expuesta para forzar una resincronizacion a mano. Si el RPC da timeout,
+ * usar `node scripts/run-sql.mjs` (conexion directa, sin tope de tiempo).
+ */
+export async function syncNameIndex(limit = 50000) {
+  await requireAdmin()
+  const admin = createAdminClient()
+
+  const { data, error } = await admin.schema("v3").rpc("sync_company_name_index", {
+    p_limit: limit,
+  })
+
+  if (error) throw new Error(error.message)
+  revalidatePath(RUTA)
+  return data as {
+    altas: number
+    renombres: number
+    bajas: number
+    grupos_detectados: number
+    total_indexadas: number
+    quedan_pendientes: number
   }
 }
 
@@ -186,15 +227,31 @@ export async function applyDupCandidates(candidateIds: string[]) {
   return { aplicados, movidas, errores }
 }
 
-/** Auto-merge de los grupos seguros. No usa IA. */
-export async function autoMergeSafe(options?: { limit?: number; dryRun?: boolean }) {
+/**
+ * Auto-merge de los grupos seguros. No usa IA.
+ *
+ * El corte lo maneja la funcion por TIEMPO, no por cantidad: el costo por merge
+ * varia mucho (medido sobre 198: promedio 27ms, p95 44ms, un outlier de ~5s), y
+ * un lote fijo de 100 se pasaba de los 8s de la conexion y tiraba
+ * "canceling statement due to statement timeout".
+ *
+ * `p_budget_ms` NO se manda a proposito: el default vive en la funcion, donde
+ * esta la cuenta de por que vale 2000 (presupuesto + peor merge < 8s). Fijarlo
+ * de este lado ya causo el bug de que la funcion se arreglara y la UI siguiera
+ * pidiendo el valor viejo.
+ *
+ * Lo mergeado en cada pasada queda commiteado, asi que si corta por presupuesto
+ * el siguiente clic sigue donde quedo.
+ */
+export async function autoMergeSafe(options?: { limit?: number; dryRun?: boolean; budgetMs?: number }) {
   const userId = await requireAdmin()
   const admin = createAdminClient()
 
   const { data, error } = await admin.schema("v3").rpc("auto_merge_safe_candidates", {
-    p_limit: options?.limit ?? 100,
+    p_limit: options?.limit ?? 500,
     p_dry_run: options?.dryRun ?? false,
     p_decided_by: userId,
+    ...(options?.budgetMs ? { p_budget_ms: options.budgetMs } : {}),
   })
 
   if (error) throw new Error(error.message)
@@ -204,6 +261,11 @@ export async function autoMergeSafe(options?: { limit?: number; dryRun?: boolean
     rows_moved: number
     rows_deleted: number
     errors: unknown[]
+    /** Salteados por lock. Siguen 'pending', se reintentan solos. */
+    trabados: number
+    corto_por_tiempo: boolean
+    ms: number
+    restantes: number
   }
 }
 

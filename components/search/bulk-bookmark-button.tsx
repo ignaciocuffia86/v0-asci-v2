@@ -42,9 +42,20 @@ export default function BulkBookmarkButton({ selectedCompanyIds, searchContext, 
       const result = await bookmarkCompanyBatch(userId, selectedCompanyIds, searchContext)
 
       if (result.success) {
+        // `companiesCount` son las que realmente se crearon. Las que ya estaban
+        // guardadas con este mismo contexto se saltean, asi que se avisan aparte
+        // en vez de contarlas como nuevas.
+        const creadas = result.companiesCount ?? 0
+        const repetidas = result.alreadyExistedCount ?? 0
+
         toast({
-          title: "Éxito",
-          description: `Se crearon ${result.companiesCount} bookmarks`,
+          title: creadas > 0 ? "Éxito" : "Sin cambios",
+          description:
+            creadas === 0
+              ? `Ya tenías ${repetidas === 1 ? "esta empresa" : `estas ${repetidas} empresas`} guardada${repetidas === 1 ? "" : "s"} con esta búsqueda`
+              : repetidas > 0
+                ? `Se crearon ${creadas} bookmarks (${repetidas} ya estaban guardadas)`
+                : `Se crearon ${creadas} bookmarks`,
         })
         setShowConfirmation(false)
         onSuccess?.()
