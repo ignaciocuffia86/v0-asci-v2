@@ -227,15 +227,27 @@ export async function applyDupCandidates(candidateIds: string[]) {
   return { aplicados, movidas, errores }
 }
 
-/** Auto-merge de los grupos seguros. No usa IA. */
-export async function autoMergeSafe(options?: { limit?: number; dryRun?: boolean }) {
+/**
+ * Auto-merge de los grupos seguros. No usa IA.
+ *
+ * El corte lo maneja la funcion por TIEMPO, no por cantidad: cada merge cuesta
+ * entre 26 y 243ms medidos (depende de cuantas filas hijas tiene el grupo), asi
+ * que un lote fijo de 100 se pasaba de los 8s de la conexion y tiraba
+ * "canceling statement due to statement timeout".
+ *
+ * Lo mergeado en cada pasada queda commiteado, asi que si corta por presupuesto
+ * el siguiente clic sigue donde quedo. `corto_por_tiempo` y `restantes` estan
+ * para que la UI lo pueda decir.
+ */
+export async function autoMergeSafe(options?: { limit?: number; dryRun?: boolean; budgetMs?: number }) {
   const userId = await requireAdmin()
   const admin = createAdminClient()
 
   const { data, error } = await admin.schema("v3").rpc("auto_merge_safe_candidates", {
-    p_limit: options?.limit ?? 100,
+    p_limit: options?.limit ?? 500,
     p_dry_run: options?.dryRun ?? false,
     p_decided_by: userId,
+    p_budget_ms: options?.budgetMs ?? 3500,
   })
 
   if (error) throw new Error(error.message)
@@ -245,6 +257,9 @@ export async function autoMergeSafe(options?: { limit?: number; dryRun?: boolean
     rows_moved: number
     rows_deleted: number
     errors: unknown[]
+    corto_por_tiempo: boolean
+    ms: number
+    restantes: number
   }
 }
 

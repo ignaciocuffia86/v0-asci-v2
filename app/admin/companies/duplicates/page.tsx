@@ -179,8 +179,15 @@ export default function CompanyDuplicatesPage() {
           <Button
             onClick={() =>
               correr("auto", async () => {
-                const r = await autoMergeSafe({ limit: 100 })
-                return `${r.groups} grupos unificados, ${r.rows_moved} registros movidos`
+                const r = await autoMergeSafe()
+                const base = `${r.groups} grupos unificados, ${r.rows_moved} registros movidos`
+                const fallidos = r.errors.length > 0 ? `. ${r.errors.length} fallaron` : ""
+                // Corta por presupuesto de tiempo para no chocar con el limite de
+                // la conexion. Lo hecho ya quedo guardado, asi que alcanza con
+                // volver a tocar el boton.
+                return r.corto_por_tiempo
+                  ? `${base}${fallidos}. Quedan ${r.restantes.toLocaleString("es-AR")}: tocá de nuevo para seguir.`
+                  : `${base}${fallidos}`
               })
             }
             disabled={ocupado !== null || (resumen?.seguros_pendientes ?? 0) === 0}
