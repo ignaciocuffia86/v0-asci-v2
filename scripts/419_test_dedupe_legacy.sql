@@ -24,6 +24,16 @@ BEGIN
   INSERT INTO public.companies (name) VALUES ('ZZ Test Legacy Dedupe')
   RETURNING id INTO v_comp;
 
+  -- Hay que sacar el UNIQUE del 421 para poder armar el escenario: este test
+  -- prueba la limpieza HISTORICA, o sea filas redundantes que hoy el constraint
+  -- justamente prohibe crear. Sin esto el fixture no se puede insertar.
+  --
+  -- No es trampa: `dedupe_bookmarks_legacy` existe para datos que entraron ANTES
+  -- del constraint, y su revert reconstruye ese estado, asi que el unico contexto
+  -- donde tiene sentido ejercitarla es sin el indice. El DROP va dentro de la
+  -- transaccion y el dry-run lo revierte, asi que el indice sigue en produccion.
+  DROP INDEX IF EXISTS public.bookmarks_user_company_context_uniq;
+
   -- Dos con contexto IDENTICO pero con las señales en orden distinto: la clave
   -- las ordena, asi que tienen que reconocerse como el mismo contexto.
   --
