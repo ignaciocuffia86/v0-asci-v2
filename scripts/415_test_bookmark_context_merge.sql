@@ -30,8 +30,12 @@ BEGIN
   VALUES (v_user, v_master, v_ctx_x, 'nota del master', 'nuevo', NULL)
   RETURNING id INTO v_bm_keep;
 
+  -- La duplicada lleva countryFilter y el master no. countryFilter NO es parte de
+  -- la identidad (solo filterSignalIds + filterType), asi que estas dos igual
+  -- tienen que chocar, y el sobreviviente tiene que heredar el pais.
   INSERT INTO public.bookmarks (user_id, company_id, search_context, notes, status, priority)
-  VALUES (v_user, v_dup, v_ctx_x, 'nota de la duplicada', 'reunion', 'alta')
+  VALUES (v_user, v_dup, v_ctx_x || '{"countryFilter":"AR"}'::jsonb,
+          'nota de la duplicada', 'reunion', 'alta')
   RETURNING id INTO v_bm_drop;
 
   -- B) contexto distinto: NO debe consolidarse
@@ -88,6 +92,17 @@ BEGIN
   END IF;
   RAISE NOTICE 'OK status y priority conciliados';
 
+  -- countryFilter heredado, y sin romper la identidad del bookmark
+  SELECT search_context INTO v_res FROM public.bookmarks WHERE id = v_bm_keep;
+  IF v_res->>'countryFilter' IS DISTINCT FROM 'AR' THEN
+    RAISE EXCEPTION 'FALLO: no heredo countryFilter -> %', v_res;
+  END IF;
+  IF v_res->>'filterType' <> 'technology'
+     OR v_res->'filterSignalIds' <> v_ctx_x->'filterSignalIds' THEN
+    RAISE EXCEPTION 'FALLO: la herencia piso la identidad del bookmark -> %', v_res;
+  END IF;
+  RAISE NOTICE 'OK countryFilter heredado sin tocar la identidad';
+
   -- El icebreaker se movio (no se perdio por CASCADE)
   SELECT bookmark_id INTO v_txt FROM public.user_icebreakers WHERE id = v_ice;
   IF v_txt IS DISTINCT FROM v_bm_keep::text THEN
@@ -127,6 +142,14 @@ BEGIN
   IF v_n <> 1 THEN
     RAISE EXCEPTION 'FALLO revert: no volvio el resumen borrado (n=%)', v_n;
   END IF;
+  -- La herencia de countryFilter tambien se deshace: la key vuelve a NO estar
+  -- (distinto de estar en null, que significaria "Todos los paises" elegido).
+  SELECT search_context INTO v_res FROM public.bookmarks WHERE id = v_bm_keep;
+  IF v_res ? 'countryFilter' THEN
+    RAISE EXCEPTION 'FALLO revert: quedo el countryFilter heredado -> %', v_res;
+  END IF;
+  RAISE NOTICE 'OK revert: countryFilter heredado deshecho';
+
   RAISE NOTICE 'OK revert: bookmark, notas, icebreaker y resumen restaurados';
 
   RAISE NOTICE '=== TODO OK ===';
