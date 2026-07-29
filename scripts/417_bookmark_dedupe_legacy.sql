@@ -360,16 +360,31 @@ BEGIN
   RETURN jsonb_build_object('batch_id', p_batch_id, 'revertidos', v_count);
 END $$;
 
--- Postgres le da EXECUTE a PUBLIC por defecto: hay que revocarlo a mano.
-REVOKE ALL ON FUNCTION v3.consolidate_bookmark_pair(UUID, UUID) FROM PUBLIC, anon;
-REVOKE ALL ON FUNCTION v3.restore_bookmark_pair(JSONB) FROM PUBLIC, anon;
-REVOKE ALL ON FUNCTION v3.premerge_bookmarks(UUID, UUID) FROM PUBLIC, anon;
-REVOKE ALL ON FUNCTION v3.dedupe_bookmarks_legacy(INTEGER, BOOLEAN) FROM PUBLIC, anon;
-REVOKE ALL ON FUNCTION v3.revert_bookmark_dedupe(UUID) FROM PUBLIC, anon;
+-- PERMISOS. Estas 5 son de mantenimiento y son SECURITY DEFINER: si un usuario
+-- logueado las pudiera llamar, consolidaria o restauraria bookmarks de CUALQUIER
+-- otro usuario salteando RLS (le alcanza con pasar un UUID ajeno).
+--
+-- Ojo con la trampa: NO basta con revocar de PUBLIC. Ademas del EXECUTE a PUBLIC
+-- que da Postgres, Supabase trae un `ALTER DEFAULT PRIVILEGES ... GRANT ALL ON
+-- FUNCTIONS TO anon, authenticated, service_role`, o sea que cada funcion nueva
+-- nace con un GRANT **directo** a `authenticated`. Ese grant no se hereda de
+-- PUBLIC, asi que `REVOKE ... FROM PUBLIC, anon` lo deja intacto. Hay que
+-- nombrar a `authenticated` explicitamente.
+--
+-- Revocarselo a `authenticated` no rompe el merge: `public.merge_companies` es
+-- SECURITY DEFINER, asi que corre como su owner y puede llamar a estas por
+-- dentro sin importar los permisos de quien la invoco.
+REVOKE ALL ON FUNCTION v3.consolidate_bookmark_pair(UUID, UUID) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION v3.restore_bookmark_pair(JSONB) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION v3.premerge_bookmarks(UUID, UUID) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION v3.dedupe_bookmarks_legacy(INTEGER, BOOLEAN) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION v3.revert_bookmark_dedupe(UUID) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION v3.consolidate_bookmark_pair(UUID, UUID) TO service_role;
 GRANT EXECUTE ON FUNCTION v3.restore_bookmark_pair(JSONB) TO service_role;
 GRANT EXECUTE ON FUNCTION v3.premerge_bookmarks(UUID, UUID) TO service_role;
 GRANT EXECUTE ON FUNCTION v3.dedupe_bookmarks_legacy(INTEGER, BOOLEAN) TO service_role;
 GRANT EXECUTE ON FUNCTION v3.revert_bookmark_dedupe(UUID) TO service_role;
 
-REVOKE ALL ON TABLE v3.bookmark_dedupe_log FROM PUBLIC, anon;
+-- El log guarda filas enteras de bookmarks de otros usuarios: solo service_role.
+REVOKE ALL ON TABLE v3.bookmark_dedupe_log FROM PUBLIC, anon, authenticated;
+GRANT ALL ON TABLE v3.bookmark_dedupe_log TO service_role;
