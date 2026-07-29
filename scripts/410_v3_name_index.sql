@@ -289,10 +289,19 @@ AS $$
       -- coalesce por si la empresa todavia no fue indexada (ETL recien corrido)
       'jobs',     coalesce(i.n_jobs, 0),
       'contacts', coalesce(i.n_contacts, 0),
-      'news',     coalesce(i.n_news, 0)
+      'news',     coalesce(i.n_news, 0),
+      -- Para que la revision manual sepa que esta empresa es una cuenta seguida
+      -- por alguien. Join contra una tabla chica e indexada por company_id.
+      'follows',  coalesce(f.n, 0)
     ) AS x
     FROM public.companies c
     LEFT JOIN v3.company_name_index i ON i.company_id = c.id
+    LEFT JOIN (
+      SELECT company_id, count(*) AS n
+      FROM v3.followed_accounts
+      WHERE company_id = ANY(p_ids)
+      GROUP BY company_id
+    ) f ON f.company_id = c.id
     WHERE c.id = ANY(p_ids)
   ) s;
 $$;
@@ -357,6 +366,21 @@ BEGIN
     FROM miembros
     GROUP BY group_key
   ),
+  -- Grupos donde un mismo workspace sigue 2+ empresas del grupo. Unificar ahi
+  -- fuerza a descartar uno de los dos follows (choca el UNIQUE workspace+empresa)
+  -- y a decidir estado y suscriptores. Se preserva todo (script 412), pero es
+  -- una decision de negocio: va a revision manual, no se auto-unifica.
+  follows_en_conflicto AS (
+    SELECT x.group_key
+    FROM (
+      SELECT mi.group_key, f.workspace_id, count(*) AS n
+      FROM miembros mi
+      JOIN v3.followed_accounts f ON f.company_id = mi.id
+      GROUP BY mi.group_key, f.workspace_id
+    ) x
+    WHERE x.n > 1
+    GROUP BY x.group_key
+  ),
   -- Master elegido con el `weight` ya precalculado, en una sola pasada.
   -- `public.pick_merge_master()` hacia 3 subqueries por empresa (~4.500
   -- lookups por lote). No se la toca porque la usan los merges de v2.
@@ -372,12 +396,14 @@ BEGIN
       e.group_key, 'core', e.ids, m.master_id,
       CASE
         WHEN a.li_distintas >= 2 OR a.paises >= 2 THEN 'ambiguo'
+        WHEN fc.group_key IS NOT NULL THEN 'ambiguo'
         ELSE 'seguro'
       END,
       v3.build_dup_payload(e.ids)
     FROM elegidos e
     JOIN atributos a ON a.group_key = e.group_key
     JOIN masters   m ON m.group_key = e.group_key
+    LEFT JOIN follows_en_conflicto fc ON fc.group_key = e.group_key
     ON CONFLICT (group_key, method) DO NOTHING
     RETURNING group_key
   ),
