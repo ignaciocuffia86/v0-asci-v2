@@ -1,7 +1,7 @@
 import { generateObject, NoObjectGeneratedError } from "ai"
 import { z } from "zod"
 import { createAdminClient } from "@/lib/supabase/admin"
-import { logAiUsage } from "@/lib/v3/usage"
+import { logAiUsage, estimateCostUsd } from "@/lib/v3/usage"
 
 /**
  * Fase 2 — Resolucion de duplicados ambiguos con IA.
@@ -186,7 +186,7 @@ ${bloques.join("\n\n")}`,
  * llaves, respetando strings y escapes (una llave dentro de un reasoning no
  * cuenta). El ultimo objeto, si quedo cortado, no cierra y se descarta.
  */
-function salvageVerdicts(text: string | undefined): Verdict[] {
+export function salvageVerdicts(text: string | undefined): Verdict[] {
   if (!text) return []
 
   const start = text.indexOf('"results"')
@@ -440,8 +440,6 @@ export async function classifyAmbiguousDuplicates(options?: {
       })
       .eq("id", c.id)
   }
-
-  const { estimateCostUsd } = await import("@/lib/v3/usage")
 
   return {
     processed: candidates.length - retriable,
