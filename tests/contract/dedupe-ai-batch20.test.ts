@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { classifyAmbiguousDuplicates } from "@/lib/v3/dedupe-ai"
-import { createServiceClient } from "@/lib/supabase/service"
+import { createAdminClient } from "@/lib/supabase/admin"
 
 // El lote de 20 es el que reventaba: la respuesta llegaba al techo de 4096 tokens
 // y se cortaba a mitad del array. Este test reproduce ESE tamaño para probar que
@@ -26,7 +26,7 @@ gate("lote de 20 (el tamaño que fallaba)", () => {
     expect(r.same + r.different + r.unsure).toBe(r.processed)
 
     // Cuantos tokens de salida uso realmente? Antes: 4096 (el techo, truncado).
-    const supabase = createServiceClient()
+    const supabase = createAdminClient()
     const { data } = await supabase
       .schema("v3")
       .from("ai_usage_log")
