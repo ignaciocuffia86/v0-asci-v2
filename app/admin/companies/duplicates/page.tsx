@@ -162,9 +162,15 @@ export default function CompanyDuplicatesPage() {
             onClick={() =>
               correr("ia", async () => {
                 const r = await classifyAmbiguous(20)
-                return `${r.processed} grupos analizados. Misma: ${r.same}, distintas: ${r.different}, dudosos: ${
-                  r.unsure
-                }. Costo: US$${r.costUsd.toFixed(4)}`
+                const base = `${r.processed} grupos analizados. Misma: ${r.same}, distintas: ${r.different}, dudosos: ${r.unsure}`
+                // Los reintentables no son un error: la respuesta se corto por
+                // limite de tokens antes de llegar a ellos, asi que siguen
+                // pendientes. Se avisa para que se entienda por que la cuenta no
+                // cierra con el tamaño del lote. Mismo criterio que "Unificar
+                // seguros" con los trabados.
+                const pendientes =
+                  r.retriable > 0 ? `. ${r.retriable} quedaron pendientes (respuesta cortada), tocá de nuevo para seguir` : ""
+                return `${base}${pendientes}. Costo: US$${r.costUsd.toFixed(4)}`
               })
             }
             disabled={ocupado !== null || (resumen?.ambiguos_pendientes ?? 0) === 0}
