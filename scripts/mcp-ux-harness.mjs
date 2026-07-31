@@ -203,9 +203,93 @@ async function fasePrepararNoticias(client) {
   )
   console.log(mostrar(r.texto, 6000))
   if (r.ok) {
-    fs.writeFileSync("/tmp/asci-news-package.json", r.texto)
-    console.log("\npackage guardado en /tmp/asci-news-package.json")
+    // Se guarda la idempotencyKey aparte porque el package NO la devuelve, y
+    // submit_company_news la exige. Ver hallazgo: el modelo tiene que acordarse
+    // de un valor que invento el mismo, sin que nada en la respuesta lo diga.
+    const j = comoJson(r.texto) ?? {}
+    j.__idempotencyKeyUsada = idem
+    fs.writeFileSync("/tmp/asci-news-package.json", JSON.stringify(j))
+    console.log(`\npackage guardado · idempotencyKey usada: ${idem}`)
   }
+}
+
+// ───────────── Fase: submit de noticias + guardrails ─────────────
+// Manda 1 hallazgo bueno y 4 defectuosos a proposito para ver QUE descarta el
+// servidor. Los titulos van prefijados [TEST v0] porque las noticias son GLOBALES
+// a todo v3 y hay que poder limpiarlas despues.
+async function faseSubmitNoticias(client) {
+  const pkg = JSON.parse(fs.readFileSync("/tmp/asci-news-package.json", "utf8"))
+  const hoy = new Date().toISOString().slice(0, 10)
+
+  const items = [
+    {
+      // 1. BUENO: url viva y la pagina menciona a la empresa.
+      title: "[TEST v0] Arcor comunica novedades corporativas",
+      summary: "Caso de control: fuente viva que menciona a la empresa.",
+      category: "corporate",
+      direction: "neutro",
+      // Query string variable: sin esto el re-submit choca contra
+      // idx_company_news_unique_source y voltea el lote entero.
+      sourceUrl: `https://www.arcor.com/?harness=${Date.now()}`,
+      sourceName: "Arcor",
+      publishedAt: hoy,
+    },
+    {
+      // 2. SOFT-404: responde 200 pero la pagina no existe.
+      title: "[TEST v0] Arcor inaugura planta (soft-404)",
+      summary: "La URL da 200 aunque la pagina no existe. Deberia caer.",
+      category: "expansion",
+      direction: "expansion",
+      sourceUrl: "https://www.arcor.com/esta-url-no-existe-harness-test",
+      sourceName: "Arcor",
+      publishedAt: hoy,
+    },
+    {
+      // 3. DOMINIO MUERTO: no resuelve.
+      title: "[TEST v0] Arcor cierra linea (dominio inexistente)",
+      summary: "Dominio que no resuelve. Deberia caer.",
+      category: "contraccion",
+      direction: "contraccion",
+      sourceUrl: "https://este-dominio-no-existe-harness-v0-9182.com/nota",
+      sourceName: "Inventado",
+      publishedAt: hoy,
+    },
+    {
+      // 4. VIVA PERO AJENA: no menciona a la empresa.
+      title: "[TEST v0] Arcor mencionado en medio real (falso)",
+      summary: "Home de un diario que no habla de la empresa. Deberia caer.",
+      category: "corporate",
+      direction: "neutro",
+      sourceUrl: "https://www.lanacion.com.ar",
+      sourceName: "La Nacion",
+      publishedAt: hoy,
+    },
+    {
+      // 5. FUERA DE VENTANA: se pidieron 180 dias.
+      title: "[TEST v0] Arcor hecho viejo fuera de ventana",
+      summary: "Fecha de 2019 con ventana de 180 dias. Deberia caer.",
+      category: "corporate",
+      direction: "neutro",
+      sourceUrl: `https://www.arcor.com/?harness-viejo=${Date.now()}`,
+      sourceName: "Arcor",
+      publishedAt: "2019-03-01",
+    },
+  ]
+
+  // La idempotencyKey no viene en el package. Si el harness (o el modelo) no la
+  // recuerda del prepare, inventa una: probamos si el server la acepta igual.
+  const idem = pkg.__idempotencyKeyUsada ?? `harness-submit-${Date.now()}`
+  const nota = pkg.__idempotencyKeyUsada
+    ? "idem key reusada del prepare"
+    : "idem key NUEVA (el package no la devolvia)"
+
+  const r = await llamar(
+    client,
+    "submit_company_news",
+    { executionId: pkg.executionId, packageHash: pkg.promptPackage.packageHash, idempotencyKey: idem, result: { items } },
+    `5 hallazgos: 1 bueno + 4 defectuosos · ${nota}`,
+  )
+  console.log(mostrar(r.texto, 4000))
 }
 
 // ───────────── Fase: determinismo de la busqueda ─────────────
@@ -323,6 +407,7 @@ try {
   else if (fase === "panorama") await fasePanorama(client)
   else if (fase === "determinismo") await faseDeterminismo(client)
   else if (fase === "preparar-noticias") await fasePrepararNoticias(client)
+  else if (fase === "submit-noticias") await faseSubmitNoticias(client)
   else {
     console.log(`fase desconocida: ${fase}`)
   }
