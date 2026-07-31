@@ -14,7 +14,7 @@ const gate = process.env.RUN_DEDUPE_AI_CONTRACT_TESTS === "1" ? describe : descr
 gate("lote de 20 (el tamaño que fallaba)", () => {
   it("no se trunca y consume muy por debajo del techo de tokens", async () => {
     const antes = Date.now()
-    const r = await classifyAmbiguousDuplicates(20)
+    const r = await classifyAmbiguousDuplicates({ batchSize: 20 })
     console.log("[test] resultado:", JSON.stringify(r))
 
     // Lo central: no se corto.

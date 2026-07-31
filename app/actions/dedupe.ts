@@ -4,15 +4,41 @@ import { createClient } from "@/lib/supabase/server"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { revalidatePath } from "next/cache"
 import { classifyAmbiguousDuplicates } from "@/lib/v3/dedupe-ai"
+import { rpcDirecto, esTimeout } from "@/lib/db/direct"
 
 /**
  * Server actions de la gestion de duplicados.
  *
  * Todo merge pasa por v3.apply_dup_candidate -> public.merge_companies, que
  * mueve las 25 tablas hijas y deja el registro reversible en v3.company_merges.
+ *
+ * POR QUE LOS MERGES NO VAN POR SUPABASE
+ * --------------------------------------
+ * Las lecturas van por PostgREST, pero los MERGES van por conexion directa
+ * (`rpcDirecto`). PostgREST corta a los 8s y hay grupos que no entran: mover
+ * ~1.000 contactos ensucia ~400 MB de indices GIN, y el merge de un grupo
+ * chico (3 empresas) medido tardaba ~19s. El limite lo impone el rol de login,
+ * asi que `service_role` NO lo esquiva (verificado contra el REST real).
  */
 
 const RUTA = "/admin/companies/duplicates"
+
+/**
+ * Traduce errores de Postgres a algo que el admin pueda entender y accionar.
+ * Antes el timeout llegaba crudo como "canceling statement due to statement
+ * timeout", que no le dice nada a quien esta usando la pantalla.
+ */
+function mensajeDeError(error: unknown, accion: string): string {
+  if (esTimeout(error)) {
+    return (
+      `El grupo es demasiado pesado y se corto por tiempo al ${accion}. ` +
+      `No se aplico ningun cambio: la operacion es atomica. ` +
+      `Proba de nuevo; si vuelve a pasar, avisale al equipo tecnico para revisarlo.`
+    )
+  }
+  const mensaje = error instanceof Error ? error.message : String(error)
+  return `No se pudo ${accion}: ${mensaje}`
+}
 
 export interface DupCandidateRow {
   id: string
@@ -173,54 +199,80 @@ export async function syncNameIndex(limit = 50000) {
  */
 export async function previewDupCandidate(candidateId: string) {
   const userId = await requireAdmin()
-  const admin = createAdminClient()
 
-  const { data, error } = await admin.schema("v3").rpc("apply_dup_candidate", {
-    p_candidate_id: candidateId,
-    p_dry_run: true,
-    p_decided_by: userId,
-  })
+  try {
+    // Por conexion directa: hasta el dry-run de un grupo pesado pasa los 8s de
+    // PostgREST, porque simula el merge completo dentro de una transaccion.
+    const bruto = await rpcDirecto<{
+      rows_moved: number
+      rows_deleted: number
+      master_id: string
+    }>("v3.apply_dup_candidate", {
+      p_candidate_id: candidateId,
+      p_dry_run: true,
+      p_decided_by: userId,
+    })
 
-  if (error) throw new Error(error.message)
-  return data as { rows_moved: number; rows_deleted: number; master_id: string }
+    // Proyeccion explicita: el JSON que devuelve la funcion incluye `detail`
+    // con el ID de CADA fila que se moveria (~6.000 uuids en un grupo pesado).
+    // Un `as` de TypeScript no recorta nada en runtime, asi que sin esto el
+    // server action le manda ~1 MB al browser para mostrar dos numeros.
+    return {
+      rows_moved: bruto.rows_moved,
+      rows_deleted: bruto.rows_deleted,
+      master_id: bruto.master_id,
+    }
+  } catch (error) {
+    throw new Error(mensajeDeError(error, "calcular el detalle del grupo"))
+  }
 }
 
 export async function applyDupCandidate(candidateId: string) {
   const userId = await requireAdmin()
-  const admin = createAdminClient()
 
-  const { data, error } = await admin.schema("v3").rpc("apply_dup_candidate", {
-    p_candidate_id: candidateId,
-    p_dry_run: false,
-    p_decided_by: userId,
-  })
+  let bruto: { rows_moved: number; rows_deleted: number; merges: string[] }
+  try {
+    bruto = await rpcDirecto<{ rows_moved: number; rows_deleted: number; merges: string[] }>(
+      "v3.apply_dup_candidate",
+      { p_candidate_id: candidateId, p_dry_run: false, p_decided_by: userId },
+    )
+  } catch (error) {
+    throw new Error(mensajeDeError(error, "unificar el grupo"))
+  }
 
-  if (error) throw new Error(error.message)
   revalidatePath(RUTA)
-  return data as { rows_moved: number; rows_deleted: number; merges: string[] }
+  // Igual que en el preview: se proyecta a mano para no mandarle al browser el
+  // `detail` con miles de uuids. `merges` si va, son pocos ids y sirven para
+  // revertir.
+  return {
+    rows_moved: bruto.rows_moved,
+    rows_deleted: bruto.rows_deleted,
+    merges: bruto.merges ?? [],
+  }
 }
 
 /** Aprobacion en bloque: aplica varios candidatos de una. */
 export async function applyDupCandidates(candidateIds: string[]) {
   const userId = await requireAdmin()
-  const admin = createAdminClient()
 
   let aplicados = 0
   let movidas = 0
   const errores: string[] = []
 
+  // Cada merge es su propia transaccion, asi que uno que falle no arrastra a los
+  // demas: los ya aplicados quedan commiteados.
   for (const id of candidateIds) {
-    const { data, error } = await admin.schema("v3").rpc("apply_dup_candidate", {
-      p_candidate_id: id,
-      p_dry_run: false,
-      p_decided_by: userId,
-    })
-    if (error) {
-      errores.push(error.message)
-      continue
+    try {
+      const data = await rpcDirecto<{ rows_moved?: number }>("v3.apply_dup_candidate", {
+        p_candidate_id: id,
+        p_dry_run: false,
+        p_decided_by: userId,
+      })
+      aplicados++
+      movidas += data?.rows_moved ?? 0
+    } catch (error) {
+      errores.push(mensajeDeError(error, "unificar un grupo"))
     }
-    aplicados++
-    movidas += (data as { rows_moved?: number })?.rows_moved ?? 0
   }
 
   revalidatePath(RUTA)
@@ -242,19 +294,39 @@ export async function applyDupCandidates(candidateIds: string[]) {
  *
  * Lo mergeado en cada pasada queda commiteado, asi que si corta por presupuesto
  * el siguiente clic sigue donde quedo.
+ *
+ * Ahora va por conexion directa, asi que el techo real es de 60s y no de 8s. El
+ * presupuesto de la funcion sigue calibrado para 8s (conservador): corta antes de
+ * lo necesario, pero es seguro y reanudable. Subirlo requiere medir de nuevo, no
+ * se toca de este lado.
  */
 export async function autoMergeSafe(options?: { limit?: number; dryRun?: boolean; budgetMs?: number }) {
   const userId = await requireAdmin()
-  const admin = createAdminClient()
 
-  const { data, error } = await admin.schema("v3").rpc("auto_merge_safe_candidates", {
-    p_limit: options?.limit ?? 500,
-    p_dry_run: options?.dryRun ?? false,
-    p_decided_by: userId,
-    ...(options?.budgetMs ? { p_budget_ms: options.budgetMs } : {}),
-  })
+  let data: {
+    groups: number
+    rows_moved: number
+    rows_deleted: number
+    errors: unknown[]
+    trabados: number
+    corto_por_tiempo: boolean
+    ms: number
+    restantes: number
+  }
 
-  if (error) throw new Error(error.message)
+  try {
+    data = await rpcDirecto("v3.auto_merge_safe_candidates", {
+      p_limit: options?.limit ?? 500,
+      p_dry_run: options?.dryRun ?? false,
+      p_decided_by: userId,
+      // undefined => no se manda => usa el DEFAULT 2000 de la funcion.
+      // Mandar null en su lugar romperia la logica de presupuesto.
+      p_budget_ms: options?.budgetMs,
+    })
+  } catch (error) {
+    throw new Error(mensajeDeError(error, "unificar los grupos seguros"))
+  }
+
   revalidatePath(RUTA)
   return data as {
     groups: number
