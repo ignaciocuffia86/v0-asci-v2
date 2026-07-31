@@ -112,12 +112,40 @@ de $3/$15 en vez de $5/$25 de Opus. La misma llamada pasa de $0,431091 a $0,7184
 Arreglado con `normalizeModelKey`, que compara sin separadores. Gemini nunca estuvo
 afectado.
 
-### 🔴 BUG-1 — El brief client-assisted pierde 9 campos (ALTO)
+### ✅ BUG-1 — El brief client-assisted perdía 9 campos (ARREGLADO)
 
-Detallado en §1. `mcp-client-ai.ts:252` omite `recommended_contacts`, `coverage`,
-`freshness`, `warnings`, `scorecard_id`, `research_job_id`, `status`, `profile_version`,
-`snapshot_version`. Efecto visible: briefs sin contactos sugeridos y sin trazabilidad.
-Impacto directo en la utilidad del modo que queremos empujar.
+`mcp-client-ai.ts:252` omitía `recommended_contacts`, `coverage`, `freshness`, `warnings`,
+`scorecard_id`, `status`, `profile_version`, `snapshot_version` y `supersedes_brief_id`.
+Efecto visible: briefs sin contactos sugeridos (0 vs 4,9 del server) y sin trazabilidad.
+
+**El hallazgo clave del arreglo:** no era una limitación del modo cliente. Los datos ya
+viajaban en `package_payload.evidence` — que es el mismo snapshot interno que consume el
+server-managed — y el insert simplemente no los leía. Verificado sobre datos reales: los
+paquetes vigentes traen 8 contactos, `coverage`, `warnings`, `snapshotVersion` y
+`profileVersion`.
+
+Qué se hizo:
+1. Nuevo `lib/v3/services/account-brief-row.ts` con la forma compartida de la fila
+   (`resolveBriefStatus`, `findSupersededBriefId`, `hydrateEvidenceFromSnapshot`,
+   `BRIEF_CONFLICT_TARGET`). Esto es también **MEJ-3**: las dos rutas ya no pueden
+   divergir en silencio.
+2. El brief client-assisted ahora escribe las 25 columnas, toma contactos/coverage/
+   freshness/warnings del payload y resuelve `scorecard_id` buscando el scorecard que dejó
+   la etapa `fit_scoring` de la misma ejecución.
+3. **`evidence` rehidratada**: el cliente devuelve solo ids (`["abc","def"]`), que la UI no
+   podía renderizar frente a los objetos del server. Ahora se reconstruyen contra el
+   snapshot. Verificado: **30/30 ids reales hidratan**, el fallback `missing: true` nunca
+   se dispara con datos de producción.
+4. `insert` → `upsert` con la misma clave de conflicto que el server, así un reintento no
+   duplica el brief.
+
+`research_job_id` queda legítimamente en null: en modo cliente no hay `research_job`, la
+trazabilidad va por `client_execution_id`.
+
+**Decisión de diseño a registrar:** `resolveBriefStatus` mira solo la evidencia y
+deliberadamente **no** mira `warnings`. Unificar hacia "warnings ⇒ partial" habría
+convertido en `partial` briefs server-managed que hoy son `ready` en producción (cualquier
+cuenta con un aviso de contactos), rompiendo a quien filtre por `status`.
 
 ### 🔴 BUG-2 — Atribución de costo incompleta (ALTO para negocio)
 
@@ -144,6 +172,18 @@ costo está en lo que se le manda al modelo, no en lo que genera.
 §2 camino A. Los stages de clasificación de señales del modo cliente quedan encerrados en
 el workspace, cuando por el modelo definido deberían enriquecer la info pública de la
 compañía. Se pierde el efecto de red: el trabajo de un usuario no beneficia a los demás.
+
+**Alcance decidido:** todo el análisis pasa al corpus público **salvo icebreakers y
+propuesta de valor** (y los documentos del workspace). Es decir: `internal_analysis`,
+`signal_classification`, `fit_scoring` y el `account_brief` se publican; lo único que queda
+privado del workspace es lo que depende de qué vende cada uno.
+
+⚠️ Implicancia a resolver al implementar: `fit_scoring` y `account_brief` se calculan
+**contra el ICP del workspace** (`workspaceContext` en el paquete). Publicar el score tal
+cual expondría el fit de un workspace a los demás, y además sería engañoso para un tercero
+con otro ICP. Al implementar hay que separar la parte factual (señales, tecnologías,
+procesos, evidencia) de la parte relativa al ICP (score, rationale de fit), publicando la
+primera y dejando la segunda en el workspace.
 
 ### 🔴 BUG-5 — El caño de publicación nunca entregó (MEDIO)
 
@@ -179,12 +219,19 @@ función no tiene con qué filtrar. Es deuda técnica, no vulnerabilidad.
 
 Más allá de arreglar bugs, esto es lo que el recorrido dejó a la vista.
 
-### MEJ-1 — Empujar el drilldown a client-assisted (mayor impacto en margen)
+### MEJ-1 — Client-assisted como default en MCP ✅ DECIDIDO, pendiente de implementar
 
-Es la palanca más grande: **$3,39 → $0 por cuenta**, con prosa que además mide mejor. Se
-apoya en resolver BUG-1 para que el modo cliente alcance paridad estructural. Pendiente de
-definición: si el modo cliente pasa a ser el default cuando el usuario entra por MCP, y qué
-pasa con quien entra por la web (donde no hay modelo de cliente que preste inferencia).
+Es la palanca más grande: **$3,39 → $0 por cuenta**, con prosa que además mide mejor.
+
+**Decisión:** client-assisted pasa a ser el **default cuando el usuario entra por MCP**;
+server-managed queda como **fallback** (para la web, donde no hay modelo del cliente que
+preste inferencia, y para clientes MCP que no soporten el circuito `prepare`/`submit`).
+
+Habilitado por el arreglo de BUG-1: ya hay paridad estructural, así que empujar volumen al
+modo cliente no degrada el entregable. Al implementar hay que definir la señal de
+capacidad: cómo sabe el server que este cliente puede hacer inferencia antes de elegir el
+modo (y qué hace si el cliente abandona el circuito a mitad, dado que la cuota ya se
+reservó — hoy eso lo cubre `refresh_prompt_package`).
 
 ### MEJ-2 — Recortar el input, no el modelo
 
@@ -194,12 +241,13 @@ deduplicar señales entre pasos, recortar el snapshot a lo que cada categoría n
 cachear la parte del prompt que se repite entre las N categorías. Un 40% menos de input es
 un 40% menos de factura, sin tocar calidad.
 
-### MEJ-3 — Unificar los dos inserts de brief
+### ✅ MEJ-3 — Unificar los dos inserts de brief (HECHO junto con BUG-1)
 
-BUG-1 existe porque hay **dos** lugares que construyen un `account_briefs` con dos listas de
-campos distintas (`preliminary-fit.ts` y `mcp-client-ai.ts`). Mientras sigan duplicados van
-a volver a divergir. Un único constructor de brief que ambos caminos usen elimina la clase
-entera de bug, no sólo esta instancia.
+BUG-1 existía porque había **dos** lugares construyendo un `account_briefs` con listas de
+campos distintas. Resuelto con `lib/v3/services/account-brief-row.ts`, que ambas rutas ahora
+comparten: elimina la clase entera de bug, no sólo esta instancia. `preliminary-fit.ts`
+sigue con su propia forma (es el brief preliminar, otra etapa) y es el próximo candidato a
+alinear si se le suman campos.
 
 ### MEJ-4 — Feedback de progreso en el research asíncrono
 
@@ -218,30 +266,89 @@ ese circuito está cableado y apagado.
 
 ## 5. Paridad MCP vs web: qué le falta al MCP
 
-Superficie comparada. La web v3 tiene estas rutas: `accounts`, `accounts/[companyId]`,
-`campaigns`, `chat`, `docs`, `onboarding`, `settings`, `settings/api-keys`,
-`settings/workspace`, `admin/{agents,prompts,usage,users,workspaces}`.
+### ⚠️ Corrección: hay DOS superficies MCP, no una
 
-El MCP expone 36 tools que cubren bien: búsqueda y guardado de cuentas, inteligencia y
-evidencia, señales, contactos, enriquecimiento, icebreakers, documentos, research en ambos
-modos, y uso/cuota.
+Esto invalida lo que dije antes de que las campañas estuvieran "ausentes por completo":
+
+| Superficie | Archivo | Tools | Orientación |
+|---|---|---|---|
+| **Moderna** | `app/api/v3/mcp/server/[transport]/route.ts` | ~36 | Cuentas, inteligencia, evidencia, research (ambos modos), contactos, icebreakers, docs, uso. **0 menciones de campañas.** |
+| **Legacy** | `app/api/v3/mcp/route.ts` | 9 | Centrada en campañas: `list_campaigns`, `get_account_digest`, `list_accounts`, `get_signals`, `get_contacts`, `search_companies`, `run_tech_radar`, `search_decision_makers`, `get_recommended_job_titles`. Sus params son `campaign_account_id`. |
+
+**Esto es un hallazgo en sí mismo, y probablemente el más importante de esta sección:** las
+campañas SÍ están expuestas, pero en la superficie vieja, y el research (lo que da valor)
+sólo está en la nueva. Un usuario conectado a una no puede completar el flujo de la otra.
+Antes de planificar tools nuevas hay que decidir si la legacy se consolida en la moderna o
+se deprecia — planificar GAP-1 sin resolver esto duplicaría trabajo.
+
+La web v3 tiene: `accounts`, `accounts/[companyId]`, `campaigns`, `chat`, `docs`,
+`onboarding`, `settings`, `settings/api-keys`, `settings/workspace`,
+`admin/{agents,prompts,usage,users,workspaces}`.
 
 ### Faltantes identificados
 
 | # | Funcionalidad web | Estado en MCP | Notas |
 |---|---|---|---|
-| **GAP-1** | **Campañas** (`v3.campaigns`, `campaign_accounts`, `campaign_account_digest`) | **Ausente por completo** | Ninguna tool de campañas. Es el faltante más grande: no se puede crear campaña, agregarle cuentas ni leer el digest desde el chat. |
+| **GAP-1** | **Campañas** (`v3.campaigns`, `campaign_accounts`, `campaign_account_digest`) | **Sólo lectura, y en la superficie legacy** | `list_campaigns` y `get_account_digest` existen pero en `app/api/v3/mcp/route.ts`. La superficie moderna no las tiene. Falta toda la escritura: crear campaña, agregar/quitar cuentas. |
+| **GAP-0** | **Consolidación de las dos superficies MCP** | **Bloqueante de GAP-1** | No es paridad con la web sino coherencia interna. Decidir si la legacy se migra o se deprecia, antes de escribir tools nuevas. |
 | **GAP-2** | **Propuesta de valor** (`v3.workspace_value_profiles`) | Sólo lectura indirecta | Existe `recommend_accounts_for_value_proposition` (consume la propuesta) pero **no hay tool para crearla o editarla**. Y es un insumo obligatorio: sin ella el `fit_summary` sale como "Fit no evaluado". Un usuario nuevo por MCP no puede arrancar. |
 | **GAP-3** | **Onboarding** | Ausente | Sin equivalente conversacional del setup inicial. Encadenado con GAP-2. |
 | **GAP-4** | **Settings de workspace / API keys** | Ausente | Sin gestión de miembros, invitaciones ni keys. Defendible por seguridad, pero hay que decidirlo explícitamente. |
 | **GAP-5** | **Admin** (agents, prompts, usage, users, workspaces) | Parcial | Sólo `get_ai_usage`. El resto del panel super-admin no está expuesto. Probablemente correcto que no lo esté. |
 | **GAP-6** | **Bookmarks de contactos** | Parcial | Hay `get_company_contacts` y `run_contact_enrichment`, pero no vi tool para gestionar el bookmark del usuario. Según tu modelo, los decision makers de Apollo van al bookmark del usuario **y** al corpus público — falta confirmar que ambas escrituras ocurran. |
 
-### Priorización sugerida
+### Plan escrito de tools (diseño, sin implementar)
 
-1. **GAP-2 (propuesta de valor)** — desbloquea el fit scoring, que hoy sale vacío. Es el que
-   más valor entrega por línea de código.
-2. **GAP-1 (campañas)** — el faltante funcional más grande.
-3. **GAP-6 (bookmarks)** — verificar primero si es gap real o si ya está cubierto.
-4. **GAP-3** — depende de GAP-2.
-5. **GAP-4 / GAP-5** — decisión de política, no de implementación.
+#### GAP-0 · Consolidar superficies — hacer primero, no cuesta código
+Inventariar qué clientes apuntan a `app/api/v3/mcp/route.ts`. Si son propios, migrar sus 9
+tools a la superficie moderna y dejar la legacy como alias temporal. Decisión, no
+desarrollo, pero **bloquea GAP-1**: escribir tools de campaña en la superficie equivocada es
+trabajo perdido.
+
+#### GAP-2 · Propuesta de valor — el de mejor relación valor/esfuerzo
+Tabla: `v3.workspace_value_profiles`. Sin esto, `fit_summary` devuelve literalmente
+"Fit no evaluado: completá la propuesta de valor" y **un usuario nuevo que entra por MCP no
+puede arrancar**.
+
+- `get_workspace_value_proposition` → devuelve el perfil vigente y su `version`.
+- `set_workspace_value_proposition` → `{ summary, targetTechnologies[], targetProcesses[],
+  targetIndustries[], recommendedJobTitles[] }`. Debe bumpear `version`, porque
+  `profile_version` queda grabado en cada brief y es lo que permite saber contra qué ICP se
+  midió un score viejo.
+- Scope nuevo `value_profile:write`; privado del workspace (nunca al corpus público).
+
+#### GAP-1 · Campañas — el faltante funcional más grande
+Sobre `v3.campaigns`, `campaign_accounts`, `campaign_account_digest`.
+
+- `create_campaign` → `{ name, description? }`.
+- `add_accounts_to_campaign` / `remove_account_from_campaign` → aceptando `companyId` para
+  encadenar con `search_companies` y `save_account`.
+- `list_campaigns` y `get_campaign_account_digest` → portar de la legacy.
+- Guardrail: reusar `guardSavedAccounts`, igual que el research, para no meter en campaña
+  cuentas que el workspace no guardó.
+
+#### GAP-6 · Bookmarks de contactos — verificar antes de construir
+`public.bookmarks` y `public.bookmark_summaries` existen y son **globales** (schema
+`public`, sin `workspace_id`), lo que calza con tu modelo: el bookmark es del usuario pero el
+contacto se vuelve info pública de la cuenta. También hay `v3.bookmark_dedupe_log`.
+No encontré tool que escriba el bookmark. **Primero confirmar** si `search_decision_makers` /
+`run_contact_enrichment` ya persisten ahí; si no, falta `bookmark_contact`.
+
+#### GAP-3 · Onboarding conversacional — depende de GAP-2
+Una vez que exista `set_workspace_value_proposition`, el onboarding es un prompt que
+encadena: propuesta de valor → subir documento → primera cuenta → primer research. Sin
+GAP-2 no se puede.
+
+#### GAP-4 / GAP-5 · Settings, API keys y admin — decisión de política
+Gestión de miembros, invitaciones, keys y panel super-admin. Mi recomendación es **no**
+exponerlos por MCP: son operaciones privilegiadas y el MCP es una superficie de agente. Pero
+conviene que quede como decisión explícita y no como olvido.
+
+### Orden sugerido
+
+1. **GAP-0** — decisión, desbloquea el resto.
+2. **GAP-2** — desbloquea el fit scoring, que hoy sale vacío.
+3. **GAP-1** — el faltante funcional mayor.
+4. **GAP-6** — verificar si es gap real.
+5. **GAP-3** — depende de GAP-2.
+6. **GAP-4 / GAP-5** — decidir y documentar, probablemente sin implementar.

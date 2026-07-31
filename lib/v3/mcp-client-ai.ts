@@ -14,6 +14,12 @@ import { guardSavedAccounts } from "./mcp-account-lifecycle"
 import { persistClientSuccessCases, persistClientNews, DEFAULT_NEWS_WINDOW_DAYS } from "./services/external-drilldown"
 import { NEWS_CATEGORIES } from "./services/evidence-level"
 import { getWorkspaceFitProfile, type WorkspaceFitProfile } from "./services/workspace-fit-profile"
+import {
+  BRIEF_CONFLICT_TARGET,
+  findSupersededBriefId,
+  hydrateEvidenceFromSnapshot,
+  resolveBriefStatus,
+} from "./services/account-brief-row"
 
 const PROMPT_VERSION = "mcp-client-research-v2"
 const STAGES = ["internal_analysis", "signal_classification", "fit_scoring", "account_brief"] as const
@@ -249,7 +255,58 @@ export async function submitResearchStage(principal: McpPrincipal, params: { exe
   }
   if (params.stage === "account_brief") {
     const value = parsed.data as z.infer<typeof schemas.account_brief>
-    await admin.schema("v3").from("account_briefs").insert({ workspace_id: principal.workspaceId, company_id: execution.company_id, stage: "final", headline: value.headline, why_now: value.whyNow, fit_summary: value.fitSummary, next_actions: value.nextActions, evidence: value.evidenceIds, input_hash: hash(value), prompt_version: PROMPT_VERSION, model: params.clientModel ?? "client-model", generation_mode: "client_model", client_execution_id: execution.id })
+    const snapshot = execution.package_payload?.evidence as Record<string, unknown> | undefined
+
+    // El scorecard lo escribió la etapa `fit_scoring` de esta misma ejecución. Sin
+    // este lookup, `scorecard_id` quedaba null y el brief no podía enlazarse con el
+    // score que lo justifica.
+    const { data: scorecard } = await admin
+      .schema("v3")
+      .from("account_scorecards")
+      .select("id")
+      .eq("client_execution_id", execution.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    // Contactos, coverage, freshness y warnings YA venían en el paquete que consumió
+    // el modelo: son el mismo snapshot interno que usa el server-managed. Se toman de
+    // ahí en vez de re-consultar para que el brief quede consistente con la evidencia
+    // que el modelo efectivamente vio.
+    const snapshotContacts = Array.isArray(snapshot?.contacts) ? (snapshot!.contacts as unknown[]) : []
+    const snapshotWarnings = Array.isArray(snapshot?.warnings) ? (snapshot!.warnings as unknown[]) : []
+    const evidence = hydrateEvidenceFromSnapshot(snapshot, value.evidenceIds)
+
+    await admin.schema("v3").from("account_briefs").upsert(
+      {
+        workspace_id: principal.workspaceId,
+        company_id: execution.company_id,
+        scorecard_id: scorecard?.id ?? null,
+        stage: "final",
+        status: resolveBriefStatus({ evidenceCount: evidence.length }),
+        headline: value.headline,
+        why_now: value.whyNow,
+        fit_summary: value.fitSummary,
+        next_actions: value.nextActions,
+        evidence,
+        recommended_contacts: snapshotContacts.slice(0, 5),
+        coverage: (snapshot?.coverage as Record<string, unknown> | undefined) ?? {},
+        freshness: {
+          ...((snapshot?.freshness as Record<string, unknown> | undefined) ?? {}),
+          clientAnalysisAt: new Date().toISOString(),
+        },
+        warnings: snapshotWarnings,
+        profile_version: (snapshot?.profileVersion as string | undefined) ?? null,
+        snapshot_version: (snapshot?.snapshotVersion as string | undefined) ?? null,
+        supersedes_brief_id: await findSupersededBriefId(admin, principal.workspaceId, execution.company_id),
+        input_hash: hash(value),
+        prompt_version: PROMPT_VERSION,
+        model: params.clientModel ?? "client-model",
+        generation_mode: "client_model",
+        client_execution_id: execution.id,
+      },
+      { onConflict: BRIEF_CONFLICT_TARGET }
+    )
   }
   const index = STAGES.indexOf(params.stage)
   if (index === STAGES.length - 1) {
