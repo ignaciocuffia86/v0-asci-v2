@@ -25,7 +25,23 @@ const MARCA = "[TEST v0] harness"
 const WS_A = "c731ba5a-aeb1-4e36-8bd5-401135566ecd" // Bigua (real)
 const cleanup = process.argv.includes("--cleanup")
 
-const client = new Client({ connectionString: process.env.POSTGRES_URL, ssl: { rejectUnauthorized: false } })
+// pg lee `sslmode=require` de la URL como 'verify-full' e ignora el objeto `ssl`
+// de abajo, con lo que el cert self-signed de Supabase hace fallar el handshake.
+// Hay que sacar el parametro de la URL, igual que run-sql.mjs.
+function sinSslMode(url) {
+  try {
+    const u = new URL(url)
+    u.searchParams.delete("sslmode")
+    return u.toString()
+  } catch {
+    return url.replace(/[?&]sslmode=[^&]*/g, "")
+  }
+}
+
+const client = new Client({
+  connectionString: sinSslMode(process.env.POSTGRES_URL_NON_POOLING ?? process.env.POSTGRES_URL),
+  ssl: { rejectUnauthorized: false },
+})
 await client.connect()
 
 /** Genera una key con el formato que espera mcp-auth: asci_ + random. */
@@ -36,15 +52,33 @@ function nuevaKey() {
 
 async function crearKey(workspaceId, nombre) {
   const { raw, hash, prefix } = nuevaKey()
-  // Se copian scopes y modos de la key real de Claude para que el test corra con
-  // los mismos permisos que el cliente de verdad, no con permisos inventados.
+  // En vez de listar columnas NOT NULL una por una (created_by, owner_user_id, …),
+  // se CLONA una key real existente y se sobreescribe solo lo propio de la nueva.
+  // Asi el test hereda scopes, modos y cualquier columna obligatoria que el esquema
+  // agregue en el futuro, sin tener que perseguir el error 23502 columna por columna.
+  const { rows } = await client.query(
+    `SELECT * FROM v3.mcp_api_keys WHERE revoked_at IS NULL ORDER BY created_at LIMIT 1`,
+  )
+  if (!rows.length) throw new Error("No hay una key real de la cual clonar el esquema.")
+  const plantilla = rows[0]
+
+  // Columnas que NO se copian: se generan nuevas o se sobreescriben.
+  const overrides = {
+    id: undefined, // que lo genere el default
+    workspace_id: workspaceId,
+    name: nombre,
+    key_hash: hash,
+    key_prefix: prefix,
+    created_at: undefined,
+    revoked_at: null,
+    last_used_at: null,
+  }
+  // Columnas a insertar = las de la plantilla menos las autogeneradas.
+  const finales = Object.keys(plantilla).filter((c) => !["id", "created_at"].includes(c))
+  const valores = finales.map((c) => (c in overrides ? overrides[c] : plantilla[c]))
   await client.query(
-    `INSERT INTO v3.mcp_api_keys (workspace_id, name, key_hash, key_prefix, scopes, allowed_modes)
-     SELECT $1, $2, $3, $4,
-            coalesce((SELECT scopes FROM v3.mcp_api_keys WHERE name='Claude' AND revoked_at IS NULL LIMIT 1), scopes),
-            coalesce((SELECT allowed_modes FROM v3.mcp_api_keys WHERE name='Claude' AND revoked_at IS NULL LIMIT 1), allowed_modes)
-     FROM v3.mcp_api_keys LIMIT 1`,
-    [workspaceId, nombre, hash, prefix],
+    `INSERT INTO v3.mcp_api_keys (${finales.join(",")}) VALUES (${finales.map((_, i) => `$${i + 1}`).join(",")})`,
+    valores,
   )
   return raw
 }
@@ -86,8 +120,12 @@ console.log(`[v0] columnas obligatorias de v3.workspaces: ${obligatorias.join(",
 
 const { rows: plantilla } = await client.query(`SELECT * FROM v3.workspaces WHERE id = $1`, [WS_A])
 const base = plantilla[0]
+const sufijo = Date.now()
 const valores = { name: `${MARCA} workspace B`, plan: base.plan }
-if (obligatorias.includes("slug")) valores.slug = `test-v0-harness-b-${Date.now()}`
+// Se completan todas las obligatorias sin default a partir de la plantilla o de un
+// valor de prueba unico, para no depender de saber el esquema de memoria.
+if (obligatorias.includes("slug")) valores.slug = `test-v0-harness-b-${sufijo}`
+if (obligatorias.includes("domain")) valores.domain = `test-v0-harness-b-${sufijo}.invalid`
 if (obligatorias.includes("owner_user_id")) valores.owner_user_id = base.owner_user_id
 if (obligatorias.includes("created_by")) valores.created_by = base.created_by
 
