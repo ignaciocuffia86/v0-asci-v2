@@ -133,7 +133,8 @@ export interface CompanyResolution {
   lastResearchedAt: string | null
   /** true si el workspace ya sigue esta cuenta */
   alreadyFollowed: boolean
-  matchedBy?: "domain" | "alias" | "exact_name" | "ranked"
+  /** `company_id`: el input ya era un UUID, así que no hubo match difuso. */
+  matchedBy?: "company_id" | "domain" | "alias" | "exact_name" | "ranked"
   confidence?: number
   resolutionReason?: string
   /** candidatos cuando el input es ambiguo */

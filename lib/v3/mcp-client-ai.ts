@@ -123,11 +123,19 @@ function packageFor(
     evidence,
     previousStages: previous,
   }
+  const packageHash = hash(payload)
   return {
     ...payload,
-    packageHash: hash(payload),
+    packageHash,
     expiresAt: new Date(Date.now() + ttl * 60_000).toISOString(),
     ttlMinutes: ttl,
+    // Las tools submit_* exigen `idempotencyKey` (min 8 chars) pero el paquete no
+    // traía ninguna, así que el modelo la inventaba distinta en cada intento. Con
+    // eso el replay no servía de nada: reintentar un submit tras un error de red
+    // se registraba como un envío nuevo. Se emite acá para que el reintento use la
+    // MISMA key y el replay funcione. Va fuera del payload hasheado a propósito:
+    // incluirla cambiaría el packageHash y rompería la comparación del submit.
+    submitIdempotencyKey: `${stage}-${packageHash.slice(0, 24)}`,
   }
 }
 

@@ -90,6 +90,8 @@ async function rankCandidates(params: {
   })).then((rows) => rows.sort((a, b) => b.score - a.score || b.signalsCount - a.signalsCount))
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 export async function resolveCompany(input: string, workspaceId: string): Promise<CompanyResolution> {
   const admin = createAdminClient()
   const trimmed = input.trim()
@@ -98,6 +100,35 @@ export async function resolveCompany(input: string, workspaceId: string): Promis
     cacheFresh: false, lastResearchedAt: null, alreadyFollowed: false, candidates: [],
   }
   if (!trimmed) return empty
+
+  // Atajo por id exacto.
+  //
+  // El circuito que hace el modelo es search_companies -> save_account(companyId)
+  // -> research. Los dos primeros pasos hablan de `companyId`, pero el research
+  // solo aceptaba texto y volvía a resolver por nombre con match difuso, así que
+  // podía elegir OTRA entidad que la que el usuario acababa de guardar: el research
+  // fallaba con NOT_SAVED aunque la cuenta estuviera guardada, sin forma de
+  // arreglarlo desde el cliente. Si ya tenemos el id, no hay nada que adivinar.
+  if (UUID_RE.test(trimmed)) {
+    const { data: row } = await admin
+      .from("companies")
+      .select("id,name,website,country,industry")
+      .eq("id", trimmed)
+      .maybeSingle()
+    if (!row) return { ...empty, resolutionReason: "No existe una empresa con ese id." }
+    const [cacheFresh, followed, lastRun] = await Promise.all([
+      isRadarCacheFresh(row.id, LIMITS.CACHE_TTL_DAYS),
+      admin.schema("v3").from("followed_accounts").select("id").eq("workspace_id", workspaceId).eq("company_id", row.id).eq("is_active", true).maybeSingle().then((result) => Boolean(result.data)),
+      admin.from("radar_research_runs").select("created_at").eq("company_id", row.id).eq("status", "completed").order("created_at", { ascending: false }).limit(1).maybeSingle().then((result) => result.data?.created_at ?? null),
+    ])
+    return {
+      input: trimmed, companyId: row.id, name: row.name, domain: row.website,
+      country: row.country, industry: row.industry, cacheFresh, lastResearchedAt: lastRun,
+      alreadyFollowed: followed, matchedBy: "company_id", confidence: 100,
+      resolutionReason: "companyId exacto: no se aplicó resolución por nombre.",
+      candidates: [],
+    }
+  }
 
   const alias = findCompanyAlias(trimmed)
   const expectedDomain = alias?.canonicalDomain ?? (looksLikeDomain(trimmed) ? extractDomain(trimmed) : null)

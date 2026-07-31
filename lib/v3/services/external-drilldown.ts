@@ -193,7 +193,15 @@ export async function persistClientNews(params: {
   userId: string
   windowDays?: number
   items: ClientNewsItem[]
-}): Promise<GuardrailReport & { directions: Record<SignalDirection, number> }> {
+}): Promise<
+  GuardrailReport & {
+    directions: Record<SignalDirection, number>
+    /** Cuántas se guardaron de verdad. */
+    saved?: number
+    /** Cuántas ya estaban (misma company_id + source_url) y se omitieron. */
+    duplicates?: number
+  }
+> {
   const { kept, report } = await applyGuardrails(params.items, {
     companyName: params.companyName,
     textFields: ["title", "summary"],
@@ -228,7 +236,22 @@ export async function persistClientNews(params: {
     }
   })
 
-  const { error } = await admin.from("company_news").insert(rows)
+  // Un `insert` plano fallaba entero cuando UNA sola nota ya estaba guardada:
+  // `idx_company_news_unique_source` (company_id, source_url) tiraba un 23505 y se
+  // perdían también las notas nuevas del mismo lote. Reencontrar una noticia ya
+  // conocida es lo NORMAL cuando se re-investiga una cuenta, no un error del
+  // cliente. Con ignoreDuplicates el lote entra igual y las repetidas se omiten.
+  const { data: inserted, error } = await admin
+    .from("company_news")
+    .upsert(rows, { onConflict: "company_id,source_url", ignoreDuplicates: true })
+    .select("id")
   if (error) throw new Error(`No se pudieron guardar las noticias: ${error.message}`)
-  return { ...report, directions }
+
+  const saved = inserted?.length ?? 0
+  const duplicates = rows.length - saved
+  // Si una nota no se insertó, su `direction` no debe contarse como novedad.
+  if (duplicates > 0 && saved === 0) {
+    for (const key of Object.keys(directions) as SignalDirection[]) directions[key] = 0
+  }
+  return { ...report, directions, saved, duplicates }
 }
