@@ -100,19 +100,36 @@ Medido de punta a punta sobre Grupo Boldt (300 señales, cuenta nueva). La únic
 tokens y costo es `v3.ai_usage_log`; `v3.research_jobs` **no tiene ninguna columna de
 costo**.
 
-- **`run_account_research` es asíncrono.** Devuelve `batchId` en ~2s y sigue en background;
-  tarda más de 15 minutos. Un OK inmediato NO significa research terminado — hay que
-  seguir `research_jobs.status` y `current_step`. (El primer intento de medición confundió
-  ese OK rápido con un run completo.)
+- **`run_account_research` es asíncrono.** Devuelve `batchId` en ~2s y sigue en background.
+  Un OK inmediato NO significa research terminado — hay que seguir `research_jobs.status` y
+  `current_step`. (El primer intento de medición confundió ese OK rápido con un run
+  completo.)
 - **Estructura del gasto.** Itera un paso por categoría de radar
   (`customer_service`, `cybersec_iam`, `devops_platform`, `jobs_skills`, `news_business`…).
   Cada paso hace **1 llamada a `claude-opus-4-5` con 80-130k tokens de input** más 1 a
   `gemini-2.5-flash`. El input gigante por paso domina el costo y escala con las señales
   de la cuenta.
-- **Cifras.** A 63% de progreso: 10 llamadas, **$1.72 reportados**. Proyección por cuenta:
-  **~$3 reportado / ~$5 real** (ver bug de precios). Es mucho más de lo que sugiere
-  "1 unidad de cuota": la cuota cuenta cuentas, no dinero, así que el costo por unidad
-  varía fuerte con el tamaño de la cuenta.
+
+**Cifras finales (job `completed`, 100%):**
+
+| Métrica | Valor |
+|---|---|
+| Duración | **761 s (12,7 min)** |
+| Llamadas a IA | 14 |
+| Tokens input / output | 588.324 / 39.545 |
+| Costo **reportado** | **$2,0556** |
+| Costo **real** (recalculado) | **$3,3905** |
+
+El input es **15x** el output: el costo está casi todo en lo que se le manda al modelo, no
+en lo que genera. Esa es la palanca de optimización si hay que bajar el costo.
+
+**Corrección de mi propia estimación:** a 63% proyecté ~$3 reportado / ~$5 real; el real
+fue $2,06 / $3,39. Proyecté de más porque asumí costo lineal con el progreso, y los últimos
+pasos son más baratos que los de radar. Vale como techo, no como estimación.
+
+Aun así el punto de fondo se sostiene: **~$3,4 reales por cuenta** es mucho más de lo que
+sugiere "1 unidad de cuota". La cuota cuenta cuentas, no dinero, así que el costo por unidad
+varía fuerte con el tamaño de la cuenta (Boldt tenía 300 señales).
 
 ### Bug de precios: subreporte de ~1.67x (arreglado)
 
@@ -125,14 +142,54 @@ Verificado: la misma llamada (129.847 in / 2.770 out) pasa de **$0.431091 a $0.7
 El arreglo agrega `normalizeModelKey`, que compara sin separadores para que punto y guion
 resuelvan al mismo precio. Gemini nunca estuvo afectado porque su id ya coincidía.
 
-### Atribución de costo rota (no arreglado: es decisión de producto)
+### Client-assisted: el costo para ASCI es CERO
 
-El insert de `logAiUsage` nunca escribe `research_job_id` ni `api_key_id`, aunque las
-columnas existen: no se puede saber cuánto costó un job concreto ni imputar gasto a una
-API key. Y **`generation_mode` viene de un DEFAULT de la base (`'server_managed'`)** que el
-código nunca setea, así que el modo client-assisted también quedaría marcado como
-`server_managed`. Hoy es imposible comparar el costo de los dos modos en el log — que era,
-justamente, el objetivo original del Test A.
+Este es el resultado central del Test A, y es una diferencia de naturaleza, no de grado.
+
+El modo client-assisted usa una arquitectura **`prepare` / `submit`**
+(`lib/v3/mcp-client-ai.ts`): el server arma un paquete de prompt, **la inferencia la hace
+el modelo del cliente** (Claude, dentro de la suscripción del usuario) y el cliente
+devuelve el resultado ya validado. Verificado: `mcp-client-ai.ts` tiene **0 referencias** a
+`generateContent` / `logAiUsage` / cualquier proveedor. No hay llamada de IA del lado del
+server.
+
+Evidencia en datos de producción:
+
+| | server-managed | client-assisted |
+|---|---|---|
+| Costo IA para ASCI | **$3,3905** por cuenta | **$0,00** |
+| Filas en `ai_usage_log` | 135 | **0** |
+| Output producido | 20 briefs | 4 briefs, 8 ejecuciones, 18 stages |
+| Quién paga los tokens | ASCI (AI Gateway) | el usuario (su plan de Claude) |
+
+Los stages que corrió el cliente: `internal_analysis`, `fit_scoring`,
+`signal_classification`, `account_brief`, con `client_model` = `claude-fable-5` y
+`claude-opus-5`. O sea: **el circuito client-assisted produce el mismo tipo de entregable
+que el server-managed, a costo cero de gateway.**
+
+Implicancia de producto: la cuota que hoy cobra "1 unidad" por cuenta cuesta $3,39 en
+server-managed y $0 en client-assisted. Empujar el drilldown hacia client-assisted es la
+palanca de margen más grande que tiene el MCP.
+
+### Corrección de una afirmación previa sobre `generation_mode`
+
+Antes escribí que `generation_mode` sale de un DEFAULT que el código nunca setea, y que por
+eso client-assisted quedaría mal marcado como `server_managed`. **Eso es incorrecto.** El
+código **sí** setea `generation_mode: "client_model"` de forma explícita, en
+`account_scorecards`, `account_briefs` e `icebreakers`, junto con `client_execution_id`.
+Verificado: 4 briefs con `client_model` vs 20 `server_managed`.
+
+Lo cierto es más simple: **`ai_usage_log` sólo puede contener filas server-managed**, porque
+client-assisted no genera ninguna llamada de IA que registrar (0 filas con `client_model`).
+Buscar la comparación de modos en `ai_usage_log` era el enfoque equivocado — la telemetría
+del modo cliente vive en `client_ai_stage_submissions.client_model` y en el
+`generation_mode` de las tablas de dominio. El modo NO está sin instrumentar.
+
+### Atribución de costo incompleta (no arreglado: es decisión de producto)
+
+Lo que sí falta: el insert de `logAiUsage` nunca escribe `research_job_id` ni `api_key_id`,
+aunque las columnas existen. No se puede saber cuánto costó un job concreto ni imputar el
+gasto a una API key. Es un fix contenido a una función, sin migración de esquema.
 
 ## Scopes de las API keys
 
