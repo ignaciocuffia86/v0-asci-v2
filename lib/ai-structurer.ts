@@ -158,6 +158,35 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
+ * Codigos que significan "este host no existe / no se puede alcanzar". Solo
+ * estos descartan una fuente: un timeout o un 403 no prueban que no exista.
+ */
+const DNS_FAILURE_CODES = new Set(["ENOTFOUND", "EAI_AGAIN", "ERR_INVALID_URL"])
+
+/**
+ * Busca un error de resolucion de host en toda la cadena de `cause`.
+ *
+ * `fetch` envuelve el error real: el objeto de arriba dice "fetch failed" y el
+ * codigo aparece en `err.cause.code` (a veces mas abajo todavia). Devuelve el
+ * codigo encontrado, o null si el fallo no es concluyente.
+ */
+function findDnsFailure(err: unknown): string | null {
+  let nodo: unknown = err
+  // Tope de profundidad por si alguna libreria arma una cadena circular.
+  for (let i = 0; i < 5 && nodo; i++) {
+    const actual = nodo as { code?: unknown; message?: unknown; cause?: unknown }
+    const code = typeof actual.code === "string" ? actual.code : null
+    if (code && DNS_FAILURE_CODES.has(code)) return code
+    // Fallback por si algun runtime si lo mete en el texto.
+    const msg = typeof actual.message === "string" ? actual.message : ""
+    const enTexto = [...DNS_FAILURE_CODES, "getaddrinfo"].find((c) => msg.includes(c))
+    if (enTexto) return enTexto
+    nodo = actual.cause
+  }
+  return null
+}
+
+/**
  * Verifica liveness de una lista de URLs en paralelo (HEAD request con timeout).
  * Devuelve un Set con las URLs que respondieron < 400 (o 405 Method Not Allowed,
  * porque algunos sitios bloquean HEAD pero la URL si existe).
@@ -206,14 +235,15 @@ export async function checkUrlsAlive(
         return { url, alive: true, reason: `status_${res.status}` }
       } catch (err) {
         clearTimeout(timer)
-        const msg = String((err as Error)?.message ?? err)
-        // DNS no resuelve -> descartar.
-        if (
-          msg.includes("ENOTFOUND") ||
-          msg.includes("getaddrinfo") ||
-          msg.includes("EAI_AGAIN")
-        ) {
-          return { url, alive: false, reason: "dns_error" }
+        // OJO: `undici` (el fetch de Node) NO pone el codigo del error en
+        // `err.message`, que dice solamente "fetch failed". El ENOTFOUND real
+        // viaja en `err.cause.code` y puede venir anidado varios niveles.
+        // Durante mucho tiempo aca se leia solo el message, asi que la condicion
+        // NUNCA matcheaba: todo dominio inexistente terminaba en
+        // "network_error_assume_alive" y se publicaba como fuente valida.
+        const failure = findDnsFailure(err)
+        if (failure) {
+          return { url, alive: false, reason: `dns_error:${failure}` }
         }
         // Timeout / network reset -> aceptar por defecto (no podemos saber).
         return { url, alive: true, reason: "network_error_assume_alive" }
