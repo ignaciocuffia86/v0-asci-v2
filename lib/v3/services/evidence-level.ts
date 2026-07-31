@@ -143,6 +143,70 @@ export function toSignalDirection(value: string | null | undefined): SignalDirec
   return "neutro"
 }
 
+// ─── Categoría de la noticia ─────────────────────────────────
+//
+// `category` viajaba como string libre, así que cada cliente MCP inventaba su
+// taxonomía y la tabla quedó con variantes que agrupan mal. Medido en producción:
+// 'alianzas' (74 filas) contra 'alanzas' (1, con typo), y 'regulatorio' (25)
+// contra 'regulacion' (3). Son lo mismo contado por separado, y cualquier filtro
+// por categoría pierde filas sin avisar.
+//
+// La lista sale de los valores reales dominantes de `company_news`, no de una
+// taxonomía inventada de cero.
+
+export const NEWS_CATEGORIES = [
+  "crecimiento", "ejecutivos", "inversion", "innovacion", "transformacion",
+  "alianzas", "ma", "desafios", "regulatorio", "financiero", "corporativo",
+  "sector", "tecnologia", "reputacion", "otro",
+] as const
+
+export type NewsCategory = (typeof NEWS_CATEGORIES)[number]
+
+/** Variantes conocidas → canónica. */
+const CATEGORY_ALIASES: Record<string, NewsCategory> = {
+  alanzas: "alianzas",
+  alianza: "alianzas",
+  regulacion: "regulatorio",
+  regulatoria: "regulatorio",
+  "m&a": "ma",
+  fusiones: "ma",
+  adquisiciones: "ma",
+  adquisicion: "ma",
+  crisis: "desafios",
+  personas: "ejecutivos",
+  liderazgo: "ejecutivos",
+  expansion: "crecimiento",
+}
+
+/**
+ * Lleva una categoría a la forma canónica.
+ *
+ * Nunca falla: lo que no reconoce cae en "otro" y se informa aparte. Rechazar la
+ * noticia entera por una etiqueta mal escrita perdería lo valioso —el hecho y su
+ * fuente— por un problema de vocabulario. Es idempotente, así que se puede llamar
+ * sobre datos ya normalizados.
+ */
+export function normalizeNewsCategory(value: string | null | undefined): {
+  category: NewsCategory
+  /** true si el valor recibido no era exactamente el canónico. */
+  wasRemapped: boolean
+  original: string | null
+} {
+  const original = value?.trim() || null
+  if (!original) return { category: "otro", wasRemapped: false, original: null }
+  // Sin tildes y en minúscula, para que 'Inversión' e 'inversion' colapsen.
+  const key = original
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+  if ((NEWS_CATEGORIES as readonly string[]).includes(key)) {
+    return { category: key as NewsCategory, wasRemapped: key !== original, original }
+  }
+  const alias = CATEGORY_ALIASES[key]
+  if (alias) return { category: alias, wasRemapped: true, original }
+  return { category: "otro", wasRemapped: true, original }
+}
+
 /** Etiqueta para mostrar al usuario junto al motivo de la clasificación. */
 export const EVIDENCE_LEVEL_HINTS: Record<EvidenceLevel, string> = {
   Confirmado: "Sostenido por una fuente citable de la propia cuenta.",

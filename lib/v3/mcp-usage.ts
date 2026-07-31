@@ -159,8 +159,94 @@ export async function commitReservationWithUnits(
   if (error) throw new Error(`RESERVATION_UPDATE_FAILED:${error.message}`)
 }
 
+/**
+ * Días de gracia después del vencimiento antes de considerar abandonada una
+ * ejecución client-assisted.
+ *
+ * No se libera al vencer el paquete porque `refreshPromptPackage` REVIVE paquetes
+ * vencidos sin cobrar: liberar ahí le quitaría al cliente cuota que todavía puede
+ * usar legítimamente. Con la gracia, tuvo el TTL completo más una semana.
+ */
+const CLIENT_RESEARCH_GRACE_DAYS = 7
+
+/**
+ * Devuelve la cuota de los research client-assisted que el cliente nunca terminó.
+ *
+ * `prepare_account_research` cobra al preparar, porque ahí se arma el paquete y se
+ * hace el trabajo de servidor. El problema es que si el cliente IA nunca manda el
+ * submit —se cortó la sesión, el modelo abandonó el loop, el usuario cerró Claude—
+ * la unidad quedaba consumida para siempre. Sobre un lote de 10 cuentas eso son 10
+ * lugares del plan perdidos por una sesión que se cayó.
+ *
+ * Se cobra solo lo que efectivamente se completó: si de 10 cuentas se terminaron 3,
+ * quedan cobradas 3 y se devuelven 7. Es idempotente y se ejecuta de forma perezosa
+ * al consultar consumo, así que no necesita cron.
+ */
+export async function reclaimAbandonedClientResearch(workspaceId: string): Promise<number> {
+  const admin = createAdminClient()
+  const cutoff = new Date(Date.now() - CLIENT_RESEARCH_GRACE_DAYS * 86400000).toISOString()
+
+  const { data: candidates } = await admin
+    .schema("v3")
+    .from("mcp_usage_reservations")
+    .select("id,units")
+    .eq("workspace_id", workspaceId)
+    .eq("pool", "research_client")
+    .eq("status", "committed")
+    .gte("created_at", new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString())
+
+  if (!candidates?.length) return 0
+
+  let reclaimed = 0
+  for (const reservation of candidates) {
+    const { data: executions } = await admin
+      .schema("v3")
+      .from("client_ai_executions")
+      .select("status,expires_at")
+      .eq("reservation_id", reservation.id)
+
+    if (!executions?.length) continue
+    // Si alguna sigue viva (dentro de gracia), no se toca la reserva: el lote está
+    // en curso y bajarle las unidades ahora liberaría cuota que aún puede usarse.
+    const someStillUsable = executions.some(
+      (execution) => execution.status !== "completed" && execution.expires_at > cutoff
+    )
+    if (someStillUsable) continue
+
+    const completed = executions.filter((execution) => execution.status === "completed").length
+    if (completed >= reservation.units) continue
+
+    // No se usa commitReservationWithUnits: esa función filtra por status
+    // 'reserved' y acá la reserva ya está 'committed'. Se ajusta en el lugar,
+    // dejando rastro en metadata de qué se devolvió y por qué.
+    const metadata = {
+      reclaimed: true,
+      reclaimedAt: new Date().toISOString(),
+      originalUnits: reservation.units,
+      completedExecutions: completed,
+      reason: "client_assisted_abandoned",
+    }
+    const { error } = await admin
+      .schema("v3")
+      .from("mcp_usage_reservations")
+      .update(
+        completed === 0
+          ? { status: "released", released_at: new Date().toISOString(), metadata }
+          : { units: completed, metadata }
+      )
+      .eq("id", reservation.id)
+      .eq("status", "committed")
+    if (error) continue
+    reclaimed += reservation.units - completed
+  }
+  return reclaimed
+}
+
 export async function getMcpUsage(principal: McpPrincipal) {
   const admin = createAdminClient()
+  // Antes de medir, se devuelve lo que quedó colgado. Perezoso a propósito: la
+  // consulta de consumo es el momento natural para reconciliar y evita un cron.
+  await reclaimAbandonedClientResearch(principal.workspaceId).catch(() => 0)
   const [planUsage, reservations, aiUsage] = await Promise.all([
     getWorkspaceUsage(principal.workspaceId),
     admin.schema("v3").from("mcp_usage_reservations")
@@ -179,9 +265,32 @@ export async function getMcpUsage(principal: McpPrincipal) {
     byPool[row.pool] ??= { reserved: 0, committed: 0, released: 0 }
     byPool[row.pool][row.status as "reserved" | "committed" | "released"] += row.units
   }
+  const monthStart = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString()
+  const clientResearchUsed = await getMonthlyPoolUsage(principal.workspaceId, "research_client")
+
   return {
     plan: planUsage.plan,
+    // `monthlyResearch` se llamaba así y contaba SOLO el research server-managed,
+    // pero las tools decían "consume 1 unidad de cuota de research" sin aclarar
+    // cuál. Resultado: el cliente corría 6 research client-assisted, veía este
+    // contador clavado y reportaba un bug de facturación que no existía. Son dos
+    // pools separados a propósito y ahora se nombran como tales.
+    monthlyServerResearch: {
+      used: planUsage.monthlyResearchCount,
+      limit: planUsage.config.monthlyResearchCap,
+      note: "Research ejecutado por ASCI (run_account_research). Consume tokens de AI Gateway de ASCI.",
+    },
+    monthlyClientResearch: {
+      used: clientResearchUsed,
+      limit: planUsage.config.monthlyResearchCap,
+      note: "Research ejecutado por tu propio modelo (prepare_account_research). No consume tokens de ASCI; sí ocupa cupo del plan.",
+    },
+    // Alias del pool server-managed. Se mantiene para no romper a ningún cliente
+    // que ya lea esta clave; usar los dos campos de arriba, que son explícitos.
     monthlyResearch: { used: planUsage.monthlyResearchCount, limit: planUsage.config.monthlyResearchCap },
+    poolsNote:
+      "Los dos pools son independientes: un research client-assisted no mueve monthlyServerResearch, y viceversa. Si preparaste research con tu modelo, mirá monthlyClientResearch.",
+    monthStart,
     lastSevenDays: byPool,
     verifiedAi: (aiUsage.data ?? []).reduce((acc, row) => ({
       inputTokens: acc.inputTokens + row.input_tokens,

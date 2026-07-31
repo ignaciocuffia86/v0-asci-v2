@@ -31,7 +31,59 @@ const authOf = (extra: unknown) => {
   return auth
 }
 const text = (value: unknown, isError = false) => ({ content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }], ...(isError ? { isError: true } : {}) })
-const safely = async (work: () => Promise<unknown>) => { try { return text(await work()) } catch (error) { return text({ success: false, error: error instanceof Error ? error.message : "UNKNOWN_ERROR" }, true) } }
+/**
+ * Qué hacer ante cada código de error. Sin esto, el cliente IA recibe
+ * "UNAUTHORIZED_EVIDENCE" pelado y su siguiente movimiento es adivinar: reintenta
+ * igual, abandona la cuenta o inventa una tool que no existe. El código lo dice el
+ * servidor; la salida también.
+ */
+const NEXT_ACTION_BY_CODE: Record<string, string> = {
+  COMPANY_RESOLUTION_REQUIRED: "El nombre coincide con varias empresas. Llamá a search_companies y pedile al usuario que elija, después reintentá con el companyId (UUID).",
+  UNAUTHORIZED_EVIDENCE: "Usaste un evidenceId que no está en el paquete. Reenviá la etapa usando solo los ids que vienen en `evidence`; no inventes ni combines ids.",
+  CLIENT_PACKAGE_EXPIRED: "Llamá a refresh_prompt_package con este executionId (no consume cuota) y reintentá el submit con el packageHash nuevo.",
+  CLIENT_PACKAGE_MISMATCH: "Llamá a get_client_research_status para traer la etapa y el packageHash vigentes, y reintentá con esos valores.",
+  CLIENT_RESULT_INVALID: "El detalle indica la ruta exacta del campo inválido (por ejemplo `items.3.title`). Corregí SOLO ese ítem y reenviá la etapa completa con la misma idempotencyKey.",
+  CLIENT_EXECUTION_COMPLETED: "Esta ejecución ya terminó. Leé el resultado con get_account_intelligence en vez de reenviar etapas.",
+  CLIENT_EXECUTION_NOT_FOUND: "El executionId no existe en este workspace. Verificá el id devuelto por prepare_account_research.",
+  IDEMPOTENCY_KEY_REUSED: "Reusaste una idempotencyKey con un contenido distinto. Si es un reintento, mandá el MISMO payload; si es un envío nuevo, usá una key nueva.",
+  PLAN_QUOTA_EXCEEDED: "Se agotó el cupo del plan. Consultá get_ai_usage para ver qué pool se agotó (monthlyServerResearch o monthlyClientResearch) y avisale al usuario.",
+  PACKAGE_REFRESH_LIMIT_REACHED: "Se alcanzó el techo de refrescos. Volvé a llamar prepare_account_research para esta cuenta (consume cuota nueva).",
+  ACCOUNT_NOT_SAVED: "La cuenta no está guardada. Llamá a prepare_save_account, confirmá el costo con el usuario y después save_account.",
+  UNAUTHORIZED: "La API key no es válida o no tiene el scope necesario. No reintentes: avisale al usuario que revise su credencial.",
+}
+
+/**
+ * Envelope uniforme de error.
+ *
+ * Los errores se lanzan como "CODIGO:mensaje humano". Antes esa cadena se devolvía
+ * entera en `error`, así que el cliente tenía que parsearla por su cuenta y el
+ * código quedaba mezclado con la explicación. Acá se separan y se agrega el
+ * próximo paso, que es el patrón que ya usaban bien las tools de contactos.
+ */
+const safely = async (work: () => Promise<unknown>) => {
+  try {
+    return text(await work())
+  } catch (error) {
+    const raw = error instanceof Error ? error.message : "UNKNOWN_ERROR"
+    const separator = raw.indexOf(":")
+    // Un código es SCREAMING_SNAKE_CASE; si no matchea, el mensaje no venía codificado.
+    const candidate = separator > 0 ? raw.slice(0, separator) : raw
+    const isCode = /^[A-Z][A-Z0-9_]*$/.test(candidate)
+    const code = isCode ? candidate : "UNKNOWN_ERROR"
+    const detail = isCode ? raw.slice(separator + 1).trim() : raw
+    return text(
+      {
+        success: false,
+        code,
+        message: detail || code,
+        ...(NEXT_ACTION_BY_CODE[code] ? { nextAction: NEXT_ACTION_BY_CODE[code] } : {}),
+        // Se mantiene la cadena original para no romper a un cliente que ya la lea.
+        error: raw,
+      },
+      true
+    )
+  }
+}
 
 const handler = createMcpHandler((server) => {
   server.tool("search_companies", "Busca empresas globales conocidas por nombre o dominio. Solo lectura; no ejecuta IA. Los resultados vienen ordenados por evidencia disponible (señales y vacantes) e incluyen likelyCanonical. Una misma empresa suele tener homónimos (plantas, filiales, distribuidores): si duplicateWarning viene informado, mostrale las opciones al usuario y confirmá cuál es la correcta antes de guardarla, porque guardar la equivocada ocupa un lugar del plan con una cuenta sin evidencia.", { query: z.string().min(2), limit: z.number().int().min(1).max(25).default(10) }, async ({ query, limit }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "companies:read", "read"); return searchCompanies(query, limit) }))
@@ -80,9 +132,9 @@ const handler = createMcpHandler((server) => {
 
   server.tool("prepare_account_research", "Prepara research completo para ejecutar con el modelo y tokens del cliente MCP. ASCI no llama AI Gateway. PASÁ EL companyId (UUID) que devolvió search_companies o save_account, no el nombre: con un UUID la cuenta queda identificada sin ambigüedad, mientras que un nombre se resuelve por match difuso y puede apuntar a un homónimo distinto del que guardaste. Requiere que todas las cuentas estén guardadas en el workspace: si alguna no lo está, devuelve el detalle sin consumir cuota y hay que llamar save_account antes de reintentar.", { companies: z.array(z.string().min(2)).min(1).max(10).describe("companyId (UUID) de cada cuenta. Se acepta el nombre solo si no tenés el id, pero es ambiguo."), idempotencyKey: z.string().min(8).max(200) }, async ({ companies, idempotencyKey }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:prepare", "client_assisted"); return prepareAccountResearch(auth, companies, idempotencyKey) }))
   server.tool("submit_account_research_stage", "Valida y persiste una etapa estructurada generada por el modelo del cliente.", { executionId: z.string().uuid(), stage: z.enum(["internal_analysis", "signal_classification", "fit_scoring", "account_brief"]), packageHash: z.string().length(64), result: z.unknown(), clientModel: z.string().max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async (args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:submit", "client_assisted"); return submitResearchStage(auth, args) }))
-  server.tool("prepare_company_success_cases", "Paso 1 de 2 para buscar casos de éxito de una cuenta con una tecnología concreta. Devuelve el prompt package para que el cliente BUSQUE con sus propios tokens. Consume 1 unidad de cuota de research. Usala después de get_company_signal_summary, cuando el usuario quiera evidencia externa de una tecnología puntual. Cada caso debe traer una sourceUrl real: el servidor verifica que responda y que la página mencione a la empresa antes de guardar, y descarta lo que no pase.", { companyId: z.string().uuid(), term: z.string().min(2).max(120).optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, term, idempotencyKey }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:prepare", "client_assisted"); return prepareCompanySuccessCases(auth, { companyId, term, idempotencyKey }) }))
+  server.tool("prepare_company_success_cases", "Paso 1 de 2 para buscar casos de éxito de una cuenta con una tecnología concreta. Devuelve el prompt package para que el cliente BUSQUE con sus propios tokens. Consume 1 unidad del pool CLIENT-ASSISTED, que en get_ai_usage se ve como monthlyClientResearch: NO mueve monthlyServerResearch, son dos cupos independientes. Usala después de get_company_signal_summary, cuando el usuario quiera evidencia externa de una tecnología puntual. Cada caso debe traer una sourceUrl real: el servidor verifica que responda y que la página mencione a la empresa antes de guardar, y descarta lo que no pase.", { companyId: z.string().uuid(), term: z.string().min(2).max(120).optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, term, idempotencyKey }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:prepare", "client_assisted"); return prepareCompanySuccessCases(auth, { companyId, term, idempotencyKey }) }))
   server.tool("submit_company_success_cases", "Paso 2 de 2: entrega los casos de éxito que encontró el cliente. El servidor aplica los guardrails (URL viva y mención real de la empresa) y descarta lo que no pase, así que la respuesta informa cuántos se aceptaron y cuántos se rechazaron con su motivo. No consume cuota adicional.", { executionId: z.string().uuid(), packageHash: z.string().length(64), result: z.unknown(), clientModel: z.string().max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async (args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:submit", "client_assisted"); return submitCompanySuccessCases(auth, args) }))
-  server.tool("prepare_company_news", "Paso 1 de 2 para buscar noticias recientes de una cuenta. Devuelve el prompt package para que el cliente BUSQUE con sus propios tokens, con una ventana temporal explícita (180 días por defecto) para que no traiga notas viejas como si fueran novedad. Consume 1 unidad de cuota de research.", { companyId: z.string().uuid(), term: z.string().min(2).max(120).optional(), windowDays: z.number().int().min(1).max(730).optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, term, windowDays, idempotencyKey }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:prepare", "client_assisted"); return prepareCompanyNews(auth, { companyId, term, windowDays, idempotencyKey }) }))
+  server.tool("prepare_company_news", "Paso 1 de 2 para buscar noticias recientes de una cuenta. Devuelve el prompt package para que el cliente BUSQUE con sus propios tokens, con una ventana temporal explícita (180 días por defecto) para que no traiga notas viejas como si fueran novedad. Consume 1 unidad del pool CLIENT-ASSISTED, que en get_ai_usage se ve como monthlyClientResearch: NO mueve monthlyServerResearch, son dos cupos independientes. Clasificá `category` con la taxonomía cerrada que viene en el responseSchema del paquete; si mandás una variante, el servidor la normaliza y te lo informa en remappedCategories.", { companyId: z.string().uuid(), term: z.string().min(2).max(120).optional(), windowDays: z.number().int().min(1).max(730).optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, term, windowDays, idempotencyKey }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:prepare", "client_assisted"); return prepareCompanyNews(auth, { companyId, term, windowDays, idempotencyKey }) }))
   server.tool("submit_company_news", "Paso 2 de 2: entrega las noticias que encontró el cliente. El servidor verifica URLs y relevancia, descarta lo que no pase, y clasifica cada noticia como expansion, contraccion o neutro para que una mala noticia (un cierre de planta, una desinversión) no sume puntaje de timing como si fuera una oportunidad. No consume cuota adicional.", { executionId: z.string().uuid(), packageHash: z.string().length(64), result: z.unknown(), clientModel: z.string().max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async (args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:submit", "client_assisted"); return submitCompanyNews(auth, args) }))
   server.tool("scrape_company_job_postings", "Trae vacantes frescas de LinkedIn para una cuenta guardada y las ingesta por el pipeline de importación de ASCI, que las normaliza y deduplica. El filtro por empresa se aplica en el buscador usando el nombre y el país que ya tenemos guardados de la cuenta, así que no hace falta pasarlos. Consume cuota de research server-managed porque el scraping corre con recursos de ASCI. Dos cosas a tener en cuenta: (1) `titleQuery` es OPCIONAL y sirve para acotar por título de puesto DENTRO de la empresa (por ejemplo 'SAP'); si lo omitís se traen todas las vacantes de la empresa, que es lo habitual. (2) La ventana sólo puede ser 1, 7 o 30 días; si pedís más, se busca sin límite de fecha y se te avisa. La ingesta es asincrónica: las vacantes aparecen cuando el importador procesa el lote, no de inmediato.", { companyId: z.string().uuid(), titleQuery: z.string().min(2).max(120).optional(), location: z.string().min(2).max(120).optional(), windowDays: z.number().int().min(1).max(365).optional(), maxRows: z.number().int().min(1).max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, titleQuery, location, windowDays, maxRows, idempotencyKey }, extra) => safely(async () => {
     const auth = authOf(extra); await requirePaidMcp(auth, "research:run", "server_managed")

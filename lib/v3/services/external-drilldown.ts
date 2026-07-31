@@ -2,7 +2,7 @@ import "server-only"
 
 import { createAdminClient } from "@/lib/supabase/admin"
 import { checkUrlsAlive, filterRelevantToCompany } from "@/lib/ai-structurer"
-import { toSignalDirection, toV2EvidenceLevel, toEvidenceLevel, type SignalDirection } from "./evidence-level"
+import { toSignalDirection, toV2EvidenceLevel, toEvidenceLevel, normalizeNewsCategory, type SignalDirection } from "./evidence-level"
 
 // ═══════════════════════════════════════════════════════════
 // Drilldown externo: casos de éxito y noticias buscados por el CLIENTE.
@@ -200,6 +200,8 @@ export async function persistClientNews(params: {
     saved?: number
     /** Cuántas ya estaban (misma company_id + source_url) y se omitieron. */
     duplicates?: number
+    /** Categorías que se corrigieron a la taxonomía canónica. */
+    remappedCategories?: { title: string; from: string | null; to: string }[]
   }
 > {
   const { kept, report } = await applyGuardrails(params.items, {
@@ -215,15 +217,22 @@ export async function persistClientNews(params: {
 
   const admin = createAdminClient()
   const verifiedAt = new Date().toISOString()
+  // Categorías que hubo que corregir. Se informan al cliente en vez de arreglarlas
+  // en silencio, para que el modelo aprenda a mandar la taxonomía correcta.
+  const remappedCategories: { title: string; from: string | null; to: string }[] = []
   const rows = kept.map((item) => {
     const direction = toSignalDirection(item.direction)
     directions[direction] += 1
+    const cat = normalizeNewsCategory(item.category)
+    if (cat.wasRemapped) {
+      remappedCategories.push({ title: item.title.slice(0, 80), from: cat.original, to: cat.category })
+    }
     return {
       company_id: params.companyId,
       user_id: params.userId,
       title: item.title.slice(0, 500),
       summary: item.summary?.slice(0, 2000) ?? null,
-      category: item.category.slice(0, 100),
+      category: cat.category,
       // La columna de v2 se llama source_url, no url.
       source_url: item.sourceUrl,
       source_name: item.sourceName?.slice(0, 120) ?? null,
@@ -253,5 +262,11 @@ export async function persistClientNews(params: {
   if (duplicates > 0 && saved === 0) {
     for (const key of Object.keys(directions) as SignalDirection[]) directions[key] = 0
   }
-  return { ...report, directions, saved, duplicates }
+  return {
+    ...report,
+    directions,
+    saved,
+    duplicates,
+    ...(remappedCategories.length ? { remappedCategories } : {}),
+  }
 }
