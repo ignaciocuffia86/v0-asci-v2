@@ -23,10 +23,19 @@ BEGIN
   INSERT INTO public.companies (name) VALUES ('ZZ Test RPC 2') RETURNING id INTO v_c2;
   INSERT INTO public.companies (name) VALUES ('ZZ Test RPC 3') RETURNING id INTO v_c3;
 
-  -- El constraint que va a estar en produccion despues del 421.
-  CREATE UNIQUE INDEX bookmarks_user_company_context_uniq
-    ON public.bookmarks (user_id, company_id, v3.bookmark_context_key(search_context))
-    NULLS NOT DISTINCT;
+  -- El constraint tiene que estar puesto para que este test valga. Se crea solo
+  -- si falta, asi el test sirve igual antes y despues de aplicar el 421 (una vez
+  -- aplicado ya existe de verdad, y un CREATE a secas fallaria por nombre
+  -- duplicado). Si lo crea, el dry-run del runner lo revierte.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE schemaname = 'public' AND indexname = 'bookmarks_user_company_context_uniq'
+  ) THEN
+    CREATE UNIQUE INDEX bookmarks_user_company_context_uniq
+      ON public.bookmarks (user_id, company_id, v3.bookmark_context_key(search_context))
+      NULLS NOT DISTINCT;
+    RAISE NOTICE 'indice creado para el test (todavia no estaba el 421)';
+  END IF;
 
   -- ------------------------------------------------------- creacion inicial --
   SELECT count(*) INTO v_n FROM public.create_bookmarks(v_user, ARRAY[v_c1, v_c2], v_ctx)
