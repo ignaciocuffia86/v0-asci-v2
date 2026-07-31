@@ -38,8 +38,26 @@ const MODEL_PRICING: Record<string, { inputPerM: number; outputPerM: number }> =
 /** Fallback conservador para modelos no listados */
 const DEFAULT_PRICING = { inputPerM: 3, outputPerM: 15 }
 
+/**
+ * Normaliza el id de modelo antes de buscar precio.
+ *
+ * El AI Gateway nombra las versiones de Anthropic con GUION ("claude-opus-4-5")
+ * mientras que las claves de arriba se escribieron con PUNTO ("claude-opus-4.5").
+ * Por esa sola diferencia, TODAS las llamadas a Anthropic caian al fallback de
+ * 3/15 en lugar de los 5/25 reales de Opus, subreportando el costo ~1.7x.
+ * Comparamos sin separadores para que la version con punto y la con guion
+ * resuelvan al mismo precio.
+ */
+function normalizeModelKey(model: string): string {
+  return model.toLowerCase().replace(/[.\-_]/g, "")
+}
+
+const NORMALIZED_PRICING: Record<string, { inputPerM: number; outputPerM: number }> = Object.fromEntries(
+  Object.entries(MODEL_PRICING).map(([key, value]) => [normalizeModelKey(key), value]),
+)
+
 export function estimateCostUsd(model: string, inputTokens: number, outputTokens: number): number {
-  const pricing = MODEL_PRICING[model] ?? DEFAULT_PRICING
+  const pricing = MODEL_PRICING[model] ?? NORMALIZED_PRICING[normalizeModelKey(model)] ?? DEFAULT_PRICING
   const cost = (inputTokens / 1_000_000) * pricing.inputPerM + (outputTokens / 1_000_000) * pricing.outputPerM
   return Math.round(cost * 1_000_000) / 1_000_000
 }
