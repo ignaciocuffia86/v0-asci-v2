@@ -242,11 +242,81 @@ export async function reclaimAbandonedClientResearch(workspaceId: string): Promi
   return reclaimed
 }
 
+/**
+ * Minutos de gracia tras el TTL del prepare de contactos antes de dar por
+ * abandonada una reserva de Apollo. PREPARE_TTL_MINUTES vale 30; con este margen,
+ * el usuario tuvo el TTL completo más una hora para confirmar el run.
+ */
+const APOLLO_PREPARE_TTL_MINUTES = 30
+const APOLLO_GRACE_MINUTES = 60
+
+/**
+ * Devuelve la cuota de los enrichment de Apollo que quedaron reservados y nunca
+ * se ejecutaron.
+ *
+ * `prepare_contact_enrichment` reserva el PEOR CASO (maxContacts, hasta 10) porque
+ * no sabe cuántas personas va a devolver la búsqueda. Si el usuario nunca confirma
+ * el run, esa reserva se queda en 'reserved' y `getMonthlyPoolUsage` la sigue
+ * contando (cuenta reserved + committed), comiéndose el cupo mensual de contactos
+ * por previews que nunca se cobraron. Es el mismo patrón de fuga que el research
+ * client-assisted, en otro pool.
+ *
+ * A diferencia del research, acá la reserva queda en 'reserved' (no 'committed'):
+ * un run confirmado la pasa a committed/released, así que una que sigue 'reserved'
+ * pasado el TTL + gracia es, por definición, un preview abandonado.
+ */
+export async function reclaimAbandonedContactEnrichment(workspaceId: string): Promise<number> {
+  const admin = createAdminClient()
+  const cutoff = new Date(Date.now() - (APOLLO_PREPARE_TTL_MINUTES + APOLLO_GRACE_MINUTES) * 60000).toISOString()
+
+  const { data: stale } = await admin
+    .schema("v3")
+    .from("mcp_usage_reservations")
+    .select("id,units")
+    .eq("workspace_id", workspaceId)
+    .eq("pool", "apollo_enrichment")
+    .eq("status", "reserved")
+    .lt("created_at", cutoff)
+
+  if (!stale?.length) return 0
+
+  let reclaimed = 0
+  for (const reservation of stale) {
+    // Doble chequeo contra el run: si existe un run de esta reserva que llegó a
+    // 'completed', NO se libera (el commit real pudo correr en paralelo). Solo se
+    // liberan las que no tienen run completado.
+    const { data: runs } = await admin
+      .schema("v3")
+      .from("contact_enrichment_runs")
+      .select("status")
+      .eq("reservation_id", reservation.id)
+    const yaCorrio = runs?.some((run) => run.status === "completed")
+    if (yaCorrio) continue
+
+    const { error } = await admin
+      .schema("v3")
+      .from("mcp_usage_reservations")
+      .update({
+        status: "released",
+        released_at: new Date().toISOString(),
+        metadata: { reclaimed: true, reclaimedAt: new Date().toISOString(), reason: "contact_prepare_abandoned" },
+      })
+      .eq("id", reservation.id)
+      .eq("status", "reserved")
+    if (error) continue
+    reclaimed += reservation.units
+  }
+  return reclaimed
+}
+
 export async function getMcpUsage(principal: McpPrincipal) {
   const admin = createAdminClient()
   // Antes de medir, se devuelve lo que quedó colgado. Perezoso a propósito: la
   // consulta de consumo es el momento natural para reconciliar y evita un cron.
-  await reclaimAbandonedClientResearch(principal.workspaceId).catch(() => 0)
+  await Promise.all([
+    reclaimAbandonedClientResearch(principal.workspaceId).catch(() => 0),
+    reclaimAbandonedContactEnrichment(principal.workspaceId).catch(() => 0),
+  ])
   const [planUsage, reservations, aiUsage] = await Promise.all([
     getWorkspaceUsage(principal.workspaceId),
     admin.schema("v3").from("mcp_usage_reservations")

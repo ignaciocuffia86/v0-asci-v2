@@ -496,10 +496,14 @@ async function faseContactos(client) {
   const cargos = [...new Set([...sugeridos.slice(0, 4), "Director de Sistemas"])]
 
   // 4. Preview: cuanto sale y a cuantos alcanza. NO gasta.
+  // idempotencyKey ESTABLE (deriva de company + tope, sin timestamp): reintentar el
+  // dry-run reusa la MISMA reserva en vez de apilar una nueva de `tope` unidades cada
+  // vez. Con timestamp, tres corridas seguidas reservaban 3x el pool apollo_enrichment
+  // y disparaban el limite de ventana ("Esperá unos minutos").
   const prep = await llamar(
     client,
     "prepare_contact_enrichment",
-    { companyId, roles: cargos, maxContacts: tope, idempotencyKey: `harness-prep-${Date.now()}` },
+    { companyId, roles: cargos, maxContacts: tope, idempotencyKey: `harness-prep-${companyId}-${tope}` },
     "preview de costo · NO gasta"
   )
   console.log(mostrar(prep.texto, 2600))

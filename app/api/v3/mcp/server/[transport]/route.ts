@@ -50,6 +50,8 @@ const NEXT_ACTION_BY_CODE: Record<string, string> = {
   PACKAGE_REFRESH_LIMIT_REACHED: "Se alcanzó el techo de refrescos. Volvé a llamar prepare_account_research para esta cuenta (consume cuota nueva).",
   ACCOUNT_NOT_SAVED: "La cuenta no está guardada. Llamá a prepare_save_account, confirmá el costo con el usuario y después save_account.",
   UNAUTHORIZED: "La API key no es válida o no tiene el scope necesario. No reintentes: avisale al usuario que revise su credencial.",
+  RATE_LIMITED: "Es un límite temporal de frecuencia, no un error definitivo ni falta de cuota. Esperá ~1 minuto y reintentá la MISMA llamada; no cambies los argumentos ni abandones la cuenta.",
+  SCOPE_REQUIRED: "La API key no tiene el permiso para esta operación (por ejemplo contacts:write). No reintentes: avisale al usuario que regenere la key con el scope faltante.",
 }
 
 /**
@@ -65,12 +67,28 @@ const safely = async (work: () => Promise<unknown>) => {
     return text(await work())
   } catch (error) {
     const raw = error instanceof Error ? error.message : "UNKNOWN_ERROR"
+    // Prioridad 1: un `.code` estructurado en el propio error. EnrichmentError (y
+    // otras clases del dominio) llevan el código en una propiedad aparte y ponen en
+    // `message` solo la frase para el usuario ("Alcanzaste el límite de uso…"). Si
+    // solo se parseara el message, todos esos códigos —RATE_LIMITED, PREPARE_FAILED,
+    // SCOPE_REQUIRED— colapsarían en UNKNOWN_ERROR y el cliente perdería el
+    // nextAction. Se detectó probando el flujo de contactos, no en revisión de código.
+    const structuredCode =
+      error && typeof error === "object" && "code" in error && typeof (error as { code: unknown }).code === "string"
+        ? ((error as { code: string }).code)
+        : null
+    // Prioridad 2: el patrón "CODIGO:mensaje" embebido en el string.
     const separator = raw.indexOf(":")
-    // Un código es SCREAMING_SNAKE_CASE; si no matchea, el mensaje no venía codificado.
     const candidate = separator > 0 ? raw.slice(0, separator) : raw
-    const isCode = /^[A-Z][A-Z0-9_]*$/.test(candidate)
-    const code = isCode ? candidate : "UNKNOWN_ERROR"
-    const detail = isCode ? raw.slice(separator + 1).trim() : raw
+    const messageHasCode = /^[A-Z][A-Z0-9_]*$/.test(candidate)
+    const code = structuredCode && /^[A-Z][A-Z0-9_]*$/.test(structuredCode)
+      ? structuredCode
+      : messageHasCode
+        ? candidate
+        : "UNKNOWN_ERROR"
+    // El detalle: si el código vino del string, se recorta el prefijo; si vino de
+    // la propiedad, el message ya es la frase limpia.
+    const detail = !structuredCode && messageHasCode ? raw.slice(separator + 1).trim() : raw
     return text(
       {
         success: false,
