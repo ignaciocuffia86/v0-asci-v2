@@ -64,6 +64,9 @@ export async function requirePaidMcp(principal: McpPrincipal, scope: string, mod
   if (!principal.scopes.includes(scope) && !principal.scopes.includes("*")) {
     throw new Error(`SCOPE_REQUIRED:${scope}`)
   }
+  // Se estampa acá, la única puerta por la que pasan todas las tools, para que la
+  // auditoría no tenga que mantener un mapa tool→modo en paralelo.
+  principal.effectiveMode = mode
   if (mode === "read") return
   const plan = await getWorkspacePlan(principal.workspaceId)
   if (plan === "trial") throw new Error("PLAN_REQUIRED:Trial no permite acciones de IA por MCP")

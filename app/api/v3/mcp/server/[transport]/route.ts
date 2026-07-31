@@ -104,7 +104,100 @@ const safely = async (work: () => Promise<unknown>) => {
   }
 }
 
-const handler = createMcpHandler((server) => {
+/** Códigos de error → status. Sin esto toda falla quedaba registrada como 200. */
+const STATUS_BY_CODE: Record<string, number> = {
+  RATE_LIMITED: 429,
+  UNAUTHORIZED: 401,
+  SCOPE_REQUIRED: 403,
+  PLAN_REQUIRED: 402,
+  PLAN_QUOTA_EXCEEDED: 402,
+  MODE_NOT_ALLOWED: 403,
+  CLIENT_EXECUTION_NOT_FOUND: 404,
+  ACCOUNT_NOT_SAVED: 409,
+}
+
+/**
+ * Auditoría real de cada invocación.
+ *
+ * Antes existía un único `logMcpRequest` en el callback de auth, que corría una vez por
+ * request HTTP y ANTES de ejecutar la tool. De ahí venían los tres agujeros que dejaban la
+ * tabla sin poder responder "quién usó qué": `tool_name` siempre null, `status_code`
+ * siempre 200 (incluso si la tool fallaba) y `response_time_ms` siempre 0.
+ */
+const auditToolCall = async (input: { toolName: string; extra: unknown; result?: unknown; thrown?: unknown; startedAt: number }) => {
+  const principal = (input.extra as { authInfo?: { extra?: McpPrincipal } } | undefined)?.authInfo?.extra
+  if (!principal) return
+
+  const payload = input.result as { content?: { text?: string }[]; isError?: boolean } | undefined
+  const failed = Boolean(input.thrown) || Boolean(payload?.isError)
+  let errorCode: string | undefined
+  if (failed) {
+    // `safely` ya normalizó el error a un envelope JSON con `code`; se reusa esa
+    // clasificación en vez de volver a parsear el mensaje crudo.
+    try {
+      const parsed = JSON.parse(payload?.content?.[0]?.text ?? "{}") as { code?: unknown }
+      if (typeof parsed.code === "string") errorCode = parsed.code
+    } catch {
+      errorCode = "UNKNOWN_ERROR"
+    }
+    if (!errorCode) errorCode = "UNKNOWN_ERROR"
+  }
+
+  await logMcpRequest({
+    principal,
+    toolName: input.toolName,
+    method: "POST",
+    statusCode: failed ? (STATUS_BY_CODE[errorCode ?? ""] ?? 400) : 200,
+    responseTimeMs: Date.now() - input.startedAt,
+    // Lo estampa `requirePaidMcp`, la única puerta por la que pasan todas las tools, así
+    // no hace falta mantener un mapa tool→modo en paralelo que se desincronice.
+    mode: principal.effectiveMode ?? "read",
+    errorCode,
+  })
+}
+
+/**
+ * Envuelve `server.tool` para auditar cada llamada sin tocar las ~36 registraciones.
+ *
+ * El Proxy devuelve el mismo tipo `S`, así que las tools conservan la inferencia de tipos
+ * de sus esquemas zod: la intervención es solo en runtime.
+ */
+function withToolAudit<S extends object>(server: S): S {
+  return new Proxy(server, {
+    get(target, prop, receiver) {
+      const original = Reflect.get(target, prop, receiver)
+      if (prop !== "tool" || typeof original !== "function") return original
+      return (...args: unknown[]) => {
+        const lastIndex = args.length - 1
+        const run = args[lastIndex]
+        const toolName = typeof args[0] === "string" ? args[0] : "(desconocida)"
+        if (typeof run === "function") {
+          args[lastIndex] = async (toolArgs: unknown, extra: unknown) => {
+            const startedAt = Date.now()
+            try {
+              const result = await (run as (a: unknown, e: unknown) => Promise<unknown>)(toolArgs, extra)
+              // `after` para no sumarle la latencia del insert a la respuesta.
+              after(() => auditToolCall({ toolName, extra, result, startedAt }))
+              return result
+            } catch (thrown) {
+              // Red de seguridad para un error lanzado dentro del handler pero fuera de
+              // `safely`. Limitación verificada en runtime: si los argumentos no pasan el
+              // esquema zod, el framework rechaza ANTES de llamar acá, así que esas
+              // llamadas malformadas no quedan auditadas. Auditarlas exigiría interceptar
+              // el transporte, no la tool.
+              after(() => auditToolCall({ toolName, extra, thrown, startedAt }))
+              throw thrown
+            }
+          }
+        }
+        return (original as (...a: unknown[]) => unknown).apply(target, args)
+      }
+    },
+  }) as S
+}
+
+const handler = createMcpHandler((rawServer) => {
+  const server = withToolAudit(rawServer)
   server.tool("search_companies", "Busca empresas globales conocidas por nombre o dominio. Solo lectura; no ejecuta IA. Los resultados vienen ordenados por evidencia disponible (señales y vacantes) e incluyen likelyCanonical. Una misma empresa suele tener homónimos (plantas, filiales, distribuidores): si duplicateWarning viene informado, mostrale las opciones al usuario y confirmá cuál es la correcta antes de guardarla, porque guardar la equivocada ocupa un lugar del plan con una cuenta sin evidencia.", { query: z.string().min(2), limit: z.number().int().min(1).max(25).default(10) }, async ({ query, limit }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "companies:read", "read"); return searchCompanies(query, limit) }))
   server.tool("get_company_profile", "Obtiene identidad y cobertura global de señales de una empresa. Solo lectura.", { companyId: z.string().uuid() }, async ({ companyId }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "companies:read", "read"); return getCompanyProfile(companyId) }))
   server.tool("get_company_signals", "Obtiene señales v2 normalizadas para un companyId exacto. Solo lectura y sin generación implícita.", { companyId: z.string().uuid(), limit: z.number().int().min(1).max(100).default(50) }, async ({ companyId, limit }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "signals:read", "read"); return getCompanySignals(companyId, limit) }))
@@ -246,7 +339,10 @@ const authedHandler = withMcpAuth(handler, async (req: Request, token?: string) 
   // `keyType` viene de validateMcpRequest y hay que propagarlo: es lo que decide
   // si keyId se escribe en api_key_id o en oauth_token_id.
   const principal: McpPrincipal = { workspaceId: result.workspaceId, userId: result.userId, keyId: result.keyId, keyType: result.keyType, scopes: result.scopes ?? [], allowedModes: result.allowedModes ?? ["read"] }
-  await logMcpRequest({ principal, method: req.method, statusCode: 200, requestId: crypto.randomUUID() })
+  // Fila de TRANSPORTE (queda con `tool_name` null a propósito): es el ticket que cuenta
+  // el rate limiter, y por eso se escribe acá, antes de ejecutar. No describe la tool —de
+  // eso se encarga `auditToolCall`—, así que no se le pone status ni duración reales.
+  await logMcpRequest({ principal, method: req.method, statusCode: 200, requestId: crypto.randomUUID(), metadata: { phase: "transport" } })
   return { token, clientId: result.keyId, scopes: principal.scopes, extra: principal as unknown as Record<string, unknown> }
 }, {
   required: true,
