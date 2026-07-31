@@ -397,6 +397,19 @@ async function faseCostoResearch(client) {
     return
   }
 
+  // run_account_research exige que la cuenta ya este guardada, pero una cuenta YA
+  // SEGUIDA la rechaza el guard de auto-refresh (por eso el intento anterior no midio
+  // nada). Para medir de verdad hay que partir de una cuenta nueva: con GUARDAR=si se
+  // la guarda recien aca.
+  if (process.env.GUARDAR === "si") {
+    for (const companyId of objetivos) {
+      // userConfirmed es z.literal(true): la tool exige confirmacion explicita del
+      // usuario porque ocupa un lugar del plan. Aca ya viene autorizado por el usuario.
+      const g = await llamar(client, "save_account", { companyId, userConfirmed: true }, `guardando cuenta ${companyId.slice(0, 8)}`)
+      console.log(mostrar(g.texto, 600))
+    }
+  }
+
   // Antes: foto de la cuota, para medir el delta y no confiar en lo que se reporta.
   const antes = await llamar(client, "get_ai_usage", {}, "cuota ANTES")
   console.log(mostrar(antes.texto, 1400))
