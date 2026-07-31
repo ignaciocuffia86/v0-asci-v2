@@ -33,7 +33,9 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 
 const PORT = process.env.DEV_PORT || "3000"
 const URL_MCP = `http://localhost:${PORT}/api/v3/mcp/server/mcp`
-const KEY = fs.readFileSync("/tmp/asci-test-key", "utf8").trim()
+// KEY_FILE permite apuntar a la key de otro workspace (ej. /tmp/asci-test-key-b)
+// sin sobreescribir la principal: necesario para la fase cross-tenant.
+const KEY = fs.readFileSync(process.env.KEY_FILE || "/tmp/asci-test-key", "utf8").trim()
 
 /** Bitacora de llamadas, para el reporte final. */
 const bitacora = []
@@ -417,7 +419,11 @@ async function faseCostoResearch(client) {
   const jd = comoJson(despues.texto)
   const usadoAntes = ja?.monthlyServerResearch?.used ?? ja?.monthlyResearch?.used
   const usadoDespues = jd?.monthlyServerResearch?.used ?? jd?.monthlyResearch?.used
-  if (usadoAntes != null && usadoDespues != null) {
+  // Solo tiene sentido comparar la cuota si el research efectivamente corrio: si
+  // `run` fallo (guard, cuota, etc.) un delta 0 es lo correcto, no un hallazgo.
+  if (!run.ok) {
+    console.log("\nEl run no se ejecuto, así que no se compara el delta de cuota.")
+  } else if (usadoAntes != null && usadoDespues != null) {
     const delta = usadoDespues - usadoAntes
     console.log(`\nCUOTA server-managed: ${usadoAntes} -> ${usadoDespues} (delta ${delta}, esperado ${objetivos.length})`)
     if (delta !== objetivos.length) console.log("HALLAZGO: el delta de cuota no coincide con las cuentas corridas.")
@@ -446,7 +452,7 @@ async function faseCrossTenant(client) {
   const intel = await llamar(
     client,
     "get_account_intelligence",
-    { company: companyId },
+    { companyId },
     "leyendo desde el workspace B lo que subio el A"
   )
   console.log(mostrar(intel.texto, 3000))
@@ -577,6 +583,9 @@ if (p?.label) return p.label
 
 function mostrar(texto, max = 1200) {
   if (!texto) return "(vacio)"
+  // MAX_CHARS permite ver la respuesta completa cuando hay que auditar el contenido
+  // (por ejemplo, comprobar si aparecen datos de otro tenant).
+  if (process.env.MAX_CHARS) max = Number(process.env.MAX_CHARS)
   return texto.length > max ? `${texto.slice(0, max)}\n… [+${texto.length - max} chars]` : texto
 }
 
@@ -596,6 +605,12 @@ try {
   else if (fase === "costo-research") await faseCostoResearch(client)
   else if (fase === "cross-tenant") await faseCrossTenant(client)
   else if (fase === "contactos") await faseContactos(client)
+  // Fase auxiliar: leer la cuota. Ademas de informar, dispara los reclaims
+  // perezosos de reservas abandonadas, asi que sirve para verificarlos.
+  else if (fase === "cuota") {
+    const r = await llamar(client, "get_ai_usage", {}, "cuota + reclaim perezoso")
+    console.log(mostrar(r.texto, 2000))
+  }
   else {
     console.log(`fase desconocida: ${fase}`)
   }

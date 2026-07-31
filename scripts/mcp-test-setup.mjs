@@ -137,7 +137,26 @@ const { rows: creado } = await client.query(
 const wsB = creado[0]
 console.log(`[v0] workspace B creado: ${wsB.id} (plan ${wsB.plan})`)
 
+// validateMcpRequest exige una fila ACTIVA en workspace_members para el par
+// (workspace_id, owner_user_id) de la key; si falta, la auth corta antes de mirar
+// scopes y mcp-handler responde un generico "No authorization provided" que no dice
+// nada del motivo real. Sin este miembro, la key del workspace B daba 401.
 const keyB = await crearKey(wsB.id, `${MARCA} MCP UX B`)
+
+// validateMcpRequest exige una fila ACTIVA en workspace_members para el par
+// (workspace_id, owner_user_id) DE LA KEY; si falta, la auth corta antes de mirar
+// scopes y mcp-handler responde un generico "No authorization provided" que no dice
+// nada del motivo real. El user sale de la key (v3.workspaces no tiene owner_user_id).
+await client.query(
+  `INSERT INTO v3.workspace_members (workspace_id, user_id, role, status)
+   SELECT k.workspace_id, k.owner_user_id, 'admin', 'active'
+   FROM v3.mcp_api_keys k
+   WHERE k.workspace_id = $1 AND k.revoked_at IS NULL
+   ON CONFLICT DO NOTHING`,
+  [wsB.id],
+)
+console.log(`[v0] miembro activo agregado al workspace B`)
+
 fs.writeFileSync("/tmp/asci-test-key-b", keyB, { mode: 0o600 })
 console.log(`[v0] key B lista (prefijo ${keyB.slice(0, 12)}…)`)
 console.log(`\n[v0] WS_B=${wsB.id}`)

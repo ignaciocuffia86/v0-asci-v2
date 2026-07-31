@@ -47,6 +47,7 @@ const NEXT_ACTION_BY_CODE: Record<string, string> = {
   CLIENT_EXECUTION_NOT_FOUND: "El executionId no existe en este workspace. Verificá el id devuelto por prepare_account_research.",
   IDEMPOTENCY_KEY_REUSED: "Reusaste una idempotencyKey con un contenido distinto. Si es un reintento, mandá el MISMO payload; si es un envío nuevo, usá una key nueva.",
   PLAN_QUOTA_EXCEEDED: "Se agotó el cupo del plan. Consultá get_ai_usage para ver qué pool se agotó (monthlyServerResearch o monthlyClientResearch) y avisale al usuario.",
+  ACCOUNT_AUTO_REFRESHED: "NO es falta de cuota: la cuenta ya está en seguimiento y se refresca sola. No reintentes ni gastes cuota. Leé lo que ya hay con get_account_intelligence y avisale al usuario en qué fecha llega el próximo digest.",
   PACKAGE_REFRESH_LIMIT_REACHED: "Se alcanzó el techo de refrescos. Volvé a llamar prepare_account_research para esta cuenta (consume cuota nueva).",
   ACCOUNT_NOT_SAVED: "La cuenta no está guardada. Llamá a prepare_save_account, confirmá el costo con el usuario y después save_account.",
   UNAUTHORIZED: "La API key no es válida o no tiene el scope necesario. No reintentes: avisale al usuario que revise su credencial.",
@@ -136,7 +137,15 @@ const handler = createMcpHandler((server) => {
     if (blocked) return blocked
     const quota = await checkResearchQuota({ workspaceId: auth.workspaceId, companies: canonical })
     const rejected = quota.items.filter((item) => !item.allowed)
-    if (rejected.length) throw new Error(`PLAN_QUOTA_EXCEEDED:${rejected.map((item) => item.reason).join(" | ")}`)
+    if (rejected.length) {
+      // No todo rechazo es falta de cupo. Una cuenta EN SEGUIMIENTO se rechaza porque
+      // ya se refresca sola (viene con nextAutoRefreshDate), y devolverla como
+      // PLAN_QUOTA_EXCEEDED hacía que el modelo le dijera al usuario "te quedaste sin
+      // cuota" teniendo 10/30 disponibles. Se separan los dos casos.
+      const soloAutoRefresh = rejected.every((item) => item.nextAutoRefreshDate)
+      const code = soloAutoRefresh ? "ACCOUNT_AUTO_REFRESHED" : "PLAN_QUOTA_EXCEEDED"
+      throw new Error(`${code}:${rejected.map((item) => item.reason).join(" | ")}`)
+    }
     const reservation = await reserveMcpUsage({ principal: auth, pool: "research_server", units: canonical.length, idempotencyKey, metadata: { companies: canonical } })
     if (!reservation.allowed || !reservation.reservationId) return reservation
     if (reservation.idempotent && reservation.status === "committed" && reservation.metadata?.batchId) return { ...reservation.metadata, idempotent: true }
