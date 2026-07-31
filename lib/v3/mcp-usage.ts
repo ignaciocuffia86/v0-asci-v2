@@ -29,6 +29,15 @@ export interface McpPrincipal {
   keyType: "api_key" | "oauth_token"
   scopes: string[]
   allowedModes: string[]
+  /**
+   * Modo efectivo de la llamada en curso, que estampa `requirePaidMcp`.
+   *
+   * Existe para que la auditoría por tool pueda registrar el modo real sin mantener un
+   * mapa duplicado tool→modo (la duplicación de fuentes fue exactamente la causa del bug
+   * del brief client-assisted). El principal se construye por request, así que este campo
+   * es contexto de request, no estado global.
+   */
+  effectiveMode?: "read" | "server_managed" | "client_assisted"
 }
 
 /** Mapea el principal a la columna correcta de reservas/logs. */

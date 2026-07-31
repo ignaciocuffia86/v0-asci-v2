@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Activity, Clock, ExternalLink, Key, Plus, ShieldCheck, Trash2 } from "lucide-react"
+import { Activity, Clock, Copy, Key, Plus, ShieldCheck, Trash2 } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 import { es } from "date-fns/locale"
 import { toast } from "sonner"
@@ -16,6 +16,9 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { McpSetupWizard } from "./mcp-setup-wizard"
+
+/** Única superficie MCP. La vieja (`/api/v3/mcp` + `/api/v3/mcp/tools/*`) se eliminó. */
+const MCP_SERVER_URL = "https://bot.bigua.lat/api/v3/mcp/server/mcp"
 
 interface ApiKeysViewProps {
   workspaces: ApiKeyWorkspaceOption[]
@@ -137,8 +140,21 @@ export function ApiKeysView({ workspaces, defaultWorkspaceId, isSuperAdmin }: Ap
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="flex items-center gap-4 rounded-lg border bg-muted/50 p-4">
-            <code className="flex-1 text-sm break-all">https://bot.bigua.lat/api/v3/mcp/server/mcp</code>
-            <Button variant="outline" size="sm" asChild><a href="/api/v3/mcp" target="_blank" rel="noreferrer"><ExternalLink data-icon="inline-start" />Ver manifest</a></Button>
+            <code className="flex-1 text-sm break-all">{MCP_SERVER_URL}</code>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(MCP_SERVER_URL)
+                  toast.success("URL del MCP copiada")
+                } catch {
+                  toast.error("No se pudo copiar la URL")
+                }
+              }}
+            >
+              <Copy data-icon="inline-start" />Copiar
+            </Button>
           </div>
           <p className="text-sm text-muted-foreground">El workspace y el usuario se resuelven automáticamente desde la API key. No debes enviar sus IDs.</p>
         </CardContent>

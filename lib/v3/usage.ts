@@ -72,6 +72,16 @@ export interface LogAiUsageParams {
   companyId?: string | null
   conversationId?: string | null
   metadata?: Record<string, unknown> | null
+  /**
+   * Atribución del gasto. Estas cuatro columnas ya existían en `v3.ai_usage_log` pero
+   * nadie las escribía, así que todo el costo quedaba sin imputar: no se podía saber qué
+   * costó un research puntual, con qué API key se gastó, ni separar el costo
+   * server-managed del client-assisted (que para ASCI es $0).
+   */
+  apiKeyId?: string | null
+  requestId?: string | null
+  researchJobId?: string | null
+  generationMode?: "server_managed" | "client_model" | null
 }
 
 /**
@@ -96,6 +106,10 @@ export async function logAiUsage(params: LogAiUsageParams): Promise<void> {
         company_id: params.companyId ?? null,
         conversation_id: params.conversationId ?? null,
         metadata: params.metadata ?? null,
+        api_key_id: params.apiKeyId ?? null,
+        request_id: params.requestId ?? null,
+        research_job_id: params.researchJobId ?? null,
+        generation_mode: params.generationMode ?? null,
       })
     if (error) {
       console.error("[v3] Error registrando uso de IA:", error.message)

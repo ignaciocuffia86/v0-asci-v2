@@ -305,6 +305,10 @@ export async function computeScorecard(input: ScoreInput): Promise<Scorecard | n
       inputTokens: usage?.inputTokens,
       outputTokens: usage?.outputTokens,
       companyId: input.companyId,
+      // `researchJobId` ya llegaba acá (se usa para el scorecard) pero no se imputaba al
+      // gasto, así que no había forma de saber qué costó un research puntual.
+      researchJobId: input.researchJobId ?? null,
+      generationMode: "server_managed",
     })
   } catch {
     // rationale determinístico como fallback
