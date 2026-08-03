@@ -40,6 +40,7 @@ import { normalizeDomain } from "@/lib/apollo/domain"
 import { resolveCompanyOrganizationId } from "@/lib/apollo/organizations"
 import { recordTitleObservations, recordTitleSuccess } from "@/lib/apollo/title-catalog"
 import { requireSavedAccount } from "@/lib/v3/mcp-account-lifecycle"
+import type { RoleOrigin } from "@/lib/v3/mcp-contact-coverage"
 
 const POOL = "apollo_enrichment" as const
 const PREPARE_TTL_MINUTES = 30
@@ -590,7 +591,20 @@ async function linkContactsToAccount(opts: {
       person_last_verified_at: nowIso,
       email_last_verified_at: c.email ? nowIso : null,
       phone_status: "not_requested",
-      role_origin: "mcp_enrichment",
+      // `role_origin` describe DE DÓNDE SALIÓ EL CARGO, no quién escribió la fila. El dominio
+      // es `RoleOrigin` = 'signal_derived' | 'user_input' (regla canónica en
+      // mcp-contact-coverage.ts: `entry.because.length ? 'signal_derived' : 'user_input'`).
+      //
+      // Acá había un `'mcp_enrichment'` hardcodeado, que respondía la otra pregunta y no
+      // existe en el dominio: el CHECK `account_contacts_role_origin_check` lo rechazaba y
+      // el enrichment moría con LINK_CONTACTS_FAILED. El CHECK tenía razón.
+      //
+      // Se usa 'user_input' porque los cargos llegan como strings crudos del cliente MCP
+      // (`input.jobTitles` → `sanitized.accepted`) y el servicio NO puede verificar si salieron
+      // de `recommend_contact_roles` o si los tipeó alguien a mano. Marcarlos 'signal_derived'
+      // afirmaría que hay señales del tenant que los justifican, evidencia que no tenemos.
+      // Si más adelante se quiere el origen real, hay que propagarlo desde el plan.
+      role_origin: "user_input" satisfies RoleOrigin,
       matched_role: matchRole(c.title, opts.matchedRoles),
       first_seen_at: nowIso,
     }))
