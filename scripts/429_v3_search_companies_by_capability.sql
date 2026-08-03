@@ -30,16 +30,27 @@
 --
 -- SOLO LECTURA. No escribe nada. No toca ninguna estructura de v2.
 --
--- PERFORMANCE (medido sobre public.signals: 1.538.509 filas, 986 MB)
---   Peor caso = "todo Microsoft" (10 productos) sin filtro de industria, 8999
---   empresas. Con cache caliente: 57 ms. En frio la primera corrida fue 5.2 s,
---   por I/O (16.150 bloques leidos de disco), no por el plan.
---   Se PROBO un indice compuesto (signal_type, signal_id, company_id) dentro de
---   un dry-run: baja las lecturas de 16.150 a 141 bloques, pero en caliente solo
---   mejora 57ms -> 35ms. NO se agrega: public.signals ya tiene 491 MB de indices
---   y la escribe el ETL de v2; sumar un cuarto indice encarece los inserts para
---   ganar 22 ms en el camino caliente. La tabla la usa el buscador de v2 todo el
---   dia, asi que el cache esta caliente en produccion.
+-- PERFORMANCE (medido sobre public.signals: 1.538.509 filas, 986 MB, 491 MB de
+-- indices). El limite a respetar es el de PostgREST: 8 s.
+--   El costo dominante es la LECTURA DE DISCO, no la CPU del agregado. La misma
+--   consulta de 3 procesos pesados tarda 365 ms en caliente y 6,6 s en frio.
+--
+--   Tecnologia (productos, terminos finos): "todo Microsoft" = 10 productos,
+--   8.999 empresas, 722 ms. Sin riesgo. Tope 20.
+--   Procesos (terminos gruesos, solo 23 en el diccionario): 1 = 1,9 s |
+--   2 = 6,1 s | 3 = 6,6 s | 23 = 22,5 s. Tope 2 (ver detalle en el cuerpo).
+--
+--   Un `count(DISTINCT s.id)` heredado del patron de v2 era el cuello real de la
+--   rama de procesos: forzaba un sort en DISCO de 17 MB (external merge). Como
+--   signals.id es PRIMARY KEY el DISTINCT es redundante; se cambio por count(*)
+--   con resultados idenficos verificados (0 filas difieren sobre 105.369).
+--   En cambio los count(DISTINCT contact_id/job_posting_id) SI son necesarios y
+--   medidos en caliente salen gratis (365 ms vs 366 ms con y sin ellos).
+--
+--   NO se agrego ningun indice. Se probaron dos en dry-run; el mejor
+--   ((signal_type, signal_id) INCLUDE (...)) baja la lectura de disco 4,7x
+--   (47.682 -> 10.046 bloques) pero pesa 153 MB sobre una tabla de v2 EN
+--   PRODUCCION que escribe el ETL. Queda como decision explicita del dueño.
 --
 -- SEGURIDAD
 --   SECURITY DEFINER porque lee tablas de v2 cuyas politicas RLS estan atadas a
@@ -79,20 +90,35 @@ BEGIN
   -- TOPES DE TERMINOS: no son arbitrarios, salen de medir contra el limite de 8s
   -- que impone PostgREST (por donde entra el MCP).
   --
-  -- Los procesos del diccionario son MUY gruesos: hay solo 23 y el mas grande
-  -- ("Control administrativo financiero") tiene 183.072 señales. Medido en
-  -- caliente: 1 proceso = ~1,0 s (60.757 empresas); los 23 juntos = 22,5 s, o
-  -- sea que el costo escala casi lineal con la cantidad de procesos y con 8
-  -- procesos ya se choca el techo. Con 3 quedan ~3 s de peor caso, que deja
-  -- margen para cache frio (medido 2,4x mas lento en la primera corrida).
+  -- El costo dominante NO es la CPU del agregado sino la LECTURA DE DISCO de
+  -- public.signals (1,5M filas / 986 MB). Con cache caliente el agregado de los
+  -- 3 procesos mas grandes corre en 365 ms; con cache frio la misma consulta
+  -- tarda 6,6 s. O sea: el techo lo marca el peor caso frio, que es el que se
+  -- va a dar en produccion cuando nadie consulto ese proceso hace rato.
   --
-  -- Los productos son finos (73 en total, la señal mas grande es chica): "todo
-  -- Microsoft" son 10 productos y tarda 722 ms, asi que 20 es holgado.
+  -- Los procesos del diccionario son MUY gruesos: hay solo 23 y el mas grande
+  -- ("Control administrativo financiero") tiene 183.072 señales. Medido frio:
+  -- 1 proceso = 1,9 s | 2 = 6,1 s | 3 = 6,6 s | los 23 juntos = 22,5 s.
+  -- Con 2 el peor caso queda en ~6 s, que entra en los 8 s con algo de aire.
+  -- Se probo con 3 y daba 7,7 s: demasiado al filo.
+  --
+  -- OJO: filtrar por industria NO abarata la consulta (2 procesos + bancos =
+  -- 5,6 s para 2.128 empresas), porque el escaneo de signals ocurre ANTES del
+  -- join con companies. El filtro sirve para acotar el RESULTADO, no el costo.
+  --
+  -- Los productos son finos (73 en total): "todo Microsoft" son 10 productos y
+  -- tarda 722 ms, asi que 20 es holgado.
   --
   -- No se puede resolver con SET LOCAL statement_timeout adentro de la funcion:
   -- no tiene efecto (ya verificado en este proyecto para las RPC de merge).
-  IF coalesce(array_length(p_process_ids, 1), 0) > 3 THEN
-    RAISE EXCEPTION 'CAPABILITY_SEARCH_TOO_MANY_PROCESSES: % procesos (max 3). Los procesos son categorias amplias; buscá de a pocos o filtrá por industria/pais.',
+  --
+  -- PENDIENTE (decision del dueño del proyecto): un indice
+  -- (signal_type, signal_id) INCLUDE (company_id, contact_id, job_posting_id,
+  -- is_current_employee, created_at) baja la lectura de disco 4,7x (47.682 ->
+  -- 10.046 bloques) y permitiria subir el tope, pero pesa 153 MB sobre una
+  -- tabla de v2 EN PRODUCCION. No se creo por precaucion.
+  IF coalesce(array_length(p_process_ids, 1), 0) > 2 THEN
+    RAISE EXCEPTION 'CAPABILITY_SEARCH_TOO_MANY_PROCESSES: % procesos (max 2). Los procesos son categorias muy amplias (el mas grande toca 60.757 empresas); buscá de a uno o dos.',
       array_length(p_process_ids, 1);
   END IF;
   IF coalesce(array_length(p_product_ids, 1), 0) > 20 THEN
@@ -130,7 +156,13 @@ BEGIN
   per_company AS (
     SELECT
       m.company_id,
-      count(DISTINCT m.signal_row_id)::integer AS signals,
+      -- count(*) y NO count(DISTINCT m.signal_row_id): `signals.id` es PRIMARY KEY,
+      -- asi que el DISTINCT es redundante por definicion. No es cosmetico: obligaba
+      -- a un `Sort Key: company_id, id` con `Sort Method: external merge Disk:
+      -- 16952kB` (sort en DISCO), y era el verdadero cuello de botella de la rama
+      -- de procesos. Verificado que ambas formas dan exactamente los mismos
+      -- conteos (0 filas difieren sobre 105.369 empresas).
+      count(*)::integer AS signals,
       count(DISTINCT m.contact_id) FILTER (
         WHERE m.is_current_employee = true AND m.contact_id IS NOT NULL)::integer AS current_employees,
       count(DISTINCT m.contact_id) FILTER (
@@ -224,9 +256,21 @@ BEGIN
 END;
 $function$;
 
--- Postgres concede EXECUTE a PUBLIC por defecto. Sin este REVOKE, cualquier
--- usuario anonimo de la API podria barrer el catalogo completo de v2.
+-- PERMISOS. Ojo, aca hay DOS mecanismos distintos y revocar de PUBLIC no alcanza:
+--
+--   1) Postgres concede EXECUTE a PUBLIC por defecto -> REVOKE FROM PUBLIC.
+--   2) Supabase tiene un ALTER DEFAULT PRIVILEGES que concede EXECUTE a `anon` y
+--      `authenticated` DIRECTAMENTE (no via PUBLIC). Verificado: tras el paso 1
+--      la ACL seguia mostrando `anon=X/postgres` y `authenticated=X/postgres`,
+--      y has_function_privilege('anon', ...) daba true.
+--
+-- Sin los REVOKE explicitos de abajo, cualquier visitante anonimo de la API podria
+-- barrer el catalogo completo de empresas y señales de v2 (es SECURITY DEFINER, o
+-- sea que esquiva RLS). El resto de las RPC de v3 tiene anon en false; esta debe
+-- quedar igual.
 REVOKE ALL ON FUNCTION v3.search_companies_by_capability(uuid[], uuid[], text[], text[], boolean, text, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION v3.search_companies_by_capability(uuid[], uuid[], text[], text[], boolean, text, integer) FROM anon;
+REVOKE ALL ON FUNCTION v3.search_companies_by_capability(uuid[], uuid[], text[], text[], boolean, text, integer) FROM authenticated;
 GRANT EXECUTE ON FUNCTION v3.search_companies_by_capability(uuid[], uuid[], text[], text[], boolean, text, integer) TO service_role;
 
 COMMENT ON FUNCTION v3.search_companies_by_capability(uuid[], uuid[], text[], text[], boolean, text, integer) IS
