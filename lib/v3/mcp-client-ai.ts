@@ -12,6 +12,14 @@ import { guardSavedAccounts } from "./mcp-account-lifecycle"
 // el panorama liviano) y el TTL escala con el tamaño del lote. Cambia la forma del
 // payload, así que la versión sube para invalidar los paquetes viejos.
 import { persistClientSuccessCases, persistClientNews, DEFAULT_NEWS_WINDOW_DAYS } from "./services/external-drilldown"
+import { NEWS_CATEGORIES } from "./services/evidence-level"
+import { getWorkspaceFitProfile, type WorkspaceFitProfile } from "./services/workspace-fit-profile"
+import {
+  BRIEF_CONFLICT_TARGET,
+  findSupersededBriefId,
+  hydrateEvidenceFromSnapshot,
+  resolveBriefStatus,
+} from "./services/account-brief-row"
 
 const PROMPT_VERSION = "mcp-client-research-v2"
 const STAGES = ["internal_analysis", "signal_classification", "fit_scoring", "account_brief"] as const
@@ -84,7 +92,7 @@ function jsonSchemaFor(stage: Stage | SingleShotStage) {
     account_brief: { headline: "string", whyNow: "string", fitSummary: "string", nextActions: ["string"], evidenceIds: ["string"] },
     icebreaker: { content: "string", evidenceIds: ["string"] },
     success_cases: { cases: [{ title: "string", providerName: "string|null", technology: "string|null", summary: "string|null", results: "string|null", sourceUrl: "url obligatoria y accesible", sourceName: "string|null", publishedAt: "ISO date|null", evidenceLevel: "Confirmado|Probable|Inferido", supportingSourceUrls: ["url"] }] },
-    company_news: { items: [{ title: "string", summary: "string|null", category: "string", direction: "expansion|contraccion|neutro", sourceUrl: "url obligatoria y accesible", sourceName: "string|null", publishedAt: "ISO date|null" }] },
+    company_news: { items: [{ title: "string", summary: "string|null", category: NEWS_CATEGORIES.join("|"), direction: "expansion|contraccion|neutro", sourceUrl: "url obligatoria y accesible", sourceName: "string|null", publishedAt: "ISO date|null" }] },
   }
   return descriptions[stage]
 }
@@ -106,20 +114,52 @@ function userPromptFor(stage: Stage | SingleShotStage) {
   return `Completá la etapa ${stage} del research de cuenta.`
 }
 
+/**
+ * Etapas que necesitan saber QUÉ VENDE el workspace.
+ *
+ * `fit_scoring` puntuaba "fit" sin ninguna referencia del ICP: el modelo recibía
+ * solo la evidencia de la cuenta y tenía que inventar contra qué medirla, así que
+ * el score salía de un criterio distinto en cada corrida y no era comparable entre
+ * cuentas. `account_brief` lo necesita por lo mismo: el "por qué ahora" depende de
+ * lo que el workspace ofrece. El dato ya se cargaba para el research
+ * server-managed; acá solo se expone también al client-assisted.
+ */
+const STAGES_NEEDING_ICP = new Set<Stage | SingleShotStage>(["fit_scoring", "account_brief"])
+
 function packageFor(
   stage: Stage | SingleShotStage,
   evidence: unknown,
   previous: unknown[] = [],
-  options: { batchSize?: number } = {}
+  options: { batchSize?: number; fitProfile?: WorkspaceFitProfile | null } = {}
 ) {
   const ttl = packageTtlMinutes(options.batchSize ?? 1)
+  // Solo se manda donde cambia la respuesta: sumarlo a todas las etapas engordaría
+  // el payload (que ya es el problema principal) sin mejorar el resultado.
+  const icp =
+    STAGES_NEEDING_ICP.has(stage) && options.fitProfile?.available
+      ? {
+          summary: options.fitProfile.summary,
+          targetTechnologies: options.fitProfile.targetTechnologies,
+          targetProcesses: options.fitProfile.targetProcesses,
+          targetIndustries: options.fitProfile.targetIndustries,
+          profileVersion: options.fitProfile.version,
+        }
+      : null
   const payload = {
     promptVersion: PROMPT_VERSION,
     stage,
     systemPrompt:
-      "Sos un analista B2B de ASCI. Usá exclusivamente la evidencia provista. No inventes hechos, IDs ni fuentes. Respondé solo JSON válido conforme al schema. La evidencia trae un nivel por término (Confirmado, Probable o Inferido): no presentes como confirmado algo que sea Probable o Inferido, y si una mención proviene de un ex-empleado no afirmes que la cuenta usa esa tecnología hoy. Si necesitás las fuentes textuales de un término, pedilas con get_account_evidence_detail en vez de suponerlas.",
+      "Sos un analista B2B de ASCI. Usá exclusivamente la evidencia provista. No inventes hechos, IDs ni fuentes. Respondé solo JSON válido conforme al schema. La evidencia trae un nivel por término (Confirmado, Probable o Inferido): no presentes como confirmado algo que sea Probable o Inferido, y si una mención proviene de un ex-empleado no afirmes que la cuenta usa esa tecnología hoy. Si necesitás las fuentes textuales de un término, pedilas con get_account_evidence_detail en vez de suponerlas." +
+      (icp
+        ? " El bloque `workspaceContext` describe qué vende ESTE workspace: puntuá el fit de la cuenta contra ese ICP, no contra un criterio propio, y explicá en el rationale qué parte del ICP se cumple y qué parte no."
+        : STAGES_NEEDING_ICP.has(stage)
+          ? " No hay ICP configurado en el workspace, así que `workspaceContext` viene null: basá el fit en la evidencia y aclaralo en el rationale en vez de suponer un ICP."
+          : ""),
     userPrompt: userPromptFor(stage),
     responseSchema: jsonSchemaFor(stage),
+    // Explícito incluso en null: si la clave faltara, el modelo no podría distinguir
+    // "el workspace no tiene ICP" de "esta etapa no lo recibe".
+    ...(STAGES_NEEDING_ICP.has(stage) ? { workspaceContext: icp } : {}),
     evidence,
     previousStages: previous,
   }
@@ -188,7 +228,20 @@ export async function submitResearchStage(principal: McpPrincipal, params: { exe
   if (new Date(execution.expires_at).getTime() < Date.now()) throw new Error("CLIENT_PACKAGE_EXPIRED:El paquete venció. Llamá a refresh_prompt_package con este executionId para reemitirlo sin consumir cuota, y reintentá el submit con el packageHash nuevo.")
   if (execution.current_stage !== params.stage || execution.package_hash !== params.packageHash) throw new Error(`CLIENT_PACKAGE_MISMATCH:La ejecución espera la etapa "${execution.current_stage}" con el packageHash vigente. Consultá get_client_research_status para obtener el paquete actual.`)
   const parsed = schemas[params.stage].safeParse(params.result)
-  if (!parsed.success) throw new Error(`CLIENT_RESULT_INVALID:${parsed.error.issues.map((i) => i.message).join(", ")}`)
+  if (!parsed.success) {
+    // Antes esto era `issues.map(i => i.message)`, que producía mensajes como
+    // "String must contain at most 500 character(s)" sin decir en QUÉ ítem del
+    // array. Con 20 casos en el lote, el cliente tenía que adivinar cuál recortar
+    // y reenviaba el lote entero a ciegas. El `path` de zod ya trae el índice, solo
+    // no se estaba usando.
+    const detalle = parsed.error.issues
+      .map((issue) => {
+        const path = issue.path.join(".")
+        return path ? `${path}: ${issue.message}` : issue.message
+      })
+      .join(" | ")
+    throw new Error(`CLIENT_RESULT_INVALID:${detalle}`)
+  }
   const allowedEvidence = new Set<string>()
   const collect = (value: unknown) => { if (!value || typeof value !== "object") return; if (Array.isArray(value)) return value.forEach(collect); for (const [key, item] of Object.entries(value as Record<string, unknown>)) { if (key === "id" && typeof item === "string") allowedEvidence.add(item); collect(item) } }
   collect(execution.package_payload.evidence)
@@ -202,15 +255,77 @@ export async function submitResearchStage(principal: McpPrincipal, params: { exe
   }
   if (params.stage === "account_brief") {
     const value = parsed.data as z.infer<typeof schemas.account_brief>
-    await admin.schema("v3").from("account_briefs").insert({ workspace_id: principal.workspaceId, company_id: execution.company_id, stage: "final", headline: value.headline, why_now: value.whyNow, fit_summary: value.fitSummary, next_actions: value.nextActions, evidence: value.evidenceIds, input_hash: hash(value), prompt_version: PROMPT_VERSION, model: params.clientModel ?? "client-model", generation_mode: "client_model", client_execution_id: execution.id })
+    const snapshot = execution.package_payload?.evidence as Record<string, unknown> | undefined
+
+    // El scorecard lo escribió la etapa `fit_scoring` de esta misma ejecución. Sin
+    // este lookup, `scorecard_id` quedaba null y el brief no podía enlazarse con el
+    // score que lo justifica.
+    const { data: scorecard } = await admin
+      .schema("v3")
+      .from("account_scorecards")
+      .select("id")
+      .eq("client_execution_id", execution.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    // Contactos, coverage, freshness y warnings YA venían en el paquete que consumió
+    // el modelo: son el mismo snapshot interno que usa el server-managed. Se toman de
+    // ahí en vez de re-consultar para que el brief quede consistente con la evidencia
+    // que el modelo efectivamente vio.
+    const snapshotContacts = Array.isArray(snapshot?.contacts) ? (snapshot!.contacts as unknown[]) : []
+    const snapshotWarnings = Array.isArray(snapshot?.warnings) ? (snapshot!.warnings as unknown[]) : []
+    const evidence = hydrateEvidenceFromSnapshot(snapshot, value.evidenceIds)
+
+    await admin.schema("v3").from("account_briefs").upsert(
+      {
+        workspace_id: principal.workspaceId,
+        company_id: execution.company_id,
+        scorecard_id: scorecard?.id ?? null,
+        stage: "final",
+        status: resolveBriefStatus({ evidenceCount: evidence.length }),
+        headline: value.headline,
+        why_now: value.whyNow,
+        fit_summary: value.fitSummary,
+        next_actions: value.nextActions,
+        evidence,
+        recommended_contacts: snapshotContacts.slice(0, 5),
+        coverage: (snapshot?.coverage as Record<string, unknown> | undefined) ?? {},
+        freshness: {
+          ...((snapshot?.freshness as Record<string, unknown> | undefined) ?? {}),
+          clientAnalysisAt: new Date().toISOString(),
+        },
+        warnings: snapshotWarnings,
+        profile_version: (snapshot?.profileVersion as string | undefined) ?? null,
+        snapshot_version: (snapshot?.snapshotVersion as string | undefined) ?? null,
+        supersedes_brief_id: await findSupersededBriefId(admin, principal.workspaceId, execution.company_id),
+        input_hash: hash(value),
+        prompt_version: PROMPT_VERSION,
+        model: params.clientModel ?? "client-model",
+        generation_mode: "client_model",
+        client_execution_id: execution.id,
+      },
+      { onConflict: BRIEF_CONFLICT_TARGET }
+    )
   }
   const index = STAGES.indexOf(params.stage)
   if (index === STAGES.length - 1) {
     await admin.schema("v3").from("client_ai_executions").update({ status: "completed", completed_at: new Date().toISOString() }).eq("id", execution.id)
-    return { accepted: true, completed: true }
+    // Cerraba con `{accepted, completed}` y nada más: el cliente terminaba las 4
+    // etapas sin saber dónde quedó lo que produjo ni qué seguía, así que inventaba
+    // el paso siguiente (o pedía tools inexistentes). Se devuelve el companyId para
+    // que pueda leer el resultado y el próximo paso concreto.
+    return {
+      accepted: true,
+      completed: true,
+      companyId: execution.company_id,
+      nextAction: "El research está completo y persistido. Leé el brief y el scorecard con get_account_intelligence usando este companyId. Para buscar tomadores de decisión, seguí con recommend_contact_roles.",
+    }
   }
   const nextStage = STAGES[index + 1]
-  const nextPackage = packageFor(nextStage, execution.package_payload.evidence, [...(prior ?? []).map((row) => row.result), parsed.data], { batchSize: execution.batch_size ?? 1 })
+  // El ICP se carga solo para las etapas que lo usan, no en cada submit.
+  const fitProfile = STAGES_NEEDING_ICP.has(nextStage) ? await getWorkspaceFitProfile(principal.workspaceId) : null
+  const nextPackage = packageFor(nextStage, execution.package_payload.evidence, [...(prior ?? []).map((row) => row.result), parsed.data], { batchSize: execution.batch_size ?? 1, fitProfile })
   await admin.schema("v3").from("client_ai_executions").update({ status: "in_progress", current_stage: nextStage, package_hash: nextPackage.packageHash, package_payload: nextPackage, expires_at: nextPackage.expiresAt }).eq("id", execution.id)
   return { accepted: true, completed: false, nextStage, promptPackage: nextPackage }
 }
@@ -237,11 +352,15 @@ export async function refreshPromptPackage(principal: McpPrincipal, executionId:
   }
 
   const { data: prior } = await admin.schema("v3").from("client_ai_stage_submissions").select("result").eq("execution_id", execution.id).eq("status", "accepted").order("created_at")
+  const currentStage = execution.current_stage as Stage | "icebreaker"
+  // Sin esto, reemitir el paquete de fit_scoring lo devolvía SIN el ICP: el refresh
+  // degradaba la etapa en silencio respecto del paquete original.
+  const fitProfile = STAGES_NEEDING_ICP.has(currentStage) ? await getWorkspaceFitProfile(principal.workspaceId) : null
   const refreshed = packageFor(
-    execution.current_stage as Stage | "icebreaker",
+    currentStage,
     execution.package_payload.evidence,
     (prior ?? []).map((row) => row.result),
-    { batchSize: execution.batch_size ?? 1 }
+    { batchSize: execution.batch_size ?? 1, fitProfile }
   )
   const { error } = await admin.schema("v3").from("client_ai_executions").update({ package_hash: refreshed.packageHash, package_payload: refreshed, expires_at: refreshed.expiresAt, refresh_count: (execution.refresh_count ?? 0) + 1 }).eq("id", execution.id)
   if (error) throw new Error(`PACKAGE_REFRESH_FAILED:${error.message}`)

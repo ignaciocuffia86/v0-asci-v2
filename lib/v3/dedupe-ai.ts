@@ -319,6 +319,10 @@ export async function classifyAmbiguousDuplicates(options?: {
         outputTokens,
         userId: options?.userId ?? null,
         metadata: { groups: candidates.length, error: "sin_veredictos", finishReason: e.finishReason },
+        // `workspaceId` va NULL a propósito: el dedupe corre sobre la tabla compartida de
+        // empresas, no sobre datos de un tenant, así que es costo de plataforma y no se
+        // imputa a ningún cliente. No es el bug de atribución que sí tenían radar/jobs.
+        generationMode: "server_managed",
       })
 
       const detalle = truncated
@@ -360,6 +364,8 @@ export async function classifyAmbiguousDuplicates(options?: {
       verdicts: verdicts.length,
       ...(truncated ? { truncated: true, rescatados: verdicts.length } : {}),
     },
+    // `workspaceId` NULL a propósito: costo de plataforma, no de un tenant. Ver nota arriba.
+    generationMode: "server_managed",
   })
 
   const byGroup = new Map(verdicts.map((v) => [v.g, v]))

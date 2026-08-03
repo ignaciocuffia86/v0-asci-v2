@@ -33,6 +33,14 @@ export interface RadarBundleInput {
   domain?: string | null
   country?: string | null
   industry?: string | null
+  /**
+   * Atribución del gasto. El radar es la etapa más cara del pipeline (el 83% del costo
+   * histórico de IA) y sus `logAiUsage` no pasaban `workspaceId`, así que ese gasto no se
+   * imputaba a ningún cliente. Opcionales para no romper a los callers que no los tienen
+   * (crons, backfills); el pipeline de research sí los propaga.
+   */
+  workspaceId?: string | null
+  researchJobId?: string | null
 }
 
 export interface RadarRunSummary {
@@ -156,6 +164,9 @@ async function researchBundle(
     outputTokens: usage?.outputTokens,
     companyId: input.companyId,
     metadata: { stage: "research", web_searches: searchCount, sources: verifiedSources.length },
+    workspaceId: input.workspaceId ?? null,
+    researchJobId: input.researchJobId ?? null,
+    generationMode: "server_managed",
   })
 
   return { text, sources: verifiedSources, searchCount }
@@ -200,7 +211,8 @@ async function structureResearch(
   raw: string,
   radarType: RadarType,
   sources: VerifiedSource[],
-  companyId?: string
+  /** Atribución del gasto de esta etapa. Antes solo llegaba el companyId. */
+  attribution: Pick<RadarBundleInput, "companyId" | "workspaceId" | "researchJobId">
 ) {
   const sourcesBlock =
     sources.length > 0
@@ -234,8 +246,11 @@ REGLAS:
     model: MODELS.STRUCTURER,
     inputTokens: usage?.inputTokens,
     outputTokens: usage?.outputTokens,
-    companyId: companyId ?? null,
+    companyId: attribution.companyId ?? null,
     metadata: { stage: "structure" },
+    workspaceId: attribution.workspaceId ?? null,
+    researchJobId: attribution.researchJobId ?? null,
+    generationMode: "server_managed",
   })
 
   // ── Validación dura: sólo URLs del set blanco de fuentes verificadas ──
@@ -301,7 +316,7 @@ export async function runMicroAgent(
 
   try {
     const { text: raw, sources } = await researchBundle(input, agent.focus, agent.radarType)
-    const findings = await structureResearch(raw, agent.radarType, sources, input.companyId)
+    const findings = await structureResearch(raw, agent.radarType, sources, input)
 
     // Persistir la corrida cruda (re-estructurable sin re-investigar)
     const { data: run } = await admin

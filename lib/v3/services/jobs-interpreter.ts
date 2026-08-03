@@ -83,7 +83,9 @@ export async function annotateJobPostings(companyId: string): Promise<JobPosting
  */
 export async function interpretJobPostings(
   companyId: string,
-  companyName: string
+  companyName: string,
+  /** Atribución del gasto: sin esto el costo de esta etapa no se imputa a nadie. */
+  attribution?: { workspaceId?: string | null; researchJobId?: string | null }
 ): Promise<JobsInterpretationResult> {
   const admin = createAdminClient()
   const dictionary = await loadDictionary()
@@ -131,6 +133,9 @@ REGLAS:
       outputTokens: usage?.outputTokens,
       companyId,
       metadata: { postings: annotated.length },
+      workspaceId: attribution?.workspaceId ?? null,
+      researchJobId: attribution?.researchJobId ?? null,
+      generationMode: "server_managed",
     })
 
     // Persistir inferencias en el cache global

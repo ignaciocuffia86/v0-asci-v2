@@ -52,6 +52,10 @@ export async function validateMcpRequest(req: NextRequest): Promise<McpAuthResul
     const { count: oauthCount } = await admin.schema("v3").from("mcp_request_logs")
       .select("id", { count: "exact", head: true })
       .eq("principal_id", token.id).gte("created_at", oauthWindowStart)
+      // Solo las filas de transporte (`tool_name` null), que son 1 por request HTTP y se
+      // escriben ANTES de ejecutar. Las filas por tool son auditoría, se escriben después
+      // y contarlas acá reduciría el tope real a la mitad. Ver nota en logMcpRequest.
+      .is("tool_name", null)
     if ((oauthCount ?? 0) >= OAUTH_RATE_LIMIT_PER_MINUTE) {
       return failure("RATE_LIMITED", "Se excedió el límite general de requests por minuto", 429)
     }
@@ -71,7 +75,9 @@ export async function validateMcpRequest(req: NextRequest): Promise<McpAuthResul
     .select("id").eq("workspace_id", key.workspace_id).eq("user_id", key.owner_user_id).eq("status", "active").maybeSingle()
   if (!membership) return failure("MEMBERSHIP_INACTIVE", "El propietario de la API key ya no es miembro activo", 403)
   const oneMinuteAgo = new Date(Date.now() - 60000).toISOString()
-  const { count } = await admin.schema("v3").from("mcp_request_logs").select("id", { count: "exact", head: true }).eq("api_key_id", key.id).gte("created_at", oneMinuteAgo)
+  // `.is("tool_name", null)`: ver la nota de la rama OAuth. El contador mira solo las
+  // filas de transporte para que sumar auditoría por tool no achique el tope.
+  const { count } = await admin.schema("v3").from("mcp_request_logs").select("id", { count: "exact", head: true }).eq("api_key_id", key.id).gte("created_at", oneMinuteAgo).is("tool_name", null)
   if ((count ?? 0) >= (key.rate_limit_per_minute ?? 60)) return failure("RATE_LIMITED", "Se excedió el límite general de requests por minuto", 429)
   await admin.schema("v3").from("mcp_api_keys").update({ last_used_at: new Date().toISOString(), request_count: (key.request_count ?? 0) + 1 }).eq("id", key.id)
   const storedScopes: string[] = key.scopes ?? []
@@ -111,6 +117,18 @@ function failure(code: string, message: string, status: number): McpAuthResult {
   return { success: false, error: { code, message, status } }
 }
 
+/**
+ * ⚠️ `mcp_request_logs` cumple DOS funciones, y conviene no mezclarlas:
+ *
+ * 1. **Contador de rate limit** — las filas con `tool_name` NULL son "tickets" de
+ *    transporte: una por request HTTP, escritas ANTES de ejecutar nada (desde el callback
+ *    de auth). Son las únicas que cuentan los chequeos de frecuencia de este archivo.
+ * 2. **Auditoría por tool** — las filas con `tool_name` informado se escriben DESPUÉS de
+ *    que la tool terminó, con su duración, status real y código de error.
+ *
+ * Por eso los dos contadores filtran `.is("tool_name", null)`: si contaran todo, cada
+ * llamada gastaría 2 unidades del tope y el límite efectivo sería la mitad del configurado.
+ */
 export async function logMcpRequest(params: {
   principal: McpPrincipal
   toolName?: string

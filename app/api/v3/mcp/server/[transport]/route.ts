@@ -31,9 +31,173 @@ const authOf = (extra: unknown) => {
   return auth
 }
 const text = (value: unknown, isError = false) => ({ content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }], ...(isError ? { isError: true } : {}) })
-const safely = async (work: () => Promise<unknown>) => { try { return text(await work()) } catch (error) { return text({ success: false, error: error instanceof Error ? error.message : "UNKNOWN_ERROR" }, true) } }
+/**
+ * Qué hacer ante cada código de error. Sin esto, el cliente IA recibe
+ * "UNAUTHORIZED_EVIDENCE" pelado y su siguiente movimiento es adivinar: reintenta
+ * igual, abandona la cuenta o inventa una tool que no existe. El código lo dice el
+ * servidor; la salida también.
+ */
+const NEXT_ACTION_BY_CODE: Record<string, string> = {
+  COMPANY_RESOLUTION_REQUIRED: "El nombre coincide con varias empresas. Llamá a search_companies y pedile al usuario que elija, después reintentá con el companyId (UUID).",
+  UNAUTHORIZED_EVIDENCE: "Usaste un evidenceId que no está en el paquete. Reenviá la etapa usando solo los ids que vienen en `evidence`; no inventes ni combines ids.",
+  CLIENT_PACKAGE_EXPIRED: "Llamá a refresh_prompt_package con este executionId (no consume cuota) y reintentá el submit con el packageHash nuevo.",
+  CLIENT_PACKAGE_MISMATCH: "Llamá a get_client_research_status para traer la etapa y el packageHash vigentes, y reintentá con esos valores.",
+  CLIENT_RESULT_INVALID: "El detalle indica la ruta exacta del campo inválido (por ejemplo `items.3.title`). Corregí SOLO ese ítem y reenviá la etapa completa con la misma idempotencyKey.",
+  CLIENT_EXECUTION_COMPLETED: "Esta ejecución ya terminó. Leé el resultado con get_account_intelligence en vez de reenviar etapas.",
+  CLIENT_EXECUTION_NOT_FOUND: "El executionId no existe en este workspace. Verificá el id devuelto por prepare_account_research.",
+  IDEMPOTENCY_KEY_REUSED: "Reusaste una idempotencyKey con un contenido distinto. Si es un reintento, mandá el MISMO payload; si es un envío nuevo, usá una key nueva.",
+  PLAN_QUOTA_EXCEEDED: "Se agotó el cupo del plan. Consultá get_ai_usage para ver qué pool se agotó (monthlyServerResearch o monthlyClientResearch) y avisale al usuario.",
+  ACCOUNT_AUTO_REFRESHED: "NO es falta de cuota: la cuenta ya está en seguimiento y se refresca sola. No reintentes ni gastes cuota. Leé lo que ya hay con get_account_intelligence y avisale al usuario en qué fecha llega el próximo digest.",
+  PACKAGE_REFRESH_LIMIT_REACHED: "Se alcanzó el techo de refrescos. Volvé a llamar prepare_account_research para esta cuenta (consume cuota nueva).",
+  ACCOUNT_NOT_SAVED: "La cuenta no está guardada. Llamá a prepare_save_account, confirmá el costo con el usuario y después save_account.",
+  UNAUTHORIZED: "La API key no es válida o no tiene el scope necesario. No reintentes: avisale al usuario que revise su credencial.",
+  RATE_LIMITED: "Es un límite temporal de frecuencia, no un error definitivo ni falta de cuota. Esperá ~1 minuto y reintentá la MISMA llamada; no cambies los argumentos ni abandones la cuenta.",
+  SCOPE_REQUIRED: "La API key no tiene el permiso para esta operación (por ejemplo contacts:write). No reintentes: avisale al usuario que regenere la key con el scope faltante.",
+}
 
-const handler = createMcpHandler((server) => {
+/**
+ * Envelope uniforme de error.
+ *
+ * Los errores se lanzan como "CODIGO:mensaje humano". Antes esa cadena se devolvía
+ * entera en `error`, así que el cliente tenía que parsearla por su cuenta y el
+ * código quedaba mezclado con la explicación. Acá se separan y se agrega el
+ * próximo paso, que es el patrón que ya usaban bien las tools de contactos.
+ */
+const safely = async (work: () => Promise<unknown>) => {
+  try {
+    return text(await work())
+  } catch (error) {
+    const raw = error instanceof Error ? error.message : "UNKNOWN_ERROR"
+    // Prioridad 1: un `.code` estructurado en el propio error. EnrichmentError (y
+    // otras clases del dominio) llevan el código en una propiedad aparte y ponen en
+    // `message` solo la frase para el usuario ("Alcanzaste el límite de uso…"). Si
+    // solo se parseara el message, todos esos códigos —RATE_LIMITED, PREPARE_FAILED,
+    // SCOPE_REQUIRED— colapsarían en UNKNOWN_ERROR y el cliente perdería el
+    // nextAction. Se detectó probando el flujo de contactos, no en revisión de código.
+    const structuredCode =
+      error && typeof error === "object" && "code" in error && typeof (error as { code: unknown }).code === "string"
+        ? ((error as { code: string }).code)
+        : null
+    // Prioridad 2: el patrón "CODIGO:mensaje" embebido en el string.
+    const separator = raw.indexOf(":")
+    const candidate = separator > 0 ? raw.slice(0, separator) : raw
+    const messageHasCode = /^[A-Z][A-Z0-9_]*$/.test(candidate)
+    const code = structuredCode && /^[A-Z][A-Z0-9_]*$/.test(structuredCode)
+      ? structuredCode
+      : messageHasCode
+        ? candidate
+        : "UNKNOWN_ERROR"
+    // El detalle: si el código vino del string, se recorta el prefijo; si vino de
+    // la propiedad, el message ya es la frase limpia.
+    const detail = !structuredCode && messageHasCode ? raw.slice(separator + 1).trim() : raw
+    return text(
+      {
+        success: false,
+        code,
+        message: detail || code,
+        ...(NEXT_ACTION_BY_CODE[code] ? { nextAction: NEXT_ACTION_BY_CODE[code] } : {}),
+        // Se mantiene la cadena original para no romper a un cliente que ya la lea.
+        error: raw,
+      },
+      true
+    )
+  }
+}
+
+/** Códigos de error → status. Sin esto toda falla quedaba registrada como 200. */
+const STATUS_BY_CODE: Record<string, number> = {
+  RATE_LIMITED: 429,
+  UNAUTHORIZED: 401,
+  SCOPE_REQUIRED: 403,
+  PLAN_REQUIRED: 402,
+  PLAN_QUOTA_EXCEEDED: 402,
+  MODE_NOT_ALLOWED: 403,
+  CLIENT_EXECUTION_NOT_FOUND: 404,
+  ACCOUNT_NOT_SAVED: 409,
+}
+
+/**
+ * Auditoría real de cada invocación.
+ *
+ * Antes existía un único `logMcpRequest` en el callback de auth, que corría una vez por
+ * request HTTP y ANTES de ejecutar la tool. De ahí venían los tres agujeros que dejaban la
+ * tabla sin poder responder "quién usó qué": `tool_name` siempre null, `status_code`
+ * siempre 200 (incluso si la tool fallaba) y `response_time_ms` siempre 0.
+ */
+const auditToolCall = async (input: { toolName: string; extra: unknown; result?: unknown; thrown?: unknown; startedAt: number }) => {
+  const principal = (input.extra as { authInfo?: { extra?: McpPrincipal } } | undefined)?.authInfo?.extra
+  if (!principal) return
+
+  const payload = input.result as { content?: { text?: string }[]; isError?: boolean } | undefined
+  const failed = Boolean(input.thrown) || Boolean(payload?.isError)
+  let errorCode: string | undefined
+  if (failed) {
+    // `safely` ya normalizó el error a un envelope JSON con `code`; se reusa esa
+    // clasificación en vez de volver a parsear el mensaje crudo.
+    try {
+      const parsed = JSON.parse(payload?.content?.[0]?.text ?? "{}") as { code?: unknown }
+      if (typeof parsed.code === "string") errorCode = parsed.code
+    } catch {
+      errorCode = "UNKNOWN_ERROR"
+    }
+    if (!errorCode) errorCode = "UNKNOWN_ERROR"
+  }
+
+  await logMcpRequest({
+    principal,
+    toolName: input.toolName,
+    method: "POST",
+    statusCode: failed ? (STATUS_BY_CODE[errorCode ?? ""] ?? 400) : 200,
+    responseTimeMs: Date.now() - input.startedAt,
+    // Lo estampa `requirePaidMcp`, la única puerta por la que pasan todas las tools, así
+    // no hace falta mantener un mapa tool→modo en paralelo que se desincronice.
+    mode: principal.effectiveMode ?? "read",
+    errorCode,
+  })
+}
+
+/**
+ * Envuelve `server.tool` para auditar cada llamada sin tocar las ~36 registraciones.
+ *
+ * El Proxy devuelve el mismo tipo `S`, así que las tools conservan la inferencia de tipos
+ * de sus esquemas zod: la intervención es solo en runtime.
+ */
+function withToolAudit<S extends object>(server: S): S {
+  return new Proxy(server, {
+    get(target, prop, receiver) {
+      const original = Reflect.get(target, prop, receiver)
+      if (prop !== "tool" || typeof original !== "function") return original
+      return (...args: unknown[]) => {
+        const lastIndex = args.length - 1
+        const run = args[lastIndex]
+        const toolName = typeof args[0] === "string" ? args[0] : "(desconocida)"
+        if (typeof run === "function") {
+          args[lastIndex] = async (toolArgs: unknown, extra: unknown) => {
+            const startedAt = Date.now()
+            try {
+              const result = await (run as (a: unknown, e: unknown) => Promise<unknown>)(toolArgs, extra)
+              // `after` para no sumarle la latencia del insert a la respuesta.
+              after(() => auditToolCall({ toolName, extra, result, startedAt }))
+              return result
+            } catch (thrown) {
+              // Red de seguridad para un error lanzado dentro del handler pero fuera de
+              // `safely`. Limitación verificada en runtime: si los argumentos no pasan el
+              // esquema zod, el framework rechaza ANTES de llamar acá, así que esas
+              // llamadas malformadas no quedan auditadas. Auditarlas exigiría interceptar
+              // el transporte, no la tool.
+              after(() => auditToolCall({ toolName, extra, thrown, startedAt }))
+              throw thrown
+            }
+          }
+        }
+        return (original as (...a: unknown[]) => unknown).apply(target, args)
+      }
+    },
+  }) as S
+}
+
+const handler = createMcpHandler((rawServer) => {
+  const server = withToolAudit(rawServer)
   server.tool("search_companies", "Busca empresas globales conocidas por nombre o dominio. Solo lectura; no ejecuta IA. Los resultados vienen ordenados por evidencia disponible (señales y vacantes) e incluyen likelyCanonical. Una misma empresa suele tener homónimos (plantas, filiales, distribuidores): si duplicateWarning viene informado, mostrale las opciones al usuario y confirmá cuál es la correcta antes de guardarla, porque guardar la equivocada ocupa un lugar del plan con una cuenta sin evidencia.", { query: z.string().min(2), limit: z.number().int().min(1).max(25).default(10) }, async ({ query, limit }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "companies:read", "read"); return searchCompanies(query, limit) }))
   server.tool("get_company_profile", "Obtiene identidad y cobertura global de señales de una empresa. Solo lectura.", { companyId: z.string().uuid() }, async ({ companyId }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "companies:read", "read"); return getCompanyProfile(companyId) }))
   server.tool("get_company_signals", "Obtiene señales v2 normalizadas para un companyId exacto. Solo lectura y sin generación implícita.", { companyId: z.string().uuid(), limit: z.number().int().min(1).max(100).default(50) }, async ({ companyId, limit }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "signals:read", "read"); return getCompanySignals(companyId, limit) }))
@@ -66,7 +230,15 @@ const handler = createMcpHandler((server) => {
     if (blocked) return blocked
     const quota = await checkResearchQuota({ workspaceId: auth.workspaceId, companies: canonical })
     const rejected = quota.items.filter((item) => !item.allowed)
-    if (rejected.length) throw new Error(`PLAN_QUOTA_EXCEEDED:${rejected.map((item) => item.reason).join(" | ")}`)
+    if (rejected.length) {
+      // No todo rechazo es falta de cupo. Una cuenta EN SEGUIMIENTO se rechaza porque
+      // ya se refresca sola (viene con nextAutoRefreshDate), y devolverla como
+      // PLAN_QUOTA_EXCEEDED hacía que el modelo le dijera al usuario "te quedaste sin
+      // cuota" teniendo 10/30 disponibles. Se separan los dos casos.
+      const soloAutoRefresh = rejected.every((item) => item.nextAutoRefreshDate)
+      const code = soloAutoRefresh ? "ACCOUNT_AUTO_REFRESHED" : "PLAN_QUOTA_EXCEEDED"
+      throw new Error(`${code}:${rejected.map((item) => item.reason).join(" | ")}`)
+    }
     const reservation = await reserveMcpUsage({ principal: auth, pool: "research_server", units: canonical.length, idempotencyKey, metadata: { companies: canonical } })
     if (!reservation.allowed || !reservation.reservationId) return reservation
     if (reservation.idempotent && reservation.status === "committed" && reservation.metadata?.batchId) return { ...reservation.metadata, idempotent: true }
@@ -80,9 +252,9 @@ const handler = createMcpHandler((server) => {
 
   server.tool("prepare_account_research", "Prepara research completo para ejecutar con el modelo y tokens del cliente MCP. ASCI no llama AI Gateway. PASÁ EL companyId (UUID) que devolvió search_companies o save_account, no el nombre: con un UUID la cuenta queda identificada sin ambigüedad, mientras que un nombre se resuelve por match difuso y puede apuntar a un homónimo distinto del que guardaste. Requiere que todas las cuentas estén guardadas en el workspace: si alguna no lo está, devuelve el detalle sin consumir cuota y hay que llamar save_account antes de reintentar.", { companies: z.array(z.string().min(2)).min(1).max(10).describe("companyId (UUID) de cada cuenta. Se acepta el nombre solo si no tenés el id, pero es ambiguo."), idempotencyKey: z.string().min(8).max(200) }, async ({ companies, idempotencyKey }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:prepare", "client_assisted"); return prepareAccountResearch(auth, companies, idempotencyKey) }))
   server.tool("submit_account_research_stage", "Valida y persiste una etapa estructurada generada por el modelo del cliente.", { executionId: z.string().uuid(), stage: z.enum(["internal_analysis", "signal_classification", "fit_scoring", "account_brief"]), packageHash: z.string().length(64), result: z.unknown(), clientModel: z.string().max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async (args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:submit", "client_assisted"); return submitResearchStage(auth, args) }))
-  server.tool("prepare_company_success_cases", "Paso 1 de 2 para buscar casos de éxito de una cuenta con una tecnología concreta. Devuelve el prompt package para que el cliente BUSQUE con sus propios tokens. Consume 1 unidad de cuota de research. Usala después de get_company_signal_summary, cuando el usuario quiera evidencia externa de una tecnología puntual. Cada caso debe traer una sourceUrl real: el servidor verifica que responda y que la página mencione a la empresa antes de guardar, y descarta lo que no pase.", { companyId: z.string().uuid(), term: z.string().min(2).max(120).optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, term, idempotencyKey }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:prepare", "client_assisted"); return prepareCompanySuccessCases(auth, { companyId, term, idempotencyKey }) }))
+  server.tool("prepare_company_success_cases", "Paso 1 de 2 para buscar casos de éxito de una cuenta con una tecnología concreta. Devuelve el prompt package para que el cliente BUSQUE con sus propios tokens. Consume 1 unidad del pool CLIENT-ASSISTED, que en get_ai_usage se ve como monthlyClientResearch: NO mueve monthlyServerResearch, son dos cupos independientes. Usala después de get_company_signal_summary, cuando el usuario quiera evidencia externa de una tecnología puntual. Cada caso debe traer una sourceUrl real: el servidor verifica que responda y que la página mencione a la empresa antes de guardar, y descarta lo que no pase.", { companyId: z.string().uuid(), term: z.string().min(2).max(120).optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, term, idempotencyKey }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:prepare", "client_assisted"); return prepareCompanySuccessCases(auth, { companyId, term, idempotencyKey }) }))
   server.tool("submit_company_success_cases", "Paso 2 de 2: entrega los casos de éxito que encontró el cliente. El servidor aplica los guardrails (URL viva y mención real de la empresa) y descarta lo que no pase, así que la respuesta informa cuántos se aceptaron y cuántos se rechazaron con su motivo. No consume cuota adicional.", { executionId: z.string().uuid(), packageHash: z.string().length(64), result: z.unknown(), clientModel: z.string().max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async (args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:submit", "client_assisted"); return submitCompanySuccessCases(auth, args) }))
-  server.tool("prepare_company_news", "Paso 1 de 2 para buscar noticias recientes de una cuenta. Devuelve el prompt package para que el cliente BUSQUE con sus propios tokens, con una ventana temporal explícita (180 días por defecto) para que no traiga notas viejas como si fueran novedad. Consume 1 unidad de cuota de research.", { companyId: z.string().uuid(), term: z.string().min(2).max(120).optional(), windowDays: z.number().int().min(1).max(730).optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, term, windowDays, idempotencyKey }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:prepare", "client_assisted"); return prepareCompanyNews(auth, { companyId, term, windowDays, idempotencyKey }) }))
+  server.tool("prepare_company_news", "Paso 1 de 2 para buscar noticias recientes de una cuenta. Devuelve el prompt package para que el cliente BUSQUE con sus propios tokens, con una ventana temporal explícita (180 días por defecto) para que no traiga notas viejas como si fueran novedad. Consume 1 unidad del pool CLIENT-ASSISTED, que en get_ai_usage se ve como monthlyClientResearch: NO mueve monthlyServerResearch, son dos cupos independientes. Clasificá `category` con la taxonomía cerrada que viene en el responseSchema del paquete; si mandás una variante, el servidor la normaliza y te lo informa en remappedCategories.", { companyId: z.string().uuid(), term: z.string().min(2).max(120).optional(), windowDays: z.number().int().min(1).max(730).optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, term, windowDays, idempotencyKey }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:prepare", "client_assisted"); return prepareCompanyNews(auth, { companyId, term, windowDays, idempotencyKey }) }))
   server.tool("submit_company_news", "Paso 2 de 2: entrega las noticias que encontró el cliente. El servidor verifica URLs y relevancia, descarta lo que no pase, y clasifica cada noticia como expansion, contraccion o neutro para que una mala noticia (un cierre de planta, una desinversión) no sume puntaje de timing como si fuera una oportunidad. No consume cuota adicional.", { executionId: z.string().uuid(), packageHash: z.string().length(64), result: z.unknown(), clientModel: z.string().max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async (args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:submit", "client_assisted"); return submitCompanyNews(auth, args) }))
   server.tool("scrape_company_job_postings", "Trae vacantes frescas de LinkedIn para una cuenta guardada y las ingesta por el pipeline de importación de ASCI, que las normaliza y deduplica. El filtro por empresa se aplica en el buscador usando el nombre y el país que ya tenemos guardados de la cuenta, así que no hace falta pasarlos. Consume cuota de research server-managed porque el scraping corre con recursos de ASCI. Dos cosas a tener en cuenta: (1) `titleQuery` es OPCIONAL y sirve para acotar por título de puesto DENTRO de la empresa (por ejemplo 'SAP'); si lo omitís se traen todas las vacantes de la empresa, que es lo habitual. (2) La ventana sólo puede ser 1, 7 o 30 días; si pedís más, se busca sin límite de fecha y se te avisa. La ingesta es asincrónica: las vacantes aparecen cuando el importador procesa el lote, no de inmediato.", { companyId: z.string().uuid(), titleQuery: z.string().min(2).max(120).optional(), location: z.string().min(2).max(120).optional(), windowDays: z.number().int().min(1).max(365).optional(), maxRows: z.number().int().min(1).max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, titleQuery, location, windowDays, maxRows, idempotencyKey }, extra) => safely(async () => {
     const auth = authOf(extra); await requirePaidMcp(auth, "research:run", "server_managed")
@@ -167,7 +339,10 @@ const authedHandler = withMcpAuth(handler, async (req: Request, token?: string) 
   // `keyType` viene de validateMcpRequest y hay que propagarlo: es lo que decide
   // si keyId se escribe en api_key_id o en oauth_token_id.
   const principal: McpPrincipal = { workspaceId: result.workspaceId, userId: result.userId, keyId: result.keyId, keyType: result.keyType, scopes: result.scopes ?? [], allowedModes: result.allowedModes ?? ["read"] }
-  await logMcpRequest({ principal, method: req.method, statusCode: 200, requestId: crypto.randomUUID() })
+  // Fila de TRANSPORTE (queda con `tool_name` null a propósito): es el ticket que cuenta
+  // el rate limiter, y por eso se escribe acá, antes de ejecutar. No describe la tool —de
+  // eso se encarga `auditToolCall`—, así que no se le pone status ni duración reales.
+  await logMcpRequest({ principal, method: req.method, statusCode: 200, requestId: crypto.randomUUID(), metadata: { phase: "transport" } })
   return { token, clientId: result.keyId, scopes: principal.scopes, extra: principal as unknown as Record<string, unknown> }
 }, {
   required: true,

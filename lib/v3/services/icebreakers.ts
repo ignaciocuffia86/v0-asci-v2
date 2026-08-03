@@ -129,6 +129,10 @@ INSTRUCCIÓN DEL USUARIO: ${req.regenerateFrom.instruction}\n`
       outputTokens: usage?.outputTokens,
       companyId: req.companyId,
       metadata: { regenerated: Boolean(req.regenerateFrom) },
+      researchJobId: req.researchJobId ?? null,
+      // Este generador es el de servidor: el icebreaker client-assisted lo produce el
+      // modelo del cliente y no pasa por acá, así que su costo para ASCI es $0.
+      generationMode: "server_managed",
     })
 
     const content = text.trim()

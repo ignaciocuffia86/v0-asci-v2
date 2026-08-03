@@ -413,6 +413,9 @@ export async function POST(req: Request) {
         inputTokens: totalUsage?.inputTokens,
         outputTokens: totalUsage?.outputTokens,
         conversationId,
+        // El chat de la app siempre lo paga ASCI: corre con nuestro modelo, nunca con el
+        // del cliente. Sin esta marca no se puede separar del gasto client-assisted ($0).
+        generationMode: "server_managed",
       })
     },
   })

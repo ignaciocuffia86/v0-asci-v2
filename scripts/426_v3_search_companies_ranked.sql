@@ -67,6 +67,12 @@ WITH q AS (
 matches AS (
   SELECT
     c.id, c.name, c.normalized_name, c.website, c.country, c.industry,
+    -- OJO: en `companies` el dominio faltante viene como string vacio, no como
+    -- NULL. Un `website IS NOT NULL` pelado da true con '' y marcaba como
+    -- "tiene dominio" a registros degradados, que es justo la senal que el modelo
+    -- usa para descartarlos. Se calcula una sola vez y se reusa en los ORDER BY
+    -- y en el payload, para que el desempate y lo que se informa no se separen.
+    (c.website IS NOT NULL AND btrim(c.website) <> '') AS has_website,
     CASE
       WHEN lower(c.name) = lower((SELECT t FROM q)) THEN 0
       WHEN c.name ILIKE (SELECT t FROM q) || '%' THEN 1
@@ -98,7 +104,7 @@ ranked AS (
   -- Primero las que coinciden por nombre: una empresa que solo matcheo por su URL
   -- casi nunca es la que el usuario busca.
   ORDER BY (tier <= 2) DESC, signals DESC, job_postings DESC,
-           (website IS NOT NULL) DESC, name, id
+           has_website DESC, name, id
   LIMIT greatest(p_limit, 1)
 )
 SELECT jsonb_build_object(
@@ -118,11 +124,11 @@ SELECT jsonb_build_object(
           'evidence', jsonb_build_object(
             'signals', r.signals,
             'jobPostings', r.job_postings,
-            'hasWebsite', r.website IS NOT NULL
+            'hasWebsite', r.has_website
           )
         )
         ORDER BY (r.tier <= 2) DESC, r.signals DESC, r.job_postings DESC,
-                 (r.website IS NOT NULL) DESC, r.name, r.id
+                 r.has_website DESC, r.name, r.id
       )
      FROM ranked r),
     '[]'::jsonb)

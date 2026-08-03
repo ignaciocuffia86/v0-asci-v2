@@ -13,8 +13,18 @@
  * Uso:
  *   node scripts/mcp-ux-harness.mjs <fase>
  *
- * Fases: catalogo | descubrimiento | panorama | guardar | evidencia
- * La key se lee de /tmp/asci-test-key (no se hardcodea ni se loguea).
+ * Fases que NO gastan:
+ *   catalogo | schemas | descubrimiento | panorama | determinismo
+ *   cross-tenant   COMPANY_ID=<uuid>            (con key de OTRO workspace)
+ *   contactos      COMPANY_ID=<uuid>            (dry-run: preview sin gastar)
+ *
+ * Fases que GASTAN (cuota, tokens o creditos) y necesitan autorizacion:
+ *   preparar-noticias | submit-noticias         (1 unidad client-assisted)
+ *   costo-research   CUENTAS=<uuid>,<uuid>      (tope 3; AI Gateway de ASCI)
+ *   contactos        COMPANY_ID=<uuid> EJECUTAR=si TOPE=10   (creditos Apollo)
+ *
+ * La key se lee de /tmp/asci-test-key (no se hardcodea ni se loguea). Para probar
+ * cross-tenant se sobreescribe ese archivo con la key del segundo workspace.
  */
 
 import fs from "fs"
@@ -23,7 +33,9 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 
 const PORT = process.env.DEV_PORT || "3000"
 const URL_MCP = `http://localhost:${PORT}/api/v3/mcp/server/mcp`
-const KEY = fs.readFileSync("/tmp/asci-test-key", "utf8").trim()
+// KEY_FILE permite apuntar a la key de otro workspace (ej. /tmp/asci-test-key-b)
+// sin sobreescribir la principal: necesario para la fase cross-tenant.
+const KEY = fs.readFileSync(process.env.KEY_FILE || "/tmp/asci-test-key", "utf8").trim()
 
 /** Bitacora de llamadas, para el reporte final. */
 const bitacora = []
@@ -363,6 +375,198 @@ async function fasePanorama(client) {
   return cand
 }
 
+// ─────────────────── costo de research (Test A) ───────────────────
+
+/**
+ * Mide el costo REAL del research server-managed.
+ *
+ * Corre `run_account_research` sobre cuentas ya guardadas y despues lee
+ * `v3.ai_usage_log` para saber tokens y dolares de verdad, en vez de estimarlos.
+ * Gasta cuota y plata: se llama solo con autorizacion explicita.
+ *
+ * Tope duro de 3 cuentas: es lo autorizado.
+ */
+async function faseCostoResearch(client) {
+  const objetivos = (process.env.CUENTAS ?? "").split(",").map((s) => s.trim()).filter(Boolean)
+  if (!objetivos.length) {
+    console.log("Falta CUENTAS='<uuid>,<uuid>' (companyIds ya guardados).")
+    return
+  }
+  if (objetivos.length > 3) {
+    console.log(`ABORTO: ${objetivos.length} cuentas, el tope autorizado es 3.`)
+    return
+  }
+
+  // run_account_research exige que la cuenta ya este guardada, pero una cuenta YA
+  // SEGUIDA la rechaza el guard de auto-refresh (por eso el intento anterior no midio
+  // nada). Para medir de verdad hay que partir de una cuenta nueva: con GUARDAR=si se
+  // la guarda recien aca.
+  if (process.env.GUARDAR === "si") {
+    for (const companyId of objetivos) {
+      // userConfirmed es z.literal(true): la tool exige confirmacion explicita del
+      // usuario porque ocupa un lugar del plan. Aca ya viene autorizado por el usuario.
+      const g = await llamar(client, "save_account", { companyId, userConfirmed: true }, `guardando cuenta ${companyId.slice(0, 8)}`)
+      console.log(mostrar(g.texto, 600))
+    }
+  }
+
+  // Antes: foto de la cuota, para medir el delta y no confiar en lo que se reporta.
+  const antes = await llamar(client, "get_ai_usage", {}, "cuota ANTES")
+  console.log(mostrar(antes.texto, 1400))
+
+  const key = `harness-costo-${Date.now()}`
+  const run = await llamar(
+    client,
+    "run_account_research",
+    { companies: objetivos, forceRefresh: false, idempotencyKey: key },
+    `research server-managed · ${objetivos.length} cuenta(s) · GASTA PLATA`
+  )
+  console.log(mostrar(run.texto, 2500))
+
+  const despues = await llamar(client, "get_ai_usage", {}, "cuota DESPUES")
+  console.log(mostrar(despues.texto, 1400))
+
+  // El delta de cuota lo valida el propio contrato: si run consumio 3, el pool
+  // server tiene que haber subido 3. Si no, hay un bug de contabilidad.
+  const ja = comoJson(antes.texto)
+  const jd = comoJson(despues.texto)
+  const usadoAntes = ja?.monthlyServerResearch?.used ?? ja?.monthlyResearch?.used
+  const usadoDespues = jd?.monthlyServerResearch?.used ?? jd?.monthlyResearch?.used
+  // Solo tiene sentido comparar la cuota si el research efectivamente corrio: si
+  // `run` fallo (guard, cuota, etc.) un delta 0 es lo correcto, no un hallazgo.
+  if (!run.ok) {
+    console.log("\nEl run no se ejecuto, así que no se compara el delta de cuota.")
+  } else if (usadoAntes != null && usadoDespues != null) {
+    const delta = usadoDespues - usadoAntes
+    console.log(`\nCUOTA server-managed: ${usadoAntes} -> ${usadoDespues} (delta ${delta}, esperado ${objetivos.length})`)
+    if (delta !== objetivos.length) console.log("HALLAZGO: el delta de cuota no coincide con las cuentas corridas.")
+  }
+  console.log("\nEl costo en tokens/USD se lee de v3.ai_usage_log con run-sql (idempotencyKey arriba).")
+}
+
+// ─────────────────── uploads publicos (Test B) ───────────────────
+
+/**
+ * Verifica que lo que sube un tenant quede visible para OTRO tenant.
+ *
+ * Las tablas de upload (company_news, company_implementations,
+ * company_public_docs) son globales: no tienen workspace_id. La hipotesis es que
+ * cualquier workspace ve lo que subio otro. Esta fase lo prueba desde el MCP,
+ * usando una key de OTRO workspace (KEY_B), que es la unica forma de comprobarlo
+ * de verdad y no por SQL con service_role.
+ */
+async function faseCrossTenant(client) {
+  const companyId = process.env.COMPANY_ID
+  if (!companyId) {
+    console.log("Falta COMPANY_ID='<uuid>' (la cuenta que el otro tenant enriquecio).")
+    return
+  }
+  // Este client ya viene autenticado con la key que se le paso al harness.
+  const intel = await llamar(
+    client,
+    "get_account_intelligence",
+    { companyId },
+    "leyendo desde el workspace B lo que subio el A"
+  )
+  console.log(mostrar(intel.texto, 3000))
+
+  const pan = await llamar(client, "get_company_signal_summary", { companyId }, "panorama desde workspace B")
+  console.log(mostrar(pan.texto, 1800))
+}
+
+// ─────────────────── tomadores de decision (Test C) ───────────────────
+
+/**
+ * Circuito completo de tomadores de decision.
+ *
+ * Encadena: recomendar cargos -> ver cobertura actual -> previsualizar costo ->
+ * (opcional) gastar creditos de Apollo. Cada paso toma sus argumentos de la
+ * respuesta anterior: si algo hay que adivinar, es hallazgo de UX.
+ *
+ * El gasto real solo ocurre con EJECUTAR=si, y con tope de contactos.
+ */
+async function faseContactos(client) {
+  const companyId = process.env.COMPANY_ID
+  if (!companyId) {
+    console.log("Falta COMPANY_ID='<uuid>'.")
+    return
+  }
+  const tope = Number(process.env.TOPE ?? 10)
+  const ejecutar = process.env.EJECUTAR === "si"
+
+  // 1. Que cargos conviene buscar? Tiene que salir de las senales, no de una
+  //    lista fija, y tiene que venir con el porque.
+  const rec = await llamar(client, "recommend_contact_roles", { companyId }, "¿que cargos y por que?")
+  console.log(mostrar(rec.texto, 2600))
+
+  // 2. Que contactos ya tenemos? Sirve para no pagar por lo que ya esta.
+  const yaHay = await llamar(client, "get_company_contacts", { companyId }, "cobertura actual")
+  console.log(mostrar(yaHay.texto, 1600))
+
+  // 3. Los cargos salen de la respuesta del paso 1. Se suma uno manual para
+  //    probar que el usuario puede ampliar la lista.
+  const jr = comoJson(rec.texto)
+  const sugeridos = extraerCargos(jr)
+  if (!sugeridos.length) {
+    console.log("\nNO pude extraer cargos de la recomendacion (hallazgo de UX): corto aca.")
+    return
+  }
+  console.log(`\ncargos sugeridos extraidos: ${sugeridos.join(" · ")}`)
+  const cargos = [...new Set([...sugeridos.slice(0, 4), "Director de Sistemas"])]
+
+  // 4. Preview: cuanto sale y a cuantos alcanza. NO gasta.
+  // idempotencyKey ESTABLE (deriva de company + tope, sin timestamp): reintentar el
+  // dry-run reusa la MISMA reserva en vez de apilar una nueva de `tope` unidades cada
+  // vez. Con timestamp, tres corridas seguidas reservaban 3x el pool apollo_enrichment
+  // y disparaban el limite de ventana ("Esperá unos minutos").
+  const prep = await llamar(
+    client,
+    "prepare_contact_enrichment",
+    { companyId, roles: cargos, maxContacts: tope, idempotencyKey: `harness-prep-${companyId}-${tope}` },
+    "preview de costo · NO gasta"
+  )
+  console.log(mostrar(prep.texto, 2600))
+
+  if (!ejecutar) {
+    console.log("\n[dry-run] EJECUTAR!=si, no se gastan creditos de Apollo.")
+    return
+  }
+
+  // 5. Gasto real. El planHash sale del preview: si no viene, no se puede ejecutar
+  //    sin adivinar, y eso tambien es un hallazgo.
+  const jp = comoJson(prep.texto)
+  const planHash = jp?.planHash ?? jp?.plan?.planHash
+  if (!planHash) {
+    console.log("\nHALLAZGO: el preview no devolvio planHash, no puedo ejecutar sin inventarlo.")
+    return
+  }
+  // run_contact_enrichment NO toma companyId: el plan ya lo tiene. `userConfirmed`
+  // es un literal(true), o sea que el modelo debe pedirle permiso al usuario antes.
+  const run = await llamar(
+    client,
+    "run_contact_enrichment",
+    { planHash, userConfirmed: true },
+    `GASTA CREDITOS DE APOLLO · tope ${tope}`
+  )
+  console.log(mostrar(run.texto, 3000))
+
+  // 6. Verificacion independiente: se guardaron y con que campos?
+  const luego = await llamar(client, "get_company_contacts", { companyId }, "cobertura DESPUES")
+  console.log(mostrar(luego.texto, 2600))
+}
+
+/** Saca los titulos de cargo de la recomendacion, sin asumir la forma exacta. */
+function extraerCargos(j) {
+  if (!j) return []
+  const pilas = [j.recommendedRoles, j.roles, j.recommendations, j.suggestedRoles]
+  for (const pila of pilas) {
+    if (Array.isArray(pila) && pila.length) {
+      return pila.map((r) => (typeof r === "string" ? r : r?.role ?? r?.title ?? r?.name)).filter(Boolean)
+    }
+  }
+  return []
+}
+
 /** Busca el primer termino citable en el panorama, sin asumir la forma exacta. */
 function primerTermino(j) {
   if (!j) return null
@@ -392,6 +596,9 @@ if (p?.label) return p.label
 
 function mostrar(texto, max = 1200) {
   if (!texto) return "(vacio)"
+  // MAX_CHARS permite ver la respuesta completa cuando hay que auditar el contenido
+  // (por ejemplo, comprobar si aparecen datos de otro tenant).
+  if (process.env.MAX_CHARS) max = Number(process.env.MAX_CHARS)
   return texto.length > max ? `${texto.slice(0, max)}\n… [+${texto.length - max} chars]` : texto
 }
 
@@ -408,6 +615,15 @@ try {
   else if (fase === "determinismo") await faseDeterminismo(client)
   else if (fase === "preparar-noticias") await fasePrepararNoticias(client)
   else if (fase === "submit-noticias") await faseSubmitNoticias(client)
+  else if (fase === "costo-research") await faseCostoResearch(client)
+  else if (fase === "cross-tenant") await faseCrossTenant(client)
+  else if (fase === "contactos") await faseContactos(client)
+  // Fase auxiliar: leer la cuota. Ademas de informar, dispara los reclaims
+  // perezosos de reservas abandonadas, asi que sirve para verificarlos.
+  else if (fase === "cuota") {
+    const r = await llamar(client, "get_ai_usage", {}, "cuota + reclaim perezoso")
+    console.log(mostrar(r.texto, 2000))
+  }
   else {
     console.log(`fase desconocida: ${fase}`)
   }

@@ -2,7 +2,7 @@ import "server-only"
 
 import { createAdminClient } from "@/lib/supabase/admin"
 import { checkUrlsAlive, filterRelevantToCompany } from "@/lib/ai-structurer"
-import { toSignalDirection, toV2EvidenceLevel, toEvidenceLevel, type SignalDirection } from "./evidence-level"
+import { toSignalDirection, toV2EvidenceLevel, toEvidenceLevel, normalizeNewsCategory, type SignalDirection } from "./evidence-level"
 
 // ═══════════════════════════════════════════════════════════
 // Drilldown externo: casos de éxito y noticias buscados por el CLIENTE.
@@ -200,6 +200,8 @@ export async function persistClientNews(params: {
     saved?: number
     /** Cuántas ya estaban (misma company_id + source_url) y se omitieron. */
     duplicates?: number
+    /** Categorías que se corrigieron a la taxonomía canónica. */
+    remappedCategories?: { title: string; from: string | null; to: string }[]
   }
 > {
   const { kept, report } = await applyGuardrails(params.items, {
@@ -215,15 +217,22 @@ export async function persistClientNews(params: {
 
   const admin = createAdminClient()
   const verifiedAt = new Date().toISOString()
+  // Categorías que hubo que corregir. Se informan al cliente en vez de arreglarlas
+  // en silencio, para que el modelo aprenda a mandar la taxonomía correcta.
+  const remappedCategories: { title: string; from: string | null; to: string }[] = []
   const rows = kept.map((item) => {
     const direction = toSignalDirection(item.direction)
     directions[direction] += 1
+    const cat = normalizeNewsCategory(item.category)
+    if (cat.wasRemapped) {
+      remappedCategories.push({ title: item.title.slice(0, 80), from: cat.original, to: cat.category })
+    }
     return {
       company_id: params.companyId,
       user_id: params.userId,
       title: item.title.slice(0, 500),
       summary: item.summary?.slice(0, 2000) ?? null,
-      category: item.category.slice(0, 100),
+      category: cat.category,
       // La columna de v2 se llama source_url, no url.
       source_url: item.sourceUrl,
       source_name: item.sourceName?.slice(0, 120) ?? null,
@@ -236,22 +245,62 @@ export async function persistClientNews(params: {
     }
   })
 
-  // Un `insert` plano fallaba entero cuando UNA sola nota ya estaba guardada:
-  // `idx_company_news_unique_source` (company_id, source_url) tiraba un 23505 y se
-  // perdían también las notas nuevas del mismo lote. Reencontrar una noticia ya
-  // conocida es lo NORMAL cuando se re-investiga una cuenta, no un error del
-  // cliente. Con ignoreDuplicates el lote entra igual y las repetidas se omiten.
-  const { data: inserted, error } = await admin
+  // Reencontrar una noticia ya conocida es lo NORMAL cuando se re-investiga una cuenta, no
+  // un error del cliente: un `insert` plano fallaba entero por el 23505 de UNA sola nota
+  // repetida y se perdían también las nuevas del mismo lote.
+  //
+  // El `.upsert({ onConflict })` que había acá para resolverlo NO funcionaba:
+  // `idx_company_news_unique_source` es un índice PARCIAL (`WHERE source_url IS NOT NULL`) y
+  // Postgres solo lo infiere si el ON CONFLICT repite ese predicado, algo que supabase-js no
+  // tiene forma de expresar. Verificado en runtime: tiraba "there is no unique or exclusion
+  // constraint matching the ON CONFLICT specification", así que NINGUNA noticia del drilldown
+  // llegaba a guardarse (0 filas con `source='client_mcp'`).
+  //
+  // El índice vive en una tabla que v2 usa en producción, así que se arregla del lado de v3:
+  // se descartan las conocidas con un SELECT previo y se insertan solo las nuevas.
+  const urls = rows.map((r) => r.source_url).filter((u): u is string => Boolean(u))
+  const { data: existing, error: existingError } = await admin
     .from("company_news")
-    .upsert(rows, { onConflict: "company_id,source_url", ignoreDuplicates: true })
-    .select("id")
-  if (error) throw new Error(`No se pudieron guardar las noticias: ${error.message}`)
+    .select("source_url")
+    .eq("company_id", params.companyId)
+    .in("source_url", urls)
+  if (existingError) {
+    throw new Error(`No se pudieron revisar las noticias existentes: ${existingError.message}`)
+  }
+  const conocidas = new Set((existing ?? []).map((r) => r.source_url as string))
+  const nuevas = rows.filter((r) => !conocidas.has(r.source_url))
 
-  const saved = inserted?.length ?? 0
+  const inserted: { id: string }[] = []
+  if (nuevas.length > 0) {
+    const res = await admin.from("company_news").insert(nuevas).select("id")
+    if (res.error?.code === "23505") {
+      // Otra corrida guardó la misma nota entre el SELECT y el INSERT. Es la carrera que el
+      // índice justamente previene; se reintenta fila por fila para no perder las nuevas.
+      for (const row of nuevas) {
+        const one = await admin.from("company_news").insert(row).select("id")
+        if (!one.error) inserted.push(...((one.data ?? []) as { id: string }[]))
+        else if (one.error.code !== "23505") {
+          throw new Error(`No se pudieron guardar las noticias: ${one.error.message}`)
+        }
+      }
+    } else if (res.error) {
+      throw new Error(`No se pudieron guardar las noticias: ${res.error.message}`)
+    } else {
+      inserted.push(...((res.data ?? []) as { id: string }[]))
+    }
+  }
+
+  const saved = inserted.length
   const duplicates = rows.length - saved
   // Si una nota no se insertó, su `direction` no debe contarse como novedad.
   if (duplicates > 0 && saved === 0) {
     for (const key of Object.keys(directions) as SignalDirection[]) directions[key] = 0
   }
-  return { ...report, directions, saved, duplicates }
+  return {
+    ...report,
+    directions,
+    saved,
+    duplicates,
+    ...(remappedCategories.length ? { remappedCategories } : {}),
+  }
 }

@@ -296,7 +296,7 @@ export async function runResearchJob(jobId: string): Promise<ResearchJob | null>
       const { agents } = await selectMicroAgentsForWorkspace(job.workspace_id)
       const total = agents.length || 1
       await runMicroAgents(
-        { companyId: companyId!, companyName, domain, country, industry },
+        { companyId: companyId!, companyName, domain, country, industry, workspaceId: job.workspace_id, researchJobId: jobId },
         agents,
         async (agentKey, index) => {
           await updateJob(jobId, {
@@ -312,7 +312,7 @@ export async function runResearchJob(jobId: string): Promise<ResearchJob | null>
     // ── 4. Intérprete de vacantes ──
     await updateJob(jobId, { current_step: "vacantes", progress: 80 })
     if (!skipResearch) {
-      await interpretJobPostings(companyId!, companyName)
+      await interpretJobPostings(companyId!, companyName, { workspaceId: job.workspace_id, researchJobId: jobId })
     }
 
     // ── 6. Scorecard final por workspace (siempre se recalcula) ──

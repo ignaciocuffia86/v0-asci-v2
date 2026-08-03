@@ -5,6 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin"
 import { getCanonicalContacts } from "./contact-provider"
 import { getRadarFindings } from "./radar"
 import { getWorkspaceFitProfile } from "./workspace-fit-profile"
+import { BRIEF_CONFLICT_TARGET, findSupersededBriefId, resolveBriefStatus } from "./account-brief-row"
 
 export async function buildFinalAccountBrief(input: {
   workspaceId: string
@@ -13,7 +14,7 @@ export async function buildFinalAccountBrief(input: {
   researchJobId: string
 }) {
   const admin = createAdminClient()
-  const [scorecardResult, findings, contactsResult, profile, preliminaryResult] = await Promise.all([
+  const [scorecardResult, findings, contactsResult, profile, supersedesBriefId] = await Promise.all([
     admin
       .schema("v3")
       .from("account_scorecards")
@@ -27,16 +28,7 @@ export async function buildFinalAccountBrief(input: {
     getRadarFindings(input.companyId, { limit: 12 }),
     getCanonicalContacts({ companyId: input.companyId, limit: 10 }),
     getWorkspaceFitProfile(input.workspaceId),
-    admin
-      .schema("v3")
-      .from("account_briefs")
-      .select("id")
-      .eq("workspace_id", input.workspaceId)
-      .eq("company_id", input.companyId)
-      .eq("stage", "preliminary")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
+    findSupersededBriefId(admin, input.workspaceId, input.companyId),
   ])
 
   const scorecard = scorecardResult.data
@@ -69,7 +61,7 @@ export async function buildFinalAccountBrief(input: {
         research_job_id: input.researchJobId,
         scorecard_id: scorecard?.id ?? null,
         stage: "final",
-        status: evidence.length > 0 ? "ready" : "partial",
+        status: resolveBriefStatus({ evidenceCount: evidence.length }),
         headline,
         why_now: evidence[0]?.summary ?? "No se encontraron señales externas nuevas; se conservaron los datos internos.",
         fit_summary: fitEvaluated ? scorecard?.rationale : "Fit no evaluado: completá la propuesta de valor para obtener un score.",
@@ -91,9 +83,9 @@ export async function buildFinalAccountBrief(input: {
         warnings: contactsResult.warnings,
         profile_version: profile.version,
         input_hash: inputHash,
-        supersedes_brief_id: preliminaryResult.data?.id ?? null,
+        supersedes_brief_id: supersedesBriefId,
       },
-      { onConflict: "workspace_id,company_id,stage,input_hash" }
+      { onConflict: BRIEF_CONFLICT_TARGET }
     )
     .select("*")
     .single()
