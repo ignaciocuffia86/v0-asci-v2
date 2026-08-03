@@ -245,18 +245,52 @@ export async function persistClientNews(params: {
     }
   })
 
-  // Un `insert` plano fallaba entero cuando UNA sola nota ya estaba guardada:
-  // `idx_company_news_unique_source` (company_id, source_url) tiraba un 23505 y se
-  // perdían también las notas nuevas del mismo lote. Reencontrar una noticia ya
-  // conocida es lo NORMAL cuando se re-investiga una cuenta, no un error del
-  // cliente. Con ignoreDuplicates el lote entra igual y las repetidas se omiten.
-  const { data: inserted, error } = await admin
+  // Reencontrar una noticia ya conocida es lo NORMAL cuando se re-investiga una cuenta, no
+  // un error del cliente: un `insert` plano fallaba entero por el 23505 de UNA sola nota
+  // repetida y se perdían también las nuevas del mismo lote.
+  //
+  // El `.upsert({ onConflict })` que había acá para resolverlo NO funcionaba:
+  // `idx_company_news_unique_source` es un índice PARCIAL (`WHERE source_url IS NOT NULL`) y
+  // Postgres solo lo infiere si el ON CONFLICT repite ese predicado, algo que supabase-js no
+  // tiene forma de expresar. Verificado en runtime: tiraba "there is no unique or exclusion
+  // constraint matching the ON CONFLICT specification", así que NINGUNA noticia del drilldown
+  // llegaba a guardarse (0 filas con `source='client_mcp'`).
+  //
+  // El índice vive en una tabla que v2 usa en producción, así que se arregla del lado de v3:
+  // se descartan las conocidas con un SELECT previo y se insertan solo las nuevas.
+  const urls = rows.map((r) => r.source_url).filter((u): u is string => Boolean(u))
+  const { data: existing, error: existingError } = await admin
     .from("company_news")
-    .upsert(rows, { onConflict: "company_id,source_url", ignoreDuplicates: true })
-    .select("id")
-  if (error) throw new Error(`No se pudieron guardar las noticias: ${error.message}`)
+    .select("source_url")
+    .eq("company_id", params.companyId)
+    .in("source_url", urls)
+  if (existingError) {
+    throw new Error(`No se pudieron revisar las noticias existentes: ${existingError.message}`)
+  }
+  const conocidas = new Set((existing ?? []).map((r) => r.source_url as string))
+  const nuevas = rows.filter((r) => !conocidas.has(r.source_url))
 
-  const saved = inserted?.length ?? 0
+  const inserted: { id: string }[] = []
+  if (nuevas.length > 0) {
+    const res = await admin.from("company_news").insert(nuevas).select("id")
+    if (res.error?.code === "23505") {
+      // Otra corrida guardó la misma nota entre el SELECT y el INSERT. Es la carrera que el
+      // índice justamente previene; se reintenta fila por fila para no perder las nuevas.
+      for (const row of nuevas) {
+        const one = await admin.from("company_news").insert(row).select("id")
+        if (!one.error) inserted.push(...((one.data ?? []) as { id: string }[]))
+        else if (one.error.code !== "23505") {
+          throw new Error(`No se pudieron guardar las noticias: ${one.error.message}`)
+        }
+      }
+    } else if (res.error) {
+      throw new Error(`No se pudieron guardar las noticias: ${res.error.message}`)
+    } else {
+      inserted.push(...((res.data ?? []) as { id: string }[]))
+    }
+  }
+
+  const saved = inserted.length
   const duplicates = rows.length - saved
   // Si una nota no se insertó, su `direction` no debe contarse como novedad.
   if (duplicates > 0 && saved === 0) {
