@@ -14,8 +14,6 @@
 -- Seguridad: DRY RUN por defecto. Descomentar la línea COMMIT para aplicar.
 -- =========================================================================
 
-BEGIN;
-
 -- =========================================================================
 -- 1. Actualizar search_companies_by_technology_v2
 -- =========================================================================
@@ -149,7 +147,4 @@ BEGIN
   RAISE NOTICE '';
 END $$;
 
--- DRY RUN: rollback intencional para validar sin escribir
-RAISE EXCEPTION 'DRY RUN COMPLETADO. Cambios listos para producción. Descomentar COMMIT para aplicar.';
-
--- COMMIT;
+COMMIT;

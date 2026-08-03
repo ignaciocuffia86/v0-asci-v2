@@ -322,4 +322,4 @@ END $$;
 -- Descomentar la línea de abajo para APLICAR EN PRODUCCIÓN.
 -- El script ejecutó con DRY RUN por defecto (revierte). Sin esta línea,
 -- la transacción se confirma automáticamente.
--- COMMIT;
+COMMIT;
