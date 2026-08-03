@@ -63,6 +63,54 @@
 
 **Limitación:** Solo aplica a TLDs **explícitamente nacionales**. No intenta "adivinar" desde .com o .org.
 
+### Fase 5: IA + Heurística (Valores ambiguos)
+
+**Estado:** Implementado en `lib/v3/services/country-normalizer.ts`  
+**Scope:** ~500 valores sin ISO (ciudades, regiones: "Greater Buenos Aires", "New York, NY", "Santiago Metropolitan Area")
+
+**Método:**
+1. **Heurística pura:** regex de US states, diccionario de países, regiones LATAM
+   - Cubre: "New York, NY" → "US", "Greater Buenos Aires" → "AR", "Lima" → "PE"
+2. **Fallback a Gemini:** batch de 10 valores a la vez, prompt estructurado que devuelve JSON
+   - Sistema prompt entiende que debe mapear ciudades/regiones a ISO
+   - Hit rate esperado: 85-95%
+
+**Cómo ejecutar (API job):**
+```bash
+# Desarrollo
+curl -X POST http://localhost:3000/api/v3/admin/normalize-country-phase5 \
+  -H "Authorization: Bearer YOUR_CRON_SECRET" \
+  -H "Content-Type: application/json"
+
+# Producción: agregar a vercel.json (cron semanal)
+{
+  "crons": [{
+    "path": "/api/v3/admin/normalize-country-phase5",
+    "schedule": "0 2 * * 0"
+  }]
+}
+```
+
+**Resultados esperados:** 
+- 400-500 valores ambiguos → ~85-95% mapeados a ISO
+- Cobertura adicional: +1-2% (de 12% total a 13-14%)
+- Empresas beneficiadas: ~5-10k adicionales
+
+**Integración con v2:**
+Una vez Fase 5 ejecutada, v2 puede usar `country_normalized` en lugar de `country` para filtros geográficos:
+
+```sql
+-- ANTES (v2): filtro contra valores sucio/ambiguo
+WHERE (p_countries IS NULL OR c.country = ANY(p_countries))
+
+-- DESPUÉS (v2 mejorado): filtro contra ISO normalizado
+WHERE (p_countries IS NULL OR c.country_normalized = ANY(p_countries))
+```
+
+Esto permite que búsquedas como "qué empresas en Argentina" encuentren tanto "Argentina" como "Greater Buenos Aires", sin ambigüedad.
+
+---
+
 ### Fase 4: Enrichment por LinkedIn (MANUAL)
 **Scope:** 5.073 empresas con URL de LinkedIn pero sin país
 
@@ -172,6 +220,103 @@ WHERE public.companies.id = x.id
 | "Muchos '(sin pais)' se quedan vacíos" | Fase 1 Mapeo no cubrió todo | Es esperado — los datos son muy sucio. Necesitaría diccionario más grande o Fase 4 |
 | "Name parsing matcheó cosas raras" | Regex demasiado broad | Script está muy conservador; revisar ejemplos si desconfías |
 | "LinkedIn paso no funciona" | Apify/Apollo no disponibles | Hacer manualmente o skip Fase 4 — los 12% base ya vale la pena |
+
+---
+
+## Integración con v2: Cómo mejorar los filtros geográficos
+
+### El problema actual en v2
+
+Las RPC `search_companies_by_technology_v2` y `search_companies_by_process_v2` filtran por:
+```sql
+WHERE (p_countries IS NULL OR c.country = ANY(p_countries))
+```
+
+Esto filtra contra `country` crudo, que tiene:
+- "Argentina" (limpio)
+- "Greater Buenos Aires" (ambiguo)
+- "New York, NY" (estado de USA)
+- "" (string vacío)
+- NULL
+
+**Problema:** Búsquedas por "Argentina" pierden las ~159 empresas con "Greater Buenos Aires". Similarmente, "US" pierde "New York, NY" (~64 empresas).
+
+**Solución:** Una vez `country_normalized` esté lleno (Fases 1-5), cambiar el filtro a usar ISO estandarizado.
+
+### Cambio en las RPC de v2 (2 opciones)
+
+**Opción A: Modificar las RPC existentes IN-PLACE** (requiere retest de v2)
+
+```sql
+-- ANTES: lib/v3/services/value-proposition-recommender.ts + search_companies_by_technology_v2
+WHERE (p_countries IS NULL OR c.country = ANY(p_countries))
+
+-- DESPUÉS
+WHERE (p_countries IS NULL OR c.country_normalized = ANY(p_countries))
+```
+
+**Ventajas:**
+- Cambio mínimo (1 línea por RPC)
+- Automático: todas las búsquedas v2 se benefician
+
+**Desventajas:**
+- Si `country_normalized` es NULL, la fila no matchea (¡quebra búsquedas!)
+- Solución: usar COALESCE: `COALESCE(c.country_normalized, c.country) = ANY(p_countries)`
+
+**Opción B: Crear RPC nuevas v3 que wrappeen a v2** (recomendado para produción en vivo)
+
+```sql
+-- RPC nueva: search_companies_by_technology_v3
+-- Internamente usa country_normalized; si NULL, fallback a country
+CREATE OR REPLACE FUNCTION public.search_companies_by_technology_v3(
+  p_product_id uuid,
+  p_countries text[] DEFAULT NULL,
+  ...
+) RETURNS TABLE(...) AS $$
+BEGIN
+  RETURN QUERY
+  SELECT ... FROM public.companies c WHERE
+    (p_countries IS NULL OR 
+     COALESCE(c.country_normalized, c.country) = ANY(p_countries))
+    AND ...;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+**Ventajas:**
+- v2 no cambia (cero riesgo de breaking changes)
+- v3 usa normalizado + fallback; convive con v2
+- Gradual adoption
+
+**Desventajas:**
+- Duplicación de lógica (2 RPC similares)
+- Clientes deben cambiar a v3
+
+### Impacto en cobertura de búsquedas
+
+Ejemplo: "¿Qué bancos de Argentina tienen Dynamics 365?"
+
+| Escenario | Hits sin normalización | Hits con normalización | Delta |
+|-----------|------------------------|------------------------|-------|
+| Antes Fase 5 | 53 | ~180 | +240% |
+| Después Fase 5 (c/IA) | 53 | ~200 | +277% |
+
+Los +180 adicionales vienen de:
+- "Greater Buenos Aires" → "AR" (~159 empresas)
+- Otras regiones LATAM mapeadas (~21)
+
+### Recomendación
+
+1. **Ejecutar Fases 1-3 ahora** (Script 430): baseline ~50k normalizadas
+2. **Ejecutar Fase 5** cuando Gemini esté lista (~500 valores ambiguos adicionales)
+3. **Opción A (simple, v2-breaking):** Cambiar filtro a `country_normalized` una vez esté 90%+ lleno
+   - Timing: después de Fase 5
+   - Comunicar a clientes: "Las búsquedas geográficas son más precisas"
+4. **Opción B (gradual):** Crear v3 en paralelo, migrar clientes progresivamente
+   - Timing: paralelo a Fase 5
+   - Zero-downtime deployment
+
+**Recomendación elegida:** Opción A (simple) + COALESCE fallback para máxima compatibilidad.
 
 ---
 
