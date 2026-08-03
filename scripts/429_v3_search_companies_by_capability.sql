@@ -178,7 +178,12 @@ BEGIN
     SELECT
       pc.company_id,
       c.name AS company_name,
-      c.country,
+      -- public.companies.country mezcla NULL y string vacio para el mismo caso
+      -- (pais desconocido). Sin este nullif el screening devolvia DOS entradas
+      -- distintas -- "(sin pais)" con 1754 empresas y "" con 1210 -- que se
+      -- quedaban con los dos primeros puestos del ranking y empujaban a los
+      -- paises reales fuera del top 5 que lee el modelo.
+      nullif(btrim(c.country), '') AS country,
       c.master_industry_id AS industry_id,
       mi.name_es AS industry_name,
       c.website,
@@ -187,7 +192,12 @@ BEGIN
     FROM per_company pc
     JOIN public.companies c ON c.id = pc.company_id
     LEFT JOIN public.master_industries mi ON mi.id = c.master_industry_id
-    WHERE (p_countries IS NULL OR c.country = ANY(p_countries))
+    -- El filtro compara contra el pais YA normalizado y sin distinguir
+    -- mayusculas, para que el modelo pueda reenviar tal cual el nombre que le
+    -- devolvio el screening ("Argentina", "Costa Rica") sin depender de como
+    -- quedo escrito en la fila.
+    WHERE (p_countries IS NULL OR lower(btrim(c.country)) = ANY(
+             SELECT lower(btrim(x)) FROM unnest(p_countries) AS x))
       AND (p_master_industry_ids IS NULL OR c.master_industry_id = ANY(p_master_industry_ids))
       -- IS DISTINCT FROM conserva las de industria NULL, igual que la RPC de v2.
       -- Son 3197 empresas en el peor caso: descartarlas perderia prospectos reales.

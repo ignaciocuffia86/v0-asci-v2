@@ -60,12 +60,26 @@ function norm(value: string): string {
  * son dos productos distintos en el diccionario (CRM y ERP) y devolver solo el
  * CRM perdería 27 bancos sin avisar. "Microsoft" son 10 productos.
  *
- * Orden de resolución, de más preciso a más laxo. Se corta en el primer nivel
- * que da resultados para no mezclar un match exacto con ruido de substring:
+ * CUIDADO con cortar en el primer nivel que da resultados. Esa era la primera
+ * version de esta funcion y estaba MAL, con el mismo sintoma que venia a
+ * arreglar: los keywords del diccionario reparten la familia "Dynamics 365"
+ * entre dos productos, de forma que ninguno de los dos la representa entera.
+ *
+ *   Dynamics 365 ERP -> keywords: {"Dynamics 365", D365, ...}
+ *   Dynamics 365 CRM -> keywords: {"Microsoft Dynamics 365", "Dynamics CRM", ...}
+ *
+ * O sea que "Dynamics 365" es keyword EXACTA del ERP. Cortando ahi se devolvia
+ * solo el ERP y se perdian los 27 bancos del CRM en silencio: exactamente el
+ * bug original. Por eso los tres primeros niveles ACUMULAN en lugar de cortar.
+ *
+ * Niveles (los 1-3 se suman entre si; el 4 es fallback solo si no hubo nada):
  *   1. nombre exacto del producto/proceso
  *   2. keyword exacta
- *   3. vendor exacto → todos sus productos ("Microsoft", "SAP")
- *   4. substring del nombre (mín. 4 caracteres) → "dynamics" trae CRM y ERP
+ *   3. vendor exacto -> todos sus productos ("Microsoft" = 10, "SAP" = 6)
+ *   3b. prefijo de familia: el termino es prefijo del nombre del producto y lo
+ *       que sigue es un sufijo corto de variante ("Dynamics 365" -> "... CRM",
+ *       "... ERP"). Esto es lo que reune la familia partida por keywords.
+ *   4. substring del nombre (min. 4 caracteres), solo si los anteriores fallaron
  */
 export async function resolveCapabilityTerms(
   terms: string[],
@@ -100,26 +114,35 @@ export async function resolveCapabilityTerms(
     for (const p of dict.products) if (norm(p.name) === q) hits.push(asProduct(p))
     for (const p of dict.processes) if (norm(p.name) === q) hits.push(asProcess(p))
 
-    // 2. keyword exacta
-    if (!hits.length) {
-      for (const p of dict.products) {
-        if (p.keywords.some((k) => norm(k) === q)) hits.push(asProduct(p))
-      }
-      for (const p of dict.processes) {
-        if (p.keywords.some((k) => norm(k) === q)) hits.push(asProcess(p))
-      }
+    // 2. keyword exacta (ACUMULA, no corta: ver comentario del encabezado)
+    for (const p of dict.products) {
+      if (p.keywords.some((k) => norm(k) === q)) hits.push(asProduct(p))
+    }
+    for (const p of dict.processes) {
+      if (p.keywords.some((k) => norm(k) === q)) hits.push(asProcess(p))
     }
 
     // 3. vendor exacto → todos sus productos
-    if (!hits.length) {
-      const vendor = dict.vendors.find((v) => norm(v.name) === q)
-      if (vendor) {
-        for (const p of dict.products) if (p.vendor_id === vendor.id) hits.push(asProduct(p))
+    const vendor = dict.vendors.find((v) => norm(v.name) === q)
+    if (vendor) {
+      for (const p of dict.products) if (p.vendor_id === vendor.id) hits.push(asProduct(p))
+    }
+
+    // 3b. prefijo de familia. Reúne "Dynamics 365 CRM" + "Dynamics 365 ERP" bajo
+    //     "Dynamics 365". Se exige que el resto sea corto (<= 24 caracteres) y no
+    //     arranque con un separador raro, para no convertir esto en un substring
+    //     encubierto: "SAP" NO cae acá (lo agarra el vendor), y "Azure" no se
+    //     tragaría un hipotético "Azure DevOps Server Enterprise Edition".
+    for (const p of dict.products) {
+      const n = norm(p.name)
+      if (n !== q && n.startsWith(q)) {
+        const rest = n.slice(q.length).trim()
+        if (rest.length > 0 && rest.length <= 24) hits.push(asProduct(p))
       }
     }
 
-    // 4. substring. El mínimo de 4 caracteres evita el problema ya conocido de
-    //    los acrónimos cortos del diccionario ("ORM" matcheando "información").
+    // 4. substring, SOLO como último recurso. El mínimo de 4 caracteres evita el
+    //    problema conocido de los acrónimos cortos ("ORM" matchea "información").
     if (!hits.length && q.length >= 4) {
       for (const p of dict.products) if (norm(p.name).includes(q)) hits.push(asProduct(p))
       for (const p of dict.processes) if (norm(p.name).includes(q)) hits.push(asProcess(p))
