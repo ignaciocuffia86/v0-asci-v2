@@ -73,10 +73,22 @@ export interface LogAiUsageParams {
   conversationId?: string | null
   metadata?: Record<string, unknown> | null
   /**
-   * Atribución del gasto. Estas cuatro columnas ya existían en `v3.ai_usage_log` pero
-   * nadie las escribía, así que todo el costo quedaba sin imputar: no se podía saber qué
-   * costó un research puntual, con qué API key se gastó, ni separar el costo
-   * server-managed del client-assisted (que para ASCI es $0).
+   * Atribución del gasto. `api_key_id`, `request_id` y `research_job_id` existían en
+   * `v3.ai_usage_log` pero nadie las escribía, así que no se podía saber qué costó un
+   * research puntual ni con qué credencial se gastó.
+   *
+   * `generation_mode` es distinto: ya tenía DEFAULT 'server_managed', así que no estaba
+   * vacío — pero por eso mismo TODO quedaba marcado como server-managed por omisión. El
+   * gasto que corre con el modelo del cliente tiene que pasar `'client_model'` de forma
+   * explícita (el vocabulario que ya usan `account_scorecards` y `mcp-client-ai`), porque
+   * el default nunca lo va a inferir.
+   */
+  /**
+   * ⚠️ SOLO el id de una `v3.mcp_api_keys`: la columna tiene FK a esa tabla y no existe
+   * una equivalente para OAuth. Un principal MCP puede ser `api_key` u `oauth_token` y los
+   * dos exponen el mismo campo `keyId`, así que pasarlo a ciegas viola la FK. Como el
+   * insert de abajo solo hace `console.error`, eso perdería la fila de costo COMPLETA, que
+   * es peor que no atribuirla. Discriminá por `keyType` (ver `principalColumns`).
    */
   apiKeyId?: string | null
   requestId?: string | null
@@ -109,7 +121,10 @@ export async function logAiUsage(params: LogAiUsageParams): Promise<void> {
         api_key_id: params.apiKeyId ?? null,
         request_id: params.requestId ?? null,
         research_job_id: params.researchJobId ?? null,
-        generation_mode: params.generationMode ?? null,
+        // `generation_mode` es NOT NULL con DEFAULT 'server_managed'. Un NULL explícito NO
+        // dispara el default: viola la restricción y tira el insert entero, así que la
+        // clave se OMITE cuando no vino y deja que la base ponga el default.
+        ...(params.generationMode ? { generation_mode: params.generationMode } : {}),
       })
     if (error) {
       console.error("[v3] Error registrando uso de IA:", error.message)
