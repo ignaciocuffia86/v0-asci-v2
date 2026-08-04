@@ -123,15 +123,30 @@ async function main() {
 
   console.log(`[437] modo=${COMMIT ? "COMMIT (escribe)" : "DRY RUN (no escribe)"} limit=${LIMIT} batch=${BATCH}`)
 
-  // Candidatas: tienen LinkedIn, les falta el pais del HQ y no fueron procesadas.
+  // Candidatas: tienen LinkedIn y les falta alguna de las columnas que V2 CONSUME.
+  //
+  // Por que este filtro y no `hq_country_iso IS NULL`: se audito que funciones de v2 leen
+  // cada columna. country_normalized (8 fn), industry (10 fn) y website (6 fn) alimentan los
+  // exports de admin y las busquedas. En cambio hq_country_iso y linkedin_slug los usan
+  // 0 funciones de v2. Filtrar por HQ traia 57.107 candidatas de las cuales 47.791 ya tenian
+  // country+industry+website completos: se pagaria por ellas sin mover nada en v2.
+  // Este filtro deja 9.316 y captura practicamente todo el upside visible en v2.
+  //
+  // Orden: primero las que tienen datos asociados (senales, contactos, vacantes), porque son
+  // las que efectivamente aparecen en los exports y las busquedas.
   const { rows: candidates } = await db.query(
     `SELECT c.id, c.name, c.linkedin_url
        FROM public.companies c
        LEFT JOIN v3.linkedin_company_enrichment e ON e.company_id = c.id
       WHERE c.linkedin_url ~ 'linkedin\\.com/company/'
-        AND c.hq_country_iso IS NULL
         AND (e.company_id IS NULL ${RETRY_ERRORS ? "OR e.status = 'error'" : ""})
-      ORDER BY c.id
+        AND (    (c.country  IS NULL OR btrim(c.country)  = '')
+              OR (c.industry IS NULL OR btrim(c.industry) = '')
+              OR (c.website  IS NULL OR btrim(c.website)  = ''))
+      ORDER BY
+        (EXISTS (SELECT 1 FROM public.signals s WHERE s.company_id = c.id)) DESC,
+        (EXISTS (SELECT 1 FROM public.contacts t WHERE t.current_company_id = c.id)) DESC,
+        c.id
       LIMIT $1`,
     [LIMIT],
   )
