@@ -1,0 +1,966 @@
+{
+  "meta": {
+    "name": "ASCI — Mapa de arquitectura v2 + v3",
+    "generatedAt": "2026-08-04",
+    "repo": "ignaciocuffia86/v0-asci-v2",
+    "summary": "Monorepo Next.js unico donde conviven ASCI v2 (produccion, schema public) y ASCI v3 (multitenant, schema v3) sobre la MISMA base Supabase. El aislamiento es por schema, no por proyecto ni por base.",
+    "stats": {
+      "tsFiles": 371,
+      "apiRoutes": 48,
+      "pages": 45,
+      "crons": 9,
+      "sqlScripts": 235,
+      "tablesPublic": 54,
+      "tablesV3": 47,
+      "mcpTools": 36
+    },
+    "legend": {
+      "zones": {
+        "v2": "Codigo/datos de ASCI v2 (produccion, schema public)",
+        "v3": "Codigo/datos de ASCI v3 (multitenant, schema v3)",
+        "shared": "Zona de contacto: la tocan v2 y v3 a la vez",
+        "external": "Proveedor o servicio de terceros"
+      },
+      "layers": [
+        "0 — Proveedores externos",
+        "1 — UI / Clientes",
+        "2 — Edge, API y Crons",
+        "3 — Servicios de dominio",
+        "4 — Datos (Postgres / Supabase)"
+      ]
+    },
+    "invariant": "v2 esta en produccion con usuarios reales: ningun cambio de v3 puede afectarla. Los nodos 'shared' son exactamente donde ese invariante puede romperse."
+  },
+
+  "nodes": [
+    { "id": "ext_apollo", "label": "Apollo.io", "zone": "external", "layer": 0, "kind": "api", "desc": "Fuente primaria de contactos y organizaciones. Consumida por v2 y reusada por v3.", "files": ["lib/apollo/client.ts"], "env": ["APOLLO_API_KEY", "APOLLO_WEBHOOK_SECRET"] },
+    { "id": "ext_apify", "label": "Apify", "zone": "external", "layer": 0, "kind": "api", "desc": "Actores harvestapi/linkedin-company (enrichment HQ) y bebity/linkedin-jobs-scraper (vacantes).", "files": ["lib/v3/services/apify-client.ts"], "env": ["APIFY_TOKEN", "APIFY_ACTOR_ID"] },
+    { "id": "ext_perplexity", "label": "Perplexity", "zone": "external", "layer": 0, "kind": "api", "desc": "Busqueda con citas para research de cuentas y noticias.", "env": ["PERPLEXITY_API_KEY"] },
+    { "id": "ext_parallel", "label": "Parallel.ai", "zone": "external", "layer": 0, "kind": "api", "desc": "Extraccion web estructurada. Solo lib/parallel.ts esta en uso.", "files": ["lib/parallel.ts"], "env": ["PARALLEL_API_KEY"] },
+    { "id": "ext_gemini", "label": "Google Gemini", "zone": "external", "layer": 0, "kind": "ai", "desc": "LLM principal de v2 y v3 (briefs, icebreakers, scoring, chat, dedupe).", "env": ["GOOGLE_GENERATIVE_AI_API_KEY"] },
+    { "id": "ext_secedgar", "label": "SEC EDGAR", "zone": "external", "layer": 0, "kind": "api", "desc": "Filings publicos para evidencia de implementaciones tecnologicas.", "files": ["lib/sec-edgar.ts"] },
+    { "id": "ext_resend", "label": "Resend", "zone": "external", "layer": 0, "kind": "email", "desc": "Email transaccional: invitaciones v3 y alertas de monitoreo v2.", "env": ["RESEND_API_KEY", "RESEND_FROM_EMAIL"] },
+    { "id": "ext_blob", "label": "Vercel Blob", "zone": "external", "layer": 0, "kind": "storage", "desc": "Staging de CSV grandes (v2) y documentos de workspace (v3).", "env": ["BLOB_READ_WRITE_TOKEN"] },
+    { "id": "ext_mcp_client", "label": "Cliente MCP", "zone": "external", "layer": 0, "kind": "client", "desc": "Agente IA externo (Claude, IDE) que consume las 36 tools del servidor MCP de v3.", "notes": "Es el unico consumidor no-navegador del sistema." },
+
+    { "id": "ui_v2_landing", "label": "Landing publica", "zone": "v2", "layer": 1, "kind": "page", "desc": "Home publica con estadisticas precalculadas.", "files": ["app/(landing)/page.tsx"] },
+    { "id": "ui_v2_search", "label": "Busqueda de empresas", "zone": "v2", "layer": 1, "kind": "page", "desc": "Busqueda facetada sobre companies + senales del diccionario.", "files": ["app/search/page.tsx"] },
+    { "id": "ui_v2_bookmarks", "label": "Bookmarks / Drilldown", "zone": "v2", "layer": 1, "kind": "page", "desc": "Cuentas guardadas y su vista de inteligencia (tabs de resumen, prospects, icebreakers, radar).", "files": ["app/bookmarks/page.tsx", "app/bookmarks/[id]/page.tsx", "app/bookmarks/[id]/_components/"] },
+    { "id": "ui_v2_admin", "label": "Admin v2 (13 paginas)", "zone": "v2", "layer": 1, "kind": "page", "desc": "Ingesta, diccionario, duplicados, exports, logs, prompts, usuarios, industrias.", "files": ["app/admin/"], "risk": "Ninguna de estas paginas valida rol server-side (ver OPT-01)." },
+    { "id": "ui_auth", "label": "Auth (login / signup / invite)", "zone": "shared", "layer": 1, "kind": "page", "desc": "Supabase Auth compartido: la MISMA identidad entra a v2 y a v3.", "files": ["app/auth/", "app/invite/[token]/page.tsx"] },
+    { "id": "ui_v3_accounts", "label": "Cuentas v3", "zone": "v3", "layer": 1, "kind": "page", "desc": "Listado de cuentas seguidas y vista de cuenta con tabs (panorama, senales, contactos, fit).", "files": ["app/v3/accounts/page.tsx", "app/v3/accounts/[companyId]/page.tsx"] },
+    { "id": "ui_v3_campaigns", "label": "Campanas v3", "zone": "v3", "layer": 1, "kind": "page", "desc": "Agrupacion de cuentas en campanas de prospeccion.", "files": ["app/v3/campaigns/page.tsx"] },
+    { "id": "ui_v3_chat", "label": "Chat v3", "zone": "v3", "layer": 1, "kind": "page", "desc": "Chat conversacional con memoria sobre el contexto del workspace.", "files": ["app/v3/chat/page.tsx"] },
+    { "id": "ui_v3_docs", "label": "Documentos de workspace", "zone": "v3", "layer": 1, "kind": "page", "desc": "Carga de docs propios que definen la propuesta de valor del tenant.", "files": ["app/v3/docs/page.tsx"] },
+    { "id": "ui_v3_settings", "label": "Settings + API keys", "zone": "v3", "layer": 1, "kind": "page", "desc": "Config de workspace, miembros y API keys para el MCP.", "files": ["app/v3/settings/", "app/v3/settings/api-keys/page.tsx"] },
+    { "id": "ui_v3_admin", "label": "Super-admin v3", "zone": "v3", "layer": 1, "kind": "page", "desc": "Panel cross-tenant: workspaces, usuarios, agentes, prompts, uso.", "files": ["app/v3/admin/"], "risk": "Panel cross-tenant sin guard server-side (ver OPT-01)." },
+    { "id": "ui_v3_onboarding", "label": "Onboarding v3", "zone": "v3", "layer": 1, "kind": "page", "desc": "Alta de workspace y perfil de valor inicial.", "files": ["app/v3/onboarding/page.tsx"] },
+    { "id": "ui_v3_oauth", "label": "Consent OAuth MCP", "zone": "v3", "layer": 1, "kind": "page", "desc": "Pantalla de autorizacion para clientes MCP y upload por token.", "files": ["app/v3/oauth/authorize/page.tsx", "app/v3/mcp/upload/[token]/page.tsx"] },
+
+    { "id": "edge_proxy", "label": "proxy.ts (middleware)", "zone": "shared", "layer": 2, "kind": "edge", "desc": "Refresca la cookie de sesion de Supabase en cada request.", "files": ["proxy.ts", "lib/supabase/middleware.ts"], "risk": "NO protege rutas: no hay redireccion por ausencia de sesion ni por rol. Toda la autorizacion queda delegada a cada pagina/action." },
+
+    { "id": "api_ingest", "label": "Ingesta CSV", "zone": "v2", "layer": 2, "kind": "route", "desc": "Recibe CSV directo o via Blob y crea el batch de importacion.", "files": ["app/api/ingest/upload/route.ts", "app/api/ingest/blob-upload/route.ts"] },
+    { "id": "api_admin_v2", "label": "API admin v2", "zone": "v2", "layer": 2, "kind": "route", "desc": "Industrias (map/master/stats/suggest/unmapped), usuarios, prompts, reproceso de docs, export de vacantes.", "files": ["app/api/admin/"] },
+    { "id": "api_bookmark_ops", "label": "API bookmarks", "zone": "v2", "layer": 2, "kind": "route", "desc": "Export, brief, summary y datos de prospects de una cuenta guardada.", "files": ["app/api/bookmarks/[id]/"] },
+    { "id": "api_research_v2", "label": "API research v2", "zone": "v2", "layer": 2, "kind": "route", "desc": "Implementaciones, noticias y documentos publicos de una empresa.", "files": ["app/api/research/implementations/route.ts", "app/api/research/news/route.ts", "app/api/research/public-docs/route.ts"] },
+    { "id": "api_documents_v2", "label": "API documentos v2", "zone": "v2", "layer": 2, "kind": "route", "desc": "Procesa docs de usuario, genera perfil de valor y contexto por bookmark.", "files": ["app/api/documents/"] },
+    { "id": "api_landing_stats", "label": "API landing-stats", "zone": "v2", "layer": 2, "kind": "route", "desc": "Sirve las metricas precalculadas de la landing.", "files": ["app/api/landing-stats/route.ts"] },
+    { "id": "api_proxy_image", "label": "API proxy-image", "zone": "v2", "layer": 2, "kind": "route", "desc": "Proxy de logos remotos para evitar CORS/hotlinking.", "files": ["app/api/proxy-image/route.ts"], "risk": "Superficie SSRF: fetch de una URL controlada por el cliente (ver OPT-04)." },
+    { "id": "api_test_alert", "label": "API test-alert", "zone": "v2", "layer": 2, "kind": "route", "desc": "Endpoint de prueba que dispara el mail de alerta.", "files": ["app/api/test-alert/route.ts"], "risk": "GET publico sin autenticacion: permite gatillar envio de mails (ver DEAD-08)." },
+    { "id": "api_apollo_webhook", "label": "Webhook Apollo", "zone": "v2", "layer": 2, "kind": "webhook", "desc": "Callback de Apollo autenticado por secreto en el path.", "files": ["app/api/webhooks/apollo/[secret]/route.ts"] },
+
+    { "id": "api_v3_chat", "label": "API chat v3", "zone": "v3", "layer": 2, "kind": "route", "desc": "Streaming del chat con memoria de conversacion.", "files": ["app/api/v3/chat/route.ts"] },
+    { "id": "api_v3_workspace", "label": "API workspace v3", "zone": "v3", "layer": 2, "kind": "route", "desc": "Operaciones de workspace y miembros.", "files": ["app/api/v3/workspace/route.ts"] },
+    { "id": "api_v3_documents", "label": "API documentos v3", "zone": "v3", "layer": 2, "kind": "route", "desc": "Carga por Blob y procesamiento/analisis de docs del tenant.", "files": ["app/api/v3/documents/blob-upload/route.ts", "app/api/v3/documents/process/route.ts"] },
+    { "id": "api_v3_research_batch", "label": "API research batch", "zone": "v3", "layer": 2, "kind": "route", "desc": "Avance por lotes del pipeline de research (evita timeouts).", "files": ["app/api/v3/research/batch/[batchId]/route.ts"] },
+    { "id": "api_mcp_server", "label": "Servidor MCP (36 tools)", "zone": "v3", "layer": 2, "kind": "mcp", "desc": "Punto de entrada unico del MCP. Instrumenta cada tool con auditoria y cuota via proxy sobre server.tool.", "files": ["app/api/v3/mcp/server/[transport]/route.ts"], "risk": "Ruta monolitica muy grande: concentra registro de tools, auth, cuota y transporte (ver OPT-07)." },
+    { "id": "api_mcp_oauth", "label": "OAuth MCP", "zone": "v3", "layer": 2, "kind": "route", "desc": "Registro dinamico de cliente, authorize, token y revoke.", "files": ["app/api/v3/mcp/oauth/"] },
+    { "id": "api_mcp_doc_upload", "label": "Upload MCP por token", "zone": "v3", "layer": 2, "kind": "route", "desc": "Permite que un agente pida al humano subir un doc via link con token de un uso.", "files": ["app/api/v3/mcp/documents/upload/[token]/route.ts"] },
+
+    { "id": "cron_process_queue", "label": "cron process-queue (1m)", "zone": "v2", "layer": 2, "kind": "cron", "desc": "Worker del ETL: consume import_rows y materializa companies/contacts. Usa estado 'uploading' + lock distribuido.", "files": ["app/api/cron/process-queue/route.ts"], "schedule": "* * * * *" },
+    { "id": "cron_process_dictionary", "label": "cron process-dictionary (1m)", "zone": "v2", "layer": 2, "kind": "cron", "desc": "Matchea vacantes contra el diccionario de productos/procesos y emite senales.", "files": ["app/api/cron/process-dictionary/route.ts"], "schedule": "* * * * *" },
+    { "id": "cron_monitor", "label": "cron monitor (15m)", "zone": "v2", "layer": 2, "kind": "cron", "desc": "Watchdog de salud del ETL; alerta por email ante atascos.", "files": ["app/api/cron/monitor/route.ts"], "schedule": "*/15 * * * *" },
+    { "id": "cron_sync_users", "label": "cron sync-users (02:00)", "zone": "shared", "layer": 2, "kind": "cron", "desc": "Sincroniza auth.users hacia public.profiles. Afecta la identidad que usan v2 y v3.", "files": ["app/api/sync-users/route.ts"], "schedule": "0 2 * * *" },
+    { "id": "cron_cleanup", "label": "cron cleanup (dom 03:00)", "zone": "v2", "layer": 2, "kind": "cron", "desc": "Purga datos viejos de importacion via cleanup_old_import_data.", "files": ["app/api/cron/cleanup/route.ts"], "schedule": "0 3 * * 0", "risk": "Loguea el intento no autorizado pero NO corta la ejecucion (ver OPT-02)." },
+    { "id": "cron_apollo_reverify", "label": "cron apollo-reverify (04:00)", "zone": "v2", "layer": 2, "kind": "cron", "desc": "Revalida contactos cacheados de Apollo.", "files": ["app/api/cron/apollo-reverify/route.ts"], "schedule": "0 4 * * *" },
+    { "id": "cron_refresh_landing", "label": "cron refresh-landing-stats (lun 05:00)", "zone": "v2", "layer": 2, "kind": "cron", "desc": "Precalcula las metricas de la landing para no pegarle a companies en cada visita.", "files": ["app/api/cron/refresh-landing-stats/route.ts"], "schedule": "0 5 * * 1" },
+    { "id": "cron_v3_refresh", "label": "cron v3-refresh-accounts (06/07/08)", "zone": "v3", "layer": 2, "kind": "cron", "desc": "Refresca el research de cuentas seguidas de forma escalonada.", "files": ["app/api/cron/v3-refresh-accounts/route.ts"], "schedule": "0 6,7,8 * * *" },
+    { "id": "cron_v3_watchdog", "label": "cron v3-research-watchdog (5m)", "zone": "v3", "layer": 2, "kind": "cron", "desc": "Detecta research_jobs colgados y los reencola o falla.", "files": ["app/api/cron/v3-research-watchdog/route.ts", "lib/v3/services/research-watchdog.ts"], "schedule": "*/5 * * * *" },
+
+    { "id": "svc_supabase", "label": "Clientes Supabase", "zone": "shared", "layer": 3, "kind": "infra", "desc": "server (RLS con cookies), client (browser), admin (service_role, ignora RLS).", "files": ["lib/supabase/server.ts", "lib/supabase/client.ts", "lib/supabase/admin.ts"], "risk": "16 archivos instancian createClient crudo de @supabase/supabase-js salteando estos helpers (ver OPT-06)." },
+    { "id": "svc_db_direct", "label": "Conexion directa (lib/db/direct.ts)", "zone": "shared", "layer": 3, "kind": "infra", "desc": "Escape hatch a Postgres sin PostgREST: es la unica via para SQL que excede el timeout de 8s del rol authenticator.", "files": ["lib/db/direct.ts"], "notes": "service_role NO esquiva los 8s: el limite lo pone el rol de login." },
+    { "id": "svc_apollo", "label": "Apollo (11 modulos)", "zone": "v2", "layer": 3, "kind": "service", "desc": "Search, enrich, organizations, cache por hash de query, validacion de titulos, parsers y dominio.", "files": ["lib/apollo/"] },
+    { "id": "svc_etl", "label": "ETL de ingesta", "zone": "v2", "layer": 3, "kind": "service", "desc": "Parseo de CSV, normalizacion y materializacion por lotes idempotentes.", "files": ["app/actions/ingest.ts", "lib/normalize-utils.ts"] },
+    { "id": "svc_dedupe", "label": "Dedupe de empresas", "zone": "v2", "layer": 3, "kind": "service", "desc": "Merge reversible con snapshot: deteccion gratis en SQL, IA solo para ambiguos. Las filiales NO se unifican.", "files": ["app/actions/dedupe.ts", "lib/v3/dedupe-ai.ts"] },
+    { "id": "svc_export_v2", "label": "Exports v2", "zone": "v2", "layer": 3, "kind": "service", "desc": "Patron RPC + server action con streaming para volumenes grandes.", "files": ["lib/export-utils.ts", "lib/export-bookmarks.ts", "app/actions/company-export.ts"], "risk": "Las RPC detras tienen EXECUTE para anon (ver OPT-03)." },
+    { "id": "svc_brief", "label": "Briefs y fit v2", "zone": "v2", "layer": 3, "kind": "service", "desc": "Arma contexto, calcula fit score y prompea al LLM para el brief de cuenta.", "files": ["lib/brief/"] },
+    { "id": "svc_documents_v2", "label": "Documentos v2", "zone": "v2", "layer": 3, "kind": "service", "desc": "Extraccion de texto, analisis, perfil de valor y ranking de docs por bookmark.", "files": ["lib/documents/"] },
+    { "id": "svc_tech_radar", "label": "Tech radar v2", "zone": "v2", "layer": 3, "kind": "service", "desc": "Investigacion de implementaciones tecnologicas por empresa.", "files": ["lib/tech-radar.ts", "lib/tech-radar-constants.ts"] },
+    { "id": "svc_ai_v2", "label": "Capa IA v2", "zone": "v2", "layer": 3, "kind": "service", "desc": "Wrapper de generacion y estructuracion de salidas del LLM.", "files": ["lib/ai-service.ts", "lib/ai-structurer.ts"] },
+    { "id": "svc_normalize", "label": "Normalizacion de pais", "zone": "shared", "layer": 3, "kind": "service", "desc": "normalize_country + trigger trg_normalize_country. Escribe el NOMBRE del pais, no ISO.", "files": ["lib/normalize-utils.ts"], "risk": "companies.country_normalized guarda nombre ('Argentina'). Los exports de v2 filtran contra esa columna: escribir ISO ahi rompe v2 en silencio. El ISO de v3 va en hq_country_iso." },
+
+    { "id": "svc_v3_research", "label": "Pipeline de research", "zone": "v3", "layer": 3, "kind": "service", "desc": "Orquestador por etapas con checkpoint por stage, ejecutado en lotes para no exceder el limite de la funcion.", "files": ["lib/v3/services/research-pipeline.ts", "lib/v3/services/research-stage-run.ts"] },
+    { "id": "svc_v3_radar", "label": "Micro-agentes de radar", "zone": "v3", "layer": 3, "kind": "service", "desc": "Seleccion y ejecucion de agentes especializados por tecnologia/proceso.", "files": ["lib/v3/services/radar.ts", "lib/v3/services/radar-agents.ts", "lib/v3/services/agent-selection.ts"] },
+    { "id": "svc_v3_accounts", "label": "Cuentas y briefs v3", "zone": "v3", "layer": 3, "kind": "service", "desc": "Snapshot interno, panorama y brief final de cuenta.", "files": ["lib/v3/services/accounts.ts", "lib/v3/services/internal-account-snapshot.ts", "lib/v3/services/final-account-brief.ts", "lib/v3/services/account-brief-row.ts"] },
+    { "id": "svc_v3_signals", "label": "Senales v3", "zone": "shared", "layer": 3, "kind": "service", "desc": "Resumen de senales por compania, provider legacy sobre datos de v2 y nivel de evidencia.", "files": ["lib/v3/services/company-signal-summary.ts", "lib/v3/services/legacy-signal-provider.ts", "lib/v3/services/evidence-level.ts"], "risk": "get_company_signal_summary tiene fuga cross-tenant: las tablas de upload no tienen workspace_id." },
+    { "id": "svc_v3_contacts", "label": "Contactos v3", "zone": "shared", "layer": 3, "kind": "service", "desc": "Provider de contactos, cobertura y enrichment; reusa el cache de Apollo de v2.", "files": ["lib/v3/services/contacts.ts", "lib/v3/services/contact-provider.ts", "lib/v3/services/mcp-contact-enrichment.ts", "lib/v3/mcp-contact-coverage.ts"] },
+    { "id": "svc_v3_jobs", "label": "Vacantes v3", "zone": "shared", "layer": 3, "kind": "service", "desc": "Ingesta y lectura de vacantes via Apify. El actor busca por titulo, no por empresa.", "files": ["lib/v3/services/apify-job-ingest.ts", "lib/v3/services/job-posting-provider.ts", "lib/v3/services/jobs-interpreter.ts"], "risk": "Requiere guardrail de pertenencia obligatorio: el scraper devuelve vacantes de otras empresas." },
+    { "id": "svc_v3_capability", "label": "Busqueda inversa por capacidad", "zone": "shared", "layer": 3, "kind": "service", "desc": "Encuentra empresas por tecnologia/proceso reusando las RPC de v2, con circuito screening -> drilldown.", "files": ["lib/v3/services/capability-search.ts"], "notes": "Los keywords del diccionario parten familias de producto: cortar por keyword exacta pierde resultados." },
+    { "id": "svc_v3_icebreakers", "label": "Icebreakers", "zone": "v3", "layer": 3, "kind": "service", "desc": "Cruza los docs de valor del tenant con las senales de la cuenta.", "files": ["lib/v3/services/icebreakers.ts"] },
+    { "id": "svc_v3_scoring", "label": "Scoring y fit", "zone": "v3", "layer": 3, "kind": "service", "desc": "Fit preliminar, scoring definitivo, perfil de fit del workspace y recomendador de propuesta de valor.", "files": ["lib/v3/services/scoring.ts", "lib/v3/services/fit.ts", "lib/v3/services/preliminary-fit.ts", "lib/v3/services/workspace-fit-profile.ts", "lib/v3/services/value-proposition-recommender.ts"] },
+    { "id": "svc_v3_workspace", "label": "Workspace y planes", "zone": "v3", "layer": 3, "kind": "service", "desc": "Multitenancy: workspaces, invitacion por email, roles admin/member y limites por plan.", "files": ["lib/v3/workspace.ts", "lib/v3/invitations.ts", "lib/v3/plans.ts"] },
+    { "id": "svc_v3_mcp_tools", "label": "Tools MCP", "zone": "v3", "layer": 3, "kind": "service", "desc": "Implementacion de las tools de lectura, ciclo de vida de cuenta y circuito client-assisted.", "files": ["lib/v3/mcp-read-tools.ts", "lib/v3/mcp-account-lifecycle.ts", "lib/v3/mcp-client-ai.ts"] },
+    { "id": "svc_v3_mcp_auth", "label": "Auth MCP", "zone": "v3", "layer": 3, "kind": "service", "desc": "OAuth, API keys y resolucion de acceso/plan por request.", "files": ["lib/v3/mcp-auth.ts", "lib/v3/mcp-oauth.ts", "lib/v3/api-key-access.ts"] },
+    { "id": "svc_v3_usage", "label": "Telemetria y cuota", "zone": "v3", "layer": 3, "kind": "service", "desc": "Auditoria de tools, pools de cuota y costo de IA.", "files": ["lib/v3/usage.ts", "lib/v3/mcp-usage.ts"], "risk": "mcp_request_logs es auditoria Y contador de rate limit a la vez: mezclar ambos parte el tope." },
+    { "id": "svc_v3_docs", "label": "Documentos v3", "zone": "v3", "layer": 3, "kind": "service", "desc": "Ingesta y analisis de documentos del tenant, incluido el flujo por token del MCP.", "files": ["lib/v3/services/mcp-document-ingestion.ts", "lib/v3/services/mcp-document-analysis.ts"] },
+    { "id": "svc_v3_resolver", "label": "Resolver de companias", "zone": "shared", "layer": 3, "kind": "service", "desc": "Resuelve nombre/dominio/alias a un company_id de public.companies.", "files": ["lib/v3/services/company-resolver.ts", "lib/v3/services/company-aliases.ts"] },
+    { "id": "svc_v3_dictionary", "label": "Diccionario v3", "zone": "shared", "layer": 3, "kind": "service", "desc": "Lectura del diccionario de v2 y sugerencia de nuevos terminos.", "files": ["lib/v3/services/dictionary.ts"] },
+    { "id": "svc_v3_drilldown", "label": "Drilldown externo", "zone": "v3", "layer": 3, "kind": "service", "desc": "Profundiza en fuentes externas y guarda noticias como pool compartido por compania.", "files": ["lib/v3/services/external-drilldown.ts"] },
+    { "id": "svc_v3_chat_mem", "label": "Memoria de conversacion", "zone": "v3", "layer": 3, "kind": "service", "desc": "Contexto persistente del chat por workspace.", "files": ["lib/v3/services/conversation-memory.ts"] },
+    { "id": "svc_v3_ai", "label": "Capa IA v3", "zone": "v3", "layer": 3, "kind": "service", "desc": "Wrapper de LLM con registro de costo, y prompts versionados en base.", "files": ["lib/v3/ai.ts", "lib/v3/prompts.ts", "lib/v3/prompt-defaults.ts"] },
+    { "id": "svc_v3_email", "label": "Email y digest v3", "zone": "v3", "layer": 3, "kind": "service", "desc": "Invitaciones y digest de novedades del workspace.", "files": ["lib/v3/email.ts", "lib/v3/services/digest.ts"] },
+    { "id": "svc_v3_cache_reader", "label": "Cache reader", "zone": "shared", "layer": 3, "kind": "service", "desc": "Lee datos ya cacheados por v2 (Apollo, noticias, radar) sin volver a pagar el proveedor.", "files": ["lib/v3/cache-reader.ts"] },
+
+    { "id": "db_auth_users", "label": "auth.users", "zone": "shared", "layer": 4, "kind": "table", "desc": "Identidad unica de Supabase Auth. Raiz de FKs de v2 y de v3.", "tables": ["auth.users"] },
+    { "id": "db_profiles", "label": "public.profiles", "zone": "shared", "layer": 4, "kind": "table", "desc": "Perfil de usuario que consumen tanto v2 como v3.", "tables": ["public.profiles"] },
+    { "id": "db_companies", "label": "public.companies", "zone": "shared", "layer": 4, "kind": "table", "desc": "Nucleo del dato: ~488k empresas. v3 la referencia 33 veces y le agrego hq_country_iso.", "tables": ["public.companies"], "risk": "Tabla mas caliente del sistema y punto de contacto principal v2<->v3." },
+    { "id": "db_contacts", "label": "public.contacts", "zone": "shared", "layer": 4, "kind": "table", "desc": "Contactos ingestados por el ETL de v2, leidos por v3.", "tables": ["public.contacts", "public.user_company_contacts"], "notes": "Tiene ~1 GB de indices GIN: los UPDATE masivos son no-HOT y caros." },
+    { "id": "db_job_postings", "label": "public.job_postings", "zone": "shared", "layer": 4, "kind": "table", "desc": "Vacantes: insumo del diccionario en v2 y de la interpretacion en v3.", "tables": ["public.job_postings"] },
+    { "id": "db_company_news", "label": "public.company_news", "zone": "shared", "layer": 4, "kind": "table", "desc": "Pool de noticias por compania: sourced_by_workspace atribuye pero el dato es compartido.", "tables": ["public.company_news"], "risk": "La RLS lo ata a bookmarks personales de v2, asi que un miembro de workspace v3 no ve nada. UPDATE sin WITH CHECK." },
+    { "id": "db_signals", "label": "public.signals", "zone": "shared", "layer": 4, "kind": "table", "desc": "Senales derivadas del diccionario. Vive en public pero la consume la vista de cuenta de v3.", "tables": ["public.signals"] },
+    { "id": "db_radar", "label": "public.radar_findings / radar_research_runs", "zone": "shared", "layer": 4, "kind": "table", "desc": "Hallazgos del radar tecnologico. Escritos por v2, leidos y ampliados por v3.", "tables": ["public.radar_findings", "public.radar_research_runs", "public.radar_micro_agents"] },
+    { "id": "db_apollo_cache", "label": "public.apollo_contacts_cache", "zone": "shared", "layer": 4, "kind": "table", "desc": "Cache de Apollo por hash de query. v3 lo reusa para no re-pagar el proveedor.", "tables": ["public.apollo_contacts_cache"] },
+    { "id": "db_dictionary", "label": "Diccionario (6 tablas)", "zone": "shared", "layer": 4, "kind": "table", "desc": "Vendors, productos, procesos, jobs, matches y cache de patrones.", "tables": ["public.dictionary_vendors", "public.dictionary_products", "public.dictionary_processes", "public.dictionary_jobs", "public.dictionary_job_matches", "public.dictionary_patterns_cache"] },
+    { "id": "db_bookmarks", "label": "public.bookmarks", "zone": "v2", "layer": 4, "kind": "table", "desc": "Cuentas guardadas por usuario y sus resumenes generados.", "tables": ["public.bookmarks", "public.bookmark_summaries"] },
+    { "id": "db_import", "label": "public.import_batches / import_rows", "zone": "v2", "layer": 4, "kind": "table", "desc": "Cola del ETL. El estado 'uploading' evita la race condition historica del cron.", "tables": ["public.import_batches", "public.import_rows"] },
+    { "id": "db_user_docs", "label": "public.user_documents", "zone": "v2", "layer": 4, "kind": "table", "desc": "Documentos de valor cargados en v2.", "tables": ["public.user_documents", "public.document_tags"] },
+    { "id": "db_admin_prompts", "label": "public.admin_prompts", "zone": "v2", "layer": 4, "kind": "table", "desc": "Prompts editables del admin de v2.", "tables": ["public.admin_prompts"] },
+    { "id": "db_cron_exec", "label": "public.cron_executions", "zone": "v2", "layer": 4, "kind": "table", "desc": "Log de ejecuciones de cron: ~1,3M de filas.", "tables": ["public.cron_executions"], "risk": "Sin RLS y cleanup_old_import_data NO la purga: crece sin techo (ver OPT-05)." },
+    { "id": "db_workspaces", "label": "v3.workspaces / members / invitations", "zone": "v3", "layer": 4, "kind": "table", "desc": "Raiz del multitenancy y del scoping por workspace_id.", "tables": ["v3.workspaces", "v3.workspace_members", "v3.workspace_invitations"] },
+    { "id": "db_research_jobs", "label": "v3.research_jobs", "zone": "v3", "layer": 4, "kind": "table", "desc": "Estado por etapa del pipeline; lo vigila el watchdog.", "tables": ["v3.research_jobs"] },
+    { "id": "db_followed", "label": "v3.followed_accounts", "zone": "v3", "layer": 4, "kind": "table", "desc": "Cuentas seguidas por workspace; apunta a public.companies.", "tables": ["v3.followed_accounts"] },
+    { "id": "db_campaigns", "label": "v3.campaigns / campaign_accounts", "zone": "v3", "layer": 4, "kind": "table", "desc": "Campanas y su membresia de cuentas.", "tables": ["v3.campaigns", "v3.campaign_accounts"] },
+    { "id": "db_scorecards", "label": "v3.account_scorecards", "zone": "v3", "layer": 4, "kind": "table", "desc": "Resultado consolidado del research y el scoring.", "tables": ["v3.account_scorecards"] },
+    { "id": "db_account_contacts", "label": "v3.account_contacts", "zone": "v3", "layer": 4, "kind": "table", "desc": "Contactos por cuenta y workspace, con runs de enrichment.", "tables": ["v3.account_contacts", "v3.contact_enrichment_runs"] },
+    { "id": "db_icebreakers", "label": "v3.icebreakers", "zone": "v3", "layer": 4, "kind": "table", "desc": "Aperturas generadas por cuenta.", "tables": ["v3.icebreakers"] },
+    { "id": "db_chat", "label": "v3.chat_conversations", "zone": "v3", "layer": 4, "kind": "table", "desc": "Historial del chat por workspace.", "tables": ["v3.chat_conversations"] },
+    { "id": "db_ws_docs", "label": "v3.workspace_documents", "zone": "v3", "layer": 4, "kind": "table", "desc": "Docs del tenant que definen su propuesta de valor, con tags y drafts del MCP.", "tables": ["v3.workspace_documents", "v3.workspace_document_tags", "v3.mcp_document_drafts", "v3.mcp_document_upload_tokens"] },
+    { "id": "db_v3_prompts", "label": "v3.ai_prompts / versions", "zone": "v3", "layer": 4, "kind": "table", "desc": "Prompts versionados de v3.", "tables": ["v3.ai_prompts", "v3.ai_prompt_versions"] },
+    { "id": "db_mcp_logs", "label": "v3.mcp_request_logs", "zone": "v3", "layer": 4, "kind": "table", "desc": "Auditoria de tools Y contador de rate limit. Las filas de transporte con tool_name NULL son las que cuentan el 429.", "tables": ["v3.mcp_request_logs", "v3.mcp_usage_reservations"] },
+    { "id": "db_ai_usage", "label": "v3.ai_usage_log", "zone": "v3", "layer": 4, "kind": "table", "desc": "Costo de IA por feature, con CHECK sobre el campo feature.", "tables": ["v3.ai_usage_log"] }
+  ],
+
+  "edges": [
+    { "id": "e1", "from": "ui_v2_search", "to": "db_companies", "kind": "read", "label": "busqueda facetada" },
+    { "id": "e2", "from": "ui_v2_search", "to": "db_signals", "kind": "read", "label": "senales por empresa" },
+    { "id": "e3", "from": "ui_v2_bookmarks", "to": "db_bookmarks", "kind": "rw" },
+    { "id": "e4", "from": "ui_v2_bookmarks", "to": "api_bookmark_ops", "kind": "call" },
+    { "id": "e5", "from": "api_bookmark_ops", "to": "svc_brief", "kind": "call" },
+    { "id": "e6", "from": "svc_brief", "to": "ext_gemini", "kind": "call", "label": "genera brief" },
+    { "id": "e7", "from": "svc_brief", "to": "db_bookmarks", "kind": "write", "label": "bookmark_summaries" },
+    { "id": "e8", "from": "ui_v2_admin", "to": "api_ingest", "kind": "call", "label": "sube CSV" },
+    { "id": "e9", "from": "api_ingest", "to": "ext_blob", "kind": "write", "label": "CSV grande" },
+    { "id": "e10", "from": "api_ingest", "to": "db_import", "kind": "write", "label": "crea batch en 'uploading'" },
+    { "id": "e11", "from": "cron_process_queue", "to": "db_import", "kind": "rw", "label": "toma lote con lock" },
+    { "id": "e12", "from": "cron_process_queue", "to": "svc_etl", "kind": "call" },
+    { "id": "e13", "from": "svc_etl", "to": "db_companies", "kind": "write" },
+    { "id": "e14", "from": "svc_etl", "to": "db_contacts", "kind": "write" },
+    { "id": "e15", "from": "svc_etl", "to": "db_job_postings", "kind": "write" },
+    { "id": "e16", "from": "svc_etl", "to": "svc_normalize", "kind": "call" },
+    { "id": "e17", "from": "svc_normalize", "to": "db_companies", "kind": "write", "label": "trigger country_normalized" },
+    { "id": "e18", "from": "cron_process_dictionary", "to": "db_job_postings", "kind": "read" },
+    { "id": "e19", "from": "cron_process_dictionary", "to": "db_dictionary", "kind": "rw" },
+    { "id": "e20", "from": "cron_process_dictionary", "to": "db_signals", "kind": "write", "label": "emite senales" },
+    { "id": "e21", "from": "cron_monitor", "to": "db_import", "kind": "read", "label": "detecta atascos" },
+    { "id": "e22", "from": "cron_monitor", "to": "ext_resend", "kind": "call", "label": "alerta" },
+    { "id": "e23", "from": "cron_cleanup", "to": "db_import", "kind": "write", "label": "purga" },
+    { "id": "e24", "from": "cron_refresh_landing", "to": "db_companies", "kind": "read" },
+    { "id": "e25", "from": "api_landing_stats", "to": "ui_v2_landing", "kind": "read", "label": "metricas precalculadas" },
+    { "id": "e26", "from": "svc_apollo", "to": "ext_apollo", "kind": "call" },
+    { "id": "e27", "from": "svc_apollo", "to": "db_apollo_cache", "kind": "rw", "label": "cache por hash" },
+    { "id": "e28", "from": "svc_apollo", "to": "db_contacts", "kind": "write" },
+    { "id": "e29", "from": "cron_apollo_reverify", "to": "svc_apollo", "kind": "call" },
+    { "id": "e30", "from": "api_apollo_webhook", "to": "svc_apollo", "kind": "call" },
+    { "id": "e31", "from": "ui_v2_admin", "to": "svc_dedupe", "kind": "call" },
+    { "id": "e32", "from": "svc_dedupe", "to": "db_companies", "kind": "write", "label": "merge_companies (reversible)" },
+    { "id": "e33", "from": "svc_dedupe", "to": "ext_gemini", "kind": "call", "label": "solo ambiguos" },
+    { "id": "e34", "from": "ui_v2_admin", "to": "svc_export_v2", "kind": "call" },
+    { "id": "e35", "from": "svc_export_v2", "to": "db_companies", "kind": "read", "label": "RPC + streaming" },
+    { "id": "e36", "from": "svc_export_v2", "to": "db_contacts", "kind": "read" },
+    { "id": "e37", "from": "api_research_v2", "to": "svc_tech_radar", "kind": "call" },
+    { "id": "e38", "from": "svc_tech_radar", "to": "ext_perplexity", "kind": "call" },
+    { "id": "e39", "from": "svc_tech_radar", "to": "ext_secedgar", "kind": "call" },
+    { "id": "e40", "from": "svc_tech_radar", "to": "db_radar", "kind": "write" },
+    { "id": "e41", "from": "api_research_v2", "to": "db_company_news", "kind": "write", "label": "noticias" },
+    { "id": "e42", "from": "api_documents_v2", "to": "svc_documents_v2", "kind": "call" },
+    { "id": "e43", "from": "svc_documents_v2", "to": "db_user_docs", "kind": "rw" },
+    { "id": "e44", "from": "svc_documents_v2", "to": "ext_gemini", "kind": "call", "label": "perfil de valor" },
+    { "id": "e45", "from": "api_proxy_image", "to": "ext_blob", "kind": "call", "label": "fetch remoto" },
+    { "id": "e46", "from": "api_test_alert", "to": "ext_resend", "kind": "call", "label": "sin auth" },
+
+    { "id": "e47", "from": "ui_auth", "to": "db_auth_users", "kind": "rw", "label": "Supabase Auth" },
+    { "id": "e48", "from": "edge_proxy", "to": "db_auth_users", "kind": "read", "label": "refresca sesion" },
+    { "id": "e49", "from": "cron_sync_users", "to": "db_auth_users", "kind": "read" },
+    { "id": "e50", "from": "cron_sync_users", "to": "db_profiles", "kind": "write", "label": "sincroniza perfiles" },
+    { "id": "e51", "from": "db_auth_users", "to": "db_workspaces", "kind": "fk", "label": "FK cross-schema" },
+    { "id": "e52", "from": "db_auth_users", "to": "db_bookmarks", "kind": "fk" },
+
+    { "id": "e53", "from": "ui_v3_onboarding", "to": "svc_v3_workspace", "kind": "call" },
+    { "id": "e54", "from": "svc_v3_workspace", "to": "db_workspaces", "kind": "rw" },
+    { "id": "e55", "from": "svc_v3_workspace", "to": "svc_v3_email", "kind": "call", "label": "invitacion" },
+    { "id": "e56", "from": "svc_v3_email", "to": "ext_resend", "kind": "call" },
+    { "id": "e57", "from": "ui_v3_accounts", "to": "svc_v3_accounts", "kind": "call" },
+    { "id": "e58", "from": "svc_v3_accounts", "to": "db_followed", "kind": "rw" },
+    { "id": "e59", "from": "svc_v3_accounts", "to": "db_companies", "kind": "read", "label": "nucleo de v2" },
+    { "id": "e60", "from": "svc_v3_accounts", "to": "db_scorecards", "kind": "rw" },
+    { "id": "e61", "from": "ui_v3_accounts", "to": "svc_v3_research", "kind": "call", "label": "dispara research" },
+    { "id": "e62", "from": "svc_v3_research", "to": "db_research_jobs", "kind": "rw", "label": "checkpoint por stage" },
+    { "id": "e63", "from": "svc_v3_research", "to": "api_v3_research_batch", "kind": "call", "label": "avance por lotes" },
+    { "id": "e64", "from": "api_v3_research_batch", "to": "svc_v3_research", "kind": "call" },
+    { "id": "e65", "from": "svc_v3_research", "to": "svc_v3_resolver", "kind": "call" },
+    { "id": "e66", "from": "svc_v3_resolver", "to": "db_companies", "kind": "read", "label": "resuelve company_id" },
+    { "id": "e67", "from": "svc_v3_research", "to": "svc_v3_signals", "kind": "call" },
+    { "id": "e68", "from": "svc_v3_signals", "to": "db_signals", "kind": "read", "label": "senales de v2" },
+    { "id": "e69", "from": "svc_v3_signals", "to": "db_dictionary", "kind": "read" },
+    { "id": "e70", "from": "svc_v3_research", "to": "svc_v3_radar", "kind": "call" },
+    { "id": "e71", "from": "svc_v3_radar", "to": "db_radar", "kind": "rw", "label": "hallazgos" },
+    { "id": "e72", "from": "svc_v3_radar", "to": "ext_perplexity", "kind": "call" },
+    { "id": "e73", "from": "svc_v3_research", "to": "svc_v3_jobs", "kind": "call" },
+    { "id": "e74", "from": "svc_v3_jobs", "to": "ext_apify", "kind": "call", "label": "scraper de vacantes" },
+    { "id": "e75", "from": "svc_v3_jobs", "to": "db_job_postings", "kind": "rw" },
+    { "id": "e76", "from": "svc_v3_research", "to": "svc_v3_contacts", "kind": "call" },
+    { "id": "e77", "from": "svc_v3_contacts", "to": "svc_v3_cache_reader", "kind": "call" },
+    { "id": "e78", "from": "svc_v3_cache_reader", "to": "db_apollo_cache", "kind": "read", "label": "reusa cache de v2" },
+    { "id": "e79", "from": "svc_v3_contacts", "to": "db_account_contacts", "kind": "rw" },
+    { "id": "e80", "from": "svc_v3_contacts", "to": "ext_apollo", "kind": "call", "label": "solo si falta cache" },
+    { "id": "e81", "from": "svc_v3_research", "to": "svc_v3_scoring", "kind": "call" },
+    { "id": "e82", "from": "svc_v3_scoring", "to": "db_scorecards", "kind": "write" },
+    { "id": "e83", "from": "svc_v3_scoring", "to": "db_ws_docs", "kind": "read", "label": "perfil de valor del tenant" },
+    { "id": "e84", "from": "svc_v3_research", "to": "svc_v3_ai", "kind": "call" },
+    { "id": "e85", "from": "svc_v3_ai", "to": "ext_gemini", "kind": "call" },
+    { "id": "e86", "from": "svc_v3_ai", "to": "db_ai_usage", "kind": "write", "label": "costo por feature" },
+    { "id": "e87", "from": "svc_v3_ai", "to": "db_v3_prompts", "kind": "read", "label": "prompt versionado" },
+    { "id": "e88", "from": "cron_v3_watchdog", "to": "db_research_jobs", "kind": "rw", "label": "reencola colgados" },
+    { "id": "e89", "from": "cron_v3_refresh", "to": "db_followed", "kind": "read" },
+    { "id": "e90", "from": "cron_v3_refresh", "to": "svc_v3_research", "kind": "call", "label": "refresh escalonado" },
+    { "id": "e91", "from": "ext_mcp_client", "to": "api_mcp_oauth", "kind": "call", "label": "register/authorize/token" },
+    { "id": "e92", "from": "api_mcp_oauth", "to": "svc_v3_mcp_auth", "kind": "call" },
+    { "id": "e93", "from": "ui_v3_oauth", "to": "api_mcp_oauth", "kind": "call", "label": "consent humano" },
+    { "id": "e94", "from": "ext_mcp_client", "to": "api_mcp_server", "kind": "call", "label": "tool call" },
+    { "id": "e95", "from": "api_mcp_server", "to": "svc_v3_mcp_auth", "kind": "call", "label": "resuelve plan y tenant" },
+    { "id": "e96", "from": "api_mcp_server", "to": "svc_v3_usage", "kind": "call", "label": "cuota + auditoria" },
+    { "id": "e97", "from": "svc_v3_usage", "to": "db_mcp_logs", "kind": "write" },
+    { "id": "e98", "from": "api_mcp_server", "to": "svc_v3_mcp_tools", "kind": "call" },
+    { "id": "e99", "from": "svc_v3_mcp_tools", "to": "svc_v3_accounts", "kind": "call" },
+    { "id": "e100", "from": "svc_v3_mcp_tools", "to": "svc_v3_signals", "kind": "call" },
+    { "id": "e101", "from": "svc_v3_mcp_tools", "to": "svc_v3_capability", "kind": "call" },
+    { "id": "e102", "from": "svc_v3_capability", "to": "db_companies", "kind": "read", "label": "RPC de v2" },
+    { "id": "e103", "from": "svc_v3_capability", "to": "db_dictionary", "kind": "read" },
+    { "id": "e104", "from": "svc_v3_mcp_tools", "to": "svc_v3_drilldown", "kind": "call" },
+    { "id": "e105", "from": "svc_v3_drilldown", "to": "ext_perplexity", "kind": "call" },
+    { "id": "e106", "from": "svc_v3_drilldown", "to": "db_company_news", "kind": "write", "label": "pool por compania" },
+    { "id": "e107", "from": "svc_v3_mcp_tools", "to": "svc_v3_docs", "kind": "call" },
+    { "id": "e108", "from": "svc_v3_docs", "to": "db_ws_docs", "kind": "rw" },
+    { "id": "e109", "from": "api_mcp_doc_upload", "to": "svc_v3_docs", "kind": "call", "label": "token de un uso" },
+    { "id": "e110", "from": "ui_v3_docs", "to": "api_v3_documents", "kind": "call" },
+    { "id": "e111", "from": "api_v3_documents", "to": "ext_blob", "kind": "write" },
+    { "id": "e112", "from": "api_v3_documents", "to": "svc_v3_docs", "kind": "call" },
+    { "id": "e113", "from": "ui_v3_chat", "to": "api_v3_chat", "kind": "call" },
+    { "id": "e114", "from": "api_v3_chat", "to": "svc_v3_chat_mem", "kind": "call" },
+    { "id": "e115", "from": "svc_v3_chat_mem", "to": "db_chat", "kind": "rw" },
+    { "id": "e116", "from": "api_v3_chat", "to": "svc_v3_ai", "kind": "call" },
+    { "id": "e117", "from": "ui_v3_accounts", "to": "svc_v3_icebreakers", "kind": "call" },
+    { "id": "e118", "from": "svc_v3_icebreakers", "to": "db_ws_docs", "kind": "read" },
+    { "id": "e119", "from": "svc_v3_icebreakers", "to": "db_signals", "kind": "read" },
+    { "id": "e120", "from": "svc_v3_icebreakers", "to": "db_icebreakers", "kind": "write" },
+    { "id": "e121", "from": "ui_v3_campaigns", "to": "db_campaigns", "kind": "rw" },
+    { "id": "e122", "from": "ui_v3_settings", "to": "svc_v3_mcp_auth", "kind": "call", "label": "API keys" },
+    { "id": "e123", "from": "ui_v3_admin", "to": "db_workspaces", "kind": "rw", "label": "cross-tenant" },
+    { "id": "e124", "from": "ui_v3_admin", "to": "db_mcp_logs", "kind": "read" },
+    { "id": "e125", "from": "ui_v3_admin", "to": "db_ai_usage", "kind": "read" },
+    { "id": "e126", "from": "svc_v3_dictionary", "to": "db_dictionary", "kind": "rw" },
+    { "id": "e127", "from": "svc_v3_contacts", "to": "db_contacts", "kind": "read", "label": "contactos de v2" },
+    { "id": "e128", "from": "svc_v3_jobs", "to": "svc_v3_dictionary", "kind": "call" },
+    { "id": "e129", "from": "svc_supabase", "to": "db_auth_users", "kind": "read" },
+    { "id": "e130", "from": "svc_db_direct", "to": "db_companies", "kind": "rw", "label": "SQL > 8s" },
+    { "id": "e131", "from": "svc_v3_research", "to": "db_cron_exec", "kind": "write", "label": "log de corrida" },
+    { "id": "e132", "from": "cron_process_queue", "to": "db_cron_exec", "kind": "write" },
+    { "id": "e133", "from": "svc_v3_accounts", "to": "svc_v3_workspace", "kind": "call", "label": "scoping por workspace_id" },
+    { "id": "e134", "from": "ui_v2_bookmarks", "to": "api_research_v2", "kind": "call" },
+    { "id": "e135", "from": "svc_v3_mcp_tools", "to": "svc_v3_contacts", "kind": "call" }
+  ],
+
+  "flows": [
+    {
+      "id": "f_etl_csv",
+      "name": "Ingesta de CSV (contactos / vacantes)",
+      "version": "v2",
+      "trigger": "Admin sube un CSV",
+      "desc": "Camino critico de entrada de datos. El estado 'uploading' + lock distribuido resuelven la race condition historica en la que el cron tomaba un batch a medio subir.",
+      "steps": [
+        { "n": 1, "nodeId": "ui_v2_admin", "detail": "El admin sube el archivo desde /admin/ingest." },
+        { "n": 2, "nodeId": "api_ingest", "edgeId": "e8", "detail": "Segun tamano va directo o se stagea en Blob." },
+        { "n": 3, "nodeId": "ext_blob", "edgeId": "e9", "detail": "Staging del CSV grande." },
+        { "n": 4, "nodeId": "db_import", "edgeId": "e10", "detail": "Se crea import_batches en estado 'uploading' y se cargan import_rows." },
+        { "n": 5, "nodeId": "cron_process_queue", "edgeId": "e11", "detail": "El cron de cada minuto toma un lote con lock, solo si el batch ya no esta 'uploading'." },
+        { "n": 6, "nodeId": "svc_etl", "edgeId": "e12", "detail": "Parsea, normaliza y materializa por lotes idempotentes." },
+        { "n": 7, "nodeId": "svc_normalize", "edgeId": "e16", "detail": "Normaliza pais; el trigger deriva country_normalized (NOMBRE, no ISO)." },
+        { "n": 8, "nodeId": "db_companies", "edgeId": "e13", "detail": "Upsert de empresas." },
+        { "n": 9, "nodeId": "db_contacts", "edgeId": "e14", "detail": "Upsert de contactos." }
+      ]
+    },
+    {
+      "id": "f_dictionary",
+      "name": "Diccionario: vacantes a senales",
+      "version": "v2",
+      "trigger": "cron cada minuto",
+      "desc": "Convierte texto libre de vacantes en senales estructuradas de tecnologia/proceso. Es el motor que alimenta la busqueda de v2 Y la vista de cuenta de v3.",
+      "steps": [
+        { "n": 1, "nodeId": "cron_process_dictionary", "detail": "Toma vacantes pendientes de matchear." },
+        { "n": 2, "nodeId": "db_job_postings", "edgeId": "e18", "detail": "Lee el texto de las vacantes." },
+        { "n": 3, "nodeId": "db_dictionary", "edgeId": "e19", "detail": "Matchea contra vendors/productos/procesos y guarda dictionary_job_matches." },
+        { "n": 4, "nodeId": "db_signals", "edgeId": "e20", "detail": "Emite senales por empresa. Este es el insumo compartido con v3." }
+      ]
+    },
+    {
+      "id": "f_search_v2",
+      "name": "Busqueda de empresas",
+      "version": "v2",
+      "trigger": "Usuario en /search",
+      "desc": "Busqueda facetada sobre el nucleo de 488k empresas cruzado con senales.",
+      "steps": [
+        { "n": 1, "nodeId": "ui_v2_search", "detail": "Filtros por industria, pais y capacidad." },
+        { "n": 2, "nodeId": "db_companies", "edgeId": "e1", "detail": "Los filtros de pais pegan contra country_normalized." },
+        { "n": 3, "nodeId": "db_signals", "edgeId": "e2", "detail": "Enriquece cada resultado con sus senales." }
+      ]
+    },
+    {
+      "id": "f_bookmark_brief",
+      "name": "Brief de cuenta guardada",
+      "version": "v2",
+      "trigger": "Usuario pide brief en /bookmarks/[id]",
+      "desc": "Genera el brief con LLM a partir del contexto de la empresa y los docs de valor del usuario.",
+      "steps": [
+        { "n": 1, "nodeId": "ui_v2_bookmarks", "detail": "Accion en la vista de inteligencia." },
+        { "n": 2, "nodeId": "api_bookmark_ops", "edgeId": "e4", "detail": "Ruta generate-brief." },
+        { "n": 3, "nodeId": "svc_brief", "edgeId": "e5", "detail": "Arma contexto y calcula fit score." },
+        { "n": 4, "nodeId": "ext_gemini", "edgeId": "e6", "detail": "Genera el texto del brief." },
+        { "n": 5, "nodeId": "db_bookmarks", "edgeId": "e7", "detail": "Persiste en bookmark_summaries." }
+      ]
+    },
+    {
+      "id": "f_research_v2",
+      "name": "Research de implementaciones y noticias",
+      "version": "v2",
+      "trigger": "Usuario abre el drilldown de una cuenta",
+      "desc": "Investiga evidencia externa de que la empresa usa una tecnologia.",
+      "steps": [
+        { "n": 1, "nodeId": "ui_v2_bookmarks", "detail": "Tabs de radar / noticias." },
+        { "n": 2, "nodeId": "api_research_v2", "edgeId": "e134", "detail": "Rutas implementations / news / public-docs." },
+        { "n": 3, "nodeId": "svc_tech_radar", "edgeId": "e37", "detail": "Orquesta la investigacion por tecnologia." },
+        { "n": 4, "nodeId": "ext_perplexity", "edgeId": "e38", "detail": "Busqueda con citas." },
+        { "n": 5, "nodeId": "ext_secedgar", "edgeId": "e39", "detail": "Filings como evidencia dura." },
+        { "n": 6, "nodeId": "db_radar", "edgeId": "e40", "detail": "Guarda radar_findings." },
+        { "n": 7, "nodeId": "db_company_news", "edgeId": "e41", "detail": "Guarda noticias como pool por compania." }
+      ]
+    },
+    {
+      "id": "f_apollo",
+      "name": "Enriquecimiento de contactos con Apollo",
+      "version": "v2",
+      "trigger": "Busqueda de prospects o cron de reverificacion",
+      "desc": "Trae contactos de Apollo con cache agresivo por hash de query para no re-pagar el proveedor.",
+      "steps": [
+        { "n": 1, "nodeId": "svc_apollo", "detail": "Calcula el hash de la query." },
+        { "n": 2, "nodeId": "db_apollo_cache", "edgeId": "e27", "detail": "Si hay hit, corta aca." },
+        { "n": 3, "nodeId": "ext_apollo", "edgeId": "e26", "detail": "Solo ante miss: llamada paga." },
+        { "n": 4, "nodeId": "db_contacts", "edgeId": "e28", "detail": "Materializa contactos validados por catalogo de titulos." }
+      ]
+    },
+    {
+      "id": "f_dedupe",
+      "name": "Deduplicacion de empresas",
+      "version": "v2",
+      "trigger": "Admin en /admin/companies/duplicates",
+      "desc": "Merge reversible con snapshot. La deteccion es gratis en SQL y la IA se usa solo para los casos ambiguos. Las filiales NO se unifican.",
+      "steps": [
+        { "n": 1, "nodeId": "ui_v2_admin", "detail": "Revisa candidatos detectados en SQL." },
+        { "n": 2, "nodeId": "svc_dedupe", "edgeId": "e31", "detail": "Corre en dry_run primero: eso revelo datos que las FK CASCADE borraban en silencio." },
+        { "n": 3, "nodeId": "ext_gemini", "edgeId": "e33", "detail": "Desempata solo los ambiguos." },
+        { "n": 4, "nodeId": "db_companies", "edgeId": "e32", "detail": "merge_companies con snapshot para poder revertir." }
+      ]
+    },
+    {
+      "id": "f_export",
+      "name": "Exports de admin",
+      "version": "v2",
+      "trigger": "Admin en /admin/export/*",
+      "desc": "Patron RPC + server action con streaming. Es el flujo con el hallazgo de seguridad mas grave del repo.",
+      "steps": [
+        { "n": 1, "nodeId": "ui_v2_admin", "detail": "Elige filtros de companies / contacts / job-postings." },
+        { "n": 2, "nodeId": "svc_export_v2", "edgeId": "e34", "detail": "Server action sin verificacion de rol." },
+        { "n": 3, "nodeId": "db_companies", "edgeId": "e35", "detail": "RPC SECURITY DEFINER con streaming. 9 de estas RPC tienen EXECUTE para anon." },
+        { "n": 4, "nodeId": "db_contacts", "edgeId": "e36", "detail": "Filtra pais contra country_normalized." }
+      ]
+    },
+    {
+      "id": "f_monitor",
+      "name": "Monitoreo y alertas del ETL",
+      "version": "v2",
+      "trigger": "cron cada 15 minutos",
+      "desc": "Watchdog que detecta batches atascados y avisa por mail.",
+      "steps": [
+        { "n": 1, "nodeId": "cron_monitor", "detail": "Evalua salud de la cola." },
+        { "n": 2, "nodeId": "db_import", "edgeId": "e21", "detail": "Busca batches sin progreso." },
+        { "n": 3, "nodeId": "ext_resend", "edgeId": "e22", "detail": "Envia la alerta a ALERT_EMAIL." }
+      ]
+    },
+    {
+      "id": "f_cleanup",
+      "name": "Limpieza semanal",
+      "version": "v2",
+      "trigger": "cron domingo 03:00",
+      "desc": "Purga datos viejos de importacion. No cubre cron_executions, que ya acumula ~1,3M de filas.",
+      "steps": [
+        { "n": 1, "nodeId": "cron_cleanup", "detail": "Chequea CRON_SECRET pero solo loguea: no corta la ejecucion." },
+        { "n": 2, "nodeId": "db_import", "edgeId": "e23", "detail": "cleanup_old_import_data con retencion de 30 dias." },
+        { "n": 3, "nodeId": "db_cron_exec", "detail": "NO se purga aca: crece sin techo." }
+      ]
+    },
+    {
+      "id": "f_landing",
+      "name": "Metricas de la landing",
+      "version": "v2",
+      "trigger": "cron lunes 05:00 + visita publica",
+      "desc": "Precalculo semanal para que la home publica no consulte companies en cada visita.",
+      "steps": [
+        { "n": 1, "nodeId": "cron_refresh_landing", "detail": "Recalcula agregados." },
+        { "n": 2, "nodeId": "db_companies", "edgeId": "e24", "detail": "Conteos sobre 488k filas." },
+        { "n": 3, "nodeId": "api_landing_stats", "detail": "Sirve el resultado ya materializado." },
+        { "n": 4, "nodeId": "ui_v2_landing", "edgeId": "e25", "detail": "Render publico." }
+      ]
+    },
+    {
+      "id": "f_docs_v2",
+      "name": "Documentos de valor (v2)",
+      "version": "v2",
+      "trigger": "Usuario sube un documento",
+      "desc": "Extrae el texto y deriva el perfil de valor que despues pondera los briefs.",
+      "steps": [
+        { "n": 1, "nodeId": "api_documents_v2", "detail": "Rutas process / generate-profile." },
+        { "n": 2, "nodeId": "svc_documents_v2", "edgeId": "e42", "detail": "Extrae texto y analiza." },
+        { "n": 3, "nodeId": "ext_gemini", "edgeId": "e44", "detail": "Genera el perfil de valor." },
+        { "n": 4, "nodeId": "db_user_docs", "edgeId": "e43", "detail": "Persiste doc y tags." }
+      ]
+    },
+    {
+      "id": "f_auth_shared",
+      "name": "Identidad compartida v2 + v3",
+      "version": "shared",
+      "trigger": "Login / signup / cron 02:00",
+      "desc": "ZONA DE CONTACTO: la misma identidad de Supabase Auth habilita v2 y v3. El middleware solo refresca la sesion, no autoriza nada.",
+      "steps": [
+        { "n": 1, "nodeId": "ui_auth", "detail": "Login o alta por invitacion." },
+        { "n": 2, "nodeId": "db_auth_users", "edgeId": "e47", "detail": "Unica fuente de identidad." },
+        { "n": 3, "nodeId": "edge_proxy", "edgeId": "e48", "detail": "Refresca la cookie en cada request. NO redirige por falta de sesion ni valida rol." },
+        { "n": 4, "nodeId": "cron_sync_users", "edgeId": "e49", "detail": "Sincroniza a diario." },
+        { "n": 5, "nodeId": "db_profiles", "edgeId": "e50", "detail": "profiles lo leen v2 y v3." },
+        { "n": 6, "nodeId": "db_workspaces", "edgeId": "e51", "detail": "FK cross-schema de v3.workspaces a auth.users." }
+      ]
+    },
+    {
+      "id": "f_onboarding_v3",
+      "name": "Onboarding e invitacion multitenant",
+      "version": "v3",
+      "trigger": "Alta de workspace o invitacion por email",
+      "desc": "Crea el tenant y su primer miembro. Roles admin/member; el super-admin ve todos los workspaces.",
+      "steps": [
+        { "n": 1, "nodeId": "ui_v3_onboarding", "detail": "Alta de workspace y perfil de valor inicial." },
+        { "n": 2, "nodeId": "svc_v3_workspace", "edgeId": "e53", "detail": "Crea workspace y asigna rol." },
+        { "n": 3, "nodeId": "db_workspaces", "edgeId": "e54", "detail": "workspaces + workspace_members + invitations." },
+        { "n": 4, "nodeId": "svc_v3_email", "edgeId": "e55", "detail": "Dispara la invitacion." },
+        { "n": 5, "nodeId": "ext_resend", "edgeId": "e56", "detail": "Email con el token de invitacion." }
+      ]
+    },
+    {
+      "id": "f_research_v3",
+      "name": "Pipeline de research de cuenta",
+      "version": "v3",
+      "trigger": "Usuario sigue una cuenta o cron de refresh",
+      "desc": "El flujo mas complejo del sistema: multi-etapa, con checkpoint por stage y avance por lotes para no exceder el limite de ejecucion. Consume masivamente datos de v2.",
+      "steps": [
+        { "n": 1, "nodeId": "ui_v3_accounts", "detail": "El usuario sigue la cuenta." },
+        { "n": 2, "nodeId": "svc_v3_resolver", "edgeId": "e65", "detail": "Resuelve nombre/dominio a un company_id de public.companies." },
+        { "n": 3, "nodeId": "db_companies", "edgeId": "e66", "detail": "CONTACTO con v2: el nucleo de empresas." },
+        { "n": 4, "nodeId": "db_research_jobs", "edgeId": "e62", "detail": "Crea el job con checkpoint por etapa." },
+        { "n": 5, "nodeId": "api_v3_research_batch", "edgeId": "e63", "detail": "Cada lote avanza unas pocas etapas y devuelve el control." },
+        { "n": 6, "nodeId": "svc_v3_signals", "edgeId": "e67", "detail": "Lee senales ya calculadas por el diccionario de v2." },
+        { "n": 7, "nodeId": "svc_v3_radar", "edgeId": "e70", "detail": "Micro-agentes por tecnologia/proceso." },
+        { "n": 8, "nodeId": "svc_v3_jobs", "edgeId": "e73", "detail": "Vacantes via Apify, con guardrail de pertenencia." },
+        { "n": 9, "nodeId": "svc_v3_contacts", "edgeId": "e76", "detail": "Contactos reusando el cache de Apollo de v2." },
+        { "n": 10, "nodeId": "svc_v3_scoring", "edgeId": "e81", "detail": "Fit contra el perfil de valor del tenant." },
+        { "n": 11, "nodeId": "db_scorecards", "edgeId": "e82", "detail": "Persiste el scorecard consolidado." }
+      ]
+    },
+    {
+      "id": "f_watchdog_v3",
+      "name": "Watchdog de research",
+      "version": "v3",
+      "trigger": "cron cada 5 minutos",
+      "desc": "Sin este watchdog, un job que muere entre lotes queda colgado para siempre.",
+      "steps": [
+        { "n": 1, "nodeId": "cron_v3_watchdog", "detail": "Busca jobs sin progreso reciente." },
+        { "n": 2, "nodeId": "db_research_jobs", "edgeId": "e88", "detail": "Reencola o marca como fallido." }
+      ]
+    },
+    {
+      "id": "f_refresh_v3",
+      "name": "Refresh mensual de cuentas",
+      "version": "v3",
+      "trigger": "cron 06:00, 07:00 y 08:00",
+      "desc": "Escalonado en tres horas para repartir la carga de research sobre las cuentas seguidas.",
+      "steps": [
+        { "n": 1, "nodeId": "cron_v3_refresh", "detail": "Selecciona cuentas con research vencido." },
+        { "n": 2, "nodeId": "db_followed", "edgeId": "e89", "detail": "Lee followed_accounts por workspace." },
+        { "n": 3, "nodeId": "svc_v3_research", "edgeId": "e90", "detail": "Reejecuta el pipeline." }
+      ]
+    },
+    {
+      "id": "f_mcp_oauth",
+      "name": "Handshake OAuth del MCP",
+      "version": "v3",
+      "trigger": "Un cliente MCP se conecta por primera vez",
+      "desc": "Registro dinamico de cliente mas consentimiento humano en el navegador.",
+      "steps": [
+        { "n": 1, "nodeId": "ext_mcp_client", "detail": "Dynamic client registration." },
+        { "n": 2, "nodeId": "api_mcp_oauth", "edgeId": "e91", "detail": "register -> authorize -> token." },
+        { "n": 3, "nodeId": "ui_v3_oauth", "edgeId": "e93", "detail": "El humano aprueba el acceso al workspace." },
+        { "n": 4, "nodeId": "svc_v3_mcp_auth", "edgeId": "e92", "detail": "Emite el token ligado al workspace." }
+      ]
+    },
+    {
+      "id": "f_mcp_tool",
+      "name": "Llamada a tool del MCP",
+      "version": "v3",
+      "trigger": "Un agente IA invoca una de las 36 tools",
+      "desc": "Todo pasa por un proxy sobre server.tool que instrumenta auditoria y cuota sin perder tipado. mcp_request_logs es a la vez auditoria y contador de rate limit.",
+      "steps": [
+        { "n": 1, "nodeId": "ext_mcp_client", "detail": "Tool call por el transporte." },
+        { "n": 2, "nodeId": "api_mcp_server", "edgeId": "e94", "detail": "Punto de entrada unico." },
+        { "n": 3, "nodeId": "svc_v3_mcp_auth", "edgeId": "e95", "detail": "Resuelve tenant y plan; estampa effectiveMode." },
+        { "n": 4, "nodeId": "svc_v3_usage", "edgeId": "e96", "detail": "Reserva cuota. Las filas de transporte con tool_name NULL son las que cuentan el 429." },
+        { "n": 5, "nodeId": "db_mcp_logs", "edgeId": "e97", "detail": "Auditoria + rate limit en la misma tabla." },
+        { "n": 6, "nodeId": "svc_v3_mcp_tools", "edgeId": "e98", "detail": "Ejecuta la tool concreta." },
+        { "n": 7, "nodeId": "svc_v3_accounts", "edgeId": "e99", "detail": "La mayoria de tools terminan leyendo cuenta y senales." }
+      ]
+    },
+    {
+      "id": "f_capability_search",
+      "name": "Busqueda inversa por capacidad",
+      "version": "shared",
+      "trigger": "Un agente pregunta que empresas usan una tecnologia",
+      "desc": "El MCP afirmaba que ASCI no permitia busquedas inversas y era falso: las RPC de v2 ya tenian EXECUTE para service_role, solo faltaba la tool.",
+      "steps": [
+        { "n": 1, "nodeId": "ext_mcp_client", "detail": "Consulta por capacidad." },
+        { "n": 2, "nodeId": "svc_v3_capability", "edgeId": "e101", "detail": "Circuito screening -> drilldown." },
+        { "n": 3, "nodeId": "db_dictionary", "edgeId": "e103", "detail": "Cuidado: los keywords PARTEN familias de producto, cortar por keyword exacta pierde resultados." },
+        { "n": 4, "nodeId": "db_companies", "edgeId": "e102", "detail": "RPC de v2. Techo por I/O en frio: 365 ms caliente vs 6,6 s frio." }
+      ]
+    },
+    {
+      "id": "f_icebreakers",
+      "name": "Generacion de icebreakers",
+      "version": "v3",
+      "trigger": "Usuario pide aperturas para una cuenta",
+      "desc": "Cruza los documentos de valor del tenant con las senales de la cuenta: es donde el multitenancy aporta el diferencial.",
+      "steps": [
+        { "n": 1, "nodeId": "ui_v3_accounts", "detail": "Accion en la vista de cuenta." },
+        { "n": 2, "nodeId": "svc_v3_icebreakers", "edgeId": "e117", "detail": "Prioriza segun el perfil del tenant." },
+        { "n": 3, "nodeId": "db_ws_docs", "edgeId": "e118", "detail": "Docs propios del workspace." },
+        { "n": 4, "nodeId": "db_signals", "edgeId": "e119", "detail": "CONTACTO con v2: senales del diccionario." },
+        { "n": 5, "nodeId": "db_icebreakers", "edgeId": "e120", "detail": "Persiste las aperturas." }
+      ]
+    },
+    {
+      "id": "f_chat_v3",
+      "name": "Chat con memoria",
+      "version": "v3",
+      "trigger": "Usuario escribe en /v3/chat",
+      "desc": "Chat con contexto persistente del workspace.",
+      "steps": [
+        { "n": 1, "nodeId": "ui_v3_chat", "detail": "Mensaje del usuario." },
+        { "n": 2, "nodeId": "api_v3_chat", "edgeId": "e113", "detail": "Ruta de streaming." },
+        { "n": 3, "nodeId": "svc_v3_chat_mem", "edgeId": "e114", "detail": "Recupera memoria de conversacion." },
+        { "n": 4, "nodeId": "svc_v3_ai", "edgeId": "e116", "detail": "Prompt versionado desde base." },
+        { "n": 5, "nodeId": "db_ai_usage", "edgeId": "e86", "detail": "Registra costo por feature (con CHECK)." },
+        { "n": 6, "nodeId": "db_chat", "edgeId": "e115", "detail": "Persiste el turno." }
+      ]
+    },
+    {
+      "id": "f_docs_v3",
+      "name": "Documentos de workspace",
+      "version": "v3",
+      "trigger": "Usuario sube doc, o un agente pide subirlo por token",
+      "desc": "Los docs del tenant son el insumo que personaliza scoring e icebreakers. El flujo por token permite que un agente sin filesystem pida el upload al humano.",
+      "steps": [
+        { "n": 1, "nodeId": "ui_v3_docs", "detail": "Carga desde la UI." },
+        { "n": 2, "nodeId": "api_v3_documents", "edgeId": "e110", "detail": "blob-upload y process." },
+        { "n": 3, "nodeId": "ext_blob", "edgeId": "e111", "detail": "Almacena el binario." },
+        { "n": 4, "nodeId": "api_mcp_doc_upload", "edgeId": "e109", "detail": "Alternativa: link con token de un uso pedido por el agente." },
+        { "n": 5, "nodeId": "svc_v3_docs", "edgeId": "e112", "detail": "Extrae, analiza y taggea." },
+        { "n": 6, "nodeId": "db_ws_docs", "edgeId": "e108", "detail": "workspace_documents + tags + drafts." }
+      ]
+    },
+    {
+      "id": "f_contacts_v3",
+      "name": "Enrichment de contactos v3",
+      "version": "shared",
+      "trigger": "Tool del MCP o etapa del pipeline",
+      "desc": "ZONA DE CONTACTO: v3 lee el cache de Apollo y los contactos de v2 antes de pagar por datos nuevos.",
+      "steps": [
+        { "n": 1, "nodeId": "svc_v3_contacts", "detail": "Evalua cobertura actual de la cuenta." },
+        { "n": 2, "nodeId": "svc_v3_cache_reader", "edgeId": "e77", "detail": "Primero busca en lo que v2 ya pago." },
+        { "n": 3, "nodeId": "db_apollo_cache", "edgeId": "e78", "detail": "Cache por hash de query." },
+        { "n": 4, "nodeId": "db_contacts", "edgeId": "e127", "detail": "Contactos ya ingestados por el ETL." },
+        { "n": 5, "nodeId": "ext_apollo", "edgeId": "e80", "detail": "Solo si sigue faltando cobertura." },
+        { "n": 6, "nodeId": "db_account_contacts", "edgeId": "e79", "detail": "Escribe con scoping por workspace." }
+      ]
+    },
+    {
+      "id": "f_news_pool",
+      "name": "Pool de noticias por compania",
+      "version": "shared",
+      "trigger": "Drilldown externo de v3 o research de v2",
+      "desc": "ZONA DE CONTACTO con bug conocido: el esquema y el MCP implementan el pool publico por compania, pero la RLS de la web lo ata a bookmarks personales de v2.",
+      "steps": [
+        { "n": 1, "nodeId": "svc_v3_drilldown", "detail": "Profundiza en fuentes externas." },
+        { "n": 2, "nodeId": "ext_perplexity", "edgeId": "e105", "detail": "Busqueda con citas." },
+        { "n": 3, "nodeId": "db_company_news", "edgeId": "e106", "detail": "sourced_by_workspace atribuye, pero el dato es compartido. La RLS de la web lo esconde a los miembros de workspace." }
+      ]
+    },
+    {
+      "id": "f_jobs_apify",
+      "name": "Scraping de vacantes con Apify",
+      "version": "shared",
+      "trigger": "Etapa del pipeline de research",
+      "desc": "El actor busca por TITULO de puesto, no por empresa: sin guardrail de pertenencia se contaminan las vacantes de la cuenta.",
+      "steps": [
+        { "n": 1, "nodeId": "svc_v3_jobs", "detail": "Arma la query con enum cerrado de publishedAt." },
+        { "n": 2, "nodeId": "ext_apify", "edgeId": "e74", "detail": "bebity/linkedin-jobs-scraper." },
+        { "n": 3, "nodeId": "db_job_postings", "edgeId": "e75", "detail": "CONTACTO con v2: escribe en la tabla que despues matchea el diccionario." },
+        { "n": 4, "nodeId": "svc_v3_dictionary", "edgeId": "e128", "detail": "Interpreta la vacante contra el diccionario." }
+      ]
+    },
+    {
+      "id": "f_superadmin_v3",
+      "name": "Panel super-admin cross-tenant",
+      "version": "v3",
+      "trigger": "Super-admin en /v3/admin",
+      "desc": "Vista transversal a todos los workspaces, con la telemetria de MCP y costos de IA.",
+      "steps": [
+        { "n": 1, "nodeId": "ui_v3_admin", "detail": "Panel cross-tenant SIN guard server-side." },
+        { "n": 2, "nodeId": "db_workspaces", "edgeId": "e123", "detail": "Lista todos los tenants." },
+        { "n": 3, "nodeId": "db_mcp_logs", "edgeId": "e124", "detail": "Auditoria de tools." },
+        { "n": 4, "nodeId": "db_ai_usage", "edgeId": "e125", "detail": "Costo de IA por feature." }
+      ]
+    }
+  ],
+
+  "contactPoints": [
+    { "id": "cp_auth", "title": "Identidad unica (auth.users + profiles)", "severity": "alta", "nodes": ["db_auth_users", "db_profiles", "cron_sync_users", "edge_proxy"], "desc": "El mismo usuario de Supabase Auth entra a v2 y a v3. v3.workspaces tiene FK cross-schema a auth.users.", "impact": "Un cambio en el modelo de identidad o en sync-users afecta las dos versiones a la vez." },
+    { "id": "cp_companies", "title": "public.companies como nucleo unico", "severity": "critica", "nodes": ["db_companies", "svc_v3_resolver", "svc_v3_accounts", "svc_db_direct"], "desc": "488k empresas. v3 la referencia 33 veces y le agrego la columna hq_country_iso.", "impact": "Es el punto de contacto de mayor riesgo: cualquier migracion o UPDATE masivo impacta la produccion de v2." },
+    { "id": "cp_country", "title": "country_normalized guarda NOMBRE, no ISO", "severity": "critica", "nodes": ["svc_normalize", "db_companies", "svc_export_v2"], "desc": "El trigger trg_normalize_country deriva el nombre del pais ('Argentina'). Los exports de admin de v2 filtran contra esa columna. El ISO de HQ de v3 vive en hq_country_iso.", "impact": "Escribir ISO en country_normalized rompe los exports de v2 en silencio, sin error." },
+    { "id": "cp_signals", "title": "Senales y diccionario en public", "severity": "alta", "nodes": ["db_signals", "db_dictionary", "svc_v3_signals", "svc_v3_capability"], "desc": "El diccionario de v2 produce las senales que consumen la vista de cuenta y la busqueda inversa de v3.", "impact": "Cambiar la taxonomia del diccionario cambia el output de v3 sin tocar codigo de v3." },
+    { "id": "cp_apollo", "title": "Cache de Apollo reusado", "severity": "media", "nodes": ["db_apollo_cache", "svc_v3_cache_reader", "svc_apollo"], "desc": "v3 lee el cache que v2 ya pago antes de llamar al proveedor.", "impact": "Cambiar el esquema de hash de query invalida el cache para las dos versiones." },
+    { "id": "cp_news", "title": "company_news: pool compartido con RLS de v2", "severity": "alta", "nodes": ["db_company_news", "svc_v3_drilldown"], "desc": "El esquema y el MCP tratan las noticias como pool publico por compania, pero la RLS las ata a bookmarks personales de v2.", "impact": "Un miembro de workspace v3 no ve noticias en la web. Ademas el UPDATE no tiene WITH CHECK." },
+    { "id": "cp_jobs", "title": "job_postings escritas por ambas", "severity": "media", "nodes": ["db_job_postings", "svc_v3_jobs", "cron_process_dictionary"], "desc": "El ETL de v2 y el scraper de Apify de v3 escriben en la misma tabla, que despues matchea el diccionario.", "impact": "Vacantes mal atribuidas por v3 generan senales falsas visibles en v2." },
+    { "id": "cp_radar", "title": "radar_findings compartido", "severity": "media", "nodes": ["db_radar", "svc_tech_radar", "svc_v3_radar"], "desc": "El radar de v2 y los micro-agentes de v3 escriben hallazgos en las mismas tablas de public.", "impact": "Sin distincion de origen, es dificil auditar que version genero cada hallazgo." },
+    { "id": "cp_tenant_leak", "title": "Fuga cross-tenant en senales", "severity": "critica", "nodes": ["svc_v3_signals", "db_signals"], "desc": "get_company_signal_summary deja que un tenant nuevo lea proveedores que subio otro, porque las tablas de upload no tienen workspace_id.", "impact": "Rompe el aislamiento multitenant, que es la promesa central de v3." }
+  ],
+
+  "optimizations": [
+    {
+      "id": "OPT-01",
+      "title": "Autorizacion delegada pagina por pagina: 19 paginas admin sin guard server-side",
+      "severity": "critica",
+      "area": "seguridad",
+      "evidence": ["proxy.ts", "lib/supabase/middleware.ts", "app/admin/", "app/v3/admin/"],
+      "finding": "El middleware solo refresca la cookie de sesion: no redirige por falta de sesion ni valida rol. Un barrido sobre las paginas de app/admin y app/v3/admin no encuentra en ellas ni getUser, ni requireAdmin, ni redirect, ni chequeo de rol.",
+      "why": "La autorizacion queda delegada a cada pagina y cada action por separado, asi que el modo de fallo por defecto es 'abierto': una pagina nueva es publica hasta que alguien recuerde protegerla. Incluye el panel super-admin cross-tenant de v3.",
+      "fix": "Mover el gate a un unico punto: chequeo de sesion y rol en el middleware por matcher de ruta, mas un helper requireAdmin() invocado en el layout de admin. Que el default sea denegar."
+    },
+    {
+      "id": "OPT-02",
+      "title": "El cron de cleanup detecta el request no autorizado y sigue igual",
+      "severity": "critica",
+      "area": "seguridad",
+      "evidence": ["app/api/cron/cleanup/route.ts:8-10"],
+      "finding": "El if compara el header contra CRON_SECRET y ante fallo solo ejecuta console.warn('[Cleanup Cron] Unauthorized attempt'). No hay return: la ejecucion continua y llama a cleanup_old_import_data con service_role.",
+      "why": "Cualquiera que conozca la URL puede disparar una purga de datos en produccion. El log da una falsa sensacion de que el endpoint esta protegido.",
+      "fix": "Agregar el return con 401 dentro del if. Auditar los otros 8 crons con el mismo patron y extraer un helper assertCron(request) compartido."
+    },
+    {
+      "id": "OPT-03",
+      "title": "9 RPC de export SECURITY DEFINER con EXECUTE para anon",
+      "severity": "critica",
+      "area": "seguridad",
+      "evidence": ["pg_proc.proacl de export_companies, export_companies_countries, export_companies_industries, export_companies_with_signals, export_contacts, get_available_countries_for_export, get_bookmark_export_data, get_companies_for_export, get_export_stats"],
+      "finding": "El ACL de estas funciones incluye 'anon=X/postgres'. La mayoria son SECURITY DEFINER, es decir corren con los privilegios del owner y por lo tanto ignoran RLS. Las funciones de job-postings y merge_companies, en cambio, si estan restringidas: su ACL no tiene anon.",
+      "why": "En Postgres las funciones nuevas reciben EXECUTE de PUBLIC por defecto, y en Supabase el REVOKE a PUBLIC no le quita el privilegio a anon. El resultado es que la base entera de empresas y contactos es exportable con la anon key, sin sesion. Que las de job-postings esten bien demuestra que el hardening se hizo parcial.",
+      "fix": "REVOKE EXECUTE ... FROM anon, PUBLIC de forma explicita en cada una de las 9, y agregar un test de regresion que falle si alguna RPC de public vuelve a tener anon en el ACL."
+    },
+    {
+      "id": "OPT-04",
+      "title": "proxy-image hace fetch de una URL controlada por el cliente (SSRF)",
+      "severity": "alta",
+      "area": "seguridad",
+      "evidence": ["app/api/proxy-image/route.ts:4,17,22"],
+      "finding": "Toma url de searchParams, la parsea con new URL(url) y hace fetch(url). El parseo valida la forma, no el destino.",
+      "why": "Desde la infraestructura de Vercel se puede alcanzar cualquier host que el runtime vea, incluidos endpoints internos y metadata de red. Tambien sirve como proxy anonimo hacia terceros.",
+      "fix": "Allowlist de esquemas (solo https), bloqueo de IP privadas y loopback tras resolver DNS, limite de tamano y timeout, y validacion del content-type de la respuesta contra image/*. lib/utils/image-validator.ts ya existe y es el lugar natural."
+    },
+    {
+      "id": "OPT-05",
+      "title": "cron_executions: 1,3M de filas, sin RLS y fuera del cleanup",
+      "severity": "alta",
+      "area": "datos",
+      "evidence": ["public.cron_executions (relrowsecurity=false, ~1.3M filas)", "cleanup_old_import_data no la referencia"],
+      "finding": "La tabla de log de crons no tiene RLS ni politicas, y la funcion de limpieza semanal no la incluye entre sus targets. Con dos crons corriendo cada minuto, el crecimiento es permanente.",
+      "why": "Es puro costo: infla el tamano de la base y los backups sin aportar valor pasados unos dias. La ausencia de RLS ademas la expone via PostgREST.",
+      "fix": "Agregar retencion (por ejemplo 14 dias) dentro de cleanup_old_import_data o un cron propio, habilitar RLS sin politicas para authenticated, y evaluar particionado por fecha si se quiere conservar historia."
+    },
+    {
+      "id": "OPT-06",
+      "title": "16 archivos instancian createClient crudo y saltean los helpers de Supabase",
+      "severity": "alta",
+      "area": "arquitectura",
+      "evidence": ["16 archivos con import desde @supabase/supabase-js", "lib/supabase/server.ts", "lib/supabase/admin.ts"],
+      "finding": "Existen helpers dedicados (server con cookies y RLS, admin con service_role) pero 16 archivos construyen su cliente a mano con NEXT_PUBLIC_SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY.",
+      "why": "Cada instancia manual es una decision de seguridad tomada en silencio: elegir service_role ahi equivale a desactivar RLS para ese camino, y no hay forma de auditarlo de un vistazo. Es exactamente el patron que habilita fugas cross-tenant como la de get_company_signal_summary.",
+      "fix": "Centralizar en lib/supabase/*, dejar admin() como unico punto que toca service_role con un comentario que justifique cada uso, y agregar una regla de lint que prohiba importar @supabase/supabase-js fuera de lib/supabase/."
+    },
+    {
+      "id": "OPT-07",
+      "title": "La ruta del servidor MCP concentra transporte, auth, cuota y 36 tools",
+      "severity": "media",
+      "area": "arquitectura",
+      "evidence": ["app/api/v3/mcp/server/[transport]/route.ts", "lib/v3/mcp-read-tools.ts"],
+      "finding": "Un unico archivo de ruta registra las 36 tools y ademas resuelve autenticacion, plan, cuota y transporte. El proxy sobre server.tool para instrumentar sin perder tipado es una buena decision que queda sepultada en ese monolito.",
+      "why": "Es el archivo de mayor riesgo de conflicto de merge del repo y el mas dificil de testear por partes. Los bugs conocidos (tool citada pero inexistente, DNS que nunca se detecta, busqueda no determinista) son sintomas de que no hay un contrato verificable por tool.",
+      "fix": "Extraer un registry: un modulo por familia de tools que exporte definicion mas handler, y que la ruta solo itere el registry aplicando el proxy de instrumentacion. Habilita un test que valide que toda tool citada existe."
+    },
+    {
+      "id": "OPT-08",
+      "title": "mcp_request_logs cumple dos roles incompatibles",
+      "severity": "media",
+      "area": "arquitectura",
+      "evidence": ["v3.mcp_request_logs", "lib/v3/mcp-usage.ts", "lib/v3/usage.ts"],
+      "finding": "La misma tabla es auditoria de tools y contador de rate limit. Las filas de transporte con tool_name NULL son las que cuentan para el 429.",
+      "why": "Son cargas opuestas: la auditoria quiere retencion larga y escrituras baratas; el contador quiere lecturas rapidas sobre una ventana corta. Mezclarlas ya provoco que el tope de cuota se partiera al medio, y ata la politica de retencion al rate limiting.",
+      "fix": "Separar el contador en su propia estructura (contador por ventana, o Redis si se busca latencia) y dejar mcp_request_logs como log de auditoria puro con retencion propia."
+    },
+    {
+      "id": "OPT-09",
+      "title": "upsert de supabase-js contra indices unicos PARCIALES",
+      "severity": "media",
+      "area": "datos",
+      "evidence": ["indices unicos con indpred no nulo en public y v3", "grep de onConflict en app/ y lib/"],
+      "finding": "Existen indices unicos parciales y multiples llamadas a .upsert({ onConflict }). El cliente no permite expresar el predicado WHERE del indice, asi que Postgres no puede usarlo como arbitro.",
+      "why": "Es un patron roto por construccion, no un bug puntual: ya rompio run_contact_enrichment en v3.account_contacts y el guardado de noticias del drilldown. Falla en runtime y solo cuando hay colision, asi que pasa los tests felices.",
+      "fix": "Para cada upsert, o el indice arbitro es total, o se reemplaza por SQL explicito con ON CONFLICT ... WHERE via RPC. Auditar por indice (no por schema) para no dejar casos afuera."
+    },
+    {
+      "id": "OPT-10",
+      "title": "Sin cabeceras de seguridad en la respuesta",
+      "severity": "media",
+      "area": "seguridad",
+      "evidence": ["next.config.mjs sin bloque headers()"],
+      "finding": "La configuracion de Next no define headers(). No se emiten X-Content-Type-Options, Referrer-Policy, Strict-Transport-Security, X-Frame-Options ni CSP.",
+      "why": "Es defensa en profundidad barata que hoy no esta. Para una app con paneles admin y datos de clientes, la ausencia de X-Frame-Options habilita clickjacking sobre acciones destructivas como el merge de empresas.",
+      "fix": "Agregar headers() en next.config.mjs con nosniff, strict-origin-when-cross-origin, HSTS, X-Frame-Options SAMEORIGIN y Permissions-Policy restrictiva. Sumar CSP arrancando en Report-Only, listando en connect-src el origen de Supabase antes de pasar a enforcing."
+    },
+    {
+      "id": "OPT-11",
+      "title": "El limite real de PostgREST es 8s y no lo esquiva service_role",
+      "severity": "media",
+      "area": "rendimiento",
+      "evidence": ["lib/db/direct.ts", "scripts/run-sql.mjs"],
+      "finding": "El timeout lo impone el rol de login authenticator, por lo que usar service_role no lo evita, y SET LOCAL statement_timeout dentro de una funcion no sirve. El escape hatch es lib/db/direct.ts.",
+      "why": "Es una restriccion invisible en el codigo: una RPC que hoy tarda 3s pasa a fallar cuando la tabla crece, y el sintoma aparece en produccion. El caso medido de busqueda inversa muestra el techo real: 365 ms en caliente contra 6,6 s en frio.",
+      "fix": "Clasificar cada operacion pesada en uno de los dos patrones ya probados: precalcular en tabla para lecturas, o presupuesto de tiempo para escrituras de costo variable. Todo lo que no entre, por lib/db/direct.ts de forma explicita."
+    },
+    {
+      "id": "OPT-12",
+      "title": "Logica duplicada entre v2 y v3 sin frontera declarada",
+      "severity": "media",
+      "area": "arquitectura",
+      "evidence": ["lib/ai-service.ts vs lib/v3/ai.ts", "lib/documents/ vs lib/v3/services/mcp-document-*.ts", "lib/tech-radar.ts vs lib/v3/services/radar*.ts", "app/actions/search-v2.ts vs lib/v3/services/capability-search.ts"],
+      "finding": "Cada capacidad transversal (IA, documentos, radar, busqueda, dedupe, digest) tiene una implementacion en v2 y otra en v3, sin un modulo compartido ni una regla explicita de que puede depender de que.",
+      "why": "Es el costo esperable de convivir sin romper produccion, pero hoy no esta acotado: nada impide que v3 importe un modulo de v2 y quede acoplado a un cambio futuro. Solo v3 registra el costo de IA en ai_usage_log, asi que el gasto de v2 es invisible.",
+      "fix": "Declarar la frontera y hacerla verificable: lib/shared/ para lo comun, prohibicion por lint de que lib/v3 importe de lib/ raiz salvo desde esa carpeta. Como primer paso concreto, unificar la capa de IA para que v2 tambien registre costo."
+    },
+    {
+      "id": "OPT-13",
+      "title": "El schema del cliente se resuelve en runtime y es facil de perder",
+      "severity": "media",
+      "area": "arquitectura",
+      "evidence": ["uso de .schema(\"v3\") disperso", "app/actions/v3/csv-import.ts:285,324"],
+      "finding": "El acceso a v3 depende de recordar .schema('v3') en cada consulta. En csv-import.ts el mismo archivo mezcla .from('csv_imports') sin schema y .schema('v3').from('csv_imports') a pocas lineas de distancia.",
+      "why": "Un olvido no falla al compilar: apunta silenciosamente a public. Dado que v2 vive en public con usuarios reales, el modo de fallo es escribir o leer la produccion de v2 creyendo estar en v3.",
+      "fix": "Un unico helper v3Db() que devuelva el cliente ya apuntado al schema, prohibir .from() crudo en lib/v3 y app/*/v3 por lint, y generar tipos por schema para que el error salte en compilacion."
+    },
+    {
+      "id": "OPT-14",
+      "title": "235 scripts SQL sueltos sin migraciones versionadas",
+      "severity": "media",
+      "area": "operaciones",
+      "evidence": ["scripts/ con 235 archivos .sql numerados", "sin supabase/migrations"],
+      "finding": "El cambio de esquema se hace con scripts numerados a mano y ejecutados con run-sql.mjs. No hay carpeta de migraciones ni registro de que se aplico en que ambiente.",
+      "why": "El estado real de la base no es derivable del repo: la unica fuente de verdad es la base misma. Reconstruir un ambiente o auditar cuando entro un cambio exige arqueologia, y ya hubo un incidente de sobreescritura de country_normalized que necesito un script 435 de restauracion.",
+      "fix": "Adoptar migraciones versionadas con historial aplicado, sellando el estado actual como baseline. Mantener run-sql.mjs solo para operaciones puntuales, aprovechando que ya es DRY RUN por defecto sin --commit."
+    },
+    {
+      "id": "OPT-15",
+      "title": "Un COMMIT dentro del .sql anula el dry run de run-sql.mjs",
+      "severity": "baja",
+      "area": "operaciones",
+      "evidence": ["scripts/run-sql.mjs"],
+      "finding": "El runner envuelve la ejecucion en una transaccion que revierte salvo --commit, pero un COMMIT escrito dentro del archivo .sql cierra esa transaccion y persiste los cambios.",
+      "why": "La red de seguridad mas usada del proyecto se puede desactivar por accidente, sin aviso y justo cuando se cree estar probando sin riesgo.",
+      "fix": "Que el runner rechace archivos que contengan COMMIT o ROLLBACK cuando no se paso --commit, con un mensaje que explique el motivo."
+    },
+    {
+      "id": "OPT-16",
+      "title": "El scraper de vacantes busca por titulo y no por empresa",
+      "severity": "media",
+      "area": "calidad de datos",
+      "evidence": ["lib/v3/services/apify-job-ingest.ts", "public.job_postings"],
+      "finding": "El actor bebity/linkedin-jobs-scraper recibe titulos de puesto, no una empresa, asi que devuelve vacantes de cualquier compania que matchee.",
+      "why": "Sin guardrail de pertenencia se atribuyen vacantes ajenas a la cuenta, y como job_postings alimenta al diccionario, la senal falsa termina visible tambien en la busqueda de v2. Es contaminacion que cruza de v3 a produccion.",
+      "fix": "Guardrail obligatorio en la ingesta: validar el nombre de empresa del resultado contra la compania resuelta y sus alias antes de insertar, descartando lo que no matchee."
+    }
+  ],
+
+  "deadCode": [
+    {
+      "id": "DEAD-01",
+      "title": "app/actions/v3/csv-import.ts: feature completa contra tablas que no existen",
+      "severity": "critica",
+      "loc": 538,
+      "evidence": ["app/actions/v3/csv-import.ts:285,324,330,340,364,377,429", "csv_imports y csv_import_rows no aparecen en information_schema para public ni v3", "ningun archivo importa csv-import"],
+      "finding": "El archivo opera sobre csv_imports y csv_import_rows, que no existen en ninguno de los dos schemas. Tampoco hay script en scripts/ que las cree, y ningun componente ni ruta importa el modulo.",
+      "verification": "Consulta a information_schema.tables por ambos nombres: cero filas. Grep de 'csv-import' en app, components y lib: solo el propio archivo.",
+      "recommendation": "Borrar. Es el peor tipo de codigo muerto: parece una feature soportada y falla en runtime si alguien la conecta. Si la ingesta CSV en v3 esta planeada, que vuelva junto con su migracion."
+    },
+    {
+      "id": "DEAD-02",
+      "title": "app/actions/v3/apollo.ts sin consumidores",
+      "severity": "media",
+      "loc": 509,
+      "evidence": ["ningun import de app/actions/v3/apollo"],
+      "finding": "Server actions de Apollo para v3 que nadie invoca. El camino vivo es lib/v3/services/contact-provider.ts mas el cache-reader.",
+      "verification": "Grep de 'apollo' en app, components y lib filtrando el propio archivo: sin referencias a este modulo.",
+      "recommendation": "Borrar. Mantener dos entradas a Apollo en v3 invita a que una quede sin el guardrail de cuota."
+    },
+    {
+      "id": "DEAD-03",
+      "title": "app/actions/v3/tech-radar.ts sin consumidores",
+      "severity": "media",
+      "loc": 340,
+      "evidence": ["ningun import de app/actions/v3/tech-radar"],
+      "finding": "Reemplazado por lib/v3/services/radar.ts y radar-agents.ts, que son los que usa el pipeline.",
+      "verification": "Grep de 'tech-radar' en app, components y lib: las referencias apuntan a lib/tech-radar-constants y a los servicios de radar, no a este archivo.",
+      "recommendation": "Borrar."
+    },
+    {
+      "id": "DEAD-04",
+      "title": "lib/v3/digest.ts duplicado de lib/v3/services/digest.ts",
+      "severity": "media",
+      "loc": 398,
+      "evidence": ["lib/v3/digest.ts (398 loc) sin importadores", "lib/v3/services/digest.ts (231 loc) en uso"],
+      "finding": "Dos implementaciones del digest. La de services es la mas chica y la que esta conectada; la de lib/v3 quedo sin consumidores.",
+      "verification": "Grep de 'digest' en app, components y lib: los imports resuelven a lib/v3/services/digest.",
+      "recommendation": "Borrar lib/v3/digest.ts. Antes, un diff rapido para rescatar alguna mejora que solo exista en la version vieja."
+    },
+    {
+      "id": "DEAD-05",
+      "title": "app/actions/search.ts reemplazado por search-v2.ts",
+      "severity": "baja",
+      "loc": 78,
+      "evidence": ["ningun import de app/actions/search", "app/actions/search-v2.ts en uso"],
+      "finding": "Primera version de la busqueda, superada por search-v2.ts.",
+      "verification": "Grep de imports: la pagina de busqueda importa search-v2.",
+      "recommendation": "Borrar y, en el mismo movimiento, renombrar search-v2.ts a search.ts: el sufijo v2 se confunde con ASCI v2 y no significa eso."
+    },
+    {
+      "id": "DEAD-06",
+      "title": "lib/parallel-extract.ts sin importadores",
+      "severity": "baja",
+      "loc": 237,
+      "evidence": ["ningun import de lib/parallel-extract", "lib/parallel.ts si esta en uso"],
+      "finding": "Segundo modulo para Parallel.ai; el activo es lib/parallel.ts.",
+      "verification": "Grep de 'parallel-extract' en app, components y lib: sin resultados fuera del archivo.",
+      "recommendation": "Borrar."
+    },
+    {
+      "id": "DEAD-07",
+      "title": "lib/search/search-provider.ts sin importadores",
+      "severity": "baja",
+      "loc": 336,
+      "evidence": ["ningun import de lib/search/search-provider"],
+      "finding": "Abstraccion de proveedor de busqueda que quedo sin uso; el camino vivo llama a Perplexity de forma directa.",
+      "verification": "Grep de 'search-provider' en app, components y lib: sin resultados fuera del archivo.",
+      "recommendation": "Borrar. Si mas adelante hay que soportar mas de un proveedor de busqueda, conviene rehacer la abstraccion sobre el uso real."
+    },
+    {
+      "id": "DEAD-08",
+      "title": "app/api/test-alert: endpoint de prueba publico en produccion",
+      "severity": "alta",
+      "loc": 30,
+      "evidence": ["app/api/test-alert/route.ts:4 exporta GET sin verificacion alguna"],
+      "finding": "Handler GET que dispara el mail de alerta. No valida CRON_SECRET, ni sesion, ni entorno.",
+      "verification": "Lectura del archivo completo: no hay chequeo de authorization ni de NODE_ENV.",
+      "recommendation": "Borrar. Es a la vez codigo muerto y una superficie de abuso: permite gatillar envios de mail y quemar la cuota de Resend desde internet."
+    },
+    {
+      "id": "DEAD-09",
+      "title": "Tres tabs del drilldown de bookmarks huerfanos",
+      "severity": "media",
+      "loc": 928,
+      "evidence": ["app/bookmarks/[id]/_components/contacts-tab.tsx (185)", "news-tab.tsx (319)", "public-docs-tab.tsx (424)"],
+      "finding": "Tres componentes de tab sin ningun consumidor. Sus funciones quedaron absorbidas por intelligence-tab.tsx, que si esta referenciado.",
+      "verification": "Por cada archivo de _components, conteo de referencias externas: estos tres dan cero; los otros once dan uno.",
+      "recommendation": "Borrar los tres. Son 928 lineas que aparecen en toda busqueda de codigo del drilldown y compiten con la implementacion vigente."
+    },
+    {
+      "id": "DEAD-10",
+      "title": "components/theme-provider.tsx sin uso",
+      "severity": "baja",
+      "loc": 11,
+      "evidence": ["ningun import de components/theme-provider"],
+      "finding": "Wrapper de next-themes que el layout no usa.",
+      "verification": "Grep de 'theme-provider': sin resultados fuera del archivo.",
+      "recommendation": "Borrar, o conectarlo si se quiere soportar tema claro/oscuro de verdad."
+    },
+    {
+      "id": "DEAD-11",
+      "title": "APOLLO_WEBHOOL_SECRET: variable de entorno con typo",
+      "severity": "baja",
+      "loc": 0,
+      "evidence": ["variables del proyecto: APOLLO_WEBHOOK_SECRET y APOLLO_WEBHOOL_SECRET conviven"],
+      "finding": "Existen las dos variables, una con 'WEBHOOL' en lugar de 'WEBHOOK'. Es el rastro de un typo que se corrigio sin borrar la vieja.",
+      "verification": "Inventario de variables de entorno del proyecto: ambas presentes.",
+      "recommendation": "Confirmar cual lee el codigo del webhook de Apollo y eliminar la otra. Dos secretos para un mismo proposito hacen ambigua la rotacion."
+    },
+    {
+      "id": "DEAD-12",
+      "title": "Tablas de v3 sin lector: bookmark_dedupe_log y dictionary_term_suggestions",
+      "severity": "baja",
+      "loc": 0,
+      "evidence": ["v3.bookmark_dedupe_log", "v3.dictionary_term_suggestions"],
+      "finding": "Ambas existen en el schema v3 pero no aparecen en los patrones de acceso del codigo de v3 relevados.",
+      "verification": "Cruce entre el inventario de tablas de v3 y los .from() encontrados en lib/v3, app/actions/v3 y app/api/v3.",
+      "recommendation": "Confirmar con un conteo de filas y una revision de scripts antes de tocarlas: pueden alimentarse desde SQL suelto en scripts/. Si estan vacias y sin lector, borrarlas reduce ruido en el esquema."
+    }
+  ]
+}
