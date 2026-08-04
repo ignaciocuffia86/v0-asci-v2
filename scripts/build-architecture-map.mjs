@@ -1,4 +1,6 @@
-// Genera public/architecture-map.html (autocontenido) desde public/architecture-map.json.
+// Genera docs/architecture-map.html (autocontenido) desde docs/architecture-map.json.
+// Viven en docs/ y NO en public/ a proposito: el contenido describe fallas de seguridad,
+// asi que se sirve solo por /admin/architecture, detras del guard de superadmin.
 // Un solo origen de verdad: el JSON. El layout se calcula en el cliente para poder filtrar por zona.
 // Correr: node scripts/build-architecture-map.mjs
 import { readFileSync, writeFileSync } from "node:fs"
@@ -6,7 +8,7 @@ import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
-const data = JSON.parse(readFileSync(join(root, "public/architecture-map.json"), "utf8"))
+const data = JSON.parse(readFileSync(join(root, "docs/architecture-map.json"), "utf8"))
 const payload = JSON.stringify(data).replace(/</g, "\\u003c").replace(/\u2028|\u2029/g, "")
 const m = data.meta
 
@@ -507,5 +509,5 @@ draw();frame();render();
 </body>
 </html>`
 
-writeFileSync(join(root, "public/architecture-map.html"), html)
+writeFileSync(join(root, "docs/architecture-map.html"), html)
 console.log(`OK nodos=${data.nodes.length} aristas=${data.edges.length} flujos=${data.flows.length}`)
