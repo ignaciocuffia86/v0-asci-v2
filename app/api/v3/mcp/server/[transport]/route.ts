@@ -8,7 +8,7 @@ import { validateMcpRequest, logMcpRequest } from "@/lib/v3/mcp-auth"
 import { requirePaidMcp, reserveMcpUsage, setReservationStatus, getMcpUsage, type McpPrincipal } from "@/lib/v3/mcp-usage"
 import { searchCompanies, getCompanyProfile, getCompanySignals, listWorkspaceAccounts, getAccountIntelligence, getResearchStatus, getAccountEvidenceDetailTool } from "@/lib/v3/mcp-read-tools"
 import { prepareAccountResearch, submitResearchStage, getClientResearchStatus, prepareAccountIcebreaker, submitAccountIcebreaker, refreshPromptPackage, prepareCompanySuccessCases, submitCompanySuccessCases, prepareCompanyNews, submitCompanyNews } from "@/lib/v3/mcp-client-ai"
-import { runLinkedinJobsActor, companyNameVariants } from "@/lib/v3/services/apify-client"
+import { runLinkedinJobsActor, companyNameVariants, isApifyConfigured } from "@/lib/v3/services/apify-client"
 import { ingestApifyJobPostings } from "@/lib/v3/services/apify-job-ingest"
 import { prepareSaveAccount, saveAccount, removeWorkspaceAccount, listSavedAccounts, requireSavedAccount, guardSavedAccounts } from "@/lib/v3/mcp-account-lifecycle"
 import { recommendContactRoles, getCompanyContacts } from "@/lib/v3/mcp-contact-coverage"
@@ -54,6 +54,42 @@ const NEXT_ACTION_BY_CODE: Record<string, string> = {
   UNAUTHORIZED: "La API key no es válida o no tiene el scope necesario. No reintentes: avisale al usuario que revise su credencial.",
   RATE_LIMITED: "Es un límite temporal de frecuencia, no un error definitivo ni falta de cuota. Esperá ~1 minuto y reintentá la MISMA llamada; no cambies los argumentos ni abandones la cuenta.",
   SCOPE_REQUIRED: "La API key no tiene el permiso para esta operación (por ejemplo contacts:write). No reintentes: avisale al usuario que regenere la key con el scope faltante.",
+  // Sin esta entrada el modelo recibía "APIFY_TOKEN_MISSING" pelado y su siguiente
+  // movimiento fue buscar vacantes en la web y presentarlas como si fueran datos de
+  // ASCI. Es la falla más engañosa posible: una falla NUESTRA de configuración
+  // termina disfrazada de resultado. El texto tiene que cerrarle esa puerta.
+  APIFY_TOKEN_MISSING:
+    "Es una falla de CONFIGURACIÓN de ASCI (falta APIFY_TOKEN en este deployment), no un problema del pedido ni falta de cuota. No se consumió cuota. NO reintentes y NO busques las vacantes en la web ni con otras tools: los resultados web no entran al pipeline de ASCI y no se pueden atribuir a la cuenta. Decile al usuario que el scraping de vacantes está sin configurar y que hay que setear APIFY_TOKEN en el proyecto de Vercel.",
+  COMPANY_NOT_FOUND: "El companyId no existe. Llamá a search_companies para obtener el UUID correcto y reintentá.",
+}
+
+/**
+ * Familias de códigos que se resuelven por PREFIJO.
+ *
+ * Hace falta porque varios códigos son dinámicos y no se pueden enumerar:
+ * `APIFY_RUN_HTTP_429`, `APIFY_RUN_TIMED-OUT`, `APIFY_INGEST_ROWS_FAILED`. Con un
+ * mapa por igualdad exacta todos esos caían sin nextAction, que es justo el caso
+ * en que el modelo improvisa (y ya vimos que improvisa buscando en la web y
+ * presentándolo como dato de ASCI).
+ *
+ * El orden importa: se toma la primera coincidencia, así que van de más específico
+ * a más general.
+ */
+const NEXT_ACTION_BY_PREFIX: [string, string][] = [
+  [
+    "APIFY_RUN_",
+    "El scraping de LinkedIn falló o terminó sin resultados del lado del proveedor. La cuota ya se liberó, no se cobró nada. Podés reintentar UNA vez la misma llamada, o con una ventana más corta (windowDays 7 o 1) y menos maxRows. Si vuelve a fallar, avisale al usuario: NO busques las vacantes en la web, porque esos resultados no entran al pipeline de ASCI y no se pueden atribuir a la cuenta.",
+  ],
+  [
+    "APIFY_INGEST_",
+    "El scraping funcionó pero la ingesta al pipeline de ASCI falló, así que las vacantes NO quedaron guardadas. La cuota ya se liberó. Avisale al usuario y no presentes las vacantes como guardadas.",
+  ],
+]
+
+/** Resuelve el próximo paso: primero por código exacto, después por familia. */
+function nextActionFor(code: string): string | undefined {
+  if (NEXT_ACTION_BY_CODE[code]) return NEXT_ACTION_BY_CODE[code]
+  return NEXT_ACTION_BY_PREFIX.find(([prefix]) => code.startsWith(prefix))?.[1]
 }
 
 /**
@@ -82,8 +118,13 @@ const safely = async (work: () => Promise<unknown>) => {
     // Prioridad 2: el patrón "CODIGO:mensaje" embebido en el string.
     const separator = raw.indexOf(":")
     const candidate = separator > 0 ? raw.slice(0, separator) : raw
-    const messageHasCode = /^[A-Z][A-Z0-9_]*$/.test(candidate)
-    const code = structuredCode && /^[A-Z][A-Z0-9_]*$/.test(structuredCode)
+    // El guion está permitido porque hay códigos que lo llevan: el estado de un run
+    // de Apify se interpola tal cual y produce `APIFY_RUN_TIMED-OUT`. Sin el guion
+    // ese caso caía en UNKNOWN_ERROR y perdía el nextAction, justo cuando más falta
+    // hace. Sigue exigiendo mayúsculas, así que una frase humana no se confunde.
+    const CODE_PATTERN = /^[A-Z][A-Z0-9_-]*$/
+    const messageHasCode = CODE_PATTERN.test(candidate)
+    const code = structuredCode && CODE_PATTERN.test(structuredCode)
       ? structuredCode
       : messageHasCode
         ? candidate
@@ -96,7 +137,7 @@ const safely = async (work: () => Promise<unknown>) => {
         success: false,
         code,
         message: detail || code,
-        ...(NEXT_ACTION_BY_CODE[code] ? { nextAction: NEXT_ACTION_BY_CODE[code] } : {}),
+        ...(nextActionFor(code) ? { nextAction: nextActionFor(code) } : {}),
         // Se mantiene la cadena original para no romper a un cliente que ya la lea.
         error: raw,
       },
@@ -258,8 +299,13 @@ const handler = createMcpHandler((rawServer) => {
   server.tool("submit_company_success_cases", "Paso 2 de 2: entrega los casos de éxito que encontró el cliente. El servidor aplica los guardrails (URL viva y mención real de la empresa) y descarta lo que no pase, así que la respuesta informa cuántos se aceptaron y cuántos se rechazaron con su motivo. No consume cuota adicional.", { executionId: z.string().uuid(), packageHash: z.string().length(64), result: z.unknown(), clientModel: z.string().max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async (args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:submit", "client_assisted"); return submitCompanySuccessCases(auth, args) }))
   server.tool("prepare_company_news", "Paso 1 de 2 para buscar noticias recientes de una cuenta. Devuelve el prompt package para que el cliente BUSQUE con sus propios tokens, con una ventana temporal explícita (180 días por defecto) para que no traiga notas viejas como si fueran novedad. Consume 1 unidad del pool CLIENT-ASSISTED, que en get_ai_usage se ve como monthlyClientResearch: NO mueve monthlyServerResearch, son dos cupos independientes. Clasificá `category` con la taxonomía cerrada que viene en el responseSchema del paquete; si mandás una variante, el servidor la normaliza y te lo informa en remappedCategories.", { companyId: z.string().uuid(), term: z.string().min(2).max(120).optional(), windowDays: z.number().int().min(1).max(730).optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, term, windowDays, idempotencyKey }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:prepare", "client_assisted"); return prepareCompanyNews(auth, { companyId, term, windowDays, idempotencyKey }) }))
   server.tool("submit_company_news", "Paso 2 de 2: entrega las noticias que encontró el cliente. El servidor verifica URLs y relevancia, descarta lo que no pase, y clasifica cada noticia como expansion, contraccion o neutro para que una mala noticia (un cierre de planta, una desinversión) no sume puntaje de timing como si fuera una oportunidad. No consume cuota adicional.", { executionId: z.string().uuid(), packageHash: z.string().length(64), result: z.unknown(), clientModel: z.string().max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async (args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "research:submit", "client_assisted"); return submitCompanyNews(auth, args) }))
-  server.tool("scrape_company_job_postings", "Trae vacantes frescas de LinkedIn para una cuenta guardada y las ingesta por el pipeline de importación de ASCI, que las normaliza y deduplica. El filtro por empresa se aplica en el buscador usando el nombre y el país que ya tenemos guardados de la cuenta, así que no hace falta pasarlos. Consume cuota de research server-managed porque el scraping corre con recursos de ASCI. Dos cosas a tener en cuenta: (1) `titleQuery` es OPCIONAL y sirve para acotar por título de puesto DENTRO de la empresa (por ejemplo 'SAP'); si lo omitís se traen todas las vacantes de la empresa, que es lo habitual. (2) La ventana sólo puede ser 1, 7 o 30 días; si pedís más, se busca sin límite de fecha y se te avisa. La ingesta es asincrónica: las vacantes aparecen cuando el importador procesa el lote, no de inmediato.", { companyId: z.string().uuid(), titleQuery: z.string().min(2).max(120).optional(), location: z.string().min(2).max(120).optional(), windowDays: z.number().int().min(1).max(365).optional(), maxRows: z.number().int().min(1).max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, titleQuery, location, windowDays, maxRows, idempotencyKey }, extra) => safely(async () => {
+  server.tool("scrape_company_job_postings", "Trae vacantes frescas de LinkedIn para una cuenta guardada y las ingesta por el pipeline de importación de ASCI, que las normaliza y deduplica. El filtro por empresa se aplica en el buscador usando el nombre y el país que ya tenemos guardados de la cuenta, así que no hace falta pasarlos. Consume cuota de research server-managed porque el scraping corre con recursos de ASCI. Dos cosas a tener en cuenta: (1) `titleQuery` es OPCIONAL y sirve para acotar por título de puesto DENTRO de la empresa (por ejemplo 'SAP'); si lo omitís se traen todas las vacantes de la empresa, que es lo habitual. (2) La ventana sólo puede ser 1, 7 o 30 días; si pedís más, se busca sin límite de fecha y se te avisa. ESTA es la forma de averiguar qué posiciones abiertas tiene una cuenta: no busques vacantes en la web, porque los resultados web no entran al pipeline de ASCI y no se pueden atribuir a la cuenta. Devuelve `preview` con las vacantes ya filtradas (título, ubicación y URL) para que puedas responder en el mismo turno; la ingesta normalizada es asincrónica y se completa después.", { companyId: z.string().uuid(), titleQuery: z.string().min(2).max(120).optional(), location: z.string().min(2).max(120).optional(), windowDays: z.number().int().min(1).max(365).optional(), maxRows: z.number().int().min(1).max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, titleQuery, location, windowDays, maxRows, idempotencyKey }, extra) => safely(async () => {
     const auth = authOf(extra); await requirePaidMcp(auth, "research:run", "server_managed")
+    // Preflight de configuración ANTES del guard de cuenta guardada y de reservar
+    // cuota. Si el token no está, esto falla en microsegundos y sin efectos
+    // colaterales; si se dejara para el final, el usuario ya habría ocupado un
+    // lugar de su plan guardando la cuenta para una capacidad inejecutable.
+    if (!isApifyConfigured()) throw new Error("APIFY_TOKEN_MISSING")
     const blocked = await guardSavedAccounts(auth, [companyId])
     if (blocked) return blocked
     const reservation = await reserveMcpUsage({ principal: auth, pool: "research_server", units: 1, idempotencyKey, metadata: { companyId, titleQuery: titleQuery ?? null } })
@@ -293,8 +339,11 @@ const handler = createMcpHandler((rawServer) => {
         warnings: run.truncatedWindow
           ? [...ingest.warnings, `LinkedIn sólo permite ventanas de 1, 7 o 30 días: se pidió ${windowDays} y se buscó sin límite de fecha.`]
           : ingest.warnings,
+        // `preview` ya viene de la ingesta y son las vacantes ACEPTADAS (pasaron
+        // el filtro de pertenencia). Se expone para poder contestar "qué
+        // posiciones hay" en este mismo turno, sin esperar al importador.
         note: ingest.batchId
-          ? "Las vacantes quedaron en cola. Consultá get_company_signal_summary en unos minutos para verlas ya normalizadas."
+          ? `Las vacantes quedaron en cola. En \`preview\` tenés ${ingest.preview.length} de las ${ingest.queued} encoladas (título, ubicación y URL) para responderle al usuario YA, sin esperar. Si necesitás el listado completo y normalizado, consultá get_company_signal_summary en unos minutos.`
           : "No se encontraron vacantes de esta empresa con esa búsqueda.",
       }
       await setReservationStatus(reservation.reservationId, "committed", { batchId: ingest.batchId, queued: ingest.queued })
@@ -332,7 +381,29 @@ const handler = createMcpHandler((rawServer) => {
   server.tool("confirm_document_analysis", "Persiste la extracción client-assisted únicamente después de mostrarla, permitir correcciones y recibir confirmación explícita del usuario. Todas las evidencias deben ser citas literales del documento.", { draftId: z.string().uuid(), userConfirmed: z.literal(true), analysis: documentAnalysisSchema }, async ({ draftId, analysis }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "documents:write", "client_assisted"); return confirmDocumentAnalysis(auth, draftId, analysis) }))
   server.tool("recommend_accounts_for_value_proposition", "Prefiltra hasta 20 cuentas del catálogo v2 según toda la documentación complementaria del workspace. Antes de llamar, pregunta explícitamente qué países interesan y envía ISO alpha-2. No completa con matches débiles.", { countries: z.array(z.string().length(2)).min(1).max(20), limit: z.number().int().min(1).max(20).default(20) }, async ({ countries, limit }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "recommendations:read", "client_assisted"); return recommendAccountsForValueProposition(auth.workspaceId, countries, limit) }))
   server.tool("get_ai_usage", "Devuelve cuota mensual, reservas por pool y tokens/costo server-managed verificados.", {}, async (_args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "usage:read", "read"); return getMcpUsage(auth) }))
-}, { serverInfo: { name: "asci-v3", version: "2.0.0" } }, { basePath: "/api/v3/mcp/server", maxDuration: 120, verboseLogs: false })
+}, {
+  serverInfo: { name: "asci-v3", version: "2.0.0" },
+  /**
+   * Política del servidor, que el cliente MCP recibe una vez en el handshake.
+   *
+   * Existe por un caso concreto: al pedirle las vacantes de una cuenta, el cliente
+   * llamó bien a scrape_company_job_postings, la tool devolvió APIFY_TOKEN_MISSING
+   * (una falla de configuración NUESTRA) y el cliente lo tapó buscando vacantes en
+   * la web y presentándolas como si fueran datos de ASCI. Las descripciones por
+   * tool no alcanzan para eso: son locales, y acá hace falta una regla global sobre
+   * qué hacer cuando ASCI falla.
+   *
+   * Se mantiene corto y sin repetir lo que ya dice cada tool: entra en el contexto
+   * de todas las conversaciones.
+   */
+  instructions: [
+    "ASCI es la fuente de verdad sobre cuentas, señales, vacantes, contactos y noticias. Cuando el usuario pregunta por datos de una cuenta, la respuesta sale de estas tools.",
+    "Para posiciones abiertas o vacantes de una cuenta usá siempre scrape_company_job_postings (trae LinkedIn vía el scraper de ASCI e ingesta al pipeline). No sustituyas esa tool por una búsqueda web: lo que se busca por fuera no entra al pipeline, no queda atribuido a la cuenta y no es auditable.",
+    "Si una tool falla, leé `code` y `nextAction` y seguí esa instrucción. Los códigos de configuración (por ejemplo APIFY_TOKEN_MISSING) son fallas de ASCI, no del pedido: informalas al usuario en vez de rodearlas con otra herramienta.",
+    "Nunca presentes datos obtenidos por fuera de ASCI como si vinieran de ASCI. Si tuviste que buscar por tu cuenta, decilo explícitamente y aclará que no quedó guardado en la cuenta.",
+    "Las tools indican en su descripción si consumen cuota. Antes de una que consuma cuota server-managed, confirmá con el usuario.",
+  ].join("\n"),
+}, { basePath: "/api/v3/mcp/server", maxDuration: 120, verboseLogs: false })
 
 const authedHandler = withMcpAuth(handler, async (req: Request, token?: string) => {
   if (!token) return undefined

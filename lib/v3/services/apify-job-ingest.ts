@@ -59,6 +59,14 @@ export interface ApifyJobItem {
   [key: string]: unknown
 }
 
+/** Una vacante aceptada, en la forma mínima para mostrarla sin esperar el ETL. */
+export interface ApifyJobPreviewItem {
+  title: string
+  location: string | null
+  url: string
+  postedAt: string | null
+}
+
 export interface ApifyIngestResult {
   batchId: string | null
   companyId: string
@@ -70,7 +78,23 @@ export interface ApifyIngestResult {
   skippedOtherCompany: number
   filename: string
   warnings: string[]
+  /**
+   * Muestra de las vacantes ACEPTADAS, para poder contestar "qué posiciones hay"
+   * en el mismo turno.
+   *
+   * Existe porque la ingesta es asincrónica: las filas se procesan después, así
+   * que sin esto la única respuesta posible es "consultá en unos minutos" y quien
+   * llama se queda sin nada que mostrar. Los items ya están en memoria y ya
+   * pasaron `belongsToCompany`, así que no cuesta una query extra ni relaja el
+   * guardrail: es exactamente lo que se va a guardar.
+   *
+   * Es una MUESTRA, no el total: `queued` sigue siendo la cuenta real.
+   */
+  preview: ApifyJobPreviewItem[]
 }
+
+/** Cuántas vacantes se devuelven en el preview. */
+const PREVIEW_LIMIT = 20
 
 /**
  * Extrae la URL de la vacante probando las mismas variantes que el RPC.
@@ -87,6 +111,38 @@ function extractJobUrl(item: ApifyJobItem): string | null {
   return null
 }
 
+/** Primer string no vacío entre varias claves candidatas. */
+function firstString(item: ApifyJobItem, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = item[key]
+    if (typeof value === "string" && value.trim()) return value.trim()
+  }
+  return null
+}
+
+/**
+ * Arma la fila del preview.
+ *
+ * Las claves candidatas son las MISMAS que lee `process_job_batch_internal` (ver
+ * los COALESCE del RPC): título por `title`/`job_title`, ubicación por `location`
+ * o `city, country`, fecha por `postedTime`/`publishedAt`/`post_date`. Si acá se
+ * leyeran otras claves, el preview podría mostrar algo distinto de lo que termina
+ * guardado, que es peor que no mostrar nada.
+ *
+ * Se lee del item ORIGINAL a propósito: en `row_data` el `country` se sobrescribe
+ * con el de la cuenta, así que la ubicación real de la vacante solo está acá.
+ */
+function toPreviewItem(item: ApifyJobItem, jobUrl: string): ApifyJobPreviewItem {
+  const city = firstString(item, ["city"])
+  const country = firstString(item, ["country"])
+  return {
+    title: firstString(item, ["title", "job_title"]) ?? "Sin título",
+    location: firstString(item, ["location"]) ?? (city && country ? `${city}, ${country}` : city ?? country),
+    url: jobUrl,
+    postedAt: firstString(item, ["postedTime", "publishedAt", "post_date"]),
+  }
+}
+
 /** Normaliza para comparar nombres de empresa: sin sufijos legales ni acentos. */
 function normalizeCompanyName(value: string): string {
   return value
@@ -97,6 +153,41 @@ function normalizeCompanyName(value: string): string {
     .replace(/[^a-z0-9]/g, "")
     .trim()
 }
+
+/**
+ * Palabras que no aportan identidad y se ignoran al comparar por palabra.
+ *
+ * Son las mismas que descarta `normalizeCompanyName`, más las partículas que
+ * aparecen en los nombres de la base ("Arcor de Perú", "Arcor do Brasil"). Sin
+ * ellas, "Arcor" no coincidiría con "Grupo Arcor".
+ */
+const STOP_WORDS = new Set([
+  "sa", "saic", "sas", "srl", "sai", "inc", "llc", "ltd", "corp", "company", "co",
+  "grupo", "group", "holding", "holdings", "the", "de", "del", "do", "da", "of", "y", "and",
+])
+
+/**
+ * Países/gentilicios que NO son ruido: distinguen una filial de la matriz.
+ *
+ * En la base conviven "Arcor", "Arcor de Perú" y "Arcor do Brasil" como empresas
+ * separadas, y el criterio del proyecto es que **las filiales no se unifican**. Si
+ * estas palabras se trataran como stop words, una vacante de "Grupo Arcor" (que
+ * normaliza a "arcor") se atribuiría también a la filial peruana.
+ *
+ * Van aparte de STOP_WORDS porque la regla es asimétrica: sobran para decidir la
+ * identidad del nombre, pero su PRESENCIA en un solo lado es una diferencia real.
+ *
+ * "argentina" queda AFUERA a propósito: `normalizeCompanyName` ya la elimina, así
+ * que "Banco BBVA Argentina" y "BBVA" normalizan igual y matchean por el camino
+ * exacto. Incluirla acá rompía ese caso legítimo (la mayoría de las cuentas son
+ * argentinas y el sufijo no distingue nada). El precio es que una filial argentina
+ * de una matriz extranjera no se separa por nombre; para eso está el slug.
+ */
+const GEO_WORDS = new Set([
+  "peru", "brasil", "brazil", "chile", "uruguay", "paraguay", "bolivia",
+  "colombia", "mexico", "ecuador", "venezuela", "espana", "spain", "usa", "us",
+  "latam", "andina", "mercosur",
+])
 
 /** Extrae el slug de empresa de una URL de LinkedIn (`/company/grupo-arcor`). */
 function linkedinCompanySlug(url: string | null | undefined): string | null {
@@ -115,8 +206,21 @@ function linkedinCompanySlug(url: string | null | undefined): string | null {
  * fila, esas 15 vacantes ajenas quedarían atribuidas a la cuenta en la tabla de
  * producción que lee v2. Es decir: evidencia falsa sobre una cuenta real.
  *
- * Se compara primero por slug de LinkedIn (identificador estable) y recién después
- * por nombre normalizado, que es más laxo.
+ * Orden de comparación, de más fuerte a más débil:
+ *   1. slug de LinkedIn — identificador estable, si ambos lados lo tienen decide solo.
+ *   2. nombre normalizado exacto.
+ *   3. contención por PALABRA (ver abajo por qué no alcanza la contención de texto).
+ *
+ * El caso que motivó el punto 3: una vacante de "Grupo Arcor" normaliza a "arcor"
+ * (el normalizador quita "grupo"), y con una contención de texto suelta eso daba
+ * por buenas las cuentas "Arcort SRL" y "Arcorp S.A." — dos empresas REALES de
+ * nuestra base, sin ninguna relación con Arcor. La contención tiene que exigir que
+ * el nombre corto sea una PALABRA completa del largo, no un prefijo cualquiera.
+ *
+ * El actor además devuelve `companyId` (el ID numérico de LinkedIn, ej. 382280 para
+ * Grupo Arcor), que sería el filtro exacto y sin homónimos. Todavía no se usa porque
+ * `companies` no guarda ese ID: solo hay `linkedin_slug`/`linkedin_url`. Se puede ir
+ * poblando desde estos mismos resultados y en ese momento pasa a ser el punto 1.
  */
 function belongsToCompany(
   item: ApifyJobItem,
@@ -131,9 +235,32 @@ function belongsToCompany(
   const a = normalizeCompanyName(itemName)
   const b = normalizeCompanyName(company.name)
   if (!a || !b) return false
-  // Se admite la contención en un sentido u otro ("Arcor" vs "Grupo Arcor"), pero
-  // exigiendo una longitud mínima para que un fragmento corto no matchee de casualidad.
-  return a === b || (a.length >= 4 && b.length >= 4 && (a.includes(b) || b.includes(a)))
+  if (a === b) return true
+
+  // Contención por palabra. Se comparan los nombres SIN normalizar a un string
+  // pegado, porque "arcor" ⊂ "arcorp" es cierto como texto y falso como empresa.
+  const words = (v: string) =>
+    v
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w && !STOP_WORDS.has(w))
+  const wa = words(itemName)
+  const wb = words(company.name)
+  if (wa.length === 0 || wb.length === 0) return false
+
+  // Una marca geográfica presente en un solo lado indica filial distinta: "Arcor"
+  // (matriz) no es "Arcor de Perú". Si aparece en ambos, tiene que ser la misma.
+  const geoA = wa.filter((w) => GEO_WORDS.has(w)).sort().join(",")
+  const geoB = wb.filter((w) => GEO_WORDS.has(w)).sort().join(",")
+  if (geoA !== geoB) return false
+
+  // El nombre más corto tiene que estar contenido, palabra por palabra, en el más
+  // largo: "arcor" ⊂ ["grupo","arcor"] pasa; "arcor" ⊄ ["arcorp"] no.
+  const [short, long] = wa.length <= wb.length ? [wa, wb] : [wb, wa]
+  const longSet = new Set(long)
+  return short.every((w) => longSet.has(w)) && short.some((w) => w.length >= 4)
 }
 
 export async function ingestApifyJobPostings(params: {
@@ -166,6 +293,7 @@ export async function ingestApifyJobPostings(params: {
   let skippedDuplicateInPayload = 0
   let skippedOtherCompany = 0
   const rows: { batch_id: string; row_data: Record<string, unknown> }[] = []
+  const preview: ApifyJobPreviewItem[] = []
 
   for (const item of params.items) {
     // Primero el filtro de pertenencia: el actor busca por título de puesto y
@@ -189,6 +317,10 @@ export async function ingestApifyJobPostings(params: {
       continue
     }
     seen.add(jobUrl)
+
+    // Se arma acá, con la fila ya aceptada, para que el preview no pueda
+    // desalinearse de lo que efectivamente se encola.
+    if (preview.length < PREVIEW_LIMIT) preview.push(toPreviewItem(item, jobUrl))
 
     rows.push({
       batch_id: "",
@@ -235,6 +367,7 @@ export async function ingestApifyJobPostings(params: {
       skippedOtherCompany,
       filename,
       warnings: [...warnings, "No quedaron vacantes utilizables: no se creó ningún batch."],
+      preview: [],
     }
   }
 
@@ -307,5 +440,6 @@ export async function ingestApifyJobPostings(params: {
     skippedOtherCompany,
     filename,
     warnings,
+    preview,
   }
 }

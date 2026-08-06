@@ -6,13 +6,37 @@ import "server-only"
  * Todo lo que hay acá se verificó contra la API real, no contra documentación:
  *
  * - El actor configurado es `bebity/linkedin-jobs-scraper`.
- * - Su input NO publica inputSchema por la API de versiones, así que los campos se
- *   tomaron de un run exitoso real: `{title, location, publishedAt, rows, proxy}`.
+ * - El input schema SÍ es accesible, pero NO por la API de versiones (que devuelve
+ *   `sourceFiles` sin el schema). Va por la de builds:
+ *     GET /v2/acts/bebity~linkedin-jobs-scraper  -> taggedBuilds.latest.buildId
+ *     GET /v2/actor-builds/{buildId}             -> .data.inputSchema
+ *   Campos declarados (build 0.0.49, verificado ago 2026):
+ *     title           string  [requerido, default ""]      título del puesto
+ *     location        string  [requerido, default "United States"]
+ *     rows            integer [requerido, default 50]      techo de resultados
+ *     companyName     array   filtro por nombre de empresa
+ *     companyId       array   filtro por ID numérico de LinkedIn (exacto)
+ *     publishedAt     enum    "" | r2592000 | r604800 | r86400
+ *     workType        enum    "" | 1 on-site | 2 remote | 3 hybrid
+ *     contractType    enum    "" | F P C T V I O
+ *     experienceLevel enum    "" | 1..6
+ *     proxy           object  default {useApifyProxy:true, groups:["RESIDENTIAL"]}
+ *   `title` figura como requerido pero Apify le aplica el default "", y los runs
+ *   por `companyName` sin title funcionan: no hace falta mandarlo.
+ * - `companyId` es el filtro EXACTO y no tiene el problema de homónimos de
+ *   `companyName`. Hoy no se usa porque no guardamos ese ID (`companies` solo tiene
+ *   `linkedin_slug`/`linkedin_url`), pero el actor lo DEVUELVE en cada vacante, así
+ *   que se puede ir poblando desde los propios resultados. Ver la nota de
+ *   `belongsToCompany` en apify-job-ingest.ts.
  * - `publishedAt` es un ENUM cerrado. La propia API rechaza cualquier otro valor:
  *   "must be equal to one of the allowed values: "", "r2592000", "r604800",
  *   "r86400"". O sea: 1 día, 7 días, 30 días o sin límite. NO existe una ventana
  *   de 180 días, así que cualquier pedido más amplio que 30 días se traduce a ""
  *   (sin límite) en lugar de fallar o de mentir sobre la ventana aplicada.
+ *   VERIFICADO que el filtro funciona y no anula resultados: ARCOR con
+ *   `publishedAt: r2592000` devolvió vacantes de 1, 11 y 14 días de antigüedad,
+ *   todas dentro de la ventana. Combinar `companyName` + `publishedAt` es válido y
+ *   la ventana se delega al actor, sin filtrar de nuestro lado.
  * - `title` es el término de búsqueda por TÍTULO DE PUESTO, no un filtro de
  *   empresa. Buscar con title="Arcor" devolvió 20 vacantes de las cuales solo 5
  *   eran de Grupo Arcor: el resto era de Medifé, ArcelorMittal y Worley.
@@ -101,6 +125,22 @@ export function companyNameVariants(name: string, linkedinUrl?: string | null): 
   if (slug) push(slug.replace(/-/g, " "))
 
   return out.slice(0, 4)
+}
+
+/**
+ * ¿Está Apify configurado en ESTE deployment?
+ *
+ * Permite fallar antes de producir efectos colaterales. Sin esto el token se
+ * valida recién dentro de `runLinkedinJobsActor`, o sea después de haber exigido
+ * que la cuenta esté guardada y después de reservar cuota: el usuario ocupa un
+ * lugar de su plan por una capacidad que este deployment no puede ejecutar.
+ *
+ * Pasó de verdad: `APIFY_TOKEN` estaba en un proyecto de Vercel y el dominio que
+ * atendía el MCP era otro, así que la tool devolvía APIFY_TOKEN_MISSING recién al
+ * final. Solo se mira el token: `APIFY_ACTOR_ID` tiene fallback.
+ */
+export function isApifyConfigured(): boolean {
+  return Boolean(process.env.APIFY_TOKEN)
 }
 
 export interface ApifyRunResult {
