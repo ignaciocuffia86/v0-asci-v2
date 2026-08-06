@@ -20,6 +20,7 @@ import {
   ChevronDown,
   ChevronRight,
   Factory,
+  Network,
 } from "lucide-react"
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
@@ -86,6 +87,11 @@ const sidebarItems = [
     title: "Exportaciones",
     href: "/admin/export",
     icon: Download,
+  },
+  {
+    title: "Arquitectura",
+    href: "/admin/architecture",
+    icon: Network,
   },
 ]
 
