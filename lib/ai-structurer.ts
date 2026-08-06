@@ -1,4 +1,5 @@
 import { generateText } from "ai"
+import { logAiUsage, type UsageFeature } from "@/lib/v3/usage"
 
 /**
  * Devuelve los tokens significativos (>=4 chars) del nombre de la empresa,
@@ -60,6 +61,7 @@ export async function structureWithLLM<T>({
   maxRetries = 3,
   model = "google/gemini-2.0-flash",
   context = "llm",
+  tracking,
 }: {
   systemPrompt: string
   userPrompt: string
@@ -69,12 +71,23 @@ export async function structureWithLLM<T>({
   model?: string
   /** Etiqueta para identificar la llamada en los logs (ej: "news", "impl", "docs"). */
   context?: string
+  /**
+   * Atribución opcional del costo. Sin esto la llamada igual se registra (con
+   * workspace/empresa en null), porque el objetivo es que NINGÚN gasto quede
+   * fuera de la contabilidad; los campos solo mejoran a quién se le imputa.
+   */
+  tracking?: {
+    workspaceId?: string | null
+    userId?: string | null
+    companyId?: string | null
+    feature?: UsageFeature
+  }
 }): Promise<T> {
   let lastError: unknown
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const { text } = await generateText({
+      const { text, usage } = await generateText({
         model,
         system: systemPrompt,
         prompt: userPrompt,
@@ -88,6 +101,29 @@ export async function structureWithLLM<T>({
             responseMimeType: "application/json",
           },
         },
+      })
+
+      // Registrar el gasto ACÁ, apenas vuelve el modelo y antes de parsear.
+      //
+      // Dos razones para no ponerlo después del JSON.parse:
+      //  1. Estos tokens ya se pagaron pase lo que pase. Si el parse falla y se
+      //     reintenta, el intento fallido igual se facturó — loguear solo el
+      //     éxito escondía justamente el costo de los reintentos.
+      //  2. Antes esta función no registraba NADA, así que todo el gasto de los
+      //     caminos de v2 (/research/news, /research/implementations, public-docs)
+      //     era invisible en v3.ai_usage_log.
+      //
+      // No se hace `await` a propósito: es fire-and-forget para no sumar latencia
+      // a la respuesta, y `logAiUsage` nunca lanza.
+      void logAiUsage({
+        workspaceId: tracking?.workspaceId ?? null,
+        userId: tracking?.userId ?? null,
+        companyId: tracking?.companyId ?? null,
+        feature: tracking?.feature ?? "research-structure",
+        model,
+        inputTokens: usage?.inputTokens ?? 0,
+        outputTokens: usage?.outputTokens ?? 0,
+        metadata: { context, attempt, source: "ai-structurer" },
       })
 
       const cleaned = stripMarkdownFences(text)
