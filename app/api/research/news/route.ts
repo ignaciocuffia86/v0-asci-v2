@@ -1,26 +1,54 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextResponse } from "next/server"
+import { z } from "zod"
 import { parallelSearch, buildNewsSearchParams } from "@/lib/parallel"
-import {
-  structureWithLLM,
-  filterRelevantToCompany,
-  checkUrlsAlive,
-  STRUCTURER_DEFAULT_MODEL,
-} from "@/lib/ai-structurer"
+import { filterRelevantToCompany, checkUrlsAlive, STRUCTURER_DEFAULT_MODEL } from "@/lib/ai-structurer"
+import { structure } from "@/lib/research/engine"
 import { GEMINI_SYSTEM } from "@/lib/news-prompt"
 
 const NEWS_CACHE_DAYS = 30 // Refresh at most once per month
 const MAX_NEWS = 15
 
-interface GeminiNewsResult {
-  news: any[]
-  digest: string | null
-}
+/**
+ * Schema de la salida del structurer.
+ *
+ * ── Esto es lo que mata el bug de los 2 meses ──
+ * Antes esta etapa era `generateText` + `JSON.parse` a mano: una respuesta
+ * truncada era un string invalido que caia al `catch`, y el `catch` publicaba
+ * excerpts crudos como si fueran noticias (47 filas de basura en produccion,
+ * durante 2 meses, sin una sola alerta). Con un schema, el SDK valida y LANZA:
+ * el camino silencioso no existe.
+ *
+ * Los campos son laxos a proposito (`nullable`, sin enum en `category`) porque
+ * el objetivo del schema es garantizar la FORMA, no adivinar el contenido. Un
+ * schema demasiado estricto se convierte en otra fuente de fallos: de hecho
+ * `category` en la base ya tiene valores fuera del enum del prompt (incluido el
+ * typo "alanzas"), asi que restringirlo aca tiraria noticias validas.
+ */
+const NewsSchema = z.object({
+  news: z
+    .array(
+      z.object({
+        /** 1-based, apunta a la fuente de Parallel. Es la clave del mapeo determinista. */
+        source_index: z.number(),
+        title: z.string(),
+        summary: z.string().nullable(),
+        source_name: z.string().nullable(),
+        published_at: z.string().nullable(),
+        category: z.string().nullable(),
+      })
+    )
+    .default([]),
+  digest: z.string().nullable().default(null),
+})
+
+type NewsItem = z.infer<typeof NewsSchema>["news"][number]
 
 async function structureNewsWithGemini(
   excerpts: { url: string; title: string; publish_date: string | null; content: string }[],
   companyName: string,
-): Promise<GeminiNewsResult> {
+  tracking: { userId: string; companyId: string },
+): Promise<{ news: NewsItem[]; digest: string | null }> {
   const excerptText = excerpts
     .map(
       (e, i) =>
@@ -30,46 +58,19 @@ async function structureNewsWithGemini(
 
   const userPrompt = `Empresa: "${companyName}"\n\nExcerpts de busqueda web:\n\n${excerptText}\n\nExtrae las noticias relevantes en JSON.`
 
-  const parsed = await structureWithLLM<{ news?: any[]; digest?: string | null }>({
+  // Sin `maxOutputTokens`: el tope de 4000 que habia aca fue EL GATILLO del
+  // incidente. El modelo gastaba el presupuesto razonando y el JSON salia
+  // cortado a mitad de string.
+  const parsed = await structure({
+    schema: NewsSchema,
     systemPrompt: GEMINI_SYSTEM,
     userPrompt,
-    maxOutputTokens: 4000,
     temperature: 0.2,
     context: "news",
+    tracking: { userId: tracking.userId, companyId: tracking.companyId, feature: "research-structure" },
   })
 
-  return {
-    news: parsed.news ?? [],
-    digest: parsed.digest ?? null,
-  }
-}
-
-/**
- * Fallback degradado: cuando Gemini falla despues de retries, publicamos los
- * excerpts crudos de Parallel (sin categorizacion ni summary IA) para que el
- * usuario vea AL MENOS los resultados de la busqueda en lugar del empty state.
- */
-function buildDegradedNewsItems(
-  excerpts: { url: string; title: string; publish_date: string | null; content: string }[],
-): GeminiNewsResult {
-  const news = excerpts.slice(0, 12).map((e, idx) => {
-    let hostname: string
-    try {
-      hostname = new URL(e.url).hostname.replace(/^www\./, "")
-    } catch {
-      hostname = "fuente"
-    }
-    const summary = e.content.replace(/\s+/g, " ").trim().slice(0, 240)
-    return {
-      source_index: idx + 1,
-      title: e.title || hostname,
-      summary: summary || null,
-      source_name: hostname,
-      published_at: e.publish_date,
-      category: null,
-    }
-  })
-  return { news, digest: null }
+  return { news: parsed.news, digest: parsed.digest }
 }
 
 // ── Date helpers ────────────────────────────────────────────────────────
@@ -258,7 +259,10 @@ export async function POST(request: Request) {
     // las 47 filas siguientes salieron en `degraded-fallback`. Estaba hardcodeada en
     // "gemini-2.0-flash", así que al cambiar el default habría seguido estampando el nombre del
     // modelo muerto y arruinado justamente la señal que hizo visible el incidente.
-    let aiProvider: string = STRUCTURER_DEFAULT_MODEL
+    //
+    // Ahora es `const`: al eliminarse el fallback degradado, NINGÚN camino puede volver a escribir
+    // `degraded-fallback`. Que el compilador lo garantice vale más que un comentario pidiéndolo.
+    const aiProvider: string = STRUCTURER_DEFAULT_MODEL
 
     // Paso A: llamar a Parallel. Si falla la busqueda, capturamos y caemos a cache vieja.
     let parallelResults: Awaited<ReturnType<typeof parallelSearch>> | null = null
@@ -288,19 +292,30 @@ export async function POST(request: Request) {
         content: r.excerpts.join("\n"),
       }))
 
-      let structured: any[] = []
+      let structured: NewsItem[] = []
       try {
         console.log(`[v0] News: Structuring with AI Gateway (${STRUCTURER_DEFAULT_MODEL})...`)
-        const result = await structureNewsWithGemini(excerpts, companyName)
+        const result = await structureNewsWithGemini(excerpts, companyName, {
+          userId: user.id,
+          companyId,
+        })
         structured = result.news
         geminiDigest = result.digest
         console.log("[v0] News: Gemini structured", structured.length, "items, digest:", geminiDigest ? "generated" : "none")
-      } catch (geminiError) {
-        console.error("[v0] News: Gemini structuring failed after retries, using degraded fallback:", geminiError)
-        const degraded = buildDegradedNewsItems(excerpts)
-        structured = degraded.news
-        geminiDigest = degraded.digest
-        aiProvider = "degraded-fallback"
+      } catch (structureError) {
+        // NO hay fallback degradado, a proposito.
+        //
+        // Antes aca se publicaban los excerpts crudos de Parallel como si fueran
+        // noticias. Eso parecia "mejor que un empty state", pero era peor por
+        // tres razones: (1) escribia basura PERMANENTE en la base (47 filas con
+        // titulos como "Noticias | Infobae" y markdown crudo), (2) el usuario no
+        // podia distinguirla de una noticia real, y (3) al no fallar nunca, el
+        // modelo retirado paso 2 meses roto sin que nadie se enterara.
+        //
+        // Dejando `structured` vacio, el flujo cae al paso 4 (cache vieja), que
+        // muestra noticias REALES de una corrida anterior y no contamina nada.
+        console.error("[v0][news] Structuring FALLO; se cae a cache vieja sin escribir nada:", structureError)
+        structured = []
       }
 
       // Guardrail post-LLM: descartar items que NO mencionan el nombre de la empresa
@@ -363,7 +378,7 @@ export async function POST(request: Request) {
       })
     }
 
-    // ── 4. Fallback to old cache if no results ───────────────────────
+    // ── 4. Fallback to old cache if no results ──────────────────────��
     if (newsItems.length === 0) {
       console.log("[v0][news][empty] No items after Parallel+Gemini. Checking old cache...")
       const oldCache = await getAnyCache(supabase, companyId)
