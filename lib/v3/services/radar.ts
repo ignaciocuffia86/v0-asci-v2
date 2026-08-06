@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto"
-import { generateText, generateObject, stepCountIs } from "ai"
-import { anthropic } from "@ai-sdk/anthropic"
+import { generateText, generateObject } from "ai"
 import { z } from "zod"
+// `collect` centraliza la busqueda web server-side (antes duplicada aca).
+import { collect } from "@/lib/research/engine"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { loadDictionary, resolveProductByName, resolveProcessByName, suggestDictionaryTerm } from "./dictionary"
 import { LIMITS, MODELS, type RadarType } from "./types"
@@ -123,59 +124,31 @@ async function researchBundle(
 
   const prompt = await renderPrompt("radar.base", { context, focus })
 
-  const userLocation = input.country
-    ? ({ type: "approximate" as const, country: countryToISO(input.country) })
-    : undefined
-
-  const { text, usage, sources, steps } = await generateText({
-    model: MODELS.RESEARCH,
+  // Delega en el `collect` del motor unificado.
+  //
+  // Esta funcion era un duplicado casi literal de `lib/research/engine.collect`:
+  // mismo `generateText`, mismo `web_search` de Anthropic, mismo dedup de fuentes
+  // citadas, mismo conteo de busquedas. La unica diferencia real era
+  // `maxOutputTokens: 4096`, que es justo el parametro que el motor NO fija a
+  // proposito: un tope de salida fue el gatillo del incidente de noticias, donde
+  // el modelo gastaba el presupuesto razonando y cortaba la respuesta.
+  //
+  // Se conserva `countryToISO` porque el motor espera ISO-2 ya resuelto.
+  return await collect({
     prompt,
-    temperature: 0.3,
-    maxOutputTokens: 4096,
-    tools: {
-      // Server-side web search de Anthropic (se ejecuta y cita en el proveedor,
-      // atravesando el AI Gateway). El cast salva un desajuste de generics del
-      // tipo Tool entre las versiones de @ai-sdk/* — el runtime es correcto.
-      web_search: anthropic.tools.webSearch_20250305({
-        maxUses: MAX_WEB_SEARCHES,
-        ...(userLocation ? { userLocation } : {}),
-      }),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any,
-    // Permitir varias rondas de búsqueda + síntesis final.
-    stopWhen: stepCountIs(MAX_WEB_SEARCHES + 2),
-  })
-
-  // Sólo URLs realmente citadas por Claude (dedup por URL).
-  const seen = new Set<string>()
-  const verifiedSources: VerifiedSource[] = []
-  for (const s of sources ?? []) {
-    if (s.sourceType !== "url" || !s.url || seen.has(s.url)) continue
-    seen.add(s.url)
-    verifiedSources.push({ url: s.url, title: s.title ?? null })
-  }
-
-  // Contar cuántas búsquedas web se ejecutaron (para métricas de costo).
-  let searchCount = 0
-  for (const step of steps ?? []) {
-    for (const call of step.toolCalls ?? []) {
-      if (call.toolName === "web_search") searchCount++
-    }
-  }
-
-  await logAiUsage({
-    feature: radarType === "news" ? "radar-news" : "radar-tech",
+    companyName: input.companyName,
+    countryISO: input.country ? countryToISO(input.country) : null,
+    maxSearches: MAX_WEB_SEARCHES,
     model: MODELS.RESEARCH,
-    inputTokens: usage?.inputTokens,
-    outputTokens: usage?.outputTokens,
-    companyId: input.companyId,
-    metadata: { stage: "research", web_searches: searchCount, sources: verifiedSources.length },
-    workspaceId: input.workspaceId ?? null,
-    researchJobId: input.researchJobId ?? null,
-    generationMode: "server_managed",
+    temperature: 0.3,
+    context: radarType === "news" ? "radar-news" : "radar-tech",
+    tracking: {
+      workspaceId: input.workspaceId ?? null,
+      companyId: input.companyId,
+      researchJobId: input.researchJobId ?? null,
+      feature: radarType === "news" ? "radar-news" : "radar-tech",
+    },
   })
-
-  return { text, sources: verifiedSources, searchCount }
 }
 
 /** Mapea nombres de país comunes a código ISO-2 para userLocation de web_search. */
