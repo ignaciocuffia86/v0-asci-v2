@@ -154,6 +154,41 @@ function normalizeCompanyName(value: string): string {
     .trim()
 }
 
+/**
+ * Palabras que no aportan identidad y se ignoran al comparar por palabra.
+ *
+ * Son las mismas que descarta `normalizeCompanyName`, más las partículas que
+ * aparecen en los nombres de la base ("Arcor de Perú", "Arcor do Brasil"). Sin
+ * ellas, "Arcor" no coincidiría con "Grupo Arcor".
+ */
+const STOP_WORDS = new Set([
+  "sa", "saic", "sas", "srl", "sai", "inc", "llc", "ltd", "corp", "company", "co",
+  "grupo", "group", "holding", "holdings", "the", "de", "del", "do", "da", "of", "y", "and",
+])
+
+/**
+ * Países/gentilicios que NO son ruido: distinguen una filial de la matriz.
+ *
+ * En la base conviven "Arcor", "Arcor de Perú" y "Arcor do Brasil" como empresas
+ * separadas, y el criterio del proyecto es que **las filiales no se unifican**. Si
+ * estas palabras se trataran como stop words, una vacante de "Grupo Arcor" (que
+ * normaliza a "arcor") se atribuiría también a la filial peruana.
+ *
+ * Van aparte de STOP_WORDS porque la regla es asimétrica: sobran para decidir la
+ * identidad del nombre, pero su PRESENCIA en un solo lado es una diferencia real.
+ *
+ * "argentina" queda AFUERA a propósito: `normalizeCompanyName` ya la elimina, así
+ * que "Banco BBVA Argentina" y "BBVA" normalizan igual y matchean por el camino
+ * exacto. Incluirla acá rompía ese caso legítimo (la mayoría de las cuentas son
+ * argentinas y el sufijo no distingue nada). El precio es que una filial argentina
+ * de una matriz extranjera no se separa por nombre; para eso está el slug.
+ */
+const GEO_WORDS = new Set([
+  "peru", "brasil", "brazil", "chile", "uruguay", "paraguay", "bolivia",
+  "colombia", "mexico", "ecuador", "venezuela", "espana", "spain", "usa", "us",
+  "latam", "andina", "mercosur",
+])
+
 /** Extrae el slug de empresa de una URL de LinkedIn (`/company/grupo-arcor`). */
 function linkedinCompanySlug(url: string | null | undefined): string | null {
   if (!url) return null
@@ -171,8 +206,21 @@ function linkedinCompanySlug(url: string | null | undefined): string | null {
  * fila, esas 15 vacantes ajenas quedarían atribuidas a la cuenta en la tabla de
  * producción que lee v2. Es decir: evidencia falsa sobre una cuenta real.
  *
- * Se compara primero por slug de LinkedIn (identificador estable) y recién después
- * por nombre normalizado, que es más laxo.
+ * Orden de comparación, de más fuerte a más débil:
+ *   1. slug de LinkedIn — identificador estable, si ambos lados lo tienen decide solo.
+ *   2. nombre normalizado exacto.
+ *   3. contención por PALABRA (ver abajo por qué no alcanza la contención de texto).
+ *
+ * El caso que motivó el punto 3: una vacante de "Grupo Arcor" normaliza a "arcor"
+ * (el normalizador quita "grupo"), y con una contención de texto suelta eso daba
+ * por buenas las cuentas "Arcort SRL" y "Arcorp S.A." — dos empresas REALES de
+ * nuestra base, sin ninguna relación con Arcor. La contención tiene que exigir que
+ * el nombre corto sea una PALABRA completa del largo, no un prefijo cualquiera.
+ *
+ * El actor además devuelve `companyId` (el ID numérico de LinkedIn, ej. 382280 para
+ * Grupo Arcor), que sería el filtro exacto y sin homónimos. Todavía no se usa porque
+ * `companies` no guarda ese ID: solo hay `linkedin_slug`/`linkedin_url`. Se puede ir
+ * poblando desde estos mismos resultados y en ese momento pasa a ser el punto 1.
  */
 function belongsToCompany(
   item: ApifyJobItem,
@@ -187,9 +235,32 @@ function belongsToCompany(
   const a = normalizeCompanyName(itemName)
   const b = normalizeCompanyName(company.name)
   if (!a || !b) return false
-  // Se admite la contención en un sentido u otro ("Arcor" vs "Grupo Arcor"), pero
-  // exigiendo una longitud mínima para que un fragmento corto no matchee de casualidad.
-  return a === b || (a.length >= 4 && b.length >= 4 && (a.includes(b) || b.includes(a)))
+  if (a === b) return true
+
+  // Contención por palabra. Se comparan los nombres SIN normalizar a un string
+  // pegado, porque "arcor" ⊂ "arcorp" es cierto como texto y falso como empresa.
+  const words = (v: string) =>
+    v
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w && !STOP_WORDS.has(w))
+  const wa = words(itemName)
+  const wb = words(company.name)
+  if (wa.length === 0 || wb.length === 0) return false
+
+  // Una marca geográfica presente en un solo lado indica filial distinta: "Arcor"
+  // (matriz) no es "Arcor de Perú". Si aparece en ambos, tiene que ser la misma.
+  const geoA = wa.filter((w) => GEO_WORDS.has(w)).sort().join(",")
+  const geoB = wb.filter((w) => GEO_WORDS.has(w)).sort().join(",")
+  if (geoA !== geoB) return false
+
+  // El nombre más corto tiene que estar contenido, palabra por palabra, en el más
+  // largo: "arcor" ⊂ ["grupo","arcor"] pasa; "arcor" ⊄ ["arcorp"] no.
+  const [short, long] = wa.length <= wb.length ? [wa, wb] : [wb, wa]
+  const longSet = new Set(long)
+  return short.every((w) => longSet.has(w)) && short.some((w) => w.length >= 4)
 }
 
 export async function ingestApifyJobPostings(params: {
