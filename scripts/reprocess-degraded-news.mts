@@ -53,6 +53,10 @@ import { GEMINI_SYSTEM, NewsSchema, type NewsItem } from "@/lib/news-prompt"
 
 const args = process.argv.slice(2)
 const commit = args.includes("--commit")
+// `--full` imprime TODAS las correcciones en vez de las primeras 12. Existe
+// porque revisar antes de escribir en produccion es el caso de uso real: con el
+// reporte cortado no se puede dar un OK informado sobre las filas 13 a 41.
+const full = args.includes("--full")
 const limitIdx = args.indexOf("--limit")
 const limitEmpresas = limitIdx >= 0 ? Number(args[limitIdx + 1]) : Infinity
 
@@ -246,15 +250,19 @@ async function main() {
 
   // ── Reporte del diff ──
   console.log(`\n${"=".repeat(78)}\nCORRECCIONES (${aActualizar.length})\n${"=".repeat(78)}`)
-  for (const { fila, nuevo } of aActualizar.slice(0, 12)) {
-    console.log(`\n[${fila.empresa}]`)
-    console.log(`  titulo  ANTES: ${recorta(fila.title, 88)}`)
-    console.log(`          AHORA: ${recorta(nuevo.title, 88)}`)
-    console.log(`  resumen ANTES: ${recorta(fila.summary, 88)}`)
-    console.log(`          AHORA: ${recorta(nuevo.summary, 88)}`)
+  const aMostrar = full ? aActualizar : aActualizar.slice(0, 12)
+  aMostrar.forEach(({ fila, nuevo }, i) => {
+    console.log(`\n${String(i + 1).padStart(3)}. [${fila.empresa}]  id=${fila.id}`)
+    console.log(`  titulo  ANTES: ${recorta(fila.title, 92)}`)
+    console.log(`          AHORA: ${recorta(nuevo.title, 92)}`)
+    console.log(`  resumen ANTES: ${recorta(fila.summary, 92)}`)
+    console.log(`          AHORA: ${recorta(nuevo.summary, 92)}`)
     console.log(`  categoria: ${fila.category ?? "null"} -> ${nuevo.category ?? "null"}`)
+    console.log(`  ${fila.source_url}`)
+  })
+  if (!full && aActualizar.length > 12) {
+    console.log(`\n  ... y ${aActualizar.length - 12} mas. Usa --full para verlas todas.`)
   }
-  if (aActualizar.length > 12) console.log(`\n  ... y ${aActualizar.length - 12} mas`)
 
   console.log(`\n${"=".repeat(78)}\nNO RECONOCIDAS COMO NOTICIA (${aDescartar.length}) — decision humana\n${"=".repeat(78)}`)
   console.log(`  El modelo no las devolvio. Revisar a ojo: hay basura obvia (homepages, PDFs`)
