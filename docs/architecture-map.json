@@ -1,15 +1,15 @@
 {
   "meta": {
     "name": "ASCI — Mapa de arquitectura v2 + v3",
-    "generatedAt": "2026-08-04",
+    "generatedAt": "2026-08-06",
     "repo": "ignaciocuffia86/v0-asci-v2",
-    "summary": "Monorepo Next.js único donde conviven ASCI v2 (producción, schema public) y ASCI v3 (multitenant, schema v3) sobre la MISMA base Supabase. El aislamiento es por schema, no por proyecto ni por base.",
+    "summary": "Monorepo Next.js único donde conviven ASCI v2 (producción, schema public) y ASCI v3 (multitenant, schema v3) sobre la MISMA base Supabase. El aislamiento es por schema, no por proyecto ni por base. Actualización 2026-08-06: todo el research pasa por un motor único (lib/research/engine.ts, collect -> structure -> verify) que reemplazó a structureWithLLM en los 4 caminos; es el primer módulo realmente compartido entre v2 y v3.",
     "stats": {
-      "tsFiles": 371,
-      "apiRoutes": 48,
-      "pages": 45,
-      "crons": 9,
-      "sqlScripts": 235,
+      "tsFiles": 370,
+      "apiRoutes": 51,
+      "pages": 49,
+      "crons": 10,
+      "sqlScripts": 237,
       "tablesPublic": 54,
       "tablesV3": 47,
       "mcpTools": 36
@@ -68,10 +68,11 @@
       "zone": "external",
       "layer": 0,
       "kind": "api",
-      "desc": "Búsqueda con citas para research de cuentas y noticias.",
+      "desc": "Búsqueda con citas. NO se usa en research: su único consumidor es lib/ai-service.ts, o sea documentos y los briefs/resúmenes de bookmarks. El research de v2 y v3 va por el motor (Anthropic para recolectar, Gemini para estructurar).",
       "env": [
         "PERPLEXITY_API_KEY"
-      ]
+      ],
+      "risk": "El mapa lo daba como buscador de research en tres lugares (tech-radar, radar de v3 y el drilldown) y el código no lo respaldaba en ninguno. Verificado por grep de PERPLEXITY_API_KEY: solo aparece en lib/ai-service.ts. Es una arista fácil de asumir de más al leer el mapa."
     },
     {
       "id": "ext_parallel",
@@ -1812,8 +1813,9 @@
     {
       "id": "e72",
       "from": "svc_v3_radar",
-      "to": "ext_perplexity",
-      "kind": "call"
+      "to": "ext_gemini",
+      "kind": "call",
+      "label": "estructura hallazgos (generateObject)"
     },
     {
       "id": "e73",
@@ -2257,6 +2259,20 @@
       "to": "db_ai_usage",
       "kind": "write",
       "label": "costo por etapa"
+    },
+    {
+      "id": "e142",
+      "from": "svc_documents_v2",
+      "to": "svc_ai_v2",
+      "kind": "call",
+      "label": "analiza / extrae / perfila"
+    },
+    {
+      "id": "e143",
+      "from": "svc_ai_v2",
+      "to": "ext_perplexity",
+      "kind": "call",
+      "label": "único consumidor real"
     }
   ],
   "flows": [
@@ -3535,9 +3551,9 @@
         "lib/tech-radar.ts vs lib/v3/services/radar*.ts",
         "app/actions/search-v2.ts vs lib/v3/services/capability-search.ts"
       ],
-      "finding": "Cada capacidad transversal (IA, documentos, radar, búsqueda, dedupe, digest) tiene una implementación en v2 y otra en v3, sin un módulo compartido ni una regla explicita de que puede depender de que.",
-      "why": "Es el costo esperable de convivir sin romper producción, pero hoy no esta acotado: nada impide que v3 importe un módulo de v2 y quede acoplado a un cambio futuro. Solo v3 registra el costo de IA en ai_usage_log, así que el gasto de v2 es invisible.",
-      "fix": "Declarar la frontera y hacerla verificable: lib/shared/ para lo comun, prohibicion por lint de que lib/v3 importe de lib/ raiz salvo desde esa carpeta. Como primer paso concreto, unificar la capa de IA para que v2 también registre costo."
+      "finding": "Cada capacidad transversal (IA, documentos, radar, búsqueda, dedupe, digest) tiene una implementación en v2 y otra en v3, sin un módulo compartido ni una regla explicita de que puede depender de que. PARCIALMENTE RESUELTO para research: lib/research/engine.ts es el primer módulo compartido real y los 4 caminos (news, tech-radar x2, radar de v3) ya lo usan.",
+      "why": "Es el costo esperable de convivir sin romper producción, pero hoy no esta acotado: nada impide que v3 importe un módulo de v2 y quede acoplado a un cambio futuro. El punto del costo invisible de IA en v2 YA NO APLICA para research: el motor registra en v3.ai_usage_log de forma incondicional en las tres etapas, así que las rutas de v2 que pasan por él (news con research-collect y research-structure) ahora sí se ven. El resto de la capa de IA de v2 sigue sin instrumentar.",
+      "fix": "Declarar la frontera y hacerla verificable: lib/shared/ para lo comun, prohibicion por lint de que lib/v3 importe de lib/ raiz salvo desde esa carpeta. El motor de research ya demostró que el patrón funciona y que además elimina duplicación real (researchBundle de v3 era un clon de collect()); replicarlo en documentos y búsqueda. Ojo con la ubicación: el motor vive en lib/research/ y escribe en el schema v3, así que la frontera todavía no está declarada, solo practicada."
     },
     {
       "id": "OPT-13",
