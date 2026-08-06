@@ -35,6 +35,19 @@ import { z } from "zod"
  * demasiado estricto se vuelve otra fuente de fallos: `category` en la base ya
  * tiene valores fuera del enum del prompt (incluido el typo "alanzas"), asi que
  * restringirlo aca tiraria noticias validas.
+ *
+ * ── Por que `news` y `digest` NO llevan `.default()` ──
+ * Llevaban `.default([])` y `.default(null)`, y eso ROMPIA el digest. Motivo:
+ * `.default()` marca el campo como OPCIONAL en el JSON Schema que el SDK le pasa
+ * al modelo, asi que el modelo lo lee como "podes omitirlo" y lo omite, por mucho
+ * que el prompt dedique un parrafo entero a pedirlo.
+ *
+ * Medido con el mismo input y 3 corridas por variante: con `.default()` el digest
+ * salio 0/3; declarado `nullable` y REQUERIDO, 3/3. `nullable` sin `.default()`
+ * obliga a que la clave este presente y a la vez permite null cuando de verdad no
+ * hay noticias, que es lo que pide la regla 5 del prompt.
+ *
+ * El sintoma era invisible: no hay error, solo un digest que nunca se genera.
  */
 export const NewsSchema = z.object({
   news: z
