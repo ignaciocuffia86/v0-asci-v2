@@ -1,7 +1,13 @@
 /**
- * Prompt de estructuracion de noticias, compartido por el endpoint y los scripts.
+ * Prompt Y schema de estructuracion de noticias, compartidos por el endpoint y
+ * los scripts.
  *
- * Vive en su propio modulo, sin dependencias, por dos razones:
+ * El schema vive JUNTO al prompt a proposito: tienen que coincidir. Con
+ * `generateObject`, un prompt que pide un campo que el schema no declara (o al
+ * reves) hace fallar la llamada entera. Separarlos en dos archivos es garantizar
+ * que algun dia deriven.
+ *
+ * Vive en su propio modulo, sin dependencias pesadas, por dos razones:
  *
  * 1. Una sola fuente de verdad. `scripts/reprocess-degraded-news.mts` reprocesa
  *    filas historicas y tiene que usar el prompt EXACTO de produccion; si lo
@@ -12,6 +18,42 @@
  *    modulo y lanza si falta `PARALLEL_API_KEY`. Un prompt no deberia obligar a
  *    tener credenciales de un servicio de busqueda para poder leerlo.
  */
+
+import { z } from "zod"
+
+/**
+ * Forma esperada de la salida del structurer.
+ *
+ * ── Esto es lo que mata el bug de los 2 meses ──
+ * Antes la etapa era `generateText` + `JSON.parse`: una respuesta truncada era
+ * un string invalido que caia al `catch`, y el `catch` publicaba excerpts crudos
+ * como si fueran noticias (47 filas de basura en produccion, sin una sola
+ * alerta). Con un schema, el SDK valida y LANZA.
+ *
+ * Los campos son LAXOS a proposito (`nullable`, `category` sin enum) porque el
+ * schema esta para garantizar la FORMA, no para adivinar el contenido. Un schema
+ * demasiado estricto se vuelve otra fuente de fallos: `category` en la base ya
+ * tiene valores fuera del enum del prompt (incluido el typo "alanzas"), asi que
+ * restringirlo aca tiraria noticias validas.
+ */
+export const NewsSchema = z.object({
+  news: z
+    .array(
+      z.object({
+        /** 1-based. Es la clave del mapeo determinista item -> URL de la fuente. */
+        source_index: z.number(),
+        title: z.string(),
+        summary: z.string().nullable(),
+        source_name: z.string().nullable(),
+        published_at: z.string().nullable(),
+        category: z.string().nullable(),
+      })
+    )
+    .default([]),
+  digest: z.string().nullable().default(null),
+})
+
+export type NewsItem = z.infer<typeof NewsSchema>["news"][number]
 
 export const GEMINI_SYSTEM = `Eres un analista de inteligencia comercial B2B.
 Se te dan excerpts de paginas web sobre una empresa. Tu tarea es extraer noticias relevantes como senales de compra B2B.

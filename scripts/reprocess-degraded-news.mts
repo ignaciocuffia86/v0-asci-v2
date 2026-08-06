@@ -47,8 +47,9 @@
  */
 
 import pg from "pg"
-import { structureWithLLM, filterRelevantToCompany, STRUCTURER_DEFAULT_MODEL } from "@/lib/ai-structurer"
-import { GEMINI_SYSTEM } from "@/lib/news-prompt"
+import { filterRelevantToCompany, STRUCTURER_DEFAULT_MODEL } from "@/lib/ai-structurer"
+import { structure } from "@/lib/research/engine"
+import { GEMINI_SYSTEM, NewsSchema, type NewsItem } from "@/lib/news-prompt"
 
 const args = process.argv.slice(2)
 const commit = args.includes("--commit")
@@ -172,18 +173,26 @@ async function main() {
 
     process.stdout.write(`[v0] ${empresa} (${filas.length} filas)... `)
 
-    let devueltas: any[] = []
+    let devueltas: NewsItem[] = []
     let digest: string | null = null
     try {
-      const parsed = await structureWithLLM<{ news?: any[]; digest?: string | null }>({
+      // MISMO camino que produccion (`/api/research/news`): motor unificado con
+      // `generateObject` + el schema compartido, y SIN `maxOutputTokens`.
+      //
+      // Antes este script usaba `structureWithLLM` con el tope de 4000, o sea el
+      // codigo exacto que causo el incidente: iba a reprocesar las filas
+      // degradadas con el mismo mecanismo que las degrado. Ademas cualquier
+      // divergencia entre script y endpoint es la clase de problema que estamos
+      // eliminando.
+      const parsed = await structure({
+        schema: NewsSchema,
         systemPrompt: GEMINI_SYSTEM,
         userPrompt,
-        maxOutputTokens: 4000,
         temperature: 0.2,
-        context: "news",
+        context: "reprocess-degraded",
       })
-      devueltas = parsed.news ?? []
-      digest = parsed.digest ?? null
+      devueltas = parsed.news
+      digest = parsed.digest
     } catch (err: any) {
       console.log(`ERROR: ${err.message.slice(0, 80)}`)
       // Si el modelo falla, NO se toca ninguna fila de esta empresa: quedan

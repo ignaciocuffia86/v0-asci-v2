@@ -1,48 +1,14 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextResponse } from "next/server"
-import { z } from "zod"
 import { parallelSearch, buildNewsSearchParams } from "@/lib/parallel"
 import { filterRelevantToCompany, checkUrlsAlive, STRUCTURER_DEFAULT_MODEL } from "@/lib/ai-structurer"
 import { structure } from "@/lib/research/engine"
-import { GEMINI_SYSTEM } from "@/lib/news-prompt"
+// Prompt Y schema salen del mismo modulo: con `generateObject` tienen que
+// coincidir, asi que tenerlos juntos evita que deriven.
+import { GEMINI_SYSTEM, NewsSchema, type NewsItem } from "@/lib/news-prompt"
 
 const NEWS_CACHE_DAYS = 30 // Refresh at most once per month
 const MAX_NEWS = 15
-
-/**
- * Schema de la salida del structurer.
- *
- * ── Esto es lo que mata el bug de los 2 meses ──
- * Antes esta etapa era `generateText` + `JSON.parse` a mano: una respuesta
- * truncada era un string invalido que caia al `catch`, y el `catch` publicaba
- * excerpts crudos como si fueran noticias (47 filas de basura en produccion,
- * durante 2 meses, sin una sola alerta). Con un schema, el SDK valida y LANZA:
- * el camino silencioso no existe.
- *
- * Los campos son laxos a proposito (`nullable`, sin enum en `category`) porque
- * el objetivo del schema es garantizar la FORMA, no adivinar el contenido. Un
- * schema demasiado estricto se convierte en otra fuente de fallos: de hecho
- * `category` en la base ya tiene valores fuera del enum del prompt (incluido el
- * typo "alanzas"), asi que restringirlo aca tiraria noticias validas.
- */
-const NewsSchema = z.object({
-  news: z
-    .array(
-      z.object({
-        /** 1-based, apunta a la fuente de Parallel. Es la clave del mapeo determinista. */
-        source_index: z.number(),
-        title: z.string(),
-        summary: z.string().nullable(),
-        source_name: z.string().nullable(),
-        published_at: z.string().nullable(),
-        category: z.string().nullable(),
-      })
-    )
-    .default([]),
-  digest: z.string().nullable().default(null),
-})
-
-type NewsItem = z.infer<typeof NewsSchema>["news"][number]
 
 async function structureNewsWithGemini(
   excerpts: { url: string; title: string; publish_date: string | null; content: string }[],
