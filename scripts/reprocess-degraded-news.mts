@@ -60,6 +60,49 @@ const full = args.includes("--full")
 const limitIdx = args.indexOf("--limit")
 const limitEmpresas = limitIdx >= 0 ? Number(args[limitIdx + 1]) : Infinity
 
+/**
+ * Ids que NO se corrigen aunque el modelo haya devuelto algo prolijo.
+ *
+ * Son las filas donde CORREGIR EMPEORA. El modelo hace bien su trabajo -toma el
+ * contenido y lo redacta lindo-, pero el contenido no es una noticia de la
+ * empresa, asi que el resultado es una fila que ya no se distingue de una
+ * noticia real: el daño original, mejor escrito y por eso mas dificil de
+ * encontrar despues.
+ *
+ * Dejarlas en `degraded-fallback` es la opcion conservadora: siguen visiblemente
+ * sospechosas y una query las encuentra en cualquier momento.
+ *
+ * Se pasan por flag y no hardcodeadas para que el script siga siendo generico,
+ * pero el default son las 10 detectadas en la revision manual de las 41.
+ */
+const EXCLUIDAS_POR_DEFECTO: Record<string, string> = {
+  // Avisos de empleo y directorios, no noticias.
+  "840d278e-82b1-419f-9783-c6da086dc79f": "aviso de empleo en laborum.cl",
+  "1370b74e-7117-4175-93c7-78b0b12c9f2e": "listado de directorio GPTW",
+  // Paginacion de blog, no un articulo.
+  "6f9ca1b0-3988-4948-8315-4ca38dc2c439": "paginacion de blog (vinhodosanjos.com.br/page/2)",
+  // Marketing de partners/vendors de Oracle, no noticia de Oracle.
+  "fb625d55-6354-4318-931a-0d6d10d6bc75": "case study de partner (SkillNet)",
+  "89e3834d-0b28-4d21-a88f-d46c49125879": "pagina de servicios de vendor (centroid.com)",
+  "cb0e2d74-cb8f-4652-81dd-1fd2d1a6a9de": "thought-leadership del blog propio de Oracle",
+  // OXXO Chile: el contenido es de OXXO Mexico / Peru / FEMSA consolidado.
+  // El guardrail de nombre las aprueba porque dicen "OXXO", pero la cuenta es
+  // la operacion chilena (verificado: companies.country = Chile).
+  "b47a2293-19fa-4962-8bbd-03ceae9fc493": "PDF de resultados consolidados de FEMSA",
+  "c119f113-d509-409d-98b6-2fb2f49a2c2b": "Spin by OXXO, Mexico",
+  "9655d566-6516-4b49-acc5-a344c0cf9446": "gacetilla de Visa Mexico",
+  "91125eea-b9bd-49d6-867e-16b749f81110": "OXXO inaugura tienda en Arequipa, Peru",
+}
+
+const excludeIdx = args.indexOf("--exclude-ids")
+const excluidas = new Set(
+  excludeIdx >= 0
+    ? (args[excludeIdx + 1] ?? "").split(",").map((s) => s.trim()).filter(Boolean)
+    : args.includes("--no-exclude")
+      ? []
+      : Object.keys(EXCLUIDAS_POR_DEFECTO)
+)
+
 // Borrado SOLO por ids explicitos, nunca por heuristica.
 //
 // La primera version tenia un `--delete-irrelevant` que borraba todo lo que el
@@ -154,6 +197,8 @@ async function main() {
 
   const aActualizar: Array<{ fila: FilaDegradada; nuevo: any }> = []
   const aDescartar: Array<{ fila: FilaDegradada; motivo: string }> = []
+  /** Reconocidas por el modelo pero excluidas por decision humana. */
+  const aExcluir: Array<{ fila: FilaDegradada; motivo: string }> = []
   const digestPorEmpresa = new Map<string, string | null>()
   let empresasProcesadas = 0
 
@@ -224,8 +269,17 @@ async function main() {
     for (const item of devueltas) {
       const idx = Number(item.source_index)
       if (!Number.isFinite(idx) || idx < 1 || idx > filas.length) continue
+      const fila = filas[idx - 1]
+      // `indicesDevueltos` se marca IGUAL para las excluidas: el modelo si las
+      // reconocio, asi que no son "no reconocidas". Se las saca de la lista de
+      // correcciones pero no se las reclasifica como descartes, porque el motivo
+      // es una decision humana ("esto no es una noticia"), no un fallo del modelo.
       indicesDevueltos.add(idx - 1)
-      aActualizar.push({ fila: filas[idx - 1], nuevo: item })
+      if (excluidas.has(fila.id)) {
+        aExcluir.push({ fila, motivo: EXCLUIDAS_POR_DEFECTO[fila.id] ?? "excluida por flag" })
+        continue
+      }
+      aActualizar.push({ fila, nuevo: item })
     }
 
     filas.forEach((f, i) => {
@@ -264,6 +318,18 @@ async function main() {
     console.log(`\n  ... y ${aActualizar.length - 12} mas. Usa --full para verlas todas.`)
   }
 
+  if (aExcluir.length > 0) {
+    console.log(`\n${"=".repeat(78)}\nEXCLUIDAS A PROPOSITO (${aExcluir.length}) — corregirlas empeoraria\n${"=".repeat(78)}`)
+    console.log(`  El modelo las redacta bien, pero el contenido NO es una noticia de la empresa.`)
+    console.log(`  Corregirlas las volveria indistinguibles de una noticia real. Quedan en`)
+    console.log(`  degraded-fallback, o sea visiblemente sospechosas y faciles de encontrar.`)
+    console.log(`  Para aplicarlas igual:  --no-exclude\n`)
+    for (const { fila, motivo } of aExcluir) {
+      console.log(`  [${fila.empresa}] ${motivo}`)
+      console.log(`    ${fila.id}  ${fila.source_url.slice(0, 72)}`)
+    }
+  }
+
   console.log(`\n${"=".repeat(78)}\nNO RECONOCIDAS COMO NOTICIA (${aDescartar.length}) — decision humana\n${"=".repeat(78)}`)
   console.log(`  El modelo no las devolvio. Revisar a ojo: hay basura obvia (homepages, PDFs`)
   console.log(`  ilegibles) mezclada con noticia legitima que se cayo por variante de razon social.`)
@@ -295,9 +361,17 @@ async function main() {
       const digest = !digestUsado.has(clave) ? (digestPorEmpresa.get(clave) ?? null) : null
       if (digest) digestUsado.add(clave)
 
+      // La categoria NO se sobreescribe si la fila ya tenia una.
+      //
+      // Detectado en la revision: dos filas de Cuscatlan tenian `ma` (la
+      // adquisicion de La Hipotecaria) y el modelo las movia a `alianzas`. `ma`
+      // era MAS correcta y es una categoria real (63 filas en la base). El
+      // proposito de este script es arreglar titulo y summary; degradar una
+      // categoria que ya estaba bien es exactamente el "empeorar" que queremos
+      // evitar. COALESCE deja llenar las nulas, que es la mayoria.
       await c.query(
         `UPDATE public.company_news
-            SET title = $1, summary = $2, category = $3,
+            SET title = $1, summary = $2, category = COALESCE(category, $3),
                 ai_provider = $4,
                 digest = COALESCE($5, digest),
                 digest_generated_at = CASE WHEN $5 IS NOT NULL THEN now() ELSE digest_generated_at END
