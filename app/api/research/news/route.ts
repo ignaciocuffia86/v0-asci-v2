@@ -1,7 +1,12 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextResponse } from "next/server"
 import { parallelSearch, buildNewsSearchParams } from "@/lib/parallel"
-import { structureWithLLM, filterRelevantToCompany, checkUrlsAlive } from "@/lib/ai-structurer"
+import {
+  structureWithLLM,
+  filterRelevantToCompany,
+  checkUrlsAlive,
+  STRUCTURER_DEFAULT_MODEL,
+} from "@/lib/ai-structurer"
 
 const NEWS_CACHE_DAYS = 30 // Refresh at most once per month
 const MAX_NEWS = 15
@@ -292,7 +297,14 @@ export async function POST(request: Request) {
 
     let newsItems: any[] = []
     let geminiDigest: string | null = null
-    let aiProvider = "gemini-2.0-flash"
+    // Se deriva del default real del structurer en vez de hardcodearse.
+    //
+    // Esta columna es la única evidencia forense de qué produjo cada noticia: gracias a ella se
+    // pudo datar que el modelo retirado murió el 3-jun-2026 (última fila `gemini-2.0-flash`) y que
+    // las 47 filas siguientes salieron en `degraded-fallback`. Estaba hardcodeada en
+    // "gemini-2.0-flash", así que al cambiar el default habría seguido estampando el nombre del
+    // modelo muerto y arruinado justamente la señal que hizo visible el incidente.
+    let aiProvider: string = STRUCTURER_DEFAULT_MODEL
 
     // Paso A: llamar a Parallel. Si falla la busqueda, capturamos y caemos a cache vieja.
     let parallelResults: Awaited<ReturnType<typeof parallelSearch>> | null = null
