@@ -4,6 +4,9 @@
 // ═══════════════════════════════════════════════════════════
 
 import type { EvidenceLevel } from "./evidence-level"
+// Modulo LEAF (cero imports) a proposito: se puede importar desde este archivo
+// de tipos sin arrastrar el SDK de IA ni crear ciclos.
+import { STRUCTURER_MODEL } from "@/lib/ai-models"
 
 export type RadarType = "tech" | "news" | "jobs-interpretation"
 
@@ -186,8 +189,16 @@ export const LIMITS = {
 export const MODELS = {
   /** Investigación profunda (etapa A) */
   RESEARCH: "anthropic/claude-opus-4-5",
-  /** Estructuración y tareas baratas (etapa B) */
-  STRUCTURER: "google/gemini-2.5-flash",
+  /**
+   * Estructuración y tareas baratas (etapa B).
+   *
+   * Sale de `lib/ai-models.ts` para que v2 y v3 usen EL MISMO modelo. Antes acá
+   * decía `gemini-2.5-flash` hardcodeado y v2 tenía su propia constante: las dos
+   * apuntaban a un modelo retirado del Gateway y fallaban distinto (v2 en
+   * silencio por acotar `maxOutputTokens`, v3 no porque no lo acota), así que
+   * arreglar una no arreglaba la otra.
+   */
+  STRUCTURER: STRUCTURER_MODEL,
   /** Generación de icebreakers (calidad media, barato) */
   WRITER: "anthropic/claude-sonnet-4-5",
   /** Chat orquestador */
