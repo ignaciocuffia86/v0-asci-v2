@@ -7,56 +7,10 @@ import {
   checkUrlsAlive,
   STRUCTURER_DEFAULT_MODEL,
 } from "@/lib/ai-structurer"
+import { GEMINI_SYSTEM } from "@/lib/news-prompt"
 
 const NEWS_CACHE_DAYS = 30 // Refresh at most once per month
 const MAX_NEWS = 15
-
-// ── Gemini structuring ─────────────────────────────────────────────────
-const GEMINI_SYSTEM = `Eres un analista de inteligencia comercial B2B.
-Se te dan excerpts de paginas web sobre una empresa. Tu tarea es extraer noticias relevantes como senales de compra B2B.
-
-REGLAS DE RELEVANCIA (CRITICAS):
-A. La empresa objetivo (te la indico abajo entre comillas) debe ser el SUJETO PRINCIPAL de la noticia.
-B. EXCLUIR cualquier excerpt donde la empresa objetivo solo se mencione:
-   - al pasar como ejemplo o comparacion ("...como Garbarino, Falabella, etc.")
-   - en una lista de empresas de un sector ("...el rubro retail incluye a X, Y, Z")
-   - en un contexto historico tangencial ("...desde la epoca de la quiebra de X")
-   - en publicidad o cross-mencion no relacionada al hecho noticioso
-C. SI tienes dudas sobre si la empresa es el sujeto principal, EXCLUYE el item. Mejor 0 noticias que 1 ruidosa.
-D. El "title" y el "summary" que generes DEBEN mencionar explicitamente el nombre de la empresa objetivo.
-
-REGLAS DE FORMATO:
-1. Responde UNICAMENTE con JSON valido (sin markdown, sin texto extra).
-2. Resume con TUS PROPIAS PALABRAS, NO copies texto literal.
-3. Cada noticia debe tener relevancia para un vendedor B2B.
-4. Minimo 0, maximo 15 noticias. Prioriza calidad sobre cantidad.
-5. Si no hay noticias relevantes (todas son tangenciales), devuelve {"news":[], "digest": null}
-6. Las fechas deben ser YYYY-MM-DD. Si no hay fecha exacta, intenta inferirla del contexto. Si es imposible, usa null.
-7. CADA item DEBE incluir el campo "source_index" (numero entero >=1) que indica de cual "Fuente N" del listado abajo proviene la noticia. ESTE CAMPO ES OBLIGATORIO. Si una noticia se basa en multiples fuentes, elige la PRIMARIA (la que mas evidencia aporta sobre la empresa). NUNCA inventes URLs ni mezcles fuentes. Si no podes asignar un source_index claro, NO incluyas el item.
-
-CATEGORIAS validas: inversion | transformacion | crecimiento | ejecutivos | desafios | alianzas | regulatorio | ma | innovacion
-
-ADEMAS de las noticias, genera un "digest" de EXACTAMENTE 1 parrafo (2-4 oraciones) en ESPAÑOL que resuma:
-- Los hallazgos mas importantes para un vendedor B2B
-- Senales de compra o oportunidades detectadas
-- Tono: informativo y accionable
-
-El digest debe responder: "¿Por que deberia prestar atencion a esta empresa ahora?"
-
-FORMATO JSON:
-{
-  "news": [
-    {
-      "source_index": 1,
-      "title": "string (titulo descriptivo de la noticia)",
-      "summary": "string (analisis de 150-250 chars de por que es relevante para ventas B2B)",
-      "source_name": "string (nombre del medio/sitio)",
-      "published_at": "YYYY-MM-DD o null",
-      "category": "string (una de las categorias validas)"
-    }
-  ],
-  "digest": "string (parrafo resumen en ESPAÑOL) o null si no hay noticias relevantes"
-}`
 
 interface GeminiNewsResult {
   news: any[]
@@ -336,7 +290,7 @@ export async function POST(request: Request) {
 
       let structured: any[] = []
       try {
-        console.log("[v0] News: Structuring with AI Gateway (gemini-2.0-flash)...")
+        console.log(`[v0] News: Structuring with AI Gateway (${STRUCTURER_DEFAULT_MODEL})...`)
         const result = await structureNewsWithGemini(excerpts, companyName)
         structured = result.news
         geminiDigest = result.digest
