@@ -61,9 +61,8 @@ export const NewsSchema = z.object({
         published_at: z.string().nullable(),
         category: z.string().nullable(),
       })
-    )
-    .default([]),
-  digest: z.string().nullable().default(null),
+    ),
+  digest: z.string().nullable(),
 })
 
 export type NewsItem = z.infer<typeof NewsSchema>["news"][number]

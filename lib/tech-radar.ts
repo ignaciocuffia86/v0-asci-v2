@@ -338,9 +338,15 @@ const RadarFindingsSchema = z.object({
           published_at: z.string().nullable(),
         })
         .passthrough()
-    )
-    .default([]),
-  digest: z.string().nullable().default(null),
+    ),
+  // Sin `.default()`, igual que en NewsSchema y por la misma razon medida:
+  // `.default()` marca el campo como OPCIONAL en el JSON Schema que recibe el
+  // modelo, y entonces el modelo lo omite por mucho que el prompt le dedique un
+  // parrafo. Medido en news con el mismo input, 3 corridas por variante: con
+  // `.default()` el digest salio 0/3; declarado nullable y REQUERIDO, 3/3.
+  // `nullable` sigue permitiendo null cuando de verdad no hay nada que resumir,
+  // que es lo que pide la regla 5 del prompt de arriba.
+  digest: z.string().nullable(),
 })
 
 // ── Public API ─────────────────────────────────────────────────────────

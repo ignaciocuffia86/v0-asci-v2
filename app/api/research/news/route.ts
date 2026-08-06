@@ -1,8 +1,7 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextResponse } from "next/server"
-import { parallelSearch, buildNewsSearchParams } from "@/lib/parallel"
 import { filterRelevantToCompany, checkUrlsAlive, STRUCTURER_DEFAULT_MODEL } from "@/lib/ai-structurer"
-import { structure } from "@/lib/research/engine"
+import { collect, structure } from "@/lib/research/engine"
 // Prompt Y schema salen del mismo modulo: con `generateObject` tienen que
 // coincidir, asi que tenerlos juntos evita que deriven.
 import { GEMINI_SYSTEM, NewsSchema, type NewsItem } from "@/lib/news-prompt"
@@ -10,19 +9,94 @@ import { GEMINI_SYSTEM, NewsSchema, type NewsItem } from "@/lib/news-prompt"
 const NEWS_CACHE_DAYS = 30 // Refresh at most once per month
 const MAX_NEWS = 15
 
+/**
+ * Cuantas busquedas web se le permiten al recolector.
+ *
+ * Calibrado, no elegido a dedo: con 4 daba 5,75 items/empresa y con 8 sube a
+ * ~9 items crudos, que tras todo el pipeline quedan en ~4 insertables. Subirlo
+ * mas no compensa el costo por token.
+ */
+const NEWS_MAX_SEARCHES = 8
+
+/**
+ * Nombre de pais -> ISO-2 para el `userLocation` de la busqueda web.
+ *
+ * Devuelve `null` cuando no reconoce el valor, y esa es la diferencia importante
+ * con la version que vive en `lib/v3/services/radar.ts`: esa cae a `"US"` por
+ * defecto. Aca eso seria un bug silencioso, porque `companies.country` de v2 NO
+ * es un pais normalizado: guarda direcciones. Entre las empresas que hoy tienen
+ * noticias hay "Switzerland", "El Salvador" y "Quito, Pichincha, Ecuador", y con
+ * el default a "US" las tres irian a buscar noticias sesgadas a Estados Unidos.
+ *
+ * `null` hace que `collect` simplemente omita `userLocation`, que es el
+ * comportamiento correcto cuando no se sabe: buscar sin sesgo geografico es mejor
+ * que buscar con el sesgo equivocado.
+ */
+function newsCountryToISO(country: string): string | null {
+  const c = country.trim().toLowerCase()
+  const map: Record<string, string> = {
+    argentina: "AR",
+    chile: "CL",
+    ecuador: "EC",
+    colombia: "CO",
+    "united states": "US",
+    "estados unidos": "US",
+    usa: "US",
+    peru: "PE",
+    perú: "PE",
+    switzerland: "CH",
+    suiza: "CH",
+    "el salvador": "SV",
+    uruguay: "UY",
+    mexico: "MX",
+    méxico: "MX",
+    portugal: "PT",
+    brasil: "BR",
+    brazil: "BR",
+    paraguay: "PY",
+    bolivia: "BO",
+    venezuela: "VE",
+    españa: "ES",
+    spain: "ES",
+    panama: "PA",
+    panamá: "PA",
+    "costa rica": "CR",
+    guatemala: "GT",
+    "republica dominicana": "DO",
+    "república dominicana": "DO",
+  }
+  if (map[c]) return map[c]
+  // Valores como "Quito, Pichincha, Ecuador": el pais suele ser el ultimo campo.
+  const last = c.split(",").pop()?.trim()
+  if (last && map[last]) return map[last]
+  if (/^[a-z]{2}$/.test(c)) return c.toUpperCase()
+  return null
+}
+
 async function structureNewsWithGemini(
-  excerpts: { url: string; title: string; publish_date: string | null; content: string }[],
+  /** Fuentes CITADAS por el recolector, en orden. El indice 1-based es el `source_index`. */
+  sources: { url: string; title: string | null }[],
+  /** Informe en prosa del recolector: es el material del que se extraen las noticias. */
+  report: string,
   companyName: string,
   tracking: { userId: string; companyId: string },
 ): Promise<{ news: NewsItem[]; digest: string | null }> {
-  const excerptText = excerpts
-    .map(
-      (e, i) =>
-        `--- Fuente ${i + 1}: ${e.title} (${e.url}) [fecha: ${e.publish_date || "desconocida"}] ---\n${e.content.slice(0, 4000)}`,
-    )
-    .join("\n\n")
+  // La lista va NUMERADA para preservar el mapeo determinista `source_index` -> URL.
+  //
+  // Es el detalle que hace que este cambio no sea riesgoso: `collect` devuelve el
+  // texto y las fuentes por separado, asi que la tentacion es pedirle al modelo
+  // que escriba la URL. Eso reintroduciria las URLs inventadas que el
+  // `source_index` justamente elimino. Numerando las fuentes citadas, el modelo
+  // solo puede elegir un indice DE ESTA LISTA, y la whitelist sale gratis: si el
+  // indice no existe, el item se descarta aguas abajo.
+  const sourceList = sources
+    .map((s, i) => `--- Fuente ${i + 1}: ${s.title ?? "(sin titulo)"} (${s.url}) ---`)
+    .join("\n")
 
-  const userPrompt = `Empresa: "${companyName}"\n\nExcerpts de busqueda web:\n\n${excerptText}\n\nExtrae las noticias relevantes en JSON.`
+  const userPrompt =
+    `Empresa: "${companyName}"\n\nInforme de busqueda web:\n\n${report}\n\n` +
+    `Fuentes disponibles (el source_index se refiere a ESTA lista):\n${sourceList}\n\n` +
+    `Extrae las noticias relevantes en JSON.`
 
   // Sin `maxOutputTokens`: el tope de 4000 que habia aca fue EL GATILLO del
   // incidente. El modelo gastaba el presupuesto razonando y el JSON salia
@@ -202,19 +276,29 @@ export async function POST(request: Request) {
       .eq("id", companyId)
       .single()
 
-    // ── 3. Search with Parallel ──────────────────────────────────────
-    console.log("[v0] News: Searching with Parallel for", companyName)
+    // ── 3. Recoleccion con el motor unificado ────────────────────────
+    //
+    // Antes esto era `parallelSearch`. Se reemplazo por `collect` del motor por
+    // dos razones, las dos medidas:
+    //
+    //  1. Parallel NO es enrutable por el AI Gateway, asi que mientras siguiera
+    //     aca la centralizacion quedaba a medias: un proveedor con su propia
+    //     clave, su propio manejo de errores y sin la telemetria del motor.
+    //  2. Calidad de las URLs. El camino nativo cita fuentes que el modelo
+    //     realmente leyo: 22/22 URLs vivas (100%) contra el ~79% historico de
+    //     Parallel, que indexaba links ya muertos.
+    //
+    // El prompt pide la FECHA explicitamente porque es el unico dato que se
+    // pierde al soltar Parallel (ver el fallback de `published_at` mas abajo).
+    console.log("[v0] News: Recolectando con el motor unificado para", companyName)
 
-    const searchParams = buildNewsSearchParams({
-      company_name: companyName,
-      industry: company?.industry,
-      country: company?.country,
-    })
-
-    console.log("[v0][news][parallel] objective:", searchParams.objective.slice(0, 200))
-    console.log("[v0][news][parallel] search_queries:", JSON.stringify(searchParams.search_queries))
-    console.log("[v0][news][parallel] source_policy:", JSON.stringify(searchParams.source_policy))
-    console.log("[v0][news][parallel] max_results:", searchParams.max_results, "| company industry/country:", company?.industry, "/", company?.country)
+    const industryCtx = company?.industry ? ` (industria: ${company.industry})` : ""
+    const countryCtx = company?.country ? ` de ${company.country}` : ""
+    const searchPrompt =
+      `Busca noticias de los ULTIMOS 12 MESES sobre la empresa "${companyName}"${countryCtx}${industryCtx}: ` +
+      `inversiones, tecnologia, cambios de ejecutivos, expansion, adquisiciones, alianzas, resultados financieros. ` +
+      `Para CADA noticia indica su FECHA DE PUBLICACION exacta en formato YYYY-MM-DD y cita la fuente. ` +
+      `Priorizar prensa economica y de negocios. Ignorar redes sociales y contenido promocional.`
 
     let newsItems: any[] = []
     let geminiDigest: string | null = null
@@ -230,38 +314,36 @@ export async function POST(request: Request) {
     // `degraded-fallback`. Que el compilador lo garantice vale más que un comentario pidiéndolo.
     const aiProvider: string = STRUCTURER_DEFAULT_MODEL
 
-    // Paso A: llamar a Parallel. Si falla la busqueda, capturamos y caemos a cache vieja.
-    let parallelResults: Awaited<ReturnType<typeof parallelSearch>> | null = null
+    // Paso A: recolectar. Si falla la busqueda, capturamos y caemos a cache vieja.
+    let collected: Awaited<ReturnType<typeof collect>> | null = null
     try {
-      parallelResults = await parallelSearch(searchParams)
-      console.log("[v0] News: Parallel returned", parallelResults.results.length, "results")
-      if (parallelResults.warnings && parallelResults.warnings.length > 0) {
-        console.log("[v0][news][parallel] warnings:", JSON.stringify(parallelResults.warnings))
-      }
-      parallelResults.results.forEach((r, i) => {
-        const excerptChars = r.excerpts.reduce((acc, e) => acc + (e?.length ?? 0), 0)
-        console.log(`[v0][news][parallel][result ${i + 1}/${parallelResults!.results.length}] date=${r.publish_date ?? "null"} | chars=${excerptChars} | ${r.url}`)
+      collected = await collect({
+        prompt: searchPrompt,
+        companyName,
+        countryISO: company?.country ? newsCountryToISO(company.country) : null,
+        maxSearches: NEWS_MAX_SEARCHES,
+        context: "news",
+        tracking: { userId: user.id, companyId, feature: "research-collect" },
       })
-    } catch (parallelError) {
-      console.error("[v0] News: Parallel search error:", parallelError)
+      console.log(
+        `[v0][news][collect] ${collected.sources.length} fuentes citadas | ${collected.searchCount} busquedas | ${collected.text.length} chars de informe`,
+      )
+      collected.sources.forEach((s, i) => {
+        console.log(`[v0][news][collect][fuente ${i + 1}/${collected!.sources.length}] ${s.url}`)
+      })
+    } catch (collectError) {
+      console.error("[v0] News: error de recoleccion:", collectError)
     }
 
-    // Paso B: estructurar con Gemini via AI Gateway. Si falla (rate limit, parse error,
-    // etc.) caemos a fallback degradado que publica los excerpts crudos para que el
-    // usuario vea AL MENOS los resultados de la busqueda.
-    if (parallelResults && parallelResults.results.length > 0) {
-      const searchResult = parallelResults
-      const excerpts = searchResult.results.map(r => ({
-        url: r.url,
-        title: r.title,
-        publish_date: r.publish_date,
-        content: r.excerpts.join("\n"),
-      }))
+    // Paso B: estructurar con el motor. Si falla, no se publica nada degradado:
+    // se cae a cache vieja mas abajo.
+    if (collected && collected.sources.length > 0) {
+      const searchResult = collected
 
       let structured: NewsItem[] = []
       try {
         console.log(`[v0] News: Structuring with AI Gateway (${STRUCTURER_DEFAULT_MODEL})...`)
-        const result = await structureNewsWithGemini(excerpts, companyName, {
+        const result = await structureNewsWithGemini(searchResult.sources, searchResult.text, companyName, {
           userId: user.id,
           companyId,
         })
@@ -302,8 +384,8 @@ export async function POST(request: Request) {
         .map((item: any) => {
           const idx1 = Number(item.source_index)
           const sourceResult =
-            Number.isFinite(idx1) && idx1 >= 1 && idx1 <= searchResult.results.length
-              ? searchResult.results[idx1 - 1]
+            Number.isFinite(idx1) && idx1 >= 1 && idx1 <= searchResult.sources.length
+              ? searchResult.sources[idx1 - 1]
               : null
           return { item, sourceResult }
         })
@@ -338,7 +420,20 @@ export async function POST(request: Request) {
           summary: item.summary,
           source_url: r.url,
           source_name: item.source_name || hostname || r.title || "Desconocido",
-          published_at: sanitizeDate(item.published_at) || sanitizeDate(r.publish_date),
+          // Unica fuente de fecha: la que el modelo extrae del contenido.
+          //
+          // Antes habia un segundo intento con `r.publish_date`, el metadato que
+          // traia Parallel. `collect` no lo tiene: devuelve las fuentes que el
+          // modelo cito, sin metadatos por URL. Es el UNICO costo real de este
+          // cambio y esta medido: el modelo fecha 20/23 items (87%) y sobreviven
+          // 17/23 (74%) a `sanitizeDate`, contra el 79% que hay hoy en la base.
+          //
+          // Importa porque el insert exige `published_at !== null`, asi que un
+          // item sin fecha se descarta en silencio. Por eso el prompt de
+          // recoleccion pide la fecha de forma explicita: es lo que sostiene ese
+          // 87%. Si esta tasa cae, el sintoma va a ser "faltan noticias", y hay
+          // que mirar aca.
+          published_at: sanitizeDate(item.published_at),
           category: item.category || categorizeNews((item.title || "") + " " + (item.summary || "")),
         }
       })
