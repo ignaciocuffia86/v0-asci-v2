@@ -7,7 +7,6 @@ import {
   getCompanyFilings,
   mapSECFormToDocumentType,
 } from "@/lib/sec-edgar"
-import { structureWithLLM } from "@/lib/ai-structurer"
 
 const DOCS_CACHE_DAYS = 30 // Refresh at most once per month
 const MAX_DOCS = 10
@@ -51,37 +50,31 @@ FORMATO JSON:
   "digest": "string (párrafo resumen en ESPAÑOL) o null"
 }`
 
-interface GeminiDocsResult {
-  findings: any[]
-  digest: string | null
-}
-
-async function structureDocumentsWithGemini(
-  excerpts: { url: string; title: string; content: string; type: string }[],
-  companyName: string
-): Promise<GeminiDocsResult> {
-  const excerptText = excerpts
-    .map(
-      (e, i) =>
-        `--- Documento ${i + 1}: ${e.title} [tipo: ${e.type}] (${e.url}) ---\n${e.content.slice(0, 8000)}`
-    )
-    .join("\n\n")
-
-  const userPrompt = `Empresa: "${companyName}"\n\nExcerpts de documentos públicos:\n\n${excerptText}\n\nExtrae los hallazgos relevantes en JSON.`
-
-  const parsed = await structureWithLLM<{ findings?: any[]; digest?: string | null }>({
-    systemPrompt: GEMINI_SYSTEM,
-    userPrompt,
-    maxOutputTokens: 6000,
-    temperature: 0.2,
-    context: "docs",
-  })
-
-  return {
-    findings: parsed.findings ?? [],
-    digest: parsed.digest ?? null,
-  }
-}
+/**
+ * ── Por qué acá NO hay llamada a IA ──
+ *
+ * Existía una `structureDocumentsWithGemini` con el prompt de arriba que
+ * **nunca se llamaba desde ningún lugar**: código muerto. El handler seteaba
+ * `findings = []` y un digest de plantilla a mano, y aun así guardaba
+ * `ai_provider: "gemini-2.0-flash"`. Verificado en produccion: 29/29 filas de
+ * `company_public_docs` sin findings y las 29 declarando ese modelo.
+ *
+ * La funcion se elimino en vez de engancharla, y la razon importa: los
+ * "excerpts" que se le pasaban NO tienen el contenido de los documentos, solo el
+ * titulo, el tipo y la URL (ver la construccion de `excerpts` mas abajo, y el
+ * comentario original "we can't extract PDFs directly in this simple version").
+ * Pedirle hallazgos citados a un modelo que solo ve titulos no da hallazgos: da
+ * alucinaciones con formato de cita, que es peor que no tener nada porque
+ * parecen verificables.
+ *
+ * Para que esto haga research de verdad falta la extraccion de PDFs
+ * (`lib/parallel-extract.ts`). Hasta entonces esta ruta hace lo unico honesto
+ * que puede hacer sin contenido: listar los documentos que encontro. El
+ * `ai_provider` ahora lo dice.
+ *
+ * El prompt GEMINI_SYSTEM se deja como especificacion de lo que habria que pedir
+ * cuando exista la extraccion.
+ */
 
 // ── Cache helpers ─────────────────────────────────────────────────────
 interface CacheResult {
@@ -389,7 +382,11 @@ export async function POST(request: Request) {
       findings: findings.length > 0 ? findings : [],
       digest: idx === 0 ? digest : null,
       digest_generated_at: idx === 0 && digest ? new Date().toISOString() : null,
-      ai_provider: "gemini-2.0-flash",
+      // No se llama a ningun modelo en esta ruta (ver la nota de arriba). Decir
+      // "gemini-2.0-flash" hacia imposible distinguir por query las filas con
+      // analisis real de las que solo listan documentos, que es justo lo que se
+      // necesita para auditar. `extraction_method` ya decia la verdad.
+      ai_provider: "none",
       extraction_method: "search_metadata",
     }))
 

@@ -1,6 +1,7 @@
 "use server"
 
 import { generateText } from "ai"
+import { logAiUsage } from "@/lib/v3/usage"
 
 // Usar IA Gateway + Gemini (modelo más barato: google/gemini-3.5-flash)
 // El Gateway ofrece OpenAI-compatible API, así que usamos createOpenAI
@@ -52,6 +53,16 @@ Códigos ISO comunes:
         prompt,
         temperature: 0,
         maxOutputTokens: 500,
+      })
+
+      // Se corre por lotes sobre cientos de miles de empresas, así que aunque
+      // cada llamada sea barata el acumulado importa. Antes no quedaba registro.
+      void logAiUsage({
+        feature: "other",
+        model: "google/gemini-2.5-flash-lite",
+        inputTokens: response.usage?.inputTokens ?? 0,
+        outputTokens: response.usage?.outputTokens ?? 0,
+        metadata: { source: "country-normalizer-ai", valores_en_lote: batch.length },
       })
 
       // Parse JSON de la respuesta

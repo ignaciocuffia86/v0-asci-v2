@@ -141,12 +141,24 @@ export async function getAuthUserByEmail(
 /**
  * Obtiene el workspace activo del usuario actual
  * Retorna null si el usuario no tiene workspace o no esta activo
+ *
+ * IMPORTANTE: no usar .single() aca. El unico indice unico de workspace_members
+ * es (workspace_id, user_id), que impide repetir al usuario en el MISMO
+ * workspace pero PERMITE que pertenezca a varios. Con 2+ membresias activas
+ * .single() devuelve el error PGRST116 ("Cannot coerce the result to a single
+ * JSON object") y esta funcion retornaba null, o sea el usuario quedaba afuera
+ * de /v3 con un cartel de "no tenes workspace" aunque tuviera sus datos
+ * intactos. Paso de verdad: un workspace de test dejo una membresia extra.
+ *
+ * Elegimos la membresia mas antigua por joined_at para que la eleccion sea
+ * estable entre requests: sin ORDER BY explicito Postgres no garantiza el
+ * orden y el usuario podria caer en un workspace distinto en cada carga.
  */
 export async function getWorkspaceForUser(userId: string): Promise<WorkspaceWithMember | null> {
   // Usamos admin client para bypasear RLS - es seguro porque el userId viene de auth validado
   const admin = createAdminClient()
 
-  const { data, error } = await admin
+  const { data: rows, error } = await admin
     .schema("v3")
     .from("workspace_members")
     .select(`
@@ -155,11 +167,21 @@ export async function getWorkspaceForUser(userId: string): Promise<WorkspaceWith
     `)
     .eq("user_id", userId)
     .eq("status", "active")
-    .single()
+    .order("joined_at", { ascending: true, nullsFirst: false })
 
-  if (error || !data) {
+  if (error || !rows?.length) {
     return null
   }
+
+  if (rows.length > 1) {
+    console.log(
+      `[v0] getWorkspaceForUser: el usuario ${userId} tiene ${rows.length} membresias activas ` +
+        `(${rows.map((r) => r.workspace_id).join(", ")}). Se usa la mas antigua por joined_at. ` +
+        `La UI todavia no tiene selector de workspace, asi que esto suele ser dato residual.`,
+    )
+  }
+
+  const data = rows[0]
 
   return {
     ...(data.workspace as Workspace),

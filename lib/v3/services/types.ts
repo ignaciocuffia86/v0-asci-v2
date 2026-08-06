@@ -4,6 +4,9 @@
 // ═══════════════════════════════════════════════════════════
 
 import type { EvidenceLevel } from "./evidence-level"
+// Modulo LEAF (cero imports) a proposito: se puede importar desde este archivo
+// de tipos sin arrastrar el SDK de IA ni crear ciclos.
+import { RESEARCH_MODEL, STRUCTURER_MODEL } from "@/lib/ai-models"
 
 export type RadarType = "tech" | "news" | "jobs-interpretation"
 
@@ -168,18 +171,44 @@ export const LIMITS = {
   MAX_BATCH_SIZE: 25,
   /** Días de validez del cache global antes de re-investigar */
   CACHE_TTL_DAYS: 30,
-  /** Máximo de bundles Opus por cuenta por ejecución */
-  MAX_OPUS_BUNDLES: 5,
+  /**
+   * Máximo de micro-agentes de investigación por cuenta por ejecución.
+   *
+   * ÚNICA fuente de verdad. Antes había tres números que se contradecían:
+   * este decía 5, el array `BUNDLES` de radar.ts tenía 3 entradas y
+   * `DEFAULT_TOP_N` de agent-selection.ts usaba 6 — así que "cuántos agentes
+   * corren" dependía de qué archivo mirabas. `agent-selection` importa esta
+   * constante y `runMicroAgents` la aplica como tope duro.
+   *
+   * Se llamaba `MAX_OPUS_BUNDLES`, pero desde la migración a haiku ya no corre
+   * ningún agente Opus, así que el nombre mentía sobre la realidad. El tope
+   * sigue existiendo por presupuesto y por `maxDuration`, no por el modelo.
+   */
+  MAX_RESEARCH_BUNDLES: 6,
   /** Contactos máximos a sugerir por cuenta */
   MAX_CONTACTS: 5,
 } as const
 
 /** Modelos vía Vercel AI Gateway */
 export const MODELS = {
-  /** Investigación profunda (etapa A) */
-  RESEARCH: "anthropic/claude-opus-4-5",
-  /** Estructuración y tareas baratas (etapa B) */
-  STRUCTURER: "google/gemini-2.5-flash",
+  /**
+   * Investigación profunda con búsqueda web (etapa A).
+   *
+   * Migrado de `claude-opus-4-5` a haiku: el benchmark midió que haiku trae más
+   * URLs y más dominios a 4,7x menos costo. Ver el detalle y la contrapartida en
+   * `lib/ai-models.ts`, que además permite revertir por env var sin redeploy.
+   */
+  RESEARCH: RESEARCH_MODEL,
+  /**
+   * Estructuración y tareas baratas (etapa B).
+   *
+   * Sale de `lib/ai-models.ts` para que v2 y v3 usen EL MISMO modelo. Antes acá
+   * decía `gemini-2.5-flash` hardcodeado y v2 tenía su propia constante: las dos
+   * apuntaban a un modelo retirado del Gateway y fallaban distinto (v2 en
+   * silencio por acotar `maxOutputTokens`, v3 no porque no lo acota), así que
+   * arreglar una no arreglaba la otra.
+   */
+  STRUCTURER: STRUCTURER_MODEL,
   /** Generación de icebreakers (calidad media, barato) */
   WRITER: "anthropic/claude-sonnet-4-5",
   /** Chat orquestador */

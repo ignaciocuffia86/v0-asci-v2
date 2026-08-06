@@ -12,8 +12,10 @@
  * da un payload manejable para Gemini.
  */
 
+import { z } from "zod"
 import { parallelSearch, type ParallelSearchOptions, type ParallelSearchResponse } from "@/lib/parallel"
-import { structureWithLLM, checkUrlsAlive } from "@/lib/ai-structurer"
+import { checkUrlsAlive, STRUCTURER_DEFAULT_MODEL } from "@/lib/ai-structurer"
+import { structure } from "@/lib/research/engine"
 
 // Constantes y tipos client-safe viven en lib/tech-radar-constants.ts
 // para no contaminar bundles del cliente con imports server-only.
@@ -294,6 +296,59 @@ FORMATO JSON:
   "digest": "string o null"
 }`
 
+/**
+ * Forma esperada de la salida del structurer del radar.
+ *
+ * Sirve para los DOS call sites (normal y retry relajado) porque los dos prompts
+ * piden exactamente el mismo formato `{ findings, digest }`. Un solo schema evita
+ * que deriven.
+ *
+ * ── Por que es LAXO y no usa enums ──
+ * El prompt documenta `micro_agent: "cloud"` y
+ * `evidence_level: "directa | convergente | inferencia"`, asi que la tentacion es
+ * `z.enum([...])`. Seria un ERROR, y el motivo esta en el codigo de abajo: el
+ * mapeo ya valida item por item con `validAgents` / `validLevels` y descarta el
+ * item malo con `continue`, quedandose con el resto.
+ *
+ * Con `generateObject`, en cambio, un enum invalido en UN item hace fallar la
+ * RESPUESTA COMPLETA. O sea que endurecer el schema cambiaria "se pierde 1 de 30
+ * hallazgos" por "se pierden los 30". El schema garantiza la FORMA; la semantica
+ * la sigue validando quien ya sabe hacerlo mejor.
+ *
+ * `.passthrough()` porque el mapeo pasa el `item` crudo hacia adelante.
+ */
+const RadarFindingsSchema = z.object({
+  findings: z
+    .array(
+      z
+        .object({
+          /** 1-based. Clave del mapeo determinista finding -> URL de la fuente. */
+          source_index: z.number(),
+          supporting_source_indexes: z.array(z.number()).nullable().default([]),
+          micro_agent: z.string(),
+          title: z.string(),
+          summary: z.string().nullable(),
+          technology: z.string().nullable(),
+          provider_name: z.string().nullable(),
+          area: z.string().nullable(),
+          results: z.string().nullable(),
+          evidence_level: z.string(),
+          evidence_detail: z.string().nullable(),
+          source_name: z.string().nullable(),
+          published_at: z.string().nullable(),
+        })
+        .passthrough()
+    ),
+  // Sin `.default()`, igual que en NewsSchema y por la misma razon medida:
+  // `.default()` marca el campo como OPCIONAL en el JSON Schema que recibe el
+  // modelo, y entonces el modelo lo omite por mucho que el prompt le dedique un
+  // parrafo. Medido en news con el mismo input, 3 corridas por variante: con
+  // `.default()` el digest salio 0/3; declarado nullable y REQUERIDO, 3/3.
+  // `nullable` sigue permitiendo null cuando de verdad no hay nada que resumir,
+  // que es lo que pide la regla 5 del prompt de arriba.
+  digest: z.string().nullable(),
+})
+
 // ── Public API ─────────────────────────────────────────────────────────
 export async function runTechRadar(input: {
   companyName: string
@@ -388,23 +443,31 @@ export async function runTechRadar(input: {
   const keywordsCtx = keywords?.length ? `\nSeñales de interes (priorizar): ${keywords.join(", ")}` : ""
   const userPrompt = `Empresa objetivo: "${companyName}"${keywordsCtx}\n\nExcerpts agrupados por bundle:\n\n${excerptText}\n\nExtrae los hallazgos en JSON segun el formato indicado.`
 
-  let parsed: { findings?: any[]; digest?: string | null } = { findings: [], digest: null }
-  let aiProvider = "gemini-2.0-flash"
+  let parsed: z.infer<typeof RadarFindingsSchema> = { findings: [], digest: null }
+  // Se deriva del default real del structurer. Estaba hardcodeado en
+  // "gemini-2.0-flash", el modelo retirado: al cambiar el default habria seguido
+  // estampando el nombre de un modelo que ya no se usa, arruinando la unica
+  // evidencia forense de que produjo cada hallazgo. Mismo bug que en news.
+  let aiProvider = STRUCTURER_DEFAULT_MODEL
   try {
-    parsed = await structureWithLLM<{ findings?: any[]; digest?: string | null }>({
+    // Motor unificado: `generateObject` + schema, y SIN `maxOutputTokens`. El tope
+    // de 6000 que habia aca es la misma clase de gatillo que el de 4000 en news:
+    // con hasta 30 hallazgos pedidos, es justamente el caso donde la salida se
+    // corta a mitad de JSON.
+    parsed = await structure({
+      schema: RadarFindingsSchema,
       systemPrompt: TECH_RADAR_SYSTEM,
       userPrompt,
-      maxOutputTokens: 6000,
       temperature: 0.2,
       context: "tech-radar",
     })
   } catch (err) {
-    console.error("[v0][tech-radar] gemini structuring failed, returning empty:", err)
-    return { findings: [], digest: null, bundle_stats: bundleStats, ai_provider: "gemini-failed" }
+    console.error("[v0][tech-radar] structuring failed, returning empty:", err)
+    return { findings: [], digest: null, bundle_stats: bundleStats, ai_provider: "structuring-failed" }
   }
 
-  const rawFindings = parsed.findings ?? []
-  const digest = parsed.digest ?? null
+  const rawFindings = parsed.findings
+  const digest = parsed.digest
 
   // Paso 4: guardrail de relevancia (mencion explicita de la empresa
   // en title o summary). Usa matchTokens para reconocer aliases, ticker,
@@ -1092,22 +1155,24 @@ async function retryWithRelaxedPrompt(args: {
   digest: string | null
   aiProvider: string
 }): Promise<{ mapped: { item: any; primary: FlatExcerptForRetry; supportingExcerpts: FlatExcerptForRetry[] }[]; aiProvider: string }> {
-  let parsed: { findings?: any[]; digest?: string | null } = { findings: [] }
+  let parsed: z.infer<typeof RadarFindingsSchema> = { findings: [], digest: null }
+  // Mismo schema que el flujo normal: los dos prompts piden el mismo formato.
+  const relaxedProvider = `${STRUCTURER_DEFAULT_MODEL}-relaxed`
   try {
-    parsed = await structureWithLLM<{ findings?: any[]; digest?: string | null }>({
+    parsed = await structure({
+      schema: RadarFindingsSchema,
       systemPrompt: TECH_RADAR_SYSTEM_RELAXED,
       userPrompt: args.userPrompt,
-      maxOutputTokens: 6000,
       temperature: 0.3,
       context: "tech-radar-retry",
     })
   } catch (err) {
-    console.error("[v0][tech-radar][retry] gemini relaxed failed:", err)
-    return { mapped: [], aiProvider: "gemini-failed-on-retry" }
+    console.error("[v0][tech-radar][retry] relaxed structuring failed:", err)
+    return { mapped: [], aiProvider: "structuring-failed-on-retry" }
   }
 
-  const rawRetry = parsed.findings ?? []
-  if (rawRetry.length === 0) return { mapped: [], aiProvider: "gemini-2.0-flash-relaxed" }
+  const rawRetry = parsed.findings
+  if (rawRetry.length === 0) return { mapped: [], aiProvider: relaxedProvider }
 
   // Aplicamos los mismos filtros que en el flow normal:
   // 1) anti-obviedad (sin cambios)
@@ -1148,5 +1213,5 @@ async function retryWithRelaxedPrompt(args: {
     mapped.push({ item, primary, supportingExcerpts })
   }
 
-  return { mapped, aiProvider: "gemini-2.0-flash-relaxed" }
+  return { mapped, aiProvider: relaxedProvider }
 }

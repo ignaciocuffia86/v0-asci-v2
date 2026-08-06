@@ -6,6 +6,12 @@ import { createAdminClient } from "@/lib/supabase/admin"
  * El costo se calcula con una tabla de precios propia por modelo.
  */
 
+/**
+ * ⚠️ Estos valores están replicados en el CHECK de `v3.ai_usage_log.feature`.
+ * Agregar uno acá sin la migración correspondiente hace fallar el insert (y
+ * `logAiUsage` solo hace console.error, así que la fila de costo se pierde en
+ * silencio). Ver scripts/441_ai_usage_feature_research.sql.
+ */
 export type UsageFeature =
   | "chat"
   | "radar-tech"
@@ -15,6 +21,10 @@ export type UsageFeature =
   | "icebreaker"
   | "doc-analysis"
   | "dedupe"
+  // Etapas del motor de investigación, separadas para poder medir dónde se gasta.
+  | "research-collect"
+  | "research-structure"
+  | "research-synthesis"
   | "other"
 
 /**

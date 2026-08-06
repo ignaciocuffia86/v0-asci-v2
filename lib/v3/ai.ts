@@ -1,4 +1,5 @@
 import { generateText } from "ai"
+import { logAiUsage, type UsageFeature } from "@/lib/v3/usage"
 
 /**
  * Generate content using Vercel AI Gateway
@@ -15,18 +16,45 @@ export async function generateContent(
     model?: string
     temperature?: number
     maxOutputTokens?: number
+    /**
+     * Atribución del costo. Sin esto la llamada igual queda registrada (como
+     * 'other', sin workspace), porque el objetivo es que ningún gasto de IA
+     * quede fuera de `v3.ai_usage_log`.
+     */
+    tracking?: {
+      feature?: UsageFeature
+      workspaceId?: string | null
+      userId?: string | null
+      companyId?: string | null
+      metadata?: Record<string, unknown>
+    }
   }
 ): Promise<string> {
   const model = options?.model || "google/gemini-2.5-flash-lite"
   
   try {
-    const { text } = await generateText({
+    const { text, usage } = await generateText({
       model,
       prompt,
       temperature: options?.temperature ?? 0.2,
       maxOutputTokens: options?.maxOutputTokens ?? 4096,
     })
-    
+
+    // Este wrapper no registraba nada, así que todo lo que pasa por acá
+    // (análisis de documentos, que manda hasta 30.000 caracteres por doc) era
+    // gasto invisible. Fire-and-forget: `logAiUsage` nunca lanza y no queremos
+    // sumarle latencia a la respuesta.
+    void logAiUsage({
+      workspaceId: options?.tracking?.workspaceId ?? null,
+      userId: options?.tracking?.userId ?? null,
+      companyId: options?.tracking?.companyId ?? null,
+      feature: options?.tracking?.feature ?? "other",
+      model,
+      inputTokens: usage?.inputTokens ?? 0,
+      outputTokens: usage?.outputTokens ?? 0,
+      metadata: { source: "generateContent", ...(options?.tracking?.metadata ?? {}) },
+    })
+
     return text
   } catch (err: any) {
     console.error(`[v3] AI Gateway error (${model}):`, err.message)
@@ -198,7 +226,13 @@ REGLAS:
 - Confidence: 0.9-1.0 = tema central. 0.7-0.89 = tema secundario. Menos de 0.7 = no incluyas.
 - El summary debe ser en espanol.`
 
-  const responseText = await generateContent(prompt, { temperature: 0.2 })
+  const responseText = await generateContent(prompt, {
+    temperature: 0.2,
+    tracking: {
+      feature: "doc-analysis",
+      metadata: { chars_enviados: Math.min(extractedText.length, 30000) },
+    },
+  })
 
   // Parse JSON response
   let parsed: any

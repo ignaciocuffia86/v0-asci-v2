@@ -1,15 +1,15 @@
 {
   "meta": {
     "name": "ASCI — Mapa de arquitectura v2 + v3",
-    "generatedAt": "2026-08-04",
+    "generatedAt": "2026-08-06",
     "repo": "ignaciocuffia86/v0-asci-v2",
-    "summary": "Monorepo Next.js único donde conviven ASCI v2 (producción, schema public) y ASCI v3 (multitenant, schema v3) sobre la MISMA base Supabase. El aislamiento es por schema, no por proyecto ni por base.",
+    "summary": "Monorepo Next.js único donde conviven ASCI v2 (producción, schema public) y ASCI v3 (multitenant, schema v3) sobre la MISMA base Supabase. El aislamiento es por schema, no por proyecto ni por base. Actualización 2026-08-06: todo el research pasa por un motor único (lib/research/engine.ts, collect -> structure -> verify) que reemplazó a structureWithLLM en los 4 caminos; es el primer módulo realmente compartido entre v2 y v3.",
     "stats": {
-      "tsFiles": 371,
-      "apiRoutes": 48,
-      "pages": 45,
-      "crons": 9,
-      "sqlScripts": 235,
+      "tsFiles": 370,
+      "apiRoutes": 51,
+      "pages": 49,
+      "crons": 10,
+      "sqlScripts": 237,
       "tablesPublic": 54,
       "tablesV3": 47,
       "mcpTools": 36
@@ -68,10 +68,11 @@
       "zone": "external",
       "layer": 0,
       "kind": "api",
-      "desc": "Búsqueda con citas para research de cuentas y noticias.",
+      "desc": "Búsqueda con citas. NO se usa en research: su único consumidor es lib/ai-service.ts, o sea documentos y los briefs/resúmenes de bookmarks. El research de v2 y v3 va por el motor (Anthropic para recolectar, Gemini para estructurar).",
       "env": [
         "PERPLEXITY_API_KEY"
-      ]
+      ],
+      "risk": "El mapa lo daba como buscador de research en tres lugares (tech-radar, radar de v3 y el drilldown) y el código no lo respaldaba en ninguno. Verificado por grep de PERPLEXITY_API_KEY: solo aparece en lib/ai-service.ts. Es una arista fácil de asumir de más al leer el mapa."
     },
     {
       "id": "ext_parallel",
@@ -79,13 +80,26 @@
       "zone": "external",
       "layer": 0,
       "kind": "api",
-      "desc": "Extracción web estructurada. Solo lib/parallel.ts esta en uso.",
+      "desc": "Extracción web estructurada. Solo lib/parallel.ts esta en uso. Ya NO es el recolector universal: news migró al motor de research y hoy Parallel queda en tech-radar y public-docs.",
       "files": [
         "lib/parallel.ts"
       ],
       "env": [
         "PARALLEL_API_KEY"
-      ]
+      ],
+      "risk": "No es enrutable por el AI Gateway: tiene su propia clave, su propio manejo de errores y queda fuera de la telemetría de costo. Mientras siga acá la centralización de research está a medias. Medido: sus URLs vivían ~79% vs 100% del recolector nativo, porque indexa links ya muertos."
+    },
+    {
+      "id": "ext_anthropic",
+      "label": "Anthropic (via AI Gateway)",
+      "zone": "external",
+      "layer": 0,
+      "kind": "ai",
+      "desc": "Recolección web del motor de research: claude-haiku-4.5 con web search server-side, que se ejecuta y cita en el proveedor. Se enruta por el AI Gateway de Vercel, así que no necesita clave propia.",
+      "env": [
+        "V3_RESEARCH_MODEL"
+      ],
+      "risk": "El modelo se cambia por env (V3_RESEARCH_MODEL) sin redeploy: así se migró de Opus a haiku-4.5 con 5x menos costo y MÁS URLs vivas. Es también la palanca de rollback si la calidad cae."
     },
     {
       "id": "ext_gemini",
@@ -345,12 +359,13 @@
       "zone": "v2",
       "layer": 2,
       "kind": "route",
-      "desc": "Implementaciones, noticias y documentos publicos de una empresa.",
+      "desc": "Implementaciones, noticias y documentos publicos de una empresa. Los tres caminos usan el motor de research; news es el único que además recolecta con el motor en vez de Parallel.",
       "files": [
         "app/api/research/implementations/route.ts",
         "app/api/research/news/route.ts",
         "app/api/research/public-docs/route.ts"
-      ]
+      ],
+      "risk": "public-docs NO hace research real: recolecta con Parallel pero solo guarda título/tipo/URL de los documentos, sin extraer su contenido, así que su ai_provider es 'none'. Tenía un estructurador definido que nunca se llamaba y aun así estampaba el modelo en la base (29/29 filas sin hallazgos declarando gemini-2.0-flash). Se eliminó en vez de engancharlo: pedir hallazgos citados sobre títulos da alucinaciones CON formato de cita, peor que no tener nada porque parecen verificables. Falta extracción de PDFs."
     },
     {
       "id": "api_documents_v2",
@@ -701,11 +716,26 @@
       "zone": "v2",
       "layer": 3,
       "kind": "service",
-      "desc": "Investigacion de implementaciones tecnologicas por empresa.",
+      "desc": "Investigacion de implementaciones tecnologicas por empresa. Recolecta con Parallel y estructura con el motor de research (generateObject + Zod).",
       "files": [
         "lib/tech-radar.ts",
         "lib/tech-radar-constants.ts"
-      ]
+      ],
+      "risk": "Su schema es deliberadamente LAXO (micro_agent y evidence_level como string, sin z.enum) porque el mapeo ya valida item por item y descarta el malo con `continue`. Endurecerlo haría fallar la respuesta COMPLETA por un solo item: cambiaría 'se pierde 1 de 30 hallazgos' por 'se pierden los 30'."
+    },
+    {
+      "id": "svc_research_engine",
+      "label": "Motor de research",
+      "zone": "shared",
+      "layer": 3,
+      "kind": "service",
+      "desc": "Circuito único collect -> structure -> verify para todo el research de v2 y v3. collect busca en la web server-side (anthropic/claude-haiku-4.5) y devuelve solo las fuentes CITADAS; structure usa generateObject + Zod (google/gemini-2.5-flash-lite); verify chequea que las URLs estén vivas.",
+      "files": [
+        "lib/research/engine.ts",
+        "lib/ai-models.ts",
+        "scripts/verify-research-engine.mts"
+      ],
+      "risk": "Dos trampas ya pagadas y documentadas en el código. 1) NO fijar maxOutputTokens: un tope de salida fue el gatillo del incidente de noticias (el modelo gasta el presupuesto razonando y corta el JSON a medias). 2) NUNCA usar .default() en Zod: marca el campo como OPCIONAL en el JSON Schema, el modelo lo omite y Zod rellena el default en silencio; así el digest de noticias no se generó nunca (0 de 3.542 filas). Medido: .default() 0/3, nullable requerido 3/3."
     },
     {
       "id": "svc_ai_v2",
@@ -713,7 +743,7 @@
       "zone": "v2",
       "layer": 3,
       "kind": "service",
-      "desc": "Wrapper de generacion y estructuracion de salidas del LLM.",
+      "desc": "Wrapper de generacion y estructuracion de salidas del LLM. structureWithLLM quedó SIN consumidores: los 4 caminos de research migraron al motor.",
       "files": [
         "lib/ai-service.ts",
         "lib/ai-structurer.ts"
@@ -749,12 +779,13 @@
       "zone": "v3",
       "layer": 3,
       "kind": "service",
-      "desc": "Seleccion y ejecución de agentes especializados por tecnología/proceso.",
+      "desc": "Seleccion y ejecución de agentes especializados por tecnología/proceso. Su researchBundle era un duplicado casi literal de collect() del motor (mismo generateText, mismo web_search, mismo dedup) y se reemplazó por la llamada al motor: -50 líneas.",
       "files": [
         "lib/v3/services/radar.ts",
         "lib/v3/services/radar-agents.ts",
         "lib/v3/services/agent-selection.ts"
-      ]
+      ],
+      "risk": "Su countryToISO cae a 'US' por defecto y NO debe reusarse para otros caminos: companies.country de v2 guarda direcciones, no países, así que 'Quito, Pichincha, Ecuador' terminaría buscando con sesgo a Estados Unidos. El helper de news devuelve null cuando no reconoce, y omite userLocation."
     },
     {
       "id": "svc_v3_accounts",
@@ -1561,8 +1592,9 @@
     {
       "id": "e38",
       "from": "svc_tech_radar",
-      "to": "ext_perplexity",
-      "kind": "call"
+      "to": "ext_parallel",
+      "kind": "call",
+      "label": "recolecta excerpts"
     },
     {
       "id": "e39",
@@ -1781,8 +1813,9 @@
     {
       "id": "e72",
       "from": "svc_v3_radar",
-      "to": "ext_perplexity",
-      "kind": "call"
+      "to": "ext_gemini",
+      "kind": "call",
+      "label": "estructura hallazgos (generateObject)"
     },
     {
       "id": "e73",
@@ -1992,9 +2025,10 @@
     },
     {
       "id": "e105",
-      "from": "svc_v3_drilldown",
-      "to": "ext_perplexity",
-      "kind": "call"
+      "from": "ext_mcp_client",
+      "to": "svc_v3_drilldown",
+      "kind": "call",
+      "label": "client-assisted: envía hallazgos"
     },
     {
       "id": "e106",
@@ -2183,6 +2217,62 @@
       "from": "svc_v3_mcp_tools",
       "to": "svc_v3_contacts",
       "kind": "call"
+    },
+    {
+      "id": "e136",
+      "from": "api_research_v2",
+      "to": "svc_research_engine",
+      "kind": "call",
+      "label": "news: collect + structure"
+    },
+    {
+      "id": "e137",
+      "from": "svc_tech_radar",
+      "to": "svc_research_engine",
+      "kind": "call",
+      "label": "structure (2 call sites)"
+    },
+    {
+      "id": "e138",
+      "from": "svc_v3_radar",
+      "to": "svc_research_engine",
+      "kind": "call",
+      "label": "collect"
+    },
+    {
+      "id": "e139",
+      "from": "svc_research_engine",
+      "to": "ext_gemini",
+      "kind": "call",
+      "label": "structure: gemini-2.5-flash-lite"
+    },
+    {
+      "id": "e140",
+      "from": "svc_research_engine",
+      "to": "ext_anthropic",
+      "kind": "call",
+      "label": "collect: web search server-side"
+    },
+    {
+      "id": "e141",
+      "from": "svc_research_engine",
+      "to": "db_ai_usage",
+      "kind": "write",
+      "label": "costo por etapa"
+    },
+    {
+      "id": "e142",
+      "from": "svc_documents_v2",
+      "to": "svc_ai_v2",
+      "kind": "call",
+      "label": "analiza / extrae / perfila"
+    },
+    {
+      "id": "e143",
+      "from": "svc_ai_v2",
+      "to": "ext_perplexity",
+      "kind": "call",
+      "label": "único consumidor real"
     }
   ],
   "flows": [
@@ -2349,7 +2439,7 @@
       "name": "Research de implementaciones y noticias",
       "version": "v2",
       "trigger": "Usuario abre el drilldown de una cuenta",
-      "desc": "Investiga evidencia externa de que la empresa usa una tecnología.",
+      "desc": "Investiga evidencia externa de que la empresa usa una tecnología. La recolección quedó partida a propósito: tech-radar y public-docs siguen con Parallel, news recolecta con el motor. La estructuración, en cambio, ya es única para los tres.",
       "steps": [
         {
           "n": 1,
@@ -2370,9 +2460,9 @@
         },
         {
           "n": 4,
-          "nodeId": "ext_perplexity",
+          "nodeId": "ext_parallel",
           "edgeId": "e38",
-          "detail": "Búsqueda con citas."
+          "detail": "Recolecta excerpts con contenido por URL. Antes este paso figuraba como Perplexity, pero el código nunca lo llamó desde acá: Perplexity solo se usa en lib/ai-service.ts."
         },
         {
           "n": 5,
@@ -2382,15 +2472,27 @@
         },
         {
           "n": 6,
+          "nodeId": "svc_research_engine",
+          "edgeId": "e137",
+          "detail": "structure() con generateObject + Zod. Reemplazó a structureWithLLM en los 2 call sites (normal y retry relajado), que comparten un solo schema porque los dos prompts piden el mismo formato."
+        },
+        {
+          "n": 7,
           "nodeId": "db_radar",
           "edgeId": "e40",
           "detail": "Guarda radar_findings."
         },
         {
-          "n": 7,
+          "n": 8,
+          "nodeId": "svc_research_engine",
+          "edgeId": "e136",
+          "detail": "news: collect() busca en la web y devuelve solo fuentes citadas; la lista se pasa NUMERADA al structure() para conservar el mapeo determinista source_index -> URL. Así el modelo solo puede elegir un índice de esa lista y la whitelist sale gratis."
+        },
+        {
+          "n": 9,
           "nodeId": "db_company_news",
           "edgeId": "e41",
-          "detail": "Guarda noticias como pool por compania."
+          "detail": "Guarda noticias como pool por compania. OJO: el insert exige published_at no nulo, y al soltar Parallel se perdió su metadato de fecha por URL; hoy la fecha depende del modelo (87%, 74% sobrevive a sanitizeDate). Si faltan noticias, mirar acá."
         }
       ]
     },
@@ -3104,9 +3206,9 @@
         },
         {
           "n": 2,
-          "nodeId": "ext_perplexity",
+          "nodeId": "ext_mcp_client",
           "edgeId": "e105",
-          "detail": "Búsqueda con citas."
+          "detail": "Circuito client-assisted: la búsqueda la hace el cliente IA y manda los hallazgos; el servicio solo aplica guardrails (pertenencia + URLs vivas) y persiste. Antes este paso figuraba como Perplexity, pero external-drilldown.ts no llama a ningún buscador."
         },
         {
           "n": 3,
@@ -3449,9 +3551,9 @@
         "lib/tech-radar.ts vs lib/v3/services/radar*.ts",
         "app/actions/search-v2.ts vs lib/v3/services/capability-search.ts"
       ],
-      "finding": "Cada capacidad transversal (IA, documentos, radar, búsqueda, dedupe, digest) tiene una implementación en v2 y otra en v3, sin un módulo compartido ni una regla explicita de que puede depender de que.",
-      "why": "Es el costo esperable de convivir sin romper producción, pero hoy no esta acotado: nada impide que v3 importe un módulo de v2 y quede acoplado a un cambio futuro. Solo v3 registra el costo de IA en ai_usage_log, así que el gasto de v2 es invisible.",
-      "fix": "Declarar la frontera y hacerla verificable: lib/shared/ para lo comun, prohibicion por lint de que lib/v3 importe de lib/ raiz salvo desde esa carpeta. Como primer paso concreto, unificar la capa de IA para que v2 también registre costo."
+      "finding": "Cada capacidad transversal (IA, documentos, radar, búsqueda, dedupe, digest) tiene una implementación en v2 y otra en v3, sin un módulo compartido ni una regla explicita de que puede depender de que. PARCIALMENTE RESUELTO para research: lib/research/engine.ts es el primer módulo compartido real y los 4 caminos (news, tech-radar x2, radar de v3) ya lo usan.",
+      "why": "Es el costo esperable de convivir sin romper producción, pero hoy no esta acotado: nada impide que v3 importe un módulo de v2 y quede acoplado a un cambio futuro. El punto del costo invisible de IA en v2 YA NO APLICA para research: el motor registra en v3.ai_usage_log de forma incondicional en las tres etapas, así que las rutas de v2 que pasan por él (news con research-collect y research-structure) ahora sí se ven. El resto de la capa de IA de v2 sigue sin instrumentar.",
+      "fix": "Declarar la frontera y hacerla verificable: lib/shared/ para lo comun, prohibicion por lint de que lib/v3 importe de lib/ raiz salvo desde esa carpeta. El motor de research ya demostró que el patrón funciona y que además elimina duplicación real (researchBundle de v3 era un clon de collect()); replicarlo en documentos y búsqueda. Ojo con la ubicación: el motor vive en lib/research/ y escribe en el schema v3, así que la frontera todavía no está declarada, solo practicada."
     },
     {
       "id": "OPT-13",
@@ -3657,6 +3759,19 @@
       "finding": "Ambas existen en el schema v3 pero no aparecen en los patrones de acceso del código de v3 relevados.",
       "verification": "Cruce entre el inventario de tablas de v3 y los .from() encontrados en lib/v3, app/actions/v3 y app/api/v3.",
       "recommendation": "Confirmar con un conteo de filas y una revisión de scripts antes de tocarlas: pueden alimentarse desde SQL suelto en scripts/. Si estan vacias y sin lector, borrarlas reduce ruido en el esquema."
+    },
+    {
+      "id": "DEAD-13",
+      "title": "structureWithLLM sin consumidores tras la migración al motor de research",
+      "severity": "media",
+      "loc": 145,
+      "evidence": [
+        "lib/ai-structurer.ts lineas 71-215",
+        "unica mencion restante: un comentario en lib/research/engine.ts"
+      ],
+      "finding": "Era el estructurador viejo de los 4 caminos de research (news, tech-radar x2, radar de v3). Todos pasaron a structure() del motor, que usa generateObject + Zod en vez de parsear texto a mano.",
+      "verification": "Grep de 'structureWithLLM' en app, components y lib: fuera de su propia definición solo queda una referencia en un comentario, no una llamada.",
+      "recommendation": "Borrar la función, no el archivo: lib/ai-structurer.ts sigue exportando checkUrlsAlive, filterRelevantToCompany y STRUCTURER_DEFAULT_MODEL, que el motor y los cuatro caminos siguen usando."
     }
   ]
 }

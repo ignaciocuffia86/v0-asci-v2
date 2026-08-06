@@ -1,4 +1,20 @@
 import { generateText } from "ai"
+import { logAiUsage, type UsageFeature } from "@/lib/v3/usage"
+// Se importa ADEMAS de re-exportarlo: un nombre re-exportado no queda en el
+// scope local del modulo, y aca se usa como valor por defecto de `model`.
+import { STRUCTURER_MODEL } from "@/lib/ai-models"
+
+/**
+ * Modelo por defecto para estructurar texto crudo a JSON.
+ *
+ * El id y todo el detalle del benchmark viven en `lib/ai-models.ts`, que es la
+ * fuente UNICA compartida con v3. Antes cada mundo tenia su propia constante
+ * apuntando al mismo modelo retirado del Gateway, con el agravante de que
+ * fallaban distinto (v2 en silencio, v3 no), asi que arreglar una no arreglaba
+ * la otra. Se mantiene el nombre `STRUCTURER_DEFAULT_MODEL` para no tocar los
+ * call sites existentes.
+ */
+export { STRUCTURER_MODEL as STRUCTURER_DEFAULT_MODEL } from "@/lib/ai-models"
 
 /**
  * Devuelve los tokens significativos (>=4 chars) del nombre de la empresa,
@@ -58,8 +74,9 @@ export async function structureWithLLM<T>({
   maxOutputTokens = 4000,
   temperature = 0.2,
   maxRetries = 3,
-  model = "google/gemini-2.0-flash",
+  model = STRUCTURER_MODEL,
   context = "llm",
+  tracking,
 }: {
   systemPrompt: string
   userPrompt: string
@@ -69,12 +86,23 @@ export async function structureWithLLM<T>({
   model?: string
   /** Etiqueta para identificar la llamada en los logs (ej: "news", "impl", "docs"). */
   context?: string
+  /**
+   * Atribución opcional del costo. Sin esto la llamada igual se registra (con
+   * workspace/empresa en null), porque el objetivo es que NINGÚN gasto quede
+   * fuera de la contabilidad; los campos solo mejoran a quién se le imputa.
+   */
+  tracking?: {
+    workspaceId?: string | null
+    userId?: string | null
+    companyId?: string | null
+    feature?: UsageFeature
+  }
 }): Promise<T> {
   let lastError: unknown
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const { text } = await generateText({
+      const { text, usage } = await generateText({
         model,
         system: systemPrompt,
         prompt: userPrompt,
@@ -88,6 +116,29 @@ export async function structureWithLLM<T>({
             responseMimeType: "application/json",
           },
         },
+      })
+
+      // Registrar el gasto ACÁ, apenas vuelve el modelo y antes de parsear.
+      //
+      // Dos razones para no ponerlo después del JSON.parse:
+      //  1. Estos tokens ya se pagaron pase lo que pase. Si el parse falla y se
+      //     reintenta, el intento fallido igual se facturó — loguear solo el
+      //     éxito escondía justamente el costo de los reintentos.
+      //  2. Antes esta función no registraba NADA, así que todo el gasto de los
+      //     caminos de v2 (/research/news, /research/implementations, public-docs)
+      //     era invisible en v3.ai_usage_log.
+      //
+      // No se hace `await` a propósito: es fire-and-forget para no sumar latencia
+      // a la respuesta, y `logAiUsage` nunca lanza.
+      void logAiUsage({
+        workspaceId: tracking?.workspaceId ?? null,
+        userId: tracking?.userId ?? null,
+        companyId: tracking?.companyId ?? null,
+        feature: tracking?.feature ?? "research-structure",
+        model,
+        inputTokens: usage?.inputTokens ?? 0,
+        outputTokens: usage?.outputTokens ?? 0,
+        metadata: { context, attempt, source: "ai-structurer" },
       })
 
       const cleaned = stripMarkdownFences(text)
@@ -110,6 +161,29 @@ export async function structureWithLLM<T>({
     } catch (err) {
       lastError = err
       const message = String((err as Error)?.message ?? err)
+
+      // Modelo inexistente o dado de baja en el Gateway.
+      //
+      // Es un error de CONFIGURACIÓN, no transitorio: reintentar 3 veces con
+      // backoff solo agrega latencia y vuelve a fallar igual. Se corta acá con
+      // un mensaje que nombra el modelo, porque así se detecta en minutos en vez
+      // de semanas: `gemini-2.0-flash` estuvo roto sin que nadie lo notara
+      // porque el error se perdía entre los genéricos.
+      const isModelNotFound =
+        message.includes("model_not_found") ||
+        message.includes("Model not found") ||
+        message.includes("does not exist") ||
+        message.includes("NOT_FOUND")
+
+      if (isModelNotFound) {
+        const explicativo =
+          `[ai-structurer][${context}] El modelo "${model}" no existe o fue dado de baja en el AI Gateway. ` +
+          `Revisar el catálogo vigente y actualizar STRUCTURER_MODEL en lib/ai-models.ts ` +
+          `(y agregar su precio en MODEL_PRICING de lib/v3/usage.ts). Error original: ${message.slice(0, 200)}`
+        console.error(`[v0]${explicativo}`)
+        throw new Error(explicativo)
+      }
+
       const isRateLimit =
         message.includes("429") ||
         message.includes("Too Many Requests") ||

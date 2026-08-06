@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto"
-import { generateText, generateObject, stepCountIs } from "ai"
-import { anthropic } from "@ai-sdk/anthropic"
+import { generateText, generateObject } from "ai"
 import { z } from "zod"
+// `collect` centraliza la busqueda web server-side (antes duplicada aca).
+import { collect } from "@/lib/research/engine"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { loadDictionary, resolveProductByName, resolveProcessByName, suggestDictionaryTerm } from "./dictionary"
-import { MODELS, type RadarType } from "./types"
+import { LIMITS, MODELS, type RadarType } from "./types"
 import { logAiUsage } from "@/lib/v3/usage"
 import { getPrompt, renderPrompt } from "@/lib/v3/prompts"
 
@@ -49,6 +50,12 @@ export interface RadarRunSummary {
   findingsCount: number
   newFindings: number
   error?: string
+  /**
+   * Por qué no se ejecutó este agente. `cache` = ya había una corrida completada
+   * dentro del TTL (no se re-paga); `sin-presupuesto` = se cortó para no morir
+   * por timeout y la próxima invocación lo retoma.
+   */
+  skipped?: "cache" | "sin-presupuesto"
 }
 
 /**
@@ -117,59 +124,31 @@ async function researchBundle(
 
   const prompt = await renderPrompt("radar.base", { context, focus })
 
-  const userLocation = input.country
-    ? ({ type: "approximate" as const, country: countryToISO(input.country) })
-    : undefined
-
-  const { text, usage, sources, steps } = await generateText({
-    model: MODELS.RESEARCH,
+  // Delega en el `collect` del motor unificado.
+  //
+  // Esta funcion era un duplicado casi literal de `lib/research/engine.collect`:
+  // mismo `generateText`, mismo `web_search` de Anthropic, mismo dedup de fuentes
+  // citadas, mismo conteo de busquedas. La unica diferencia real era
+  // `maxOutputTokens: 4096`, que es justo el parametro que el motor NO fija a
+  // proposito: un tope de salida fue el gatillo del incidente de noticias, donde
+  // el modelo gastaba el presupuesto razonando y cortaba la respuesta.
+  //
+  // Se conserva `countryToISO` porque el motor espera ISO-2 ya resuelto.
+  return await collect({
     prompt,
-    temperature: 0.3,
-    maxOutputTokens: 4096,
-    tools: {
-      // Server-side web search de Anthropic (se ejecuta y cita en el proveedor,
-      // atravesando el AI Gateway). El cast salva un desajuste de generics del
-      // tipo Tool entre las versiones de @ai-sdk/* — el runtime es correcto.
-      web_search: anthropic.tools.webSearch_20250305({
-        maxUses: MAX_WEB_SEARCHES,
-        ...(userLocation ? { userLocation } : {}),
-      }),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any,
-    // Permitir varias rondas de búsqueda + síntesis final.
-    stopWhen: stepCountIs(MAX_WEB_SEARCHES + 2),
-  })
-
-  // Sólo URLs realmente citadas por Claude (dedup por URL).
-  const seen = new Set<string>()
-  const verifiedSources: VerifiedSource[] = []
-  for (const s of sources ?? []) {
-    if (s.sourceType !== "url" || !s.url || seen.has(s.url)) continue
-    seen.add(s.url)
-    verifiedSources.push({ url: s.url, title: s.title ?? null })
-  }
-
-  // Contar cuántas búsquedas web se ejecutaron (para métricas de costo).
-  let searchCount = 0
-  for (const step of steps ?? []) {
-    for (const call of step.toolCalls ?? []) {
-      if (call.toolName === "web_search") searchCount++
-    }
-  }
-
-  await logAiUsage({
-    feature: radarType === "news" ? "radar-news" : "radar-tech",
+    companyName: input.companyName,
+    countryISO: input.country ? countryToISO(input.country) : null,
+    maxSearches: MAX_WEB_SEARCHES,
     model: MODELS.RESEARCH,
-    inputTokens: usage?.inputTokens,
-    outputTokens: usage?.outputTokens,
-    companyId: input.companyId,
-    metadata: { stage: "research", web_searches: searchCount, sources: verifiedSources.length },
-    workspaceId: input.workspaceId ?? null,
-    researchJobId: input.researchJobId ?? null,
-    generationMode: "server_managed",
+    temperature: 0.3,
+    context: radarType === "news" ? "radar-news" : "radar-tech",
+    tracking: {
+      workspaceId: input.workspaceId ?? null,
+      companyId: input.companyId,
+      researchJobId: input.researchJobId ?? null,
+      feature: radarType === "news" ? "radar-news" : "radar-tech",
+    },
   })
-
-  return { text, sources: verifiedSources, searchCount }
 }
 
 /** Mapea nombres de país comunes a código ISO-2 para userLocation de web_search. */
@@ -420,19 +399,99 @@ async function resolveLegacyBundles(): Promise<ResolvedMicroAgent[]> {
 }
 
 /**
+ * Micro-agentes que YA tienen una corrida completada para esta empresa dentro
+ * del TTL. Son los que no hay que volver a pagar.
+ */
+async function findFreshAgentKeys(companyId: string, ttlDays: number): Promise<Set<string>> {
+  const admin = createAdminClient()
+  const since = new Date(Date.now() - ttlDays * 24 * 60 * 60 * 1000).toISOString()
+  const { data, error } = await admin
+    .from("radar_research_runs")
+    .select("bundle")
+    .eq("company_id", companyId)
+    .eq("status", "completed")
+    .gte("created_at", since)
+
+  if (error) {
+    // Ante la duda no saltear nada: es peor perder un agente que repetirlo.
+    console.error("[v3] No se pudo leer el cache de micro-agentes:", error.message)
+    return new Set()
+  }
+  return new Set((data ?? []).map((row) => row.bundle as string))
+}
+
+/**
  * Corre los micro-agentes seleccionados para una empresa (secuencial, respeta
  * rate limits). Si no se pasan agentes, cae a los bundles legacy.
+ *
+ * ── Reanudación (el arreglo del 48% de desperdicio) ──
+ * Los agentes corren en serie y 6 agentes Opus no entran en el maxDuration de
+ * 300 s, así que la ejecución se cortaba a mitad. Como no había memoria de lo
+ * ya hecho, el reintento arrancaba de nuevo por el PRIMER agente y volvía a
+ * pagar lo que ya estaba investigado. Eso explica la firma que dejaron los
+ * datos: `cloud_hosting` y `customer_service` corrieron 3,7 veces por empresa
+ * (son los dos primeros de la lista) y TODOS los demás exactamente 1,0 — los
+ * del final nunca llegaban a correr.
+ *
+ * Cada corrida ya se persistía por agente en `radar_research_runs`, así que la
+ * reanudación sale casi gratis: se saltean los que ya completaron dentro del
+ * TTL y se pagan solo los que faltan.
  */
 export async function runMicroAgents(
   input: RadarBundleInput,
   agents: ResolvedMicroAgent[],
-  onProgress?: (agentKey: string, index: number, total: number) => Promise<void>
+  onProgress?: (agentKey: string, index: number, total: number) => Promise<void>,
+  options?: {
+    /** Ignora el cache por agente y re-investiga todo (acción de super-admin). */
+    forceRefresh?: boolean
+    /** Corta la corrida antes de que el runtime la mate. */
+    budgetMs?: number
+  }
 ): Promise<RadarRunSummary[]> {
-  const list = agents.length > 0 ? agents : await resolveLegacyBundles()
+  // Tope duro desde la única fuente de verdad, sin importar cuántos agentes
+  // haya seleccionado el scoring.
+  const list = (agents.length > 0 ? agents : await resolveLegacyBundles()).slice(
+    0,
+    LIMITS.MAX_RESEARCH_BUNDLES
+  )
+
+  const fresh = options?.forceRefresh
+    ? new Set<string>()
+    : await findFreshAgentKeys(input.companyId, LIMITS.CACHE_TTL_DAYS)
+
+  const startedAt = Date.now()
   const results: RadarRunSummary[] = []
+
   for (let i = 0; i < list.length; i++) {
-    if (onProgress) await onProgress(list[i].key, i, list.length)
-    results.push(await runMicroAgent(input, list[i]))
+    const agent = list[i]
+
+    if (fresh.has(agent.key)) {
+      results.push({
+        bundle: agent.key,
+        radarType: agent.radarType,
+        findingsCount: 0,
+        newFindings: 0,
+        skipped: "cache",
+      })
+      continue
+    }
+
+    // Presupuesto de tiempo: parar ordenadamente y dejar que la próxima
+    // invocación siga desde acá es mucho mejor que morir por timeout, porque
+    // el trabajo de este agente se perdería después de haberlo pagado.
+    if (options?.budgetMs && Date.now() - startedAt > options.budgetMs) {
+      results.push({
+        bundle: agent.key,
+        radarType: agent.radarType,
+        findingsCount: 0,
+        newFindings: 0,
+        skipped: "sin-presupuesto",
+      })
+      continue
+    }
+
+    if (onProgress) await onProgress(agent.key, i, list.length)
+    results.push(await runMicroAgent(input, agent))
   }
   return results
 }

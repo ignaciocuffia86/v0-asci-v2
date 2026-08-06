@@ -83,24 +83,72 @@ async function crearKey(workspaceId, nombre) {
   return raw
 }
 
-if (cleanup) {
+/**
+ * Borra todo lo marcado con [TEST v0]. Es idempotente, asi que se puede correr
+ * siempre: con --cleanup y tambien al ARRANCAR, para no acumular residuo de una
+ * corrida anterior que se cayo a mitad de camino.
+ *
+ * Por que importa arrancar limpiando: crearKey CLONA una key real para heredar
+ * las columnas obligatorias, y con eso hereda owner_user_id, que es el usuario
+ * REAL. El miembro que se agrega mas abajo usa ese owner_user_id, o sea que el
+ * usuario real queda como miembro activo del workspace de prueba. Si el cleanup
+ * no corre, ese usuario se queda con 2 membresias activas para siempre.
+ *
+ * Eso ya rompio produccion una vez: getWorkspaceForUser usaba .single(), que con
+ * 2 filas falla (PGRST116), y /v3 le decia "no tenes workspace" al usuario real
+ * aunque sus datos estaban intactos. El codigo ya es tolerante, pero igual no
+ * queremos dejar al usuario dentro de un tenant de prueba.
+ */
+async function limpiar({ silencioso = false } = {}) {
+  const log = (m) => {
+    if (!silencioso) console.log(m)
+  }
+
+  // Primero se sacan las membresias de prueba, que son las que rompen el login.
+  // Se borran por join contra los workspaces marcados, para no tocar nunca una
+  // membresia de un workspace real.
+  const { rowCount: miembros } = await client.query(
+    `DELETE FROM v3.workspace_members wm
+      USING v3.workspaces w
+      WHERE w.id = wm.workspace_id AND w.name LIKE $1`,
+    [`${MARCA}%`],
+  )
+
   const { rowCount: revocadas } = await client.query(
     `UPDATE v3.mcp_api_keys SET revoked_at = now() WHERE name LIKE $1 AND revoked_at IS NULL`,
     [`${MARCA}%`],
   )
+
   // El workspace B se borra completo; sus FKs son ON DELETE CASCADE dentro de v3.
   const { rows: wsB } = await client.query(`SELECT id, name FROM v3.workspaces WHERE name LIKE $1`, [`${MARCA}%`])
   for (const ws of wsB) {
     await client.query(`DELETE FROM v3.workspaces WHERE id = $1`, [ws.id])
-    console.log(`[v0] workspace borrado: ${ws.name} (${ws.id})`)
+    log(`[v0] workspace borrado: ${ws.name} (${ws.id})`)
   }
-  console.log(`[v0] keys revocadas: ${revocadas}`)
+
   for (const f of ["/tmp/asci-test-key", "/tmp/asci-test-key-b"]) {
     if (fs.existsSync(f)) fs.unlinkSync(f)
   }
+
+  const total = miembros + revocadas + wsB.length
+  if (total > 0) {
+    log(`[v0] limpieza: ${miembros} membresias borradas, ${revocadas} keys revocadas, ${wsB.length} workspaces borrados.`)
+  }
+  return total
+}
+
+if (cleanup) {
+  await limpiar()
   console.log("[v0] limpieza lista.")
   await client.end()
   process.exit(0)
+}
+
+// Arrancamos limpiando residuo de corridas anteriores. Si encontramos algo es que
+// un run previo no llego a su cleanup, y conviene avisarlo en vez de acumularlo.
+const residuo = await limpiar({ silencioso: true })
+if (residuo > 0) {
+  console.log(`[v0] habia residuo de una corrida anterior (${residuo} filas). Ya se limpio.`)
 }
 
 // ── Workspace A: la key para el workspace real ──
@@ -160,5 +208,13 @@ console.log(`[v0] miembro activo agregado al workspace B`)
 fs.writeFileSync("/tmp/asci-test-key-b", keyB, { mode: 0o600 })
 console.log(`[v0] key B lista (prefijo ${keyB.slice(0, 12)}…)`)
 console.log(`\n[v0] WS_B=${wsB.id}`)
+
+// El usuario real quedo como miembro activo del workspace de prueba (ver el
+// comentario de limpiar()). Mientras eso siga asi, pertenece a 2 workspaces.
+console.log(
+  `\n[v0] IMPORTANTE: el usuario real quedo como miembro activo del workspace de prueba.\n` +
+    `[v0] Al terminar de testear, corre:  node scripts/mcp-test-setup.mjs --cleanup\n` +
+    `[v0] Si no, el usuario queda con 2 membresias activas y dentro de un tenant que no es suyo.`,
+)
 
 await client.end()
