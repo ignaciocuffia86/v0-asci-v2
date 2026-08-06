@@ -103,6 +103,22 @@ export function companyNameVariants(name: string, linkedinUrl?: string | null): 
   return out.slice(0, 4)
 }
 
+/**
+ * ¿Está Apify configurado en ESTE deployment?
+ *
+ * Permite fallar antes de producir efectos colaterales. Sin esto el token se
+ * valida recién dentro de `runLinkedinJobsActor`, o sea después de haber exigido
+ * que la cuenta esté guardada y después de reservar cuota: el usuario ocupa un
+ * lugar de su plan por una capacidad que este deployment no puede ejecutar.
+ *
+ * Pasó de verdad: `APIFY_TOKEN` estaba en un proyecto de Vercel y el dominio que
+ * atendía el MCP era otro, así que la tool devolvía APIFY_TOKEN_MISSING recién al
+ * final. Solo se mira el token: `APIFY_ACTOR_ID` tiene fallback.
+ */
+export function isApifyConfigured(): boolean {
+  return Boolean(process.env.APIFY_TOKEN)
+}
+
 export interface ApifyRunResult {
   runId: string
   items: Record<string, unknown>[]

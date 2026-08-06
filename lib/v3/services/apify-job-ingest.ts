@@ -59,6 +59,14 @@ export interface ApifyJobItem {
   [key: string]: unknown
 }
 
+/** Una vacante aceptada, en la forma mínima para mostrarla sin esperar el ETL. */
+export interface ApifyJobPreviewItem {
+  title: string
+  location: string | null
+  url: string
+  postedAt: string | null
+}
+
 export interface ApifyIngestResult {
   batchId: string | null
   companyId: string
@@ -70,7 +78,23 @@ export interface ApifyIngestResult {
   skippedOtherCompany: number
   filename: string
   warnings: string[]
+  /**
+   * Muestra de las vacantes ACEPTADAS, para poder contestar "qué posiciones hay"
+   * en el mismo turno.
+   *
+   * Existe porque la ingesta es asincrónica: las filas se procesan después, así
+   * que sin esto la única respuesta posible es "consultá en unos minutos" y quien
+   * llama se queda sin nada que mostrar. Los items ya están en memoria y ya
+   * pasaron `belongsToCompany`, así que no cuesta una query extra ni relaja el
+   * guardrail: es exactamente lo que se va a guardar.
+   *
+   * Es una MUESTRA, no el total: `queued` sigue siendo la cuenta real.
+   */
+  preview: ApifyJobPreviewItem[]
 }
+
+/** Cuántas vacantes se devuelven en el preview. */
+const PREVIEW_LIMIT = 20
 
 /**
  * Extrae la URL de la vacante probando las mismas variantes que el RPC.
@@ -85,6 +109,38 @@ function extractJobUrl(item: ApifyJobItem): string | null {
     if (typeof value === "string" && value.trim()) return value.trim()
   }
   return null
+}
+
+/** Primer string no vacío entre varias claves candidatas. */
+function firstString(item: ApifyJobItem, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = item[key]
+    if (typeof value === "string" && value.trim()) return value.trim()
+  }
+  return null
+}
+
+/**
+ * Arma la fila del preview.
+ *
+ * Las claves candidatas son las MISMAS que lee `process_job_batch_internal` (ver
+ * los COALESCE del RPC): título por `title`/`job_title`, ubicación por `location`
+ * o `city, country`, fecha por `postedTime`/`publishedAt`/`post_date`. Si acá se
+ * leyeran otras claves, el preview podría mostrar algo distinto de lo que termina
+ * guardado, que es peor que no mostrar nada.
+ *
+ * Se lee del item ORIGINAL a propósito: en `row_data` el `country` se sobrescribe
+ * con el de la cuenta, así que la ubicación real de la vacante solo está acá.
+ */
+function toPreviewItem(item: ApifyJobItem, jobUrl: string): ApifyJobPreviewItem {
+  const city = firstString(item, ["city"])
+  const country = firstString(item, ["country"])
+  return {
+    title: firstString(item, ["title", "job_title"]) ?? "Sin título",
+    location: firstString(item, ["location"]) ?? (city && country ? `${city}, ${country}` : city ?? country),
+    url: jobUrl,
+    postedAt: firstString(item, ["postedTime", "publishedAt", "post_date"]),
+  }
 }
 
 /** Normaliza para comparar nombres de empresa: sin sufijos legales ni acentos. */
@@ -166,6 +222,7 @@ export async function ingestApifyJobPostings(params: {
   let skippedDuplicateInPayload = 0
   let skippedOtherCompany = 0
   const rows: { batch_id: string; row_data: Record<string, unknown> }[] = []
+  const preview: ApifyJobPreviewItem[] = []
 
   for (const item of params.items) {
     // Primero el filtro de pertenencia: el actor busca por título de puesto y
@@ -189,6 +246,10 @@ export async function ingestApifyJobPostings(params: {
       continue
     }
     seen.add(jobUrl)
+
+    // Se arma acá, con la fila ya aceptada, para que el preview no pueda
+    // desalinearse de lo que efectivamente se encola.
+    if (preview.length < PREVIEW_LIMIT) preview.push(toPreviewItem(item, jobUrl))
 
     rows.push({
       batch_id: "",
@@ -235,6 +296,7 @@ export async function ingestApifyJobPostings(params: {
       skippedOtherCompany,
       filename,
       warnings: [...warnings, "No quedaron vacantes utilizables: no se creó ningún batch."],
+      preview: [],
     }
   }
 
@@ -307,5 +369,6 @@ export async function ingestApifyJobPostings(params: {
     skippedOtherCompany,
     filename,
     warnings,
+    preview,
   }
 }
