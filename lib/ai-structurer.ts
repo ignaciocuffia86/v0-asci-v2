@@ -2,6 +2,40 @@ import { generateText } from "ai"
 import { logAiUsage, type UsageFeature } from "@/lib/v3/usage"
 
 /**
+ * Modelo por defecto para estructurar texto crudo a JSON.
+ *
+ * ── Por qué este y no otro (medido, no intuido) ──
+ * El default anterior era `google/gemini-2.0-flash`, que fue RETIRADO del AI
+ * Gateway y devolvía `model_not_found`. Como los 4 call sites no pasan modelo
+ * explícito, todos los caminos de estructuración de v2 estaban fallando en
+ * silencio (`/research/news`, `/research/public-docs` y las 2 llamadas de
+ * `lib/tech-radar.ts`).
+ *
+ * Benchmark con los prompts y datos reales de producción — ver
+ * `scripts/bench-structurer-models.mts` (4 casos: 2 de noticias, 2 de radar):
+ *
+ *   modelo                  JSON válido   items usables   latencia   costo
+ *   2.5-flash-lite            4/4              25           5,8 s    $0,0026
+ *   2.5-flash                 1/4               5          21,1 s    $0,0089
+ *   3.5-flash-lite            4/4              19           3,4 s    (sin precio)
+ *
+ * `2.5-flash` es un modelo de RAZONAMIENTO: gastó entre 3.800 y 5.700 tokens
+ * "pensando" antes de escribir, se comió el presupuesto de `maxOutputTokens` y
+ * cortó el JSON a mitad (finishReason `length`) en 3 de 4 casos. Para pasar
+ * texto a JSON no hay nada que razonar, así que ese pensamiento es puro costo y
+ * latencia. `2.5-flash-lite` no razona, acierta siempre y es 3,5x más barato.
+ *
+ * `3.5-flash-lite` también acertó 4/4 y es el más rápido, pero NO está en la
+ * tabla de precios de `lib/v3/usage.ts` (caería al fallback 3/15, que
+ * sobrereporta el costo). Es el candidato natural para migrar más adelante,
+ * agregando primero su precio real.
+ *
+ * ⚠️ Al cambiar este valor, verificar que el modelo exista en el Gateway y que
+ * tenga precio en `MODEL_PRICING` de `lib/v3/usage.ts`.
+ */
+export const STRUCTURER_DEFAULT_MODEL = "google/gemini-2.5-flash-lite"
+
+/**
  * Devuelve los tokens significativos (>=4 chars) del nombre de la empresa,
  * normalizados sin tildes, en lowercase. Filtra sufijos juridicos comunes
  * para que "Garbarino S.A." -> ["garbarino"], "Tsoft Latam" -> ["tsoft", "latam"].
@@ -59,7 +93,7 @@ export async function structureWithLLM<T>({
   maxOutputTokens = 4000,
   temperature = 0.2,
   maxRetries = 3,
-  model = "google/gemini-2.0-flash",
+  model = STRUCTURER_DEFAULT_MODEL,
   context = "llm",
   tracking,
 }: {
@@ -146,6 +180,29 @@ export async function structureWithLLM<T>({
     } catch (err) {
       lastError = err
       const message = String((err as Error)?.message ?? err)
+
+      // Modelo inexistente o dado de baja en el Gateway.
+      //
+      // Es un error de CONFIGURACIÓN, no transitorio: reintentar 3 veces con
+      // backoff solo agrega latencia y vuelve a fallar igual. Se corta acá con
+      // un mensaje que nombra el modelo, porque así se detecta en minutos en vez
+      // de semanas: `gemini-2.0-flash` estuvo roto sin que nadie lo notara
+      // porque el error se perdía entre los genéricos.
+      const isModelNotFound =
+        message.includes("model_not_found") ||
+        message.includes("Model not found") ||
+        message.includes("does not exist") ||
+        message.includes("NOT_FOUND")
+
+      if (isModelNotFound) {
+        const explicativo =
+          `[ai-structurer][${context}] El modelo "${model}" no existe o fue dado de baja en el AI Gateway. ` +
+          `Revisar el catálogo vigente y actualizar STRUCTURER_DEFAULT_MODEL en lib/ai-structurer.ts ` +
+          `(y agregar su precio en MODEL_PRICING de lib/v3/usage.ts). Error original: ${message.slice(0, 200)}`
+        console.error(`[v0]${explicativo}`)
+        throw new Error(explicativo)
+      }
+
       const isRateLimit =
         message.includes("429") ||
         message.includes("Too Many Requests") ||
