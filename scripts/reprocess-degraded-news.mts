@@ -22,8 +22,9 @@
  * ── Seguridad ──
  * Escribe en `public.company_news`, que es v2 PRODUCTIVO. Por eso:
  *   - DRY RUN por defecto: sin `--commit` no toca nada, solo muestra el diff.
- *   - Los DELETE piden ADEMAS `--delete-irrelevant`. Borrar es mas destructivo
- *     que corregir, asi que no viaja escondido en el mismo flag.
+ *   - Los DELETE piden ADEMAS `--delete-ids` con los ids uno por uno. Borrar es
+ *     mas destructivo que corregir, asi que no viaja escondido en el mismo flag
+ *     ni se decide por heuristica (ver el comentario de `idsABorrar`).
  *   - Se verifico que `direction` y `verified_at` son NULL en las 47 filas, o
  *     sea NO hay curaduria humana que se pierda al reescribirlas. El script lo
  *     re-chequea en caliente y aborta si aparece alguna curada.
@@ -41,7 +42,7 @@
  * ── Uso ──
  *   node --experimental-strip-types scripts/reprocess-degraded-news.mts
  *   ... --commit                          # persiste las correcciones
- *   ... --commit --delete-irrelevant      # ademas borra las que no son noticia
+ *   ... --commit --delete-ids a1b2,c3d4   # ademas borra esos ids puntuales
  *   ... --limit 5                         # probar con pocas empresas primero
  */
 
@@ -99,7 +100,9 @@ async function main() {
   await c.connect()
 
   console.log(`[v0] Modo: ${commit ? "COMMIT (escribe en v2 productivo)" : "DRY RUN (no escribe nada)"}`)
-  console.log(`[v0] Borrado de irrelevantes: ${deleteIrrelevant ? "SI" : "no (solo se reportan)"}`)
+  console.log(
+  `[v0] Borrado: ${idsABorrar.length > 0 ? `${idsABorrar.length} id(s) explicito(s)` : "ninguno (los descartes solo se reportan)"}`
+)
   console.log(`[v0] Modelo: ${STRUCTURER_DEFAULT_MODEL}\n`)
 
   // Guardia: si alguna fila degradada fue curada a mano, no la pisamos.
@@ -145,7 +148,7 @@ async function main() {
   console.log(`[v0] ${rows.length} filas degradadas en ${porEmpresa.size} empresas\n`)
 
   const aActualizar: Array<{ fila: FilaDegradada; nuevo: any }> = []
-  const aDescartar: Array<{ fila: FilaDegradada; motivo: string; revisarAMano: boolean }> = []
+  const aDescartar: Array<{ fila: FilaDegradada; motivo: string }> = []
   const digestPorEmpresa = new Map<string, string | null>()
   let empresasProcesadas = 0
 
@@ -214,28 +217,17 @@ async function main() {
 
     filas.forEach((f, i) => {
       if (indicesDevueltos.has(i)) return
-      const soloGuardrail = indicesDelModelo.has(i)
-      // Heuristica de falso descarte: si el titulo comparte un token distintivo
-      // con el nombre de la cuenta, la fila probablemente SI habla de la empresa
-      // y el modelo la omitio por la regla D del prompt (exige la razon social
-      // literal). Caso real detectado: la cuenta es "Grupo Antofagasta Minerals"
-      // y el titulo "2025 Full Year Results | Antofagasta PLC" -> son resultados
-      // anuales legitimos de la matriz, no basura.
-      const tokensEmpresa = empresa
-        .toLowerCase()
-        .split(/\s+/)
-        .filter((t) => t.length >= 5 && !["grupo", "banco", "empresas", "bodega", "parque"].includes(t))
-      const textoFila = `${f.title ?? ""} ${f.summary ?? ""}`.toLowerCase()
-      const compartaNombre = tokensEmpresa.some((t) => textoFila.includes(t))
-
+      // Solo se reportan las dos causas FACTUALES, sin intentar adivinar si el
+      // descarte fue correcto. Se probo una heuristica ("el titulo nombra a la
+      // empresa => probablemente sea noticia legitima") y daba falsos positivos
+      // ridiculos: marcaba como valida una nota de Dynabook porque compartia la
+      // palabra "recuerdo" con la cuenta "Parque del Recuerdo". Con 9 filas, el
+      // ojo humano es mas confiable que el clasificador.
       aDescartar.push({
         fila: f,
-        motivo: soloGuardrail
-          ? "cortada por el guardrail de nombre"
-          : compartaNombre
-            ? "el modelo la omitio PERO el titulo nombra la empresa"
-            : "el modelo la omitio",
-        revisarAMano: soloGuardrail || compartaNombre,
+        motivo: indicesDelModelo.has(i)
+          ? "el modelo la devolvio pero la corto el guardrail de nombre"
+          : "el modelo no la reconocio como noticia",
       })
     })
 
@@ -270,10 +262,7 @@ async function main() {
   if (!commit) {
     console.log(`\n[v0] DRY RUN: nada se escribio.`)
     console.log(`[v0] Para aplicar las ${aActualizar.length} correcciones:  --commit`)
-    console.log(`[v0] Para borrar ademas los ${borrables.length} descartes seguros: --commit --delete-irrelevant`)
-    if (dudosas.length > 0) {
-      console.log(`[v0] Las ${dudosas.length} de "revisar a mano" NUNCA se borran automaticamente.`)
-    }
+    console.log(`[v0] Los ${aDescartar.length} descartes NO se borran solos: elegi ids y pasa --delete-ids.`)
     await c.end()
     return
   }
@@ -324,11 +313,8 @@ async function main() {
 
     await c.query("COMMIT")
     console.log(`\n[v0] COMMIT: ${actualizadas} corregidas, ${borradas} borradas.`)
-    if (!deleteIrrelevant && borrables.length > 0) {
-      console.log(`[v0] Los ${borrables.length} descartes siguen en la base (falta --delete-irrelevant).`)
-    }
-    if (dudosas.length > 0) {
-      console.log(`[v0] Las ${dudosas.length} de "revisar a mano" quedaron intactas, por diseño.`)
+    if (borradas === 0 && aDescartar.length > 0) {
+      console.log(`[v0] Los ${aDescartar.length} descartes siguen en la base (no se pasaron ids).`)
     }
   } catch (err) {
     await c.query("ROLLBACK")
