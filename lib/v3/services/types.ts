@@ -168,8 +168,16 @@ export const LIMITS = {
   MAX_BATCH_SIZE: 25,
   /** Días de validez del cache global antes de re-investigar */
   CACHE_TTL_DAYS: 30,
-  /** Máximo de bundles Opus por cuenta por ejecución */
-  MAX_OPUS_BUNDLES: 5,
+  /**
+   * Máximo de micro-agentes de investigación por cuenta por ejecución.
+   *
+   * ÚNICA fuente de verdad. Antes había tres números que se contradecían:
+   * este decía 5, el array `BUNDLES` de radar.ts tenía 3 entradas y
+   * `DEFAULT_TOP_N` de agent-selection.ts usaba 6 — así que "cuántos agentes
+   * corren" dependía de qué archivo mirabas. `agent-selection` importa esta
+   * constante y `runMicroAgents` la aplica como tope duro.
+   */
+  MAX_OPUS_BUNDLES: 6,
   /** Contactos máximos a sugerir por cuenta */
   MAX_CONTACTS: 5,
 } as const

@@ -29,6 +29,17 @@ export interface BlockedResearchInput {
 }
 
 /**
+ * Presupuesto para la etapa de radar dentro de una invocación.
+ *
+ * El pipeline corre en una función de maxDuration=300 s y el radar es la etapa
+ * larga (micro-agentes en serie). Cortar en 180 s deja margen para el scorecard
+ * y el brief final; los agentes que no entran quedan pendientes y los retoma la
+ * próxima invocación salteando por cache los ya hechos. Morir por timeout es
+ * peor: se pierde el trabajo del agente en curso DESPUÉS de haberlo pagado.
+ */
+const RADAR_BUDGET_MS = 180_000
+
+/**
  * Crea los jobs de un lote (hasta MAX_BATCH_SIZE cuentas).
  * source="user" aplica las cuotas del plan del workspace; source="cron"
  * las omite (el refresh automático no consume cupo del tenant).
@@ -290,12 +301,22 @@ export async function runResearchJob(jobId: string): Promise<ResearchJob | null>
     const skipResearch = fresh && !job.force_refresh
 
     // ── 3. Radar (Opus + búsqueda web real + estructurador) ──
-    if (!skipResearch) {
+    //
+    // Se llama SIEMPRE, incluso con cache fresco. Antes había una puerta gruesa
+    // (`if (!skipResearch)`) y eso ocultaba un agujero: `isRadarCacheFresh` da
+    // true con UNA sola corrida completada, así que una cuenta que se cortó por
+    // timeout en el agente 1 de 6 quedaba marcada como "lista" y los otros 5
+    // nunca corrían — el research salía incompleto y nadie se enteraba.
+    //
+    // Ahora la decisión es por agente dentro de `runMicroAgents`: los que ya
+    // completaron dentro del TTL se saltean sin pagar, y los que faltan se
+    // terminan. Con todo fresco no se gasta un peso, igual que antes.
+    {
       // Selección dinámica de micro-agentes según la propuesta de valor y los
       // tags de los documentos del workspace (foco en lo que le interesa al usuario).
       const { agents } = await selectMicroAgentsForWorkspace(job.workspace_id)
       const total = agents.length || 1
-      await runMicroAgents(
+      const summaries = await runMicroAgents(
         { companyId: companyId!, companyName, domain, country, industry, workspaceId: job.workspace_id, researchJobId: jobId },
         agents,
         async (agentKey, index) => {
@@ -303,10 +324,27 @@ export async function runResearchJob(jobId: string): Promise<ResearchJob | null>
             current_step: `radar:${agentKey}`,
             progress: 10 + Math.round(((index + 1) / (total + 2)) * 70),
           })
+        },
+        {
+          forceRefresh: job.force_refresh ?? false,
+          // Presupuesto para cerrar el job antes del corte del runtime. Lo que
+          // no entra queda pendiente y lo retoma la próxima invocación.
+          budgetMs: RADAR_BUDGET_MS,
         }
       )
-    } else {
-      await updateJob(jobId, { current_step: "cache-hit", progress: 60 })
+
+      const pendientes = summaries.filter((s) => s.skipped === "sin-presupuesto").length
+      if (pendientes > 0) {
+        // El job no está completo: dejarlo reintentable para que el cron lo
+        // retome y termine los agentes que faltan (sin re-pagar los hechos).
+        await updateJob(jobId, {
+          current_step: `radar-parcial:faltan-${pendientes}`,
+          progress: 75,
+        })
+      }
+      if (skipResearch) {
+        await updateJob(jobId, { current_step: "cache-hit", progress: 60 })
+      }
     }
 
     // ── 4. Intérprete de vacantes ──
