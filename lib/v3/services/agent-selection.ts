@@ -21,11 +21,11 @@ import { LIMITS } from "./types"
 /**
  * Cantidad máxima de micro-agentes a correr por cuenta.
  *
- * Se toma de `LIMITS.MAX_OPUS_BUNDLES` para que haya UN solo número. Antes este
- * archivo decía 6, `LIMITS` decía 5 y el array legacy de radar.ts tenía 3, así
- * que la respuesta a "cuántos agentes corren" cambiaba según el archivo.
+ * Se toma de `LIMITS.MAX_RESEARCH_BUNDLES` para que haya UN solo número. Antes
+ * este archivo decía 6, `LIMITS` decía 5 y el array legacy de radar.ts tenía 3,
+ * así que la respuesta a "cuántos agentes corren" cambiaba según el archivo.
  */
-const DEFAULT_TOP_N = LIMITS.MAX_OPUS_BUNDLES
+const DEFAULT_TOP_N = LIMITS.MAX_RESEARCH_BUNDLES
 /** Piso de micro-agentes de negocio/noticias garantizados. */
 const MIN_NEWS_AGENTS = 1
 

@@ -479,7 +479,7 @@ export async function runMicroAgents(
   // haya seleccionado el scoring.
   const list = (agents.length > 0 ? agents : await resolveLegacyBundles()).slice(
     0,
-    LIMITS.MAX_OPUS_BUNDLES
+    LIMITS.MAX_RESEARCH_BUNDLES
   )
 
   const fresh = options?.forceRefresh

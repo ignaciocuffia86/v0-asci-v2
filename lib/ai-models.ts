@@ -50,3 +50,38 @@
  * con menos hallazgos que antes, este es el primer sospechoso.
  */
 export const STRUCTURER_MODEL = "google/gemini-2.5-flash-lite"
+
+/**
+ * Investigacion con busqueda web server-side (etapa A del radar y del motor
+ * unificado de research).
+ *
+ * ── Por que haiku y no opus (medido, `scripts/bench-search-providers.mts`) ──
+ * 3 empresas reales, mismo prompt, busqueda `web_search` server-side:
+ *
+ *   candidato                items  URLs vivas   dominios  latencia   costo
+ *   claude-haiku-4.5          23     81/84 (96%)    54      15,6 s   $0,1256
+ *   claude-opus-4.5           25     64/66 (97%)    47      30,8 s   $0,5922
+ *
+ * haiku sale **4,7x mas barato y 2x mas rapido**, y ademas trae MAS URLs (84 vs
+ * 66) y MAS dominios distintos (54 vs 47). Opus solo aporta +2 items. Los dos
+ * dieron 100% de relevancia contra `filterRelevantToCompany`, o sea que el
+ * guardrail del prompt alcanza y no hace falta pagar razonamiento para evitar
+ * ruido. Referencia historica: los $62,31 ya gastados en Opus habrian sido ~$13.
+ *
+ * ⚠️ ALCANCE DE LA EVIDENCIA: el benchmark midio busqueda de NOTICIAS. El radar
+ * TECNICO (inferir el stack de una empresa a partir de evidencia dispersa) es
+ * otra tarea, y ahi el razonamiento de Opus podria valer lo que cuesta. Se migro
+ * igual por decision explicita de producto, priorizando el ahorro. Si los
+ * informes tecnicos empiezan a salir mas pobres, ESTE es el primer sospechoso.
+ *
+ * ROLLBACK SIN REDEPLOY: setear la env var `V3_RESEARCH_MODEL` (por ejemplo a
+ * `anthropic/claude-opus-4.5`) pisa este default. Se eligio asi justamente
+ * porque es un cambio de calidad en produccion y queria que volver atras no
+ * dependiera de un deploy.
+ *
+ * Nota sobre el id: el catalogo del Gateway lo publica como `claude-haiku-4.5`
+ * (con PUNTO). El Gateway acepta igual la variante con guion, y
+ * `normalizeModelKey` de lib/v3/usage.ts compara sin separadores, asi que el
+ * precio (1/5 por 1M tokens) resuelve bien en ambas formas.
+ */
+export const RESEARCH_MODEL = process.env.V3_RESEARCH_MODEL?.trim() || "anthropic/claude-haiku-4.5"

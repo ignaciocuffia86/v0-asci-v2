@@ -6,7 +6,7 @@
 import type { EvidenceLevel } from "./evidence-level"
 // Modulo LEAF (cero imports) a proposito: se puede importar desde este archivo
 // de tipos sin arrastrar el SDK de IA ni crear ciclos.
-import { STRUCTURER_MODEL } from "@/lib/ai-models"
+import { RESEARCH_MODEL, STRUCTURER_MODEL } from "@/lib/ai-models"
 
 export type RadarType = "tech" | "news" | "jobs-interpretation"
 
@@ -179,16 +179,26 @@ export const LIMITS = {
    * `DEFAULT_TOP_N` de agent-selection.ts usaba 6 — así que "cuántos agentes
    * corren" dependía de qué archivo mirabas. `agent-selection` importa esta
    * constante y `runMicroAgents` la aplica como tope duro.
+   *
+   * Se llamaba `MAX_OPUS_BUNDLES`, pero desde la migración a haiku ya no corre
+   * ningún agente Opus, así que el nombre mentía sobre la realidad. El tope
+   * sigue existiendo por presupuesto y por `maxDuration`, no por el modelo.
    */
-  MAX_OPUS_BUNDLES: 6,
+  MAX_RESEARCH_BUNDLES: 6,
   /** Contactos máximos a sugerir por cuenta */
   MAX_CONTACTS: 5,
 } as const
 
 /** Modelos vía Vercel AI Gateway */
 export const MODELS = {
-  /** Investigación profunda (etapa A) */
-  RESEARCH: "anthropic/claude-opus-4-5",
+  /**
+   * Investigación profunda con búsqueda web (etapa A).
+   *
+   * Migrado de `claude-opus-4-5` a haiku: el benchmark midió que haiku trae más
+   * URLs y más dominios a 4,7x menos costo. Ver el detalle y la contrapartida en
+   * `lib/ai-models.ts`, que además permite revertir por env var sin redeploy.
+   */
+  RESEARCH: RESEARCH_MODEL,
   /**
    * Estructuración y tareas baratas (etapa B).
    *
