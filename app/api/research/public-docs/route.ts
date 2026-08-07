@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextResponse } from "next/server"
-import { parallelSearch, buildPublicDocsSearchParams } from "@/lib/parallel"
+import { searchPublicDocsViaGateway, buildPublicDocsSearchParams } from "@/lib/parallel"
 import {
   getCIKByTicker,
   searchSECByCompanyName,
@@ -282,8 +282,13 @@ export async function POST(request: Request) {
     })
 
     try {
-      const searchResult = await parallelSearch(parallelParams)
-      console.log("[v0] Public Docs: Parallel returned", searchResult.results.length, "results")
+      // Enrutado por el AI Gateway: costo visible + atribuido, sin PARALLEL_API_KEY
+      // en la app. Mismo shape de retorno que la llamada directa anterior.
+      const searchResult = await searchPublicDocsViaGateway(parallelParams, {
+        companyId,
+        userId: user.id,
+      })
+      console.log("[v0] Public Docs: Gateway parallelSearch returned", searchResult.results.length, "results")
 
       for (const result of searchResult.results) {
         // Determine document type from URL/title

@@ -1,6 +1,19 @@
 import Parallel from "parallel-web"
+import { gateway, generateText, stepCountIs } from "ai"
+import { RESEARCH_MODEL } from "@/lib/ai-models"
+import { logAiUsage } from "@/lib/v3/usage"
 
-const client = new Parallel({ apiKey: process.env.PARALLEL_API_KEY })
+// Cliente Parallel LAZY. Antes se instanciaba a nivel de modulo
+// (`new Parallel({ apiKey })`), y el constructor TIRA si la key falta: importar
+// CUALQUIER cosa de este archivo (incluidos los builders puros como
+// `buildPublicDocsSearchParams`) explotaba en un entorno sin PARALLEL_API_KEY.
+// Con el getter lazy, solo el path que realmente llama a parallel-web necesita la
+// key; la ruta que va por el Gateway (searchPublicDocsViaGateway) no la toca.
+let _client: Parallel | null = null
+function getClient(): Parallel {
+  if (!_client) _client = new Parallel({ apiKey: process.env.PARALLEL_API_KEY })
+  return _client
+}
 
 export interface ParallelSearchOptions {
   objective: string
@@ -35,7 +48,7 @@ export interface ParallelSearchResponse {
  * Returns structured results with URLs, titles, dates and LLM-optimized excerpts.
  */
 export async function parallelSearch(options: ParallelSearchOptions): Promise<ParallelSearchResponse> {
-  const search = await client.beta.search({
+  const search = await getClient().beta.search({
     objective: options.objective,
     search_queries: options.search_queries,
     max_results: options.max_results ?? 10,
@@ -53,6 +66,101 @@ export async function parallelSearch(options: ParallelSearchOptions): Promise<Pa
     })),
     warnings: search.warnings ?? null,
   }
+}
+
+/**
+ * Igual que `parallelSearch` pero ENRUTADO POR EL AI GATEWAY
+ * (`gateway.tools.parallelSearch`) en vez de pegarle directo a parallel-web.
+ *
+ * ── Por que ──
+ * 1. Costo VISIBLE: la busqueda se factura y reporta por el Gateway (como el resto
+ *    de la IA de v3), y ademas se registra en v3.ai_usage_log. El path directo era
+ *    invisible para la reporteria de costos.
+ * 2. Sin PARALLEL_API_KEY en la app: el Gateway tiene la credencial de Parallel.
+ *    Elimina una env var que ademas DIVERGE entre los dos proyectos Vercel.
+ *
+ * ── Trade-off (medido) ──
+ * Es una provider-executed tool: el `objective` y las `search_queries` los arma el
+ * MODELO (Haiku), no el codigo. Se le pasan las queries afinadas como prompt y se
+ * PINEA el `source_policy` (dominios + fecha) via config, que es lo que sostiene el
+ * anti-contaminacion. En la validacion con Arcos Dorados dio 12 docs (9 oficiales:
+ * earnings transcripts + annual reports) en 1 sola tool-call, respetando el
+ * include/exclude de dominios. Ruido menor de cross-mentions (marca madre /
+ * competidor) que la clasificacion + dedup downstream de la ruta ya absorbe.
+ *
+ * Devuelve el MISMO shape que `parallelSearch` para ser drop-in en el caller.
+ */
+export async function searchPublicDocsViaGateway(
+  options: ParallelSearchOptions,
+  tracking?: { companyId?: string | null; userId?: string | null; workspaceId?: string | null },
+): Promise<ParallelSearchResponse> {
+  const sp = options.source_policy ?? {}
+  const prompt =
+    `${options.objective}\n\n` +
+    `Ejecuta UNA busqueda web con estas queries (todas en una sola llamada a la herramienta):\n` +
+    options.search_queries.map((q, i) => `${i + 1}. ${q}`).join("\n")
+
+  const results: ParallelResult[] = []
+  let usage: { inputTokens?: number; outputTokens?: number } | undefined
+
+  try {
+    const res = await generateText({
+      model: RESEARCH_MODEL,
+      prompt,
+      tools: {
+        parallelSearch: gateway.tools.parallelSearch({
+          maxResults: options.max_results ?? 10,
+          sourcePolicy: {
+            includeDomains: sp.include_domains,
+            excludeDomains: sp.exclude_domains,
+            afterDate: sp.after_date,
+          },
+          excerpts: {
+            maxCharsPerResult: options.excerpts?.max_chars_per_result ?? 8000,
+          },
+        }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      // 1 ronda de busqueda + turno de cierre. La tool trae todo en una llamada.
+      stopWhen: stepCountIs(3),
+    })
+    usage = res.usage
+    const seen = new Set<string>()
+    for (const tr of res.staticToolResults ?? []) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const out = (tr as any).output
+      if (!out || !Array.isArray(out.results)) continue
+      for (const r of out.results) {
+        const url = r.url ?? ""
+        if (!url || seen.has(url)) continue
+        seen.add(url)
+        results.push({
+          url,
+          title: r.title ?? "",
+          publish_date: r.publishDate ?? null,
+          excerpts: r.excerpt ? [r.excerpt] : [],
+        })
+      }
+    }
+  } catch (err) {
+    console.error("[v0][public-docs] searchPublicDocsViaGateway error:", err)
+  }
+
+  // Atribucion de costo. Se usa 'research-collect' (esta etapa ES descubrimiento
+  // de fuentes) + metadata.stage para poder distinguirla en auditoria; 'public-docs'
+  // no esta en el CHECK de feature y no queremos una migracion sobre esa tabla.
+  void logAiUsage({
+    workspaceId: tracking?.workspaceId ?? null,
+    userId: tracking?.userId ?? null,
+    companyId: tracking?.companyId ?? null,
+    feature: "research-collect",
+    model: RESEARCH_MODEL,
+    inputTokens: usage?.inputTokens ?? 0,
+    outputTokens: usage?.outputTokens ?? 0,
+    metadata: { stage: "public-docs-search", results: results.length },
+  })
+
+  return { search_id: "", results, warnings: null }
 }
 
 /**
