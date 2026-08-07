@@ -1,7 +1,7 @@
 import "server-only"
 
 import crypto from "crypto"
-import { z } from "zod"
+import { z } from 'zod/v3';
 import { createAdminClient } from "@/lib/supabase/admin"
 import { resolveCompany } from "./services/company-resolver"
 import { buildInternalAccountSnapshot } from "./services/internal-account-snapshot"

@@ -55,7 +55,7 @@ export async function inferJobTitles(
     targetTechnologies: string[]
     targetProcesses: string[]
   } | null,
-): Promise<{ jobTitles: string[]; reasoning: string }> {
+): Promise<{ jobTitles: string[]; reasoningText: string }> {
   const isGeneralBookmark = technologies.length === 0 && processes.length === 0
 
   const valueProfileSection = valueProfile
@@ -112,8 +112,8 @@ Devuelve SOLO un JSON valido con este formato exacto:
       const sanitized = sanitizeTitleList(parsed.jobTitles || [])
       return {
         jobTitles: sanitized.accepted,
-        reasoning: parsed.reasoning || "",
-      }
+        reasoningText: parsed.reasoningText || "",
+      };
     }
   } catch (error) {
     console.error("Error inferring job titles with Gemini:", error)
@@ -125,8 +125,8 @@ Devuelve SOLO un JSON valido con este formato exacto:
         const sanitized = sanitizeTitleList(parsed.jobTitles || [])
         return {
           jobTitles: sanitized.accepted,
-          reasoning: parsed.reasoning || "",
-        }
+          reasoningText: parsed.reasoningText || "",
+        };
       }
     } catch (fallbackError) {
       console.error("Fallback Gemini also failed:", fallbackError)
@@ -136,14 +136,14 @@ Devuelve SOLO un JSON valido con este formato exacto:
   if (isGeneralBookmark) {
     return {
       jobTitles: ["CEO", "Director General", "COO", "Director de Operaciones", "CFO", "Director de Finanzas", "CTO", "Director de TI"],
-      reasoning: "Job titles de C-Level y directivos por defecto para busqueda general (espanol e ingles)",
-    }
+      reasoningText: "Job titles de C-Level y directivos por defecto para busqueda general (espanol e ingles)",
+    };
   }
 
   return {
     jobTitles: ["CTO", "Director de TI", "IT Manager", "Gerente de Sistemas"],
-    reasoning: "Job titles genericos por defecto en formato LATAM",
-  }
+    reasoningText: "Job titles genericos por defecto en formato LATAM",
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -395,10 +395,10 @@ export async function getRecentMerges(limit = 50) {
     duplicate_name: string | null
     method: string
     confidence: number | null
-    reasoning: string | null
+    reasoningText: string | null
     rows_moved: number
     created_at: string
-  }[]
+  }[];
 }
 
 /** Deshace un merge: reconstruye la empresa y devuelve sus filas. */

@@ -32,8 +32,8 @@
  */
 
 import { anthropic } from "@ai-sdk/anthropic"
-import { generateObject, generateText, NoObjectGeneratedError, stepCountIs } from "ai"
-import type { z } from "zod"
+import { generateObject, generateText, NoObjectGeneratedError, isStepCount } from "ai"
+import { z } from 'zod/v3';
 
 import { RESEARCH_MODEL, STRUCTURER_MODEL } from "@/lib/ai-models"
 import { checkUrlsAlive, filterRelevantToCompany } from "@/lib/ai-structurer"
@@ -112,7 +112,7 @@ export async function collect({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any,
     // Varias rondas de busqueda + la sintesis final.
-    stopWhen: stepCountIs(maxSearches + 2),
+    stopWhen: isStepCount(maxSearches + 2),
   })
 
   // Solo las URLs REALMENTE citadas por el modelo, deduplicadas.
@@ -314,7 +314,7 @@ export async function structure<S extends z.ZodType>({
     const { object, usage } = await generateObject({
       model,
       schema,
-      system: systemPrompt,
+      instructions: systemPrompt,
       prompt: userPrompt,
       temperature,
       ...(maxOutputTokens ? { maxOutputTokens } : {}),

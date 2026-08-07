@@ -1,5 +1,5 @@
 import { generateObject, NoObjectGeneratedError } from "ai"
-import { z } from "zod"
+import { z } from 'zod/v3';
 import { createAdminClient } from "@/lib/supabase/admin"
 import { logAiUsage, estimateCostUsd } from "@/lib/v3/usage"
 
@@ -72,7 +72,7 @@ const verdictSchema = z.object({
   /** Indices que son empresas distintas y deben quedar separadas. */
   different: z.array(z.number().int()),
   confidence: z.number(),
-  reasoning: z.string(),
+  reasoningText: z.string(),
 })
 
 const resultsSchema = z.object({
@@ -437,7 +437,7 @@ export async function classifyAmbiguousDuplicates(options?: {
       .update({
         status,
         ai_confidence: confidence,
-        ai_reasoning: v.reasoning?.slice(0, 500) ?? null,
+        ai_reasoning: v.reasoningText?.slice(0, 500) ?? null,
         ai_checked_at: ahora,
         error_message: null,
         // Se deja en company_ids solo lo que la IA considera la misma empresa,

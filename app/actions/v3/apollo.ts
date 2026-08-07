@@ -45,7 +45,7 @@ export type ApolloContact = {
 
 export type JobTitleRecommendation = {
   titles: string[]
-  reasoning: string
+  reasoningText: string
 }
 
 // ---------------------------------------------------------------------------
@@ -60,7 +60,7 @@ export async function getRecommendedJobTitles(
   
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) {
-    return { titles: [], reasoning: 'Not authenticated' }
+    return { titles: [], reasoningText: 'Not authenticated' };
   }
   
   // Get the account and its campaign
@@ -80,7 +80,7 @@ export async function getRecommendedJobTitles(
     .single()
   
   if (accountError || !account) {
-    return { titles: [], reasoning: 'Account not found' }
+    return { titles: [], reasoningText: 'Account not found' };
   }
   
   // Extract campaign data safely
@@ -89,7 +89,7 @@ export async function getRecommendedJobTitles(
   const buyerPersonaId = campaignData?.buyer_persona_id as string | null
   
   if (!workspaceId) {
-    return { titles: [], reasoning: 'Workspace not found' }
+    return { titles: [], reasoningText: 'Workspace not found' };
   }
   
   // Get workspace value profile
@@ -188,8 +188,8 @@ export async function getRecommendedJobTitles(
     const uniqueTitles = [...new Set(matchedTitles)].slice(0, 12)
     return {
       titles: uniqueTitles,
-      reasoning: `Job titles basados en tecnologias detectadas: ${techNames.slice(0, 3).join(', ')}`,
-    }
+      reasoningText: `Job titles basados en tecnologias detectadas: ${techNames.slice(0, 3).join(', ')}`,
+    };
   }
   
   // Otherwise, infer using AI (reuse v2 function)
@@ -205,8 +205,8 @@ export async function getRecommendedJobTitles(
   
   return {
     titles: result.jobTitles,
-    reasoning: result.reasoning,
-  }
+    reasoningText: result.reasoningText,
+  };
 }
 
 // ---------------------------------------------------------------------------

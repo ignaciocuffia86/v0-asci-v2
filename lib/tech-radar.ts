@@ -27,7 +27,7 @@
  * a ser fiable (conjunto chico y homogeneo) y el modelo no puede inventar indices.
  */
 
-import { z } from "zod"
+import { z } from 'zod/v3';
 import { checkUrlsAlive } from "@/lib/ai-structurer"
 import { collectStructured, structure, type ResearchTracking } from "@/lib/research/engine"
 import { RESEARCH_MODEL } from "@/lib/ai-models"
@@ -757,7 +757,7 @@ function isPersonalLinkedInProfile(url: string): boolean {
   try {
     const u = new URL(url)
     if (!u.hostname.includes("linkedin.com")) return false
-    return /^\/in\//i.test(u.pathname)
+    return /^\/in\//i.test(u.pathname);
   } catch {
     return false
   }
@@ -1010,7 +1010,7 @@ function tokenize(text: string): string[] {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9\s-]/g, " ")
     .split(/\s+/)
-    .filter((t) => t.length >= 4 && !STOPWORDS_TOKEN.has(t))
+    .filter((t) => t.length >= 4 && !STOPWORDS_TOKEN.has(t));
 }
 
 /**
