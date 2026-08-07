@@ -49,6 +49,14 @@ export type ResearchTracking = {
   companyId?: string | null
   researchJobId?: string | null
   feature?: UsageFeature
+  /**
+   * Callback opcional que recibe el uso de CADA etapa apenas se conoce, en
+   * paralelo al `logAiUsage` que ya persiste la fila. Existe para que un
+   * orquestador (ej. el Tech Radar) pueda AGREGAR costo/tokens de varias
+   * llamadas `collect`/`structure` en una sola corrida sin tener que releer
+   * `ai_usage_log`. No reemplaza el logueo: es adicional y no debe lanzar.
+   */
+  onUsage?: (usage: { model: string; inputTokens: number; outputTokens: number }) => void
 }
 
 export type CollectResult = {
@@ -127,6 +135,17 @@ export async function collect({
     }
   }
 
+  // Callback de agregacion (no persiste; corre junto al logAiUsage de abajo).
+  try {
+    tracking?.onUsage?.({
+      model,
+      inputTokens: usage?.inputTokens ?? 0,
+      outputTokens: usage?.outputTokens ?? 0,
+    })
+  } catch {
+    /* el tracking no debe romper la recoleccion */
+  }
+
   void logAiUsage({
     workspaceId: tracking?.workspaceId ?? null,
     userId: tracking?.userId ?? null,
@@ -200,6 +219,17 @@ export async function structure<S extends z.ZodType>({
       ...(maxOutputTokens ? { maxOutputTokens } : {}),
     })
 
+    // Callback de agregacion (no persiste; corre junto al logAiUsage de abajo).
+    try {
+      tracking?.onUsage?.({
+        model,
+        inputTokens: usage?.inputTokens ?? 0,
+        outputTokens: usage?.outputTokens ?? 0,
+      })
+    } catch {
+      /* el tracking no debe romper la estructuracion */
+    }
+
     // Se loguea apenas vuelve el modelo: estos tokens ya se pagaron, pase lo
     // que pase despues con la validacion.
     void logAiUsage({
@@ -220,6 +250,15 @@ export async function structure<S extends z.ZodType>({
     // falla, asi que se aprovecha para (a) no perder el costo de la llamada
     // fallida y (b) dejar en el log QUE devolvio el modelo.
     if (NoObjectGeneratedError.isInstance(err)) {
+      try {
+        tracking?.onUsage?.({
+          model,
+          inputTokens: err.usage?.inputTokens ?? 0,
+          outputTokens: err.usage?.outputTokens ?? 0,
+        })
+      } catch {
+        /* el tracking no debe romper el manejo de error */
+      }
       void logAiUsage({
         workspaceId: tracking?.workspaceId ?? null,
         userId: tracking?.userId ?? null,

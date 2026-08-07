@@ -13,9 +13,11 @@
  */
 
 import { z } from "zod"
-import { parallelSearch, type ParallelSearchOptions, type ParallelSearchResponse } from "@/lib/parallel"
 import { checkUrlsAlive, STRUCTURER_DEFAULT_MODEL } from "@/lib/ai-structurer"
-import { structure } from "@/lib/research/engine"
+import { collect, structure, type ResearchTracking } from "@/lib/research/engine"
+import { RESEARCH_MODEL } from "@/lib/ai-models"
+import { estimateCostUsd } from "@/lib/v3/usage"
+import { createAdminClient } from "@/lib/supabase/admin"
 
 // Constantes y tipos client-safe viven en lib/tech-radar-constants.ts
 // para no contaminar bundles del cliente con imports server-only.
