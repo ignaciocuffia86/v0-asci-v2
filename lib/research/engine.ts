@@ -32,7 +32,7 @@
  */
 
 import { anthropic } from "@ai-sdk/anthropic"
-import { generateObject, generateText, NoObjectGeneratedError, Output, stepCountIs } from "ai"
+import { generateObject, generateText, NoObjectGeneratedError, stepCountIs } from "ai"
 import type { z } from "zod"
 
 import { RESEARCH_MODEL, STRUCTURER_MODEL } from "@/lib/ai-models"
@@ -172,30 +172,35 @@ export async function collect({
 }
 
 /**
- * Etapa 1+2 FUSIONADAS — buscar Y estructurar en UN SOLO turno.
+ * Etapa 1+2 ENCADENADAS por bundle — collect (busca) seguido de structure
+ * (estructura), pero acotando el structure a las fuentes de ESTE MISMO collect.
  *
- * ── Por que existe (el bug que resuelve) ──
- * El patron collect()->structure() desacopla al modelo que ENCONTRO la evidencia
- * del que la ESTRUCTURA. `collect` devuelve un informe en prosa + una lista de
- * URLs citadas, pero la prosa ya perdio el anclaje "esta afirmacion sale de esta
- * URL". Cuando el structurer despues elige una fuente por indice, adivina: el
- * hallazgo bueno ("usa AWS, caso CloudHesive") termina apuntando a una fuente de
- * directorio generica, y el guardrail anti-contaminacion lo descarta. Resultado
- * medido en el Tech Radar: informe excelente -> 0 hallazgos.
+ * ── Por que existe (el bug que resuelve, y por que NO es un solo turno) ──
+ * El patron collect()->structure() GLOBAL desacopla la evidencia de su fuente:
+ * `collect` da un informe en prosa + una lista de URLs, pero al juntar las
+ * fuentes de VARIOS bundles en una sola lista global el structurer elige mal el
+ * indice y el guardrail anti-contaminacion descarta el hallazgo bueno. Medido en
+ * el Tech Radar: informe excelente -> 0 hallazgos.
  *
- * Aca el MISMO turno que corre web_search emite los hallazgos ya estructurados
- * con su `source_url` real (via `experimental_output`, que `generateObject` no
- * permite junto con tools). El modelo atribuye cada hallazgo a la URL que
- * efectivamente recupero: no hay indice que adivinar. Es el mismo principio que
- * ya usa Noticias, llevado a un unico paso.
+ * Fusionar en UN turno (web_search + experimental_output) NO sirve con ai@5 +
+ * Anthropic: al pedir salida estructurada el modelo se SALTA el tool-calling y
+ * responde JSON sin buscar (medido: 0 busquedas, 0 fuentes). Es un conflicto
+ * conocido de experimental_output con tools.
  *
- * Devuelve `object: null` si el modelo no logra una salida valida; el gasto se
- * registra igual (los tokens se pagaron).
+ * Solucion: dos turnos, pero el structure ve SOLO las fuentes de su propio
+ * bundle (10-30, no 144 mezcladas) numeradas 1..N. El mapeo por indice vuelve a
+ * ser fiable porque el conjunto es chico y homogeneo. Ambos turnos quedan
+ * atribuidos (tracking) y agregados (onUsage).
+ *
+ * `structure` recibe `{ text, sources }`; se espera que el schema use un campo
+ * `source_index` (1-based sobre `sources`). Devolvemos ademas `sources` para que
+ * el caller resuelva ese indice a la URL real.
  */
 export async function collectStructured<S extends z.ZodType>({
   schema,
   systemPrompt,
-  prompt,
+  buildStructurePrompt,
+  collectPrompt,
   companyName,
   countryISO,
   maxSearches = 5,
@@ -205,8 +210,12 @@ export async function collectStructured<S extends z.ZodType>({
   tracking,
 }: {
   schema: S
+  /** System prompt del turno de estructuracion. */
   systemPrompt: string
-  prompt: string
+  /** Arma el user prompt del structure a partir del informe + fuentes numeradas. */
+  buildStructurePrompt: (args: { report: string; numberedSources: string }) => string
+  /** Prompt de busqueda (turno collect). */
+  collectPrompt: string
   companyName: string
   /** ISO-2 para sesgar la busqueda a la region (ej. "AR"). */
   countryISO?: string | null
@@ -216,100 +225,51 @@ export async function collectStructured<S extends z.ZodType>({
   context?: string
   tracking?: ResearchTracking
 }): Promise<{ object: z.infer<S> | null; sources: VerifiedSource[]; searchCount: number }> {
-  const userLocation = countryISO
-    ? ({ type: "approximate" as const, country: countryISO })
-    : undefined
-
-  let object: z.infer<S> | null = null
-  let usage: { inputTokens?: number; outputTokens?: number } | undefined
-  let sources: { sourceType?: string; url?: string; title?: string | null }[] = []
-  let steps: { toolCalls?: { toolName?: string }[] }[] = []
-
-  try {
-    const res = await generateText({
-      model,
-      system: systemPrompt,
-      prompt,
-      temperature,
-      tools: {
-        // Mismo web_search server-side de Anthropic que `collect`: se ejecuta y
-        // cita en el proveedor, atravesando el Gateway.
-        web_search: anthropic.tools.webSearch_20250305({
-          maxUses: maxSearches,
-          ...(userLocation ? { userLocation } : {}),
-        }),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any,
-      // Rondas de busqueda + el turno final que produce el objeto.
-      stopWhen: stepCountIs(maxSearches + 2),
-      // La salida estructurada del turno final. `generateObject` NO admite tools,
-      // por eso va por aca: es la unica forma de fusionar busqueda + schema.
-      experimental_output: Output.object({ schema }),
-    })
-    object = res.experimental_output as z.infer<S>
-    usage = res.usage
-    sources = (res.sources as typeof sources) ?? []
-    steps = (res.steps as typeof steps) ?? []
-  } catch (err) {
-    // Con experimental_output, una salida invalida lanza. No es silencioso: se
-    // loguea, se devuelve object=null y el caller decide (tipicamente, 0 hallazgos
-    // de ese bundle sin voltear toda la corrida).
-    console.error(`[v0][research][${context}] collectStructured error:`, err)
-    if (NoObjectGeneratedError.isInstance(err)) {
-      usage = err.usage
-    }
-  }
-
-  // Solo las URLs REALMENTE citadas por el modelo, deduplicadas (mismo criterio
-  // anti-alucinacion que collect: no se parsean URLs del texto).
-  const seen = new Set<string>()
-  const verified: VerifiedSource[] = []
-  for (const s of sources) {
-    if (s.sourceType !== "url" || !s.url || seen.has(s.url)) continue
-    seen.add(s.url)
-    verified.push({ url: s.url, title: s.title ?? null })
-  }
-
-  let searchCount = 0
-  for (const step of steps) {
-    for (const call of step.toolCalls ?? []) {
-      if (call.toolName === "web_search") searchCount++
-    }
-  }
-
-  try {
-    tracking?.onUsage?.({
-      model,
-      inputTokens: usage?.inputTokens ?? 0,
-      outputTokens: usage?.outputTokens ?? 0,
-    })
-  } catch {
-    /* el tracking no debe romper la recoleccion */
-  }
-
-  void logAiUsage({
-    workspaceId: tracking?.workspaceId ?? null,
-    userId: tracking?.userId ?? null,
-    companyId: tracking?.companyId ?? null,
-    researchJobId: tracking?.researchJobId ?? null,
-    feature: tracking?.feature ?? "research-collect",
+  // Turno 1: buscar. `collect` YA hace web_search, verifica fuentes citadas,
+  // loguea y agrega uso. Reusamos ese primitivo probado en vez de reimplementarlo.
+  const collected = await collect({
+    prompt: collectPrompt,
+    companyName,
+    countryISO,
+    maxSearches,
     model,
-    inputTokens: usage?.inputTokens ?? 0,
-    outputTokens: usage?.outputTokens ?? 0,
-    metadata: {
-      stage: "collect-structured",
-      context,
-      company: companyName,
-      web_searches: searchCount,
-      sources: verified.length,
-    },
+    temperature,
+    context,
+    tracking,
   })
 
+  // Sin fuentes citadas no hay nada que estructurar de forma verificable.
+  if (collected.sources.length === 0 || !collected.text.trim()) {
+    console.log(`[v0][research][${context}] collectStructured: sin fuentes citadas, se omite el structure`)
+    return { object: null, sources: collected.sources, searchCount: collected.searchCount }
+  }
+
+  // Fuentes de ESTE bundle numeradas 1..N: el conjunto que vera el structure.
+  const numberedSources = collected.sources
+    .map((s, i) => `${i + 1}. ${s.title || "(sin titulo)"} — ${s.url}`)
+    .join("\n")
+
+  // Turno 2: estructurar acotado a este bundle. Reusa el primitivo `structure`
+  // (generateObject + schema), que loguea y agrega uso con el mismo tracking.
+  let object: z.infer<S> | null = null
+  try {
+    object = await structure({
+      schema,
+      systemPrompt,
+      userPrompt: buildStructurePrompt({ report: collected.text, numberedSources }),
+      temperature,
+      context: `${context}-structure`,
+      tracking,
+    })
+  } catch (err) {
+    console.error(`[v0][research][${context}] collectStructured structure error:`, err)
+  }
+
   console.log(
-    `[v0][research][${context}] collectStructured: ${searchCount} busquedas, ${verified.length} fuentes citadas, object=${object ? "ok" : "null"}`
+    `[v0][research][${context}] collectStructured: ${collected.searchCount} busquedas, ${collected.sources.length} fuentes citadas, object=${object ? "ok" : "null"}`
   )
 
-  return { object, sources: verified, searchCount }
+  return { object, sources: collected.sources, searchCount: collected.searchCount }
 }
 
 /**
