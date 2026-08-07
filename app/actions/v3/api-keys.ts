@@ -128,7 +128,12 @@ export async function listApiKeyOwners(workspaceId: string): Promise<{
   }
 }
 
-export async function generateApiKey(name: string, workspaceId: string, ownerUserId: string): Promise<{
+export async function generateApiKey(
+  name: string,
+  workspaceId: string,
+  ownerUserId: string,
+  keyType: ApiKeyType = "standard",
+): Promise<{
   success: boolean
   key?: string
   keyId?: string
@@ -137,6 +142,9 @@ export async function generateApiKey(name: string, workspaceId: string, ownerUse
   const userId = await getAuthenticatedUserId()
   if (!userId) return { success: false, error: "No autenticado" }
   if (!name.trim()) return { success: false, error: "Ingresa un nombre para la API key" }
+  if (keyType !== "standard" && keyType !== "explore") {
+    return { success: false, error: "Tipo de API key inválido" }
+  }
 
   const access = await resolveApiKeyAccess(userId, workspaceId)
   if (!access?.canManage) return { success: false, error: "Solo admins pueden generar API keys" }
@@ -156,18 +164,28 @@ export async function generateApiKey(name: string, workspaceId: string, ownerUse
     .maybeSingle()
   if (!ownerMembership) return { success: false, error: "El propietario debe ser un miembro activo del workspace" }
 
-  const { data: existingKey } = await admin
+  // Se permite una key activa por tipo (standard + explore) para poder correr
+  // los dos MCP en paralelo. No hay constraint en DB: el límite se valida acá.
+  const { data: existingKeys } = await admin
     .schema("v3")
     .from("mcp_api_keys")
-    .select("id")
+    .select("id, scopes")
     .eq("workspace_id", workspaceId)
     .eq("owner_user_id", ownerUserId)
     .is("revoked_at", null)
-    .maybeSingle()
-  if (existingKey) return { success: false, error: "Ese usuario ya tiene una API key activa" }
+  const alreadyHasType = (existingKeys ?? []).some((key) => keyTypeFromScopes(key.scopes) === keyType)
+  if (alreadyHasType) {
+    return {
+      success: false,
+      error: keyType === "explore"
+        ? "Ese usuario ya tiene una API key de exploración activa"
+        : "Ese usuario ya tiene una API key activa",
+    }
+  }
 
   const rawKey = `asci_${crypto.randomBytes(32).toString("hex")}`
   const keyHash = crypto.createHash("sha256").update(rawKey).digest("hex")
+  const { scopes, allowedModes } = SCOPES_BY_TYPE[keyType]
   const { data: newKey, error } = await admin
     .schema("v3")
     .from("mcp_api_keys")
@@ -178,8 +196,8 @@ export async function generateApiKey(name: string, workspaceId: string, ownerUse
       key_prefix: rawKey.substring(0, 12),
       created_by: userId,
       owner_user_id: ownerUserId,
-      scopes: ["companies:read", "signals:read", "accounts:read", "research:run", "research:prepare", "research:submit", "icebreakers:generate", "icebreakers:prepare", "icebreakers:submit", "usage:read"],
-      allowed_modes: ["read", "server_managed", "client_assisted"],
+      scopes,
+      allowed_modes: allowedModes,
     })
     .select("id")
     .single()
@@ -203,7 +221,7 @@ export async function listApiKeys(workspaceId: string): Promise<{
   let query = admin
     .schema("v3")
     .from("mcp_api_keys")
-    .select("id, name, key_prefix, created_at, last_used_at, request_count, owner_user_id")
+    .select("id, name, key_prefix, created_at, last_used_at, request_count, owner_user_id, scopes")
     .eq("workspace_id", workspaceId)
     .is("revoked_at", null)
     .order("created_at", { ascending: false })
@@ -216,10 +234,11 @@ export async function listApiKeys(workspaceId: string): Promise<{
   return {
     success: true,
     canManage: access.canManage,
-    keys: (keys ?? []).map((key) => ({
+    keys: (keys ?? []).map(({ scopes, ...key }) => ({
       ...key,
       owner_email: identities.get(key.owner_user_id)?.email ?? null,
       owner_name: identities.get(key.owner_user_id)?.full_name ?? null,
+      key_type: keyTypeFromScopes(scopes),
     })),
   }
 }
