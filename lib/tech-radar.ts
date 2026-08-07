@@ -1,15 +1,26 @@
 /**
  * Tech Radar — orquestador de los 17 micro-agentes del prompt de Claude
- * mapeados a 4 bundles tematicos (1 Parallel call por bundle, ejecutados en
- * paralelo). Despues 1 sola llamada Gemini consolidada clasifica cada hallazgo
- * en uno de los 17 micro-agentes.
+ * mapeados a 4 bundles tematicos. Despues 1 sola llamada Gemini consolidada
+ * clasifica cada hallazgo en uno de los 17 micro-agentes.
  *
  * Diseño:
- *   17 micro-agentes -> 4 bundles tematicos (4 Parallel calls en paralelo)
- *   N excerpts agrupados -> 1 Gemini call -> M hallazgos clasificados
+ *   17 micro-agentes -> 4 bundles tematicos (4 `collect` en paralelo)
+ *   informe + fuentes citadas -> 1 Gemini call -> M hallazgos clasificados
  *
- * Esto es ~80% mas eficiente que ejecutar 17 busquedas independientes y nos
- * da un payload manejable para Gemini.
+ * ── Migracion de Parallel a `collect` (motor unificado) ──
+ * Antes cada bundle era 1 llamada a `parallelSearch`, que NO es enrutable por el
+ * AI Gateway: su costo quedaba invisible y el structurer corria sin `tracking`,
+ * asi que el gasto de IA caia HUERFANO en ai_usage_log (feature
+ * 'research-structure', company_id NULL). Ahora cada bundle usa `collect` (Haiku
+ * + web_search server-side, el mismo camino que Noticias), que atraviesa el
+ * Gateway y registra costo por etapa. Se pasa `tracking` con feature 'radar-tech'
+ * + companyId/workspaceId, y se agrega el uso (tokens/costo/busquedas) para que
+ * el caller lo persista en v3.tech_radar_runs.
+ *
+ * `collect` devuelve un INFORME en prosa + las fuentes CITADAS (url+titulo), no
+ * excerpts por fuente. El mapeo determinista finding->URL se mantiene igual que
+ * en Noticias: se numeran las fuentes citadas y el modelo elige un `source_index`
+ * de esa lista (no puede inventar URLs).
  */
 
 import { z } from "zod"
@@ -17,7 +28,6 @@ import { checkUrlsAlive, STRUCTURER_DEFAULT_MODEL } from "@/lib/ai-structurer"
 import { collect, structure, type ResearchTracking } from "@/lib/research/engine"
 import { RESEARCH_MODEL } from "@/lib/ai-models"
 import { estimateCostUsd } from "@/lib/v3/usage"
-import { createAdminClient } from "@/lib/supabase/admin"
 
 // Constantes y tipos client-safe viven en lib/tech-radar-constants.ts
 // para no contaminar bundles del cliente con imports server-only.
@@ -91,56 +101,37 @@ const BUNDLES: Bundle[] = [
   },
 ]
 
-// ── Build params helper ───────────────────────────────────────────────
-function buildBundleParams(bundle: Bundle, companyName: string, country?: string): ParallelSearchOptions {
-  const threeYearsAgo = new Date()
-  threeYearsAgo.setFullYear(threeYearsAgo.getFullYear() - 3)
-  const afterDate = threeYearsAgo.toISOString().split("T")[0]
+// ── Cuantas busquedas web se le permiten a CADA bundle ─────────────────
+// Con 4-5 bundles en paralelo, 4 busquedas c/u da ~16-20 busquedas totales,
+// del orden del unico `collect` de Noticias (8). Subirlo encarece linealmente
+// sin ganancia clara de cobertura: los bundles ya reparten las areas.
+const BUNDLE_MAX_SEARCHES = 4
 
+// ── Prompt de recoleccion por bundle ───────────────────────────────────
+// `collect` hace la busqueda web server-side guiada por este prompt (no recibe
+// una lista de queries como Parallel). Traducimos el `objective` + las
+// `queries` del bundle a instrucciones en prosa, y las exclusiones que antes
+// hacia `source_policy.exclude_domains` pasan a ser reglas del prompt.
+function buildBundleCollectPrompt(bundle: Bundle, companyName: string, country?: string): string {
   const countryCtx = country ? ` (operaciones en ${country})` : ""
   const agentLabels =
     bundle.agents.length > 0
       ? bundle.agents.map((a) => MICRO_AGENT_LABELS[a]).join(", ")
       : "cualquier area tecnologica relevante (clasificar segun corresponda)"
 
-  return {
-    objective:
-      `Bundle [${bundle.label}] sobre la empresa "${companyName}"${countryCtx}. ` +
-      `Buscar EVIDENCIA TECNICA Y DE NEGOCIO en estas areas: ${agentLabels}. ` +
-      `Fuentes priorizadas: sitio oficial, casos de exito de vendors, blogs corporativos, ` +
-      `licitaciones publicas, PDFs tecnicos, avisos de empleo, perfiles de ejecutivos, prensa especializada. ` +
-      `EXCLUIR prensa generalista no tecnologica (esa va a la pestaña Noticias).`,
-    search_queries: bundle.queries(companyName),
-    max_results: 8,
-    source_policy: {
-      exclude_domains: [
-        "facebook.com",
-        "twitter.com",
-        "x.com",
-        "instagram.com",
-        "tiktok.com",
-        "youtube.com",
-        "reddit.com",
-        "pinterest.com",
-        // prensa generalista (va a Noticias)
-        "infobae.com",
-        "clarin.com",
-        "lanacion.com.ar",
-        "perfil.com",
-        "ambito.com",
-        "ambito.com.ar",
-        "eldiarioar.com",
-        "mdzol.com",
-        "diariohoy.net",
-        "lavoz.com.ar",
-        "pagina12.com.ar",
-        "iprofesional.com",
-        "cronista.com",
-      ],
-      after_date: afterDate,
-    },
-    excerpts: { max_chars_per_result: 6000 },
-  }
+  const angles = bundle.queries(companyName).map((q) => `- ${q}`).join("\n")
+
+  return (
+    `Investiga la empresa "${companyName}"${countryCtx} y su stack tecnologico en estas areas: ${agentLabels}.\n\n` +
+    `Busca EVIDENCIA TECNICA Y DE NEGOCIO concreta y verificable: vendors/productos especificos, ` +
+    `implementaciones, migraciones, contratos, licitaciones publicas, casos de exito de proveedores, ` +
+    `avisos de empleo que listan stack tecnologico. Considera estos angulos de busqueda:\n${angles}\n\n` +
+    `Para CADA hallazgo cita la fuente e indica la fecha de publicacion (YYYY-MM-DD) si aparece.\n` +
+    `Prioriza: sitio oficial de la empresa, casos de exito de vendors, blogs corporativos, ` +
+    `licitaciones publicas, PDFs tecnicos, prensa especializada en tecnologia.\n` +
+    `EXCLUYE prensa generalista no tecnologica (esa va a la pestaña Noticias) y redes sociales ` +
+    `(Facebook, X/Twitter, Instagram, TikTok, YouTube, Reddit). Enfoca los ultimos 3 años.`
+  )
 }
 
 // ── Resultado tipado ──────────────────────────────────────────────────
@@ -166,15 +157,31 @@ export interface TechRadarRunResult {
   digest: string | null
   bundle_stats: {
     bundle: string
-    parallel_results: number
-    excerpts_chars: number
+    /** Fuentes citadas por el `collect` de ese bundle (antes: resultados de Parallel). */
+    sources: number
+    /** Chars del informe en prosa que devolvio ese bundle (antes: chars de excerpts). */
+    report_chars: number
   }[]
   ai_provider: string
+  /**
+   * Uso de IA AGREGADO de toda la corrida (collect de todos los bundles +
+   * structure + retry). El caller lo persiste en v3.tech_radar_runs. El costo
+   * ya se registro fila por fila en v3.ai_usage_log; esto es la vista por corrida.
+   */
+  usage: {
+    inputTokens: number
+    outputTokens: number
+    costUsd: number
+    webSearches: number
+    sourcesCount: number
+    model: string
+  }
 }
 
 // ── Gemini system prompt ───────────────────────────────────────────────
 const TECH_RADAR_SYSTEM = `Eres un investigador senior de inteligencia tecnologica empresarial.
-Recibis excerpts de paginas web sobre la empresa objetivo, agrupados en 4 bundles tematicos.
+Recibis un informe de investigacion web sobre la empresa objetivo, organizado por area tematica,
+junto con una lista NUMERADA de las fuentes citadas.
 Tu tarea es producir una RADIOGRAFIA TECNOLOGICA: lista de hallazgos verificables sobre tecnologias,
 procesos, integraciones, vendors, partners y skills que usa la empresa.
 
@@ -351,7 +358,7 @@ const RadarFindingsSchema = z.object({
   digest: z.string().nullable(),
 })
 
-// ── Public API ─────────────────────────────────────────────────────────
+// ── Public API ────────────────────────���────────────────────────────────
 export async function runTechRadar(input: {
   companyName: string
   country?: string
@@ -363,8 +370,37 @@ export async function runTechRadar(input: {
   ticker?: string | null
   /** Slug de LinkedIn (suele ser un alias estable). */
   linkedinSlug?: string | null
+  /**
+   * Atribucion del gasto de IA (arregla el bug de las filas huerfanas): se pasa
+   * a `collect` y `structure` con feature 'radar-tech'. NO maneja la fila de
+   * v3.tech_radar_runs — de eso se encarga el caller con el `usage` que retornamos.
+   */
+  tracking?: {
+    companyId?: string | null
+    workspaceId?: string | null
+    userId?: string | null
+  }
 }): Promise<TechRadarRunResult> {
   const { companyName, country, keywords, aliases, ticker, linkedinSlug } = input
+
+  // Agregador de uso de IA de toda la corrida. Cada etapa (collect por bundle,
+  // structure, retry) invoca `onUsage` con su modelo y tokens; el costo se computa
+  // con el MISMO criterio que la fila de ai_usage_log (estimateCostUsd), asi la
+  // vista por corrida (tech_radar_runs) y la vista por fila (ai_usage_log) cuadran.
+  const usageAgg = { inputTokens: 0, outputTokens: 0, costUsd: 0, webSearches: 0 }
+  const onUsage = (u: { model: string; inputTokens: number; outputTokens: number }) => {
+    usageAgg.inputTokens += u.inputTokens
+    usageAgg.outputTokens += u.outputTokens
+    usageAgg.costUsd += estimateCostUsd(u.model, u.inputTokens, u.outputTokens)
+  }
+  // Tracking compartido por collect/structure/retry para atribuir el gasto.
+  const usageTracking: ResearchTracking = {
+    companyId: input.tracking?.companyId ?? null,
+    workspaceId: input.tracking?.workspaceId ?? null,
+    userId: input.tracking?.userId ?? null,
+    feature: "radar-tech",
+    onUsage,
+  }
 
   // Construir tokens de match para detectar menciones a la empresa.
   // Incluye: tokens del nombre legal, nombre sin sufijos legales, primera palabra,
@@ -386,23 +422,37 @@ export async function runTechRadar(input: {
     bundlesToRun.push(buildKeywordsBundle(keywords))
   }
 
-  // Paso 1: ejecutar bundles en paralelo
-  console.log(`[v0][tech-radar] running ${bundlesToRun.length} bundles in parallel for "${companyName}"`)
+  // Paso 1: recolectar cada bundle en paralelo con el motor unificado (collect).
+  // Reemplaza a parallelSearch: atraviesa el AI Gateway y registra costo.
+  console.log(`[v0][tech-radar] running ${bundlesToRun.length} bundles (collect) for "${companyName}"`)
   const bundlePromises = bundlesToRun.map(async (bundle) => {
-    const params = buildBundleParams(bundle, companyName, country)
+    const prompt = buildBundleCollectPrompt(bundle, companyName, country)
     try {
-      const res = await parallelSearch(params)
-      console.log(`[v0][tech-radar][${bundle.key}] ${res.results.length} results`)
-      return { bundle, response: res as ParallelSearchResponse }
+      const res = await collect({
+        prompt,
+        companyName,
+        // country de v2 NO es un pais normalizado (guarda direcciones), asi que no
+        // lo usamos como sesgo geografico (mismo criterio que Noticias ante valores
+        // desconocidos): va solo como contexto de texto dentro del prompt.
+        countryISO: null,
+        maxSearches: BUNDLE_MAX_SEARCHES,
+        context: `tech-radar-${bundle.key}`,
+        tracking: usageTracking,
+      })
+      console.log(
+        `[v0][tech-radar][${bundle.key}] ${res.sources.length} fuentes | ${res.searchCount} busquedas | ${res.text.length} chars`,
+      )
+      return { bundle, res }
     } catch (err) {
-      console.error(`[v0][tech-radar][${bundle.key}] parallel error:`, err)
-      return { bundle, response: { search_id: "", results: [], warnings: null } as ParallelSearchResponse }
+      console.error(`[v0][tech-radar][${bundle.key}] collect error:`, err)
+      return { bundle, res: { text: "", sources: [] as { url: string; title: string | null }[], searchCount: 0 } }
     }
   })
   const bundleResults = await Promise.all(bundlePromises)
 
-  // Paso 2: aplanar excerpts en un solo listado numerado (compartido entre bundles)
-  // El index 1-based del listado FINAL es el que vamos a pedirle a Gemini.
+  // Paso 2: fusionar en (a) un informe unico por area y (b) una lista de fuentes
+  // citadas deduplicada por URL. El index 1-based de esa lista es el `source_index`
+  // que le pediremos a Gemini (mismo mapeo determinista que Noticias).
   type FlatExcerpt = {
     bundle_key: string
     url: string
@@ -411,61 +461,77 @@ export async function runTechRadar(input: {
     content: string
   }
   const flat: FlatExcerpt[] = []
-  const bundleStats = bundleResults.map(({ bundle, response }) => {
-    let chars = 0
-    for (const r of response.results) {
-      const content = r.excerpts.join("\n")
-      flat.push({
-        bundle_key: bundle.key,
-        url: r.url,
-        title: r.title,
-        publish_date: r.publish_date,
-        content,
-      })
-      chars += content.length
+  const seenSourceUrls = new Set<string>()
+  const reportParts: string[] = []
+  const bundleStats = bundleResults.map(({ bundle, res }) => {
+    usageAgg.webSearches += res.searchCount
+    if (res.text.trim()) {
+      reportParts.push(`## Área: ${bundle.label}\n${res.text.trim()}`)
     }
-    return { bundle: bundle.label, parallel_results: response.results.length, excerpts_chars: chars }
+    for (const s of res.sources) {
+      if (!s.url || seenSourceUrls.has(s.url)) continue
+      seenSourceUrls.add(s.url)
+      // `content` queda vacio y `publish_date` null: collect no da excerpts ni
+      // fecha por URL. El pipeline downstream NO usa `content` (el doble-check
+      // anti-cross mira evidence_detail/title/url) y `publish_date` es solo un
+      // fallback de fecha; la fecha real la extrae el modelo del informe.
+      flat.push({ bundle_key: bundle.key, url: s.url, title: s.title ?? "", publish_date: null, content: "" })
+    }
+    return { bundle: bundle.label, sources: res.sources.length, report_chars: res.text.length }
+  })
+
+  // `usage` final que retornamos en cada salida. sourcesCount = fuentes unicas.
+  const buildUsage = (): TechRadarRunResult["usage"] => ({
+    inputTokens: usageAgg.inputTokens,
+    outputTokens: usageAgg.outputTokens,
+    costUsd: Math.round(usageAgg.costUsd * 1_000_000) / 1_000_000,
+    webSearches: usageAgg.webSearches,
+    sourcesCount: flat.length,
+    model: RESEARCH_MODEL,
   })
 
   if (flat.length === 0) {
-    return { findings: [], digest: null, bundle_stats: bundleStats, ai_provider: "no-results" }
+    return { findings: [], digest: null, bundle_stats: bundleStats, ai_provider: "no-results", usage: buildUsage() }
   }
 
-  // Paso 3: 1 sola llamada a Gemini con TODOS los excerpts numerados.
-  // Limitamos a 50 fuentes y truncamos cada excerpt para que entre en el context.
+  // Paso 3: 1 sola llamada a Gemini con el informe + las fuentes numeradas.
+  // Limitamos a 50 fuentes para acotar el context.
   const MAX_SOURCES = 50
   const truncated = flat.slice(0, MAX_SOURCES)
-  const excerptText = truncated
-    .map(
-      (e, i) =>
-        `--- Fuente ${i + 1} [bundle: ${e.bundle_key}] ${e.title} (${e.url}) [fecha: ${e.publish_date ?? "desconocida"}] ---\n${e.content.slice(0, 4500)}`,
-    )
-    .join("\n\n")
+  const sourceList = truncated
+    .map((e, i) => `--- Fuente ${i + 1} [area: ${e.bundle_key}]: ${e.title || "(sin titulo)"} (${e.url}) ---`)
+    .join("\n")
+  const combinedReport = reportParts.join("\n\n")
 
   const keywordsCtx = keywords?.length ? `\nSeñales de interes (priorizar): ${keywords.join(", ")}` : ""
-  const userPrompt = `Empresa objetivo: "${companyName}"${keywordsCtx}\n\nExcerpts agrupados por bundle:\n\n${excerptText}\n\nExtrae los hallazgos en JSON segun el formato indicado.`
+  // Mismo patron que Noticias: informe en prosa + fuentes NUMERADAS. El modelo
+  // solo puede elegir un source_index de esta lista, asi no inventa URLs.
+  const userPrompt =
+    `Empresa objetivo: "${companyName}"${keywordsCtx}\n\n` +
+    `Informe de investigacion web (por area):\n\n${combinedReport}\n\n` +
+    `Fuentes disponibles (el source_index se refiere a ESTA lista):\n${sourceList}\n\n` +
+    `Extrae los hallazgos en JSON segun el formato indicado.`
 
   let parsed: z.infer<typeof RadarFindingsSchema> = { findings: [], digest: null }
-  // Se deriva del default real del structurer. Estaba hardcodeado en
-  // "gemini-2.0-flash", el modelo retirado: al cambiar el default habria seguido
-  // estampando el nombre de un modelo que ya no se usa, arruinando la unica
-  // evidencia forense de que produjo cada hallazgo. Mismo bug que en news.
+  // Se deriva del default real del structurer (no se hardcodea) para que la
+  // columna ai_provider sea evidencia forense fiel de que modelo produjo cada
+  // hallazgo. Mismo criterio que en news.
   let aiProvider = STRUCTURER_DEFAULT_MODEL
   try {
-    // Motor unificado: `generateObject` + schema, y SIN `maxOutputTokens`. El tope
-    // de 6000 que habia aca es la misma clase de gatillo que el de 4000 en news:
-    // con hasta 30 hallazgos pedidos, es justamente el caso donde la salida se
-    // corta a mitad de JSON.
+    // Motor unificado: `generateObject` + schema, SIN `maxOutputTokens`. Ahora
+    // CON `tracking`: antes esta llamada no lo pasaba y por eso el gasto caia
+    // huerfano en ai_usage_log (feature 'research-structure', company_id NULL).
     parsed = await structure({
       schema: RadarFindingsSchema,
       systemPrompt: TECH_RADAR_SYSTEM,
       userPrompt,
       temperature: 0.2,
       context: "tech-radar",
+      tracking: usageTracking,
     })
   } catch (err) {
     console.error("[v0][tech-radar] structuring failed, returning empty:", err)
-    return { findings: [], digest: null, bundle_stats: bundleStats, ai_provider: "structuring-failed" }
+    return { findings: [], digest: null, bundle_stats: bundleStats, ai_provider: "structuring-failed", usage: buildUsage() }
   }
 
   const rawFindings = parsed.findings
@@ -590,6 +656,7 @@ export async function runTechRadar(input: {
       bundleStats,
       digest,
       aiProvider,
+      tracking: usageTracking,
     })
     if (retried.mapped.length > 0) {
       mapped.push(...retried.mapped)
@@ -601,7 +668,7 @@ export async function runTechRadar(input: {
   }
 
   if (mapped.length === 0) {
-    return { findings: [], digest, bundle_stats: bundleStats, ai_provider: aiProvider }
+    return { findings: [], digest, bundle_stats: bundleStats, ai_provider: aiProvider, usage: buildUsage() }
   }
 
   // Paso 6: liveness check de URLs primarias
@@ -649,7 +716,7 @@ export async function runTechRadar(input: {
     )
   }
 
-  return { findings, digest, bundle_stats: bundleStats, ai_provider: aiProvider }
+  return { findings, digest, bundle_stats: bundleStats, ai_provider: aiProvider, usage: buildUsage() }
 }
 
 // ── Anti-obviedad ──────────────────────────────────────────────────────
@@ -1153,9 +1220,11 @@ async function retryWithRelaxedPrompt(args: {
   userPrompt: string
   truncated: FlatExcerptForRetry[]
   matchTokens: string[]
-  bundleStats: { bundle: string; parallel_results: number; excerpts_chars: number }[]
+  bundleStats: { bundle: string; sources: number; report_chars: number }[]
   digest: string | null
   aiProvider: string
+  /** Se propaga para que el gasto del reintento tambien quede atribuido y agregado. */
+  tracking?: ResearchTracking
 }): Promise<{ mapped: { item: any; primary: FlatExcerptForRetry; supportingExcerpts: FlatExcerptForRetry[] }[]; aiProvider: string }> {
   let parsed: z.infer<typeof RadarFindingsSchema> = { findings: [], digest: null }
   // Mismo schema que el flujo normal: los dos prompts piden el mismo formato.
@@ -1167,6 +1236,7 @@ async function retryWithRelaxedPrompt(args: {
       userPrompt: args.userPrompt,
       temperature: 0.3,
       context: "tech-radar-retry",
+      tracking: args.tracking,
     })
   } catch (err) {
     console.error("[v0][tech-radar][retry] relaxed structuring failed:", err)
