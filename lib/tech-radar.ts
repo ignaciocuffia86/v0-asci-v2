@@ -44,7 +44,9 @@ export type { MicroAgent, EvidenceLevel }
 
 // ── Bundles tematicos ──────────────────────────────────────────────────
 type Bundle = {
-  key: "datos" | "negocio" | "seguridad" | "vertical"
+  // "bookmark" es el bundle dinamico de keywords (buildKeywordsBundle); el resto
+  // son los 4 tematicos fijos.
+  key: "datos" | "negocio" | "seguridad" | "vertical" | "bookmark"
   label: string
   agents: MicroAgent[]
   queries: (companyName: string) => string[]
