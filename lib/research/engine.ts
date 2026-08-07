@@ -32,7 +32,7 @@
  */
 
 import { anthropic } from "@ai-sdk/anthropic"
-import { generateObject, generateText, NoObjectGeneratedError, stepCountIs } from "ai"
+import { generateObject, generateText, NoObjectGeneratedError, Output, stepCountIs } from "ai"
 import type { z } from "zod"
 
 import { RESEARCH_MODEL, STRUCTURER_MODEL } from "@/lib/ai-models"
@@ -169,6 +169,147 @@ export async function collect({
   )
 
   return { text, sources: verified, searchCount }
+}
+
+/**
+ * Etapa 1+2 FUSIONADAS — buscar Y estructurar en UN SOLO turno.
+ *
+ * ── Por que existe (el bug que resuelve) ──
+ * El patron collect()->structure() desacopla al modelo que ENCONTRO la evidencia
+ * del que la ESTRUCTURA. `collect` devuelve un informe en prosa + una lista de
+ * URLs citadas, pero la prosa ya perdio el anclaje "esta afirmacion sale de esta
+ * URL". Cuando el structurer despues elige una fuente por indice, adivina: el
+ * hallazgo bueno ("usa AWS, caso CloudHesive") termina apuntando a una fuente de
+ * directorio generica, y el guardrail anti-contaminacion lo descarta. Resultado
+ * medido en el Tech Radar: informe excelente -> 0 hallazgos.
+ *
+ * Aca el MISMO turno que corre web_search emite los hallazgos ya estructurados
+ * con su `source_url` real (via `experimental_output`, que `generateObject` no
+ * permite junto con tools). El modelo atribuye cada hallazgo a la URL que
+ * efectivamente recupero: no hay indice que adivinar. Es el mismo principio que
+ * ya usa Noticias, llevado a un unico paso.
+ *
+ * Devuelve `object: null` si el modelo no logra una salida valida; el gasto se
+ * registra igual (los tokens se pagaron).
+ */
+export async function collectStructured<S extends z.ZodType>({
+  schema,
+  systemPrompt,
+  prompt,
+  companyName,
+  countryISO,
+  maxSearches = 5,
+  model = RESEARCH_MODEL,
+  temperature = 0.3,
+  context = "collect-structured",
+  tracking,
+}: {
+  schema: S
+  systemPrompt: string
+  prompt: string
+  companyName: string
+  /** ISO-2 para sesgar la busqueda a la region (ej. "AR"). */
+  countryISO?: string | null
+  maxSearches?: number
+  model?: string
+  temperature?: number
+  context?: string
+  tracking?: ResearchTracking
+}): Promise<{ object: z.infer<S> | null; sources: VerifiedSource[]; searchCount: number }> {
+  const userLocation = countryISO
+    ? ({ type: "approximate" as const, country: countryISO })
+    : undefined
+
+  let object: z.infer<S> | null = null
+  let usage: { inputTokens?: number; outputTokens?: number } | undefined
+  let sources: { sourceType?: string; url?: string; title?: string | null }[] = []
+  let steps: { toolCalls?: { toolName?: string }[] }[] = []
+
+  try {
+    const res = await generateText({
+      model,
+      system: systemPrompt,
+      prompt,
+      temperature,
+      tools: {
+        // Mismo web_search server-side de Anthropic que `collect`: se ejecuta y
+        // cita en el proveedor, atravesando el Gateway.
+        web_search: anthropic.tools.webSearch_20250305({
+          maxUses: maxSearches,
+          ...(userLocation ? { userLocation } : {}),
+        }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      // Rondas de busqueda + el turno final que produce el objeto.
+      stopWhen: stepCountIs(maxSearches + 2),
+      // La salida estructurada del turno final. `generateObject` NO admite tools,
+      // por eso va por aca: es la unica forma de fusionar busqueda + schema.
+      experimental_output: Output.object({ schema }),
+    })
+    object = res.experimental_output as z.infer<S>
+    usage = res.usage
+    sources = (res.sources as typeof sources) ?? []
+    steps = (res.steps as typeof steps) ?? []
+  } catch (err) {
+    // Con experimental_output, una salida invalida lanza. No es silencioso: se
+    // loguea, se devuelve object=null y el caller decide (tipicamente, 0 hallazgos
+    // de ese bundle sin voltear toda la corrida).
+    console.error(`[v0][research][${context}] collectStructured error:`, err)
+    if (NoObjectGeneratedError.isInstance(err)) {
+      usage = err.usage
+    }
+  }
+
+  // Solo las URLs REALMENTE citadas por el modelo, deduplicadas (mismo criterio
+  // anti-alucinacion que collect: no se parsean URLs del texto).
+  const seen = new Set<string>()
+  const verified: VerifiedSource[] = []
+  for (const s of sources) {
+    if (s.sourceType !== "url" || !s.url || seen.has(s.url)) continue
+    seen.add(s.url)
+    verified.push({ url: s.url, title: s.title ?? null })
+  }
+
+  let searchCount = 0
+  for (const step of steps) {
+    for (const call of step.toolCalls ?? []) {
+      if (call.toolName === "web_search") searchCount++
+    }
+  }
+
+  try {
+    tracking?.onUsage?.({
+      model,
+      inputTokens: usage?.inputTokens ?? 0,
+      outputTokens: usage?.outputTokens ?? 0,
+    })
+  } catch {
+    /* el tracking no debe romper la recoleccion */
+  }
+
+  void logAiUsage({
+    workspaceId: tracking?.workspaceId ?? null,
+    userId: tracking?.userId ?? null,
+    companyId: tracking?.companyId ?? null,
+    researchJobId: tracking?.researchJobId ?? null,
+    feature: tracking?.feature ?? "research-collect",
+    model,
+    inputTokens: usage?.inputTokens ?? 0,
+    outputTokens: usage?.outputTokens ?? 0,
+    metadata: {
+      stage: "collect-structured",
+      context,
+      company: companyName,
+      web_searches: searchCount,
+      sources: verified.length,
+    },
+  })
+
+  console.log(
+    `[v0][research][${context}] collectStructured: ${searchCount} busquedas, ${verified.length} fuentes citadas, object=${object ? "ok" : "null"}`
+  )
+
+  return { object, sources: verified, searchCount }
 }
 
 /**
