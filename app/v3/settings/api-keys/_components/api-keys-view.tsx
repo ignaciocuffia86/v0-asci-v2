@@ -17,8 +17,15 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrig
 import { Skeleton } from "@/components/ui/skeleton"
 import { McpSetupWizard } from "./mcp-setup-wizard"
 
-/** Única superficie MCP. La vieja (`/api/v3/mcp` + `/api/v3/mcp/tools/*`) se eliminó. */
+/** MCP estándar (señales v2, research, icebreakers). */
 const MCP_SERVER_URL = "https://bot.bigua.lat/api/v3/mcp/server/mcp"
+/** MCP Explore: embudo conversacional sobre la tabla cruda de contactos + vacantes. */
+const MCP_EXPLORE_URL = "https://bot.bigua.lat/api/v3/mcp/explore/mcp"
+
+const KEY_TYPE_LABELS: Record<string, { label: string; description: string }> = {
+  standard: { label: "Estándar", description: "Señales procesadas, research e icebreakers." },
+  explore: { label: "Explore", description: "Exploración conversacional sobre datos crudos." },
+}
 
 interface ApiKeysViewProps {
   workspaces: ApiKeyWorkspaceOption[]
@@ -36,13 +43,20 @@ export function ApiKeysView({ workspaces, defaultWorkspaceId, isSuperAdmin }: Ap
   const [loading, setLoading] = useState(true)
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [newKeyName, setNewKeyName] = useState("")
+  const [newKeyType, setNewKeyType] = useState<"standard" | "explore">("standard")
   const [creating, setCreating] = useState(false)
   const [newKey, setNewKey] = useState<string | null>(null)
   const [keyToRevoke, setKeyToRevoke] = useState<ApiKeyListItem | null>(null)
   const [revoking, setRevoking] = useState(false)
 
+  // Owners que todavía no tienen una key del tipo seleccionado (se permite una por tipo).
   const availableOwners = useMemo(
-    () => owners.filter((owner) => !keys.some((key) => key.owner_user_id === owner.id)),
+    () => owners.filter((owner) => !keys.some((key) => key.owner_user_id === owner.id && key.key_type === newKeyType)),
+    [keys, owners, newKeyType]
+  )
+  // Hay algo para generar si algún owner puede recibir una key estándar o explore.
+  const canGenerateAny = useMemo(
+    () => owners.some((owner) => (["standard", "explore"] as const).some((type) => !keys.some((key) => key.owner_user_id === owner.id && key.key_type === type))),
     [keys, owners]
   )
 
@@ -80,7 +94,7 @@ export function ApiKeysView({ workspaces, defaultWorkspaceId, isSuperAdmin }: Ap
   async function handleCreateKey() {
     if (!newKeyName.trim() || !ownerUserId) return
     setCreating(true)
-    const result = await generateApiKey(newKeyName, workspaceId, ownerUserId)
+    const result = await generateApiKey(newKeyName, workspaceId, ownerUserId, newKeyType)
     setCreating(false)
     if (!result.success || !result.key) {
       toast.error(result.error ?? "No se pudo generar la API key")
@@ -139,24 +153,35 @@ export function ApiKeysView({ workspaces, defaultWorkspaceId, isSuperAdmin }: Ap
           <CardDescription>Los agentes acceden exclusivamente a la información de {workspaceName || "este workspace"}.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <div className="flex items-center gap-4 rounded-lg border bg-muted/50 p-4">
-            <code className="flex-1 text-sm break-all">{MCP_SERVER_URL}</code>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={async () => {
-                try {
-                  await navigator.clipboard.writeText(MCP_SERVER_URL)
-                  toast.success("URL del MCP copiada")
-                } catch {
-                  toast.error("No se pudo copiar la URL")
-                }
-              }}
-            >
-              <Copy data-icon="inline-start" />Copiar
-            </Button>
-          </div>
-          <p className="text-sm text-muted-foreground">El workspace y el usuario se resuelven automáticamente desde la API key. No debes enviar sus IDs.</p>
+          {([
+            { url: MCP_SERVER_URL, ...KEY_TYPE_LABELS.standard },
+            { url: MCP_EXPLORE_URL, ...KEY_TYPE_LABELS.explore },
+          ] as const).map((server) => (
+            <div key={server.url} className="flex flex-col gap-2 rounded-lg border bg-muted/50 p-4">
+              <div className="flex items-center gap-2">
+                <Badge variant="secondary">{server.label}</Badge>
+                <span className="text-sm text-muted-foreground">{server.description}</span>
+              </div>
+              <div className="flex items-center gap-4">
+                <code className="flex-1 text-sm break-all">{server.url}</code>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(server.url)
+                      toast.success("URL del MCP copiada")
+                    } catch {
+                      toast.error("No se pudo copiar la URL")
+                    }
+                  }}
+                >
+                  <Copy data-icon="inline-start" />Copiar
+                </Button>
+              </div>
+            </div>
+          ))}
+          <p className="text-sm text-muted-foreground">Cada URL requiere una API key de su mismo tipo. El workspace y el usuario se resuelven automáticamente desde la key.</p>
         </CardContent>
       </Card>
 
@@ -166,7 +191,7 @@ export function ApiKeysView({ workspaces, defaultWorkspaceId, isSuperAdmin }: Ap
             <CardTitle>{canManage ? "API Keys del workspace" : "Tu API Key"}</CardTitle>
             <CardDescription>{keys.length === 0 ? "No hay API keys activas" : `${keys.length} ${keys.length === 1 ? "key activa" : "keys activas"}`}</CardDescription>
           </div>
-          {canManage && availableOwners.length > 0 && <Button onClick={() => setCreateDialogOpen(true)}><Plus data-icon="inline-start" />Generar API Key</Button>}
+          {canManage && canGenerateAny && <Button onClick={() => setCreateDialogOpen(true)}><Plus data-icon="inline-start" />Generar API Key</Button>}
         </CardHeader>
         <CardContent>
           {loading ? (
@@ -181,7 +206,7 @@ export function ApiKeysView({ workspaces, defaultWorkspaceId, isSuperAdmin }: Ap
               {keys.map((key) => (
                 <div key={key.id} className="flex flex-col justify-between gap-4 rounded-lg border p-4 sm:flex-row sm:items-center">
                   <div className="flex min-w-0 flex-col gap-2">
-                    <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{key.name}</span><Badge variant="outline" className="font-mono text-xs">{key.key_prefix}...</Badge></div>
+                    <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{key.name}</span><Badge variant={key.key_type === "explore" ? "default" : "secondary"} className="text-xs">{KEY_TYPE_LABELS[key.key_type]?.label ?? key.key_type}</Badge><Badge variant="outline" className="font-mono text-xs">{key.key_prefix}...</Badge></div>
                     <p className="text-sm text-muted-foreground">Propietario: {key.owner_name || key.owner_email || key.owner_user_id}</p>
                     <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground"><span className="flex items-center gap-1"><Clock />Creada {formatDistanceToNow(new Date(key.created_at), { addSuffix: true, locale: es })}</span><span className="flex items-center gap-1"><Activity />{key.request_count} requests</span>{key.last_used_at && <span>Último uso: {formatDistanceToNow(new Date(key.last_used_at), { addSuffix: true, locale: es })}</span>}</div>
                   </div>
@@ -198,7 +223,21 @@ export function ApiKeysView({ workspaces, defaultWorkspaceId, isSuperAdmin }: Ap
           <DialogHeader><DialogTitle>Generar nueva API Key</DialogTitle><DialogDescription>La credencial quedará vinculada al workspace y al miembro seleccionado.</DialogDescription></DialogHeader>
           <div className="flex flex-col gap-4 py-4">
             <div className="flex flex-col gap-2"><Label htmlFor="key-name">Nombre</Label><Input id="key-name" placeholder="Ej: Claude Desktop" value={newKeyName} onChange={(event) => setNewKeyName(event.target.value)} /></div>
-            <div className="flex flex-col gap-2"><Label htmlFor="key-owner">Propietario</Label><Select value={ownerUserId} onValueChange={setOwnerUserId}><SelectTrigger id="key-owner"><SelectValue placeholder="Selecciona un miembro" /></SelectTrigger><SelectContent><SelectGroup><SelectLabel>Miembros activos sin key</SelectLabel>{availableOwners.map((owner) => <SelectItem key={owner.id} value={owner.id}>{owner.fullName ? `${owner.fullName} · ` : ""}{owner.email ?? owner.id} ({owner.role})</SelectItem>)}</SelectGroup></SelectContent></Select></div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="key-type">Tipo de MCP</Label>
+              <Select value={newKeyType} onValueChange={(value) => setNewKeyType(value as "standard" | "explore")}>
+                <SelectTrigger id="key-type"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectLabel>Tipo de servidor</SelectLabel>
+                    <SelectItem value="standard">Estándar · señales procesadas</SelectItem>
+                    <SelectItem value="explore">Explore · exploración conversacional</SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">{KEY_TYPE_LABELS[newKeyType]?.description}</p>
+            </div>
+            <div className="flex flex-col gap-2"><Label htmlFor="key-owner">Propietario</Label><Select value={ownerUserId} onValueChange={setOwnerUserId}><SelectTrigger id="key-owner"><SelectValue placeholder="Selecciona un miembro" /></SelectTrigger><SelectContent><SelectGroup><SelectLabel>Miembros activos sin key {KEY_TYPE_LABELS[newKeyType]?.label}</SelectLabel>{availableOwners.map((owner) => <SelectItem key={owner.id} value={owner.id}>{owner.fullName ? `${owner.fullName} · ` : ""}{owner.email ?? owner.id} ({owner.role})</SelectItem>)}</SelectGroup></SelectContent></Select></div>
           </div>
           <DialogFooter><Button variant="outline" onClick={() => setCreateDialogOpen(false)}>Cancelar</Button><Button onClick={handleCreateKey} disabled={!newKeyName.trim() || !ownerUserId || creating}>{creating ? "Generando..." : "Generar key"}</Button></DialogFooter>
         </DialogContent>
