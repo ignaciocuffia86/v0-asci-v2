@@ -1,4 +1,4 @@
-import { z } from "zod"
+import { z } from 'zod/v3';
 import { createAdminClient } from "@/lib/supabase/admin"
 import type { McpPrincipal } from "@/lib/v3/mcp-usage"
 

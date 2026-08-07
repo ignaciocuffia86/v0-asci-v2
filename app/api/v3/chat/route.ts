@@ -1,14 +1,14 @@
 import { after } from "next/server"
 import {
   convertToModelMessages,
-  stepCountIs,
+  isStepCount,
   streamText,
   tool,
   type InferUITools,
   type UIDataTypes,
   type UIMessage,
 } from "ai"
-import { z } from "zod"
+import { z } from 'zod/v3';
 import { createClient } from "@/lib/supabase/server"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { requireWorkspace } from "@/lib/v3/workspace"
@@ -399,12 +399,12 @@ export async function POST(req: Request) {
 
   const result = streamText({
     model: MODELS.CHAT,
-    system: `${baseSystemPrompt}${memoryContext}`,
-    messages: convertToModelMessages(modelMessages),
+    instructions: `${baseSystemPrompt}${memoryContext}`,
+    messages: await convertToModelMessages(modelMessages),
     tools,
-    stopWhen: stepCountIs(8),
+    stopWhen: isStepCount(8),
     temperature: 0.3,
-    onFinish: async ({ totalUsage }) => {
+    onEnd: async ({ totalUsage }) => {
       await logAiUsage({
         workspaceId: workspace.id,
         userId: user.id,
@@ -430,7 +430,7 @@ export async function POST(req: Request) {
       }
       return `Error del modelo: ${message}`
     },
-    onFinish: async ({ messages: finalMessages }) => {
+    onEnd: async ({ messages: finalMessages }) => {
       if (!conversationId) return
       try {
         // Persistir solo los mensajes nuevos (los que no están guardados)
@@ -466,5 +466,5 @@ export async function POST(req: Request) {
         console.error("[v3] Error persistiendo mensajes del chat:", err)
       }
     },
-  })
+  });
 }

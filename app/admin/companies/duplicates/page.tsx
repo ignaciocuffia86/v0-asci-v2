@@ -315,7 +315,7 @@ export default function CompanyDuplicatesPage() {
                       <span>{m.rows_moved} registros movidos</span>
                       <span>{new Date(m.created_at).toLocaleString("es-AR")}</span>
                     </div>
-                    {m.reasoning && <span className="text-xs text-muted-foreground">{m.reasoning}</span>}
+                    {m.reasoningText && <span className="text-xs text-muted-foreground">{m.reasoningText}</span>}
                   </div>
                   <Button
                     variant="outline"
@@ -353,7 +353,7 @@ export default function CompanyDuplicatesPage() {
         </Card>
       )}
     </main>
-  )
+  );
 }
 
 function Metrica({ etiqueta, valor }: { etiqueta: string; valor: number | string }) {

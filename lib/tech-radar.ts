@@ -1,21 +1,37 @@
 /**
  * Tech Radar — orquestador de los 17 micro-agentes del prompt de Claude
- * mapeados a 4 bundles tematicos (1 Parallel call por bundle, ejecutados en
- * paralelo). Despues 1 sola llamada Gemini consolidada clasifica cada hallazgo
- * en uno de los 17 micro-agentes.
+ * mapeados a 4 bundles tematicos (+1 dinamico de keywords). Cada bundle produce
+ * hallazgos clasificados en uno de los 17 micro-agentes.
  *
  * Diseño:
- *   17 micro-agentes -> 4 bundles tematicos (4 Parallel calls en paralelo)
- *   N excerpts agrupados -> 1 Gemini call -> M hallazgos clasificados
+ *   17 micro-agentes -> 4 bundles tematicos, cada uno corre collect+structure
+ *   (collectStructured) en paralelo -> M hallazgos clasificados y deduplicados.
  *
- * Esto es ~80% mas eficiente que ejecutar 17 busquedas independientes y nos
- * da un payload manejable para Gemini.
+ * ── Migracion de Parallel a `collectStructured` (motor unificado) ──
+ * Antes cada bundle era 1 llamada a `parallelSearch`, que NO es enrutable por el
+ * AI Gateway: su costo quedaba invisible y el structurer corria sin `tracking`,
+ * asi que el gasto de IA caia HUERFANO en ai_usage_log (feature
+ * 'research-structure', company_id NULL). Ahora cada bundle usa `collectStructured`
+ * (Haiku + web_search server-side + generateObject, el mismo camino que Noticias),
+ * que atraviesa el Gateway y registra costo por etapa con feature 'radar-tech' +
+ * companyId/workspaceId. El uso se agrega (tokens/costo/busquedas) para que el
+ * caller lo persista en v3.tech_radar_runs.
+ *
+ * ── Por que collect y structure van SEPARADOS por bundle (no fusionados) ──
+ * Fusionar busqueda + salida estructurada en un turno (experimental_output + tools)
+ * NO sirve con ai@5 + Anthropic: el modelo se salta el web_search y responde el
+ * JSON sin buscar (medido: 0 busquedas). Y estructurar con las fuentes de TODOS los
+ * bundles juntas desacopla el informe de su fuente y deja el radar en 0 hallazgos.
+ * Solucion: dos turnos, pero el `structure` de cada bundle ve SOLO las ~10-30
+ * fuentes de su propio `collect`, numeradas 1..N. El mapeo source_index->URL vuelve
+ * a ser fiable (conjunto chico y homogeneo) y el modelo no puede inventar indices.
  */
 
-import { z } from "zod"
-import { parallelSearch, type ParallelSearchOptions, type ParallelSearchResponse } from "@/lib/parallel"
-import { checkUrlsAlive, STRUCTURER_DEFAULT_MODEL } from "@/lib/ai-structurer"
-import { structure } from "@/lib/research/engine"
+import { z } from 'zod/v3';
+import { checkUrlsAlive } from "@/lib/ai-structurer"
+import { collectStructured, structure, type ResearchTracking } from "@/lib/research/engine"
+import { RESEARCH_MODEL } from "@/lib/ai-models"
+import { estimateCostUsd } from "@/lib/v3/usage"
 
 // Constantes y tipos client-safe viven en lib/tech-radar-constants.ts
 // para no contaminar bundles del cliente con imports server-only.
@@ -32,7 +48,9 @@ export type { MicroAgent, EvidenceLevel }
 
 // ── Bundles tematicos ──────────────────────────────────────────────────
 type Bundle = {
-  key: "datos" | "negocio" | "seguridad" | "vertical"
+  // "bookmark" es el bundle dinamico de keywords (buildKeywordsBundle); el resto
+  // son los 4 tematicos fijos.
+  key: "datos" | "negocio" | "seguridad" | "vertical" | "bookmark"
   label: string
   agents: MicroAgent[]
   queries: (companyName: string) => string[]
@@ -89,56 +107,37 @@ const BUNDLES: Bundle[] = [
   },
 ]
 
-// ── Build params helper ───────────────────────────────────────────────
-function buildBundleParams(bundle: Bundle, companyName: string, country?: string): ParallelSearchOptions {
-  const threeYearsAgo = new Date()
-  threeYearsAgo.setFullYear(threeYearsAgo.getFullYear() - 3)
-  const afterDate = threeYearsAgo.toISOString().split("T")[0]
+// ── Cuantas busquedas web se le permiten a CADA bundle ─────────────────
+// Con 4-5 bundles en paralelo, 4 busquedas c/u da ~16-20 busquedas totales,
+// del orden del unico `collect` de Noticias (8). Subirlo encarece linealmente
+// sin ganancia clara de cobertura: los bundles ya reparten las areas.
+const BUNDLE_MAX_SEARCHES = 4
 
+// ── Prompt de recoleccion por bundle ───────────────────────────────────
+// `collect` hace la busqueda web server-side guiada por este prompt (no recibe
+// una lista de queries como Parallel). Traducimos el `objective` + las
+// `queries` del bundle a instrucciones en prosa, y las exclusiones que antes
+// hacia `source_policy.exclude_domains` pasan a ser reglas del prompt.
+function buildBundleCollectPrompt(bundle: Bundle, companyName: string, country?: string): string {
   const countryCtx = country ? ` (operaciones en ${country})` : ""
   const agentLabels =
     bundle.agents.length > 0
       ? bundle.agents.map((a) => MICRO_AGENT_LABELS[a]).join(", ")
       : "cualquier area tecnologica relevante (clasificar segun corresponda)"
 
-  return {
-    objective:
-      `Bundle [${bundle.label}] sobre la empresa "${companyName}"${countryCtx}. ` +
-      `Buscar EVIDENCIA TECNICA Y DE NEGOCIO en estas areas: ${agentLabels}. ` +
-      `Fuentes priorizadas: sitio oficial, casos de exito de vendors, blogs corporativos, ` +
-      `licitaciones publicas, PDFs tecnicos, avisos de empleo, perfiles de ejecutivos, prensa especializada. ` +
-      `EXCLUIR prensa generalista no tecnologica (esa va a la pestaña Noticias).`,
-    search_queries: bundle.queries(companyName),
-    max_results: 8,
-    source_policy: {
-      exclude_domains: [
-        "facebook.com",
-        "twitter.com",
-        "x.com",
-        "instagram.com",
-        "tiktok.com",
-        "youtube.com",
-        "reddit.com",
-        "pinterest.com",
-        // prensa generalista (va a Noticias)
-        "infobae.com",
-        "clarin.com",
-        "lanacion.com.ar",
-        "perfil.com",
-        "ambito.com",
-        "ambito.com.ar",
-        "eldiarioar.com",
-        "mdzol.com",
-        "diariohoy.net",
-        "lavoz.com.ar",
-        "pagina12.com.ar",
-        "iprofesional.com",
-        "cronista.com",
-      ],
-      after_date: afterDate,
-    },
-    excerpts: { max_chars_per_result: 6000 },
-  }
+  const angles = bundle.queries(companyName).map((q) => `- ${q}`).join("\n")
+
+  return (
+    `Investiga la empresa "${companyName}"${countryCtx} y su stack tecnologico en estas areas: ${agentLabels}.\n\n` +
+    `Busca EVIDENCIA TECNICA Y DE NEGOCIO concreta y verificable: vendors/productos especificos, ` +
+    `implementaciones, migraciones, contratos, licitaciones publicas, casos de exito de proveedores, ` +
+    `avisos de empleo que listan stack tecnologico. Considera estos angulos de busqueda:\n${angles}\n\n` +
+    `Para CADA hallazgo cita la fuente e indica la fecha de publicacion (YYYY-MM-DD) si aparece.\n` +
+    `Prioriza: sitio oficial de la empresa, casos de exito de vendors, blogs corporativos, ` +
+    `licitaciones publicas, PDFs tecnicos, prensa especializada en tecnologia.\n` +
+    `EXCLUYE prensa generalista no tecnologica (esa va a la pestaña Noticias) y redes sociales ` +
+    `(Facebook, X/Twitter, Instagram, TikTok, YouTube, Reddit). Enfoca los ultimos 3 años.`
+  )
 }
 
 // ── Resultado tipado ──────────────────────────────────────────────────
@@ -164,17 +163,35 @@ export interface TechRadarRunResult {
   digest: string | null
   bundle_stats: {
     bundle: string
-    parallel_results: number
-    excerpts_chars: number
+    /** Fuentes citadas por web_search en ese bundle. */
+    sources: number
+    /** Hallazgos crudos que emitio ese bundle (antes de guardrails globales). */
+    findings: number
   }[]
   ai_provider: string
+  /**
+   * Uso de IA AGREGADO de toda la corrida (collect de todos los bundles +
+   * structure + retry). El caller lo persiste en v3.tech_radar_runs. El costo
+   * ya se registro fila por fila en v3.ai_usage_log; esto es la vista por corrida.
+   */
+  usage: {
+    inputTokens: number
+    outputTokens: number
+    costUsd: number
+    webSearches: number
+    sourcesCount: number
+    model: string
+  }
 }
 
 // ── Gemini system prompt ───────────────────────────────────────────────
 const TECH_RADAR_SYSTEM = `Eres un investigador senior de inteligencia tecnologica empresarial.
-Recibis excerpts de paginas web sobre la empresa objetivo, agrupados en 4 bundles tematicos.
-Tu tarea es producir una RADIOGRAFIA TECNOLOGICA: lista de hallazgos verificables sobre tecnologias,
-procesos, integraciones, vendors, partners y skills que usa la empresa.
+Recibis un INFORME de investigacion web sobre la empresa objetivo (area tematica) y una lista
+NUMERADA de las fuentes citadas en ese informe. Tu tarea es producir una RADIOGRAFIA TECNOLOGICA:
+lista de hallazgos verificables sobre tecnologias, procesos, integraciones, vendors, partners y
+skills que usa la empresa.
+Para CADA hallazgo, "source_index" DEBE ser el numero de una fuente de la lista provista (no inventes
+numeros fuera de rango ni URLs). Basate SOLO en el informe y esas fuentes.
 
 REGLAS DE RELEVANCIA (CRITICAS):
 A. La empresa objetivo (te la indico abajo entre comillas) debe ser la USUARIA / CLIENTA / IMPLEMENTADORA de la tecnologia descripta.
@@ -253,9 +270,9 @@ REGLAS DE CLASIFICACION:
    - "sin_evidencia": el dato es plausible pero no esta sustentado; NO incluir items con este nivel salvo que sean criticos
 
 3. Para CADA hallazgo:
-   - "source_index" (>=1) primario: fuente principal del hallazgo. OBLIGATORIO.
-   - "supporting_source_indexes": array de otros indices de Fuente que TAMBIEN confirman el mismo hallazgo (puede ser []).
-   - "evidence_detail": cita textual breve o referencia especifica del excerpt que sustenta el hallazgo (max 200 chars).
+   - "source_index" (>=1): numero de la fuente PRINCIPAL en la lista provista. OBLIGATORIO.
+   - "supporting_source_indexes": array de otros numeros de fuente que TAMBIEN confirman el mismo hallazgo (puede ser []).
+   - "evidence_detail": cita textual breve o referencia especifica del informe que sustenta el hallazgo (max 200 chars).
    - "convergent_sources": numero entero = 1 + length(supporting_source_indexes).
 
 4. AREA del negocio impactada (texto libre): finanzas | ventas | logistica | rrhh | it | ciberseguridad | ecommerce | operaciones | atencion_cliente.
@@ -322,9 +339,13 @@ const RadarFindingsSchema = z.object({
     .array(
       z
         .object({
-          /** 1-based. Clave del mapeo determinista finding -> URL de la fuente. */
+          /**
+           * 1-based sobre la lista NUMERADA de fuentes de ESTE bundle (no global).
+           * Como el structure solo ve las ~10-30 fuentes de su propio collect, el
+           * mapeo indice->URL es fiable; el caller lo resuelve a la URL real.
+           */
           source_index: z.number(),
-          supporting_source_indexes: z.array(z.number()).nullable().default([]),
+          supporting_source_indexes: z.array(z.number()).nullable().default(null),
           micro_agent: z.string(),
           title: z.string(),
           summary: z.string().nullable(),
@@ -349,7 +370,7 @@ const RadarFindingsSchema = z.object({
   digest: z.string().nullable(),
 })
 
-// ── Public API ─────────────────────────────────────────────────────────
+// ── Public API ────────────────────────���────────────────────────────────
 export async function runTechRadar(input: {
   companyName: string
   country?: string
@@ -361,8 +382,37 @@ export async function runTechRadar(input: {
   ticker?: string | null
   /** Slug de LinkedIn (suele ser un alias estable). */
   linkedinSlug?: string | null
+  /**
+   * Atribucion del gasto de IA (arregla el bug de las filas huerfanas): se pasa
+   * a `collect` y `structure` con feature 'radar-tech'. NO maneja la fila de
+   * v3.tech_radar_runs — de eso se encarga el caller con el `usage` que retornamos.
+   */
+  tracking?: {
+    companyId?: string | null
+    workspaceId?: string | null
+    userId?: string | null
+  }
 }): Promise<TechRadarRunResult> {
   const { companyName, country, keywords, aliases, ticker, linkedinSlug } = input
+
+  // Agregador de uso de IA de toda la corrida. Cada etapa (collect por bundle,
+  // structure, retry) invoca `onUsage` con su modelo y tokens; el costo se computa
+  // con el MISMO criterio que la fila de ai_usage_log (estimateCostUsd), asi la
+  // vista por corrida (tech_radar_runs) y la vista por fila (ai_usage_log) cuadran.
+  const usageAgg = { inputTokens: 0, outputTokens: 0, costUsd: 0, webSearches: 0 }
+  const onUsage = (u: { model: string; inputTokens: number; outputTokens: number }) => {
+    usageAgg.inputTokens += u.inputTokens
+    usageAgg.outputTokens += u.outputTokens
+    usageAgg.costUsd += estimateCostUsd(u.model, u.inputTokens, u.outputTokens)
+  }
+  // Tracking compartido por collect/structure/retry para atribuir el gasto.
+  const usageTracking: ResearchTracking = {
+    companyId: input.tracking?.companyId ?? null,
+    workspaceId: input.tracking?.workspaceId ?? null,
+    userId: input.tracking?.userId ?? null,
+    feature: "radar-tech",
+    onUsage,
+  }
 
   // Construir tokens de match para detectar menciones a la empresa.
   // Incluye: tokens del nombre legal, nombre sin sufijos legales, primera palabra,
@@ -384,147 +434,133 @@ export async function runTechRadar(input: {
     bundlesToRun.push(buildKeywordsBundle(keywords))
   }
 
-  // Paso 1: ejecutar bundles en paralelo
-  console.log(`[v0][tech-radar] running ${bundlesToRun.length} bundles in parallel for "${companyName}"`)
+  // Paso 1: cada bundle corre collect (busca) + structure (estructura) ACOTADO a
+  // las fuentes de ESE bundle. El structure ve solo ~10-30 fuentes propias, no las
+  // ~144 mezcladas: el mapeo source_index->URL vuelve a ser fiable y desaparece el
+  // desacople informe/fuentes que dejaba el radar en 0 hallazgos.
+  console.log(`[v0][tech-radar] running ${bundlesToRun.length} bundles (collect+structure) for "${companyName}"`)
+  const keywordsCtx = keywords?.length ? `\nSeñales de interes (priorizar): ${keywords.join(", ")}` : ""
   const bundlePromises = bundlesToRun.map(async (bundle) => {
-    const params = buildBundleParams(bundle, companyName, country)
-    try {
-      const res = await parallelSearch(params)
-      console.log(`[v0][tech-radar][${bundle.key}] ${res.results.length} results`)
-      return { bundle, response: res as ParallelSearchResponse }
-    } catch (err) {
-      console.error(`[v0][tech-radar][${bundle.key}] parallel error:`, err)
-      return { bundle, response: { search_id: "", results: [], warnings: null } as ParallelSearchResponse }
-    }
+    const collectPrompt =
+      `Empresa objetivo: "${companyName}"${keywordsCtx}\n\n` + buildBundleCollectPrompt(bundle, companyName, country)
+    const res = await collectStructured({
+      schema: RadarFindingsSchema,
+      systemPrompt: TECH_RADAR_SYSTEM,
+      collectPrompt,
+      // El structure ve el informe + SUS fuentes numeradas (1..N de este bundle).
+      buildStructurePrompt: ({ report, numberedSources }) =>
+        `Empresa objetivo: "${companyName}"${keywordsCtx}\n\n` +
+        `Informe de investigacion (area "${bundle.label}"):\n\n${report}\n\n` +
+        `Fuentes citadas (source_index se refiere a ESTA lista):\n${numberedSources}\n\n` +
+        `Extrae los hallazgos en JSON segun el formato indicado.`,
+      companyName,
+      // country de v2 NO es un pais normalizado (guarda direcciones): no lo usamos
+      // como sesgo geografico, va solo como contexto de texto en el prompt.
+      countryISO: null,
+      maxSearches: BUNDLE_MAX_SEARCHES,
+      context: `tech-radar-${bundle.key}`,
+      tracking: usageTracking,
+    })
+    console.log(
+      `[v0][tech-radar][${bundle.key}] ${res.sources.length} fuentes | ${res.searchCount} busquedas | ${res.object?.findings?.length ?? 0} findings`,
+    )
+    return { bundle, res }
   })
   const bundleResults = await Promise.all(bundlePromises)
 
-  // Paso 2: aplanar excerpts en un solo listado numerado (compartido entre bundles)
-  // El index 1-based del listado FINAL es el que vamos a pedirle a Gemini.
-  type FlatExcerpt = {
-    bundle_key: string
-    url: string
-    title: string
-    publish_date: string | null
-    content: string
-  }
-  const flat: FlatExcerpt[] = []
-  const bundleStats = bundleResults.map(({ bundle, response }) => {
-    let chars = 0
-    for (const r of response.results) {
-      const content = r.excerpts.join("\n")
-      flat.push({
-        bundle_key: bundle.key,
-        url: r.url,
-        title: r.title,
-        publish_date: r.publish_date,
-        content,
-      })
-      chars += content.length
+  // Paso 2: resolver source_index->URL DENTRO de cada bundle (donde el indice es
+  // valido) y aplanar a una lista global de findings que YA cargan su URL resuelta.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  type RawFinding = { item: any; primaryUrl: string; primaryTitle: string; supportingUrls: string[] }
+  const rawFindings: RawFinding[] = []
+  const bundleDigests: string[] = []
+  const bundleStats = bundleResults.map(({ bundle, res }) => {
+    usageAgg.webSearches += res.searchCount
+    const sources = res.sources
+    const findings = res.object?.findings ?? []
+    for (const item of findings) {
+      const idx = Number(item.source_index)
+      // Fuera de rango = el modelo invento un indice -> se descarta este finding.
+      if (!Number.isFinite(idx) || idx < 1 || idx > sources.length) continue
+      const primary = sources[idx - 1]
+      if (!primary?.url) continue
+      const supportingUrls = Array.isArray(item.supporting_source_indexes)
+        ? Array.from(
+            new Set<string>(
+              (item.supporting_source_indexes as unknown[])
+                .map((n) => Number(n))
+                .filter((n) => Number.isFinite(n) && n >= 1 && n <= sources.length && n !== idx)
+                .map((n) => sources[n - 1]?.url)
+                .filter((u): u is string => Boolean(u)),
+            ),
+          )
+        : []
+      rawFindings.push({ item, primaryUrl: primary.url, primaryTitle: primary.title ?? "", supportingUrls })
     }
-    return { bundle: bundle.label, parallel_results: response.results.length, excerpts_chars: chars }
+    if (res.object?.digest) bundleDigests.push(res.object.digest)
+    return { bundle: bundle.label, sources: sources.length, findings: findings.length }
+  })
+  // sourcesCount global = fuentes unicas citadas en todos los bundles.
+  const allCitedUrls = new Set<string>()
+  for (const { res } of bundleResults) for (const s of res.sources) if (s.url) allCitedUrls.add(s.url)
+
+  const buildUsage = (): TechRadarRunResult["usage"] => ({
+    inputTokens: usageAgg.inputTokens,
+    outputTokens: usageAgg.outputTokens,
+    costUsd: Math.round(usageAgg.costUsd * 1_000_000) / 1_000_000,
+    webSearches: usageAgg.webSearches,
+    sourcesCount: allCitedUrls.size,
+    model: RESEARCH_MODEL,
   })
 
-  if (flat.length === 0) {
-    return { findings: [], digest: null, bundle_stats: bundleStats, ai_provider: "no-results" }
+  // ai_provider = modelo que PRODUJO los hallazgos (ahora el buscador-estructurador).
+  const aiProvider = RESEARCH_MODEL
+
+  if (rawFindings.length === 0) {
+    return { findings: [], digest: null, bundle_stats: bundleStats, ai_provider: "no-results", usage: buildUsage() }
   }
 
-  // Paso 3: 1 sola llamada a Gemini con TODOS los excerpts numerados.
-  // Limitamos a 50 fuentes y truncamos cada excerpt para que entre en el context.
-  const MAX_SOURCES = 50
-  const truncated = flat.slice(0, MAX_SOURCES)
-  const excerptText = truncated
-    .map(
-      (e, i) =>
-        `--- Fuente ${i + 1} [bundle: ${e.bundle_key}] ${e.title} (${e.url}) [fecha: ${e.publish_date ?? "desconocida"}] ---\n${e.content.slice(0, 4500)}`,
-    )
-    .join("\n\n")
-
-  const keywordsCtx = keywords?.length ? `\nSeñales de interes (priorizar): ${keywords.join(", ")}` : ""
-  const userPrompt = `Empresa objetivo: "${companyName}"${keywordsCtx}\n\nExcerpts agrupados por bundle:\n\n${excerptText}\n\nExtrae los hallazgos en JSON segun el formato indicado.`
-
-  let parsed: z.infer<typeof RadarFindingsSchema> = { findings: [], digest: null }
-  // Se deriva del default real del structurer. Estaba hardcodeado en
-  // "gemini-2.0-flash", el modelo retirado: al cambiar el default habria seguido
-  // estampando el nombre de un modelo que ya no se usa, arruinando la unica
-  // evidencia forense de que produjo cada hallazgo. Mismo bug que en news.
-  let aiProvider = STRUCTURER_DEFAULT_MODEL
-  try {
-    // Motor unificado: `generateObject` + schema, y SIN `maxOutputTokens`. El tope
-    // de 6000 que habia aca es la misma clase de gatillo que el de 4000 en news:
-    // con hasta 30 hallazgos pedidos, es justamente el caso donde la salida se
-    // corta a mitad de JSON.
-    parsed = await structure({
-      schema: RadarFindingsSchema,
-      systemPrompt: TECH_RADAR_SYSTEM,
-      userPrompt,
-      temperature: 0.2,
-      context: "tech-radar",
-    })
-  } catch (err) {
-    console.error("[v0][tech-radar] structuring failed, returning empty:", err)
-    return { findings: [], digest: null, bundle_stats: bundleStats, ai_provider: "structuring-failed" }
-  }
-
-  const rawFindings = parsed.findings
-  const digest = parsed.digest
-
-  // Paso 4: guardrail de relevancia (mencion explicita de la empresa
-  // en title o summary). Usa matchTokens para reconocer aliases, ticker,
-  // linkedin slug y nombre sin sufijos legales.
+  // Paso 3: guardrail de relevancia (mencion explicita en title/summary) +
+  // anti-obviedad. Operan sobre `.item` de cada wrapper (que ya carga su URL resuelta).
   const beforeRelevance = rawFindings.length
-  const relevantFindings = filterByCompanyTokens(rawFindings, matchTokens, ["title", "summary"])
+  const relevantFindings = rawFindings.filter(
+    (f) =>
+      textMentionsAnyToken(String(f.item?.title ?? ""), matchTokens) ||
+      textMentionsAnyToken(String(f.item?.summary ?? ""), matchTokens),
+  )
   if (rawFindings.length !== relevantFindings.length) {
     console.log(`[v0][tech-radar][guardrail] dropped ${beforeRelevance - relevantFindings.length} sin mencion explicita`)
   }
-
-  // Paso 4b: anti-obviedad. Descartar findings genericos cuyo "valor" sea solo
-  // afirmar que la empresa tiene un area/departamento/equipo, o que usa categorias
-  // de tecnologia sin nombrar producto especifico. Estos son los "fake insights"
-  // tipicos que produce el LLM cuando se basa en perfiles personales de LinkedIn.
-  const nonObviousFindings = relevantFindings.filter((f) => isNonObviousFinding(f))
+  const nonObviousFindings = relevantFindings.filter((f) => isNonObviousFinding(f.item))
   if (nonObviousFindings.length !== relevantFindings.length) {
-    console.log(
-      `[v0][tech-radar][anti-obviedad] dropped ${relevantFindings.length - nonObviousFindings.length} obviedades`,
-    )
+    console.log(`[v0][tech-radar][anti-obviedad] dropped ${relevantFindings.length - nonObviousFindings.length} obviedades`)
   }
 
-  // NOTA: el filtro previo "anti-cross" sobre evidence_detail era demasiado
-  // estricto y mataba findings legitimos donde el LLM citaba una oracion sin
-  // repetir el nombre exacto de la empresa (ej. "la cadena portuguesa migro
-  // a SAP"). Ahora usamos un DOBLE CHECK en el Paso 5 que combina la cita
-  // y el documento fuente.
-
-  // Paso 5: mapear source_index -> URL real, validar micro_agent / evidence_level
-  // y aplicar doble check de pertenencia a la empresa.
-  type Mapped = { item: any; primary: FlatExcerpt; supportingExcerpts: FlatExcerpt[] }
+  // Paso 4: filtrar perfiles personales de LinkedIn, validar micro_agent /
+  // evidence_level y aplicar doble-check de pertenencia. La URL ya viene resuelta
+  // por bundle (Paso 2), asi que aca no hay indice ni alucinacion de URL que validar.
+  type PrimarySource = { url: string; title: string; publish_date: string | null }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  type Mapped = { item: any; primary: PrimarySource; supportingUrls: string[] }
   const mapped: Mapped[] = []
   const validAgents = new Set<string>(MICRO_AGENTS)
   const validLevels = new Set<EvidenceLevel>(["directa", "convergente", "inferencia", "sin_evidencia"])
   let droppedByLinkedInProfile = 0
-  let droppedByOrphanFinding = 0 // cuando ni evidence_detail NI fuente mencionan empresa
+  let droppedByOrphanFinding = 0
 
-  for (const item of nonObviousFindings) {
-    const idx1 = Number(item.source_index)
-    if (!Number.isFinite(idx1) || idx1 < 1 || idx1 > truncated.length) continue
-    const primary = truncated[idx1 - 1]
+  for (const { item, primaryUrl, primaryTitle, supportingUrls: supRaw } of nonObviousFindings) {
+    const primary: PrimarySource = { url: primaryUrl, title: primaryTitle, publish_date: null }
 
-    // Anti-LinkedIn-personal: si la fuente PRIMARIA es un perfil personal de LinkedIn,
-    // descartamos. Job postings (linkedin.com/jobs/...) o paginas de empresa
-    // (linkedin.com/company/...) si son validas.
-    if (isPersonalLinkedInProfile(primary.url)) {
+    // Anti-LinkedIn-personal: perfiles personales (linkedin.com/in/...) no son
+    // evidencia. Job postings / paginas de empresa si.
+    if (isPersonalLinkedInProfile(primaryUrl)) {
       droppedByLinkedInProfile++
       continue
     }
 
-    // DOBLE CHECK anti-contaminacion cruzada (mas permisivo que la version anterior):
-    // El finding sobrevive si AL MENOS UNA de estas evidencias menciona a la empresa:
-    //   1. evidence_detail (cita literal del LLM)
-    //   2. titulo de la fuente primaria
-    //   3. URL de la fuente primaria (cubre slugs tipo /arcosdorados/...)
-    // Si NINGUNA menciona la empresa, es highly likely que sea un cross-mention.
-    // Como capa adicional: si el documento fuente NO menciona la empresa,
-    // exigimos al menos un marcador concreto (vendor whitelist, numero, fecha).
+    // DOBLE CHECK anti-contaminacion cruzada: sobrevive si la empresa aparece en
+    // evidence_detail, titulo o URL de la fuente. Si no aparece en titulo/URL y
+    // solo en evidence_detail, exigimos ademas un marcador concreto.
     const detail = String(item.evidence_detail ?? "")
     const mentionsInDetail = textMentionsAnyToken(detail, matchTokens)
     const mentionsInSourceTitle = textMentionsAnyToken(primary.title ?? "", matchTokens)
@@ -534,11 +570,6 @@ export async function runTechRadar(input: {
       droppedByOrphanFinding++
       continue
     }
-
-    // Si la fuente NO es claramente sobre la empresa (ni titulo ni URL la
-    // mencionan), y el LLM solo logro citarla en evidence_detail, exigimos
-    // marcador concreto para evitar alucinaciones. Reportes ESG/sectoriales
-    // que mencionan a la empresa al pasar caen aca.
     if (!mentionsInSourceTitle && !mentionsInSourceUrl) {
       if (!hasConcreteEvidenceMarker(detail)) {
         droppedByOrphanFinding++
@@ -548,61 +579,29 @@ export async function runTechRadar(input: {
 
     const agent = String(item.micro_agent ?? "").toLowerCase()
     if (!validAgents.has(agent)) continue
-
     const level = String(item.evidence_level ?? "").toLowerCase() as EvidenceLevel
     if (!validLevels.has(level)) continue
     if (level === "sin_evidencia") continue // no publicamos esos por default
 
-    const supportingIdx = Array.isArray(item.supporting_source_indexes)
-      ? item.supporting_source_indexes
-          .map((n: any) => Number(n))
-          .filter((n: number) => Number.isFinite(n) && n >= 1 && n <= truncated.length && n !== idx1)
-      : []
-    // Filtramos tambien los supporting que sean perfiles personales
-    const supportingExcerpts = supportingIdx
-      .map((n: number) => truncated[n - 1])
-      .filter((e: FlatExcerpt) => !isPersonalLinkedInProfile(e.url))
+    // supporting: URLs ya resueltas por bundle, no personales, distintas de la primaria.
+    const supportingUrls: string[] = supRaw.filter((u) => u !== primaryUrl && !isPersonalLinkedInProfile(u))
 
-    mapped.push({ item, primary, supportingExcerpts })
+    mapped.push({ item, primary, supportingUrls })
   }
 
   if (droppedByLinkedInProfile > 0) {
     console.log(`[v0][tech-radar][anti-linkedin] dropped ${droppedByLinkedInProfile} con fuente primaria = perfil personal`)
   }
   if (droppedByOrphanFinding > 0) {
-    console.log(`[v0][tech-radar][anti-orphan] dropped ${droppedByOrphanFinding} sin mencion en detail/title/url o sin marcador concreto cuando la fuente no era clara`)
+    console.log(`[v0][tech-radar][anti-orphan] dropped ${droppedByOrphanFinding} sin mencion clara de la empresa`)
   }
   console.log(`[v0][tech-radar][mapping] ${mapped.length}/${nonObviousFindings.length} hallazgos validos`)
 
-  // Retry con prompt relajado (capa H del relevamiento). Si rawFindings tenia
-  // contenido pero los filtros lo dejaron en 0, le damos a Gemini un segundo
-  // intento con un prompt mas permisivo. Los filtros de codigo (anti-obviedad,
-  // anti-LinkedIn-personal, doble check) siguen aplicandose, asi que el riesgo
-  // de ruido es controlado.
-  if (mapped.length === 0 && rawFindings.length > 0) {
-    console.log(`[v0][tech-radar][retry] rawFindings tenia ${rawFindings.length} items pero todos cayeron por filtros. Reintentando con prompt relajado...`)
-    const retried = await retryWithRelaxedPrompt({
-      userPrompt,
-      truncated,
-      matchTokens,
-      bundleStats,
-      digest,
-      aiProvider,
-    })
-    if (retried.mapped.length > 0) {
-      mapped.push(...retried.mapped)
-      aiProvider = retried.aiProvider
-      console.log(`[v0][tech-radar][retry] recuperados ${retried.mapped.length} findings con prompt relajado`)
-    } else {
-      console.log("[v0][tech-radar][retry] tambien devolvio 0 - rendimos.")
-    }
-  }
-
   if (mapped.length === 0) {
-    return { findings: [], digest, bundle_stats: bundleStats, ai_provider: aiProvider }
+    return { findings: [], digest: null, bundle_stats: bundleStats, ai_provider: aiProvider, usage: buildUsage() }
   }
 
-  // Paso 6: liveness check de URLs primarias
+  // Paso 5: liveness check de URLs primarias.
   const candidateUrls = mapped.map((m) => m.primary.url)
   const aliveUrls = await checkUrlsAlive(candidateUrls, { context: "tech-radar" })
   const aliveMapped = mapped.filter((m) => aliveUrls.has(m.primary.url))
@@ -610,15 +609,16 @@ export async function runTechRadar(input: {
     console.log(`[v0][tech-radar][mapping] dropped ${mapped.length - aliveMapped.length} por links muertos`)
   }
 
-  // Paso 7: armar output bruto
-  const rawOutput: TechRadarFinding[] = aliveMapped.map(({ item, primary, supportingExcerpts }) => {
+  if (aliveMapped.length === 0) {
+    return { findings: [], digest: null, bundle_stats: bundleStats, ai_provider: aiProvider, usage: buildUsage() }
+  }
+
+  // Paso 6: armar output bruto.
+  const rawOutput: TechRadarFinding[] = aliveMapped.map(({ item, primary, supportingUrls }) => {
     let hostname = "fuente"
     try {
       hostname = new URL(primary.url).hostname.replace(/^www\./, "")
     } catch {}
-
-    const supportingUrls = Array.from(new Set(supportingExcerpts.map((e) => e.url).filter(Boolean)))
-
     return {
       micro_agent: item.micro_agent as MicroAgent,
       title: String(item.title ?? "").slice(0, 240),
@@ -633,13 +633,12 @@ export async function runTechRadar(input: {
       source_name: item.source_name ? String(item.source_name).slice(0, 120) : hostname,
       supporting_source_urls: supportingUrls,
       convergent_sources: 1 + supportingUrls.length,
-      published_at: sanitizeDate(item.published_at) || sanitizeDate(primary.publish_date),
+      published_at: sanitizeDate(item.published_at),
     }
   })
 
-  // Paso 8: dedup semantico. Colapsa findings que apuntan al mismo evento
-  // pero vienen de fuentes distintas (tipico: misma noticia publicada en
-  // espanol y en ingles, o cubierta por dos medios).
+  // Paso 7: dedup semantico. Colapsa findings que apuntan al mismo evento
+  // pero vienen de fuentes distintas.
   const findings = dedupFindings(rawOutput)
   if (findings.length !== rawOutput.length) {
     console.log(
@@ -647,7 +646,30 @@ export async function runTechRadar(input: {
     )
   }
 
-  return { findings, digest, bundle_stats: bundleStats, ai_provider: aiProvider }
+  // Paso 8: digest GLOBAL. Los bundles devuelven digests parciales; generamos uno
+  // coherente sobre los hallazgos FINALES (no sobre el ruido crudo). Es sintesis
+  // pura sin busqueda: no hay riesgo de desacople y queda monitoreada (radar-tech).
+  let digest: string | null = bundleDigests[0] ?? null
+  try {
+    const findingsBrief = findings
+      .slice(0, 30)
+      .map((f) => `- [${f.micro_agent}] ${f.title}${f.provider_name ? ` (${f.provider_name})` : ""}`)
+      .join("\n")
+    const digestOut = await structure({
+      schema: z.object({ digest: z.string().nullable() }),
+      systemPrompt:
+        'Sos un analista de inteligencia tecnologica. Resumi en 2-4 oraciones en ESPAÑOL: que stack/vendors usa la empresa, que areas tienen mas evidencia, y como un vendedor B2B puede posicionarse. Devolve JSON {"digest": "..."}.',
+      userPrompt: `Empresa: "${companyName}"\n\nHallazgos:\n${findingsBrief}`,
+      temperature: 0.3,
+      context: "tech-radar-digest",
+      tracking: usageTracking,
+    })
+    if (digestOut?.digest) digest = digestOut.digest
+  } catch (err) {
+    console.error("[v0][tech-radar] digest generation failed (uso digest parcial):", err)
+  }
+
+  return { findings, digest, bundle_stats: bundleStats, ai_provider: aiProvider, usage: buildUsage() }
 }
 
 // ── Anti-obviedad ──────────────────────────────────────────────────────
@@ -735,7 +757,7 @@ function isPersonalLinkedInProfile(url: string): boolean {
   try {
     const u = new URL(url)
     if (!u.hostname.includes("linkedin.com")) return false
-    return /^\/in\//i.test(u.pathname)
+    return /^\/in\//i.test(u.pathname);
   } catch {
     return false
   }
@@ -988,7 +1010,7 @@ function tokenize(text: string): string[] {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9\s-]/g, " ")
     .split(/\s+/)
-    .filter((t) => t.length >= 4 && !STOPWORDS_TOKEN.has(t))
+    .filter((t) => t.length >= 4 && !STOPWORDS_TOKEN.has(t));
 }
 
 /**
@@ -1064,21 +1086,6 @@ export function textMentionsAnyToken(text: string, tokens: string[]): boolean {
   return tokens.some((t) => haystack.includes(t))
 }
 
-/**
- * Filtra items dejando solo los que mencionan al menos un token de empresa
- * en alguno de los `fields`. Reemplazo de filterRelevantToCompany cuando
- * tenemos tokens precomputados (con aliases, ticker, etc.).
- */
-function filterByCompanyTokens<T>(items: T[], tokens: string[], fields: (keyof T)[]): T[] {
-  if (tokens.length === 0) return items
-  return items.filter((item) =>
-    fields.some((f) => {
-      const v = item[f]
-      return typeof v === "string" && textMentionsAnyToken(v, tokens)
-    }),
-  )
-}
-
 // ── Bundle dinamico de keywords del bookmark (C del relevamiento) ────────
 /**
  * Cuando el bookmark tiene señales (ej. "ERP", "ciberseguridad"), agregamos
@@ -1099,119 +1106,4 @@ function buildKeywordsBundle(keywords: string[]): Bundle {
   }
 }
 
-// ── Retry con prompt relajado (H del relevamiento) ───────────────────────
-/**
- * Prompt mas permisivo: mantiene anti-obviedad y exige cita literal pero
- * NO requiere que la cita contenga el nombre de la empresa (el filtro de
- * codigo se encarga de validar que la fuente sea relevante).
- */
-const TECH_RADAR_SYSTEM_RELAXED = `Eres un investigador de inteligencia tecnologica empresarial.
-Recibis excerpts de paginas web sobre la empresa objetivo y tu output anterior fue rechazado por
-filtros de calidad. Reintenta extrayendo hallazgos manteniendo SOLO estas reglas estrictas:
 
-1. La empresa objetivo (entre comillas) debe ser USUARIA / CLIENTA / IMPLEMENTADORA de la tecnologia.
-2. RECHAZAR hallazgos genericos sin tecnologia concreta (ej. "tiene departamento de IT", "usa internet").
-3. CADA hallazgo debe identificar AL MENOS UNA evidencia: vendor especifico, numero, fecha, % o partner.
-4. NO inventes URLs ni datos. Si no esta en los excerpts, no lo pongas.
-5. evidence_detail: cita literal o cuasi-literal del excerpt (entre 30 y 200 chars). NO necesita repetir
-   el nombre de la empresa textualmente — usa anaforas ("la empresa", "la cadena") si la fuente lo hace.
-6. source_index OBLIGATORIO. NO mezcles fuentes.
-
-Mismo JSON schema:
-{
-  "findings": [
-    {
-      "source_index": <int>,
-      "supporting_source_indexes": [<int>...],
-      "micro_agent": "bi_analytics|cloud|ipaas|ciberseguridad|workplace|devops|erp|ia_rpa|hardware|crm|telco|procurement_it|observabilidad|pagos|logistica|health_it|consultoria",
-      "title": "<string>",
-      "summary": "<string 2-3 oraciones>",
-      "technology": "<string|null>",
-      "provider_name": "<string|null>",
-      "area": "<string|null>",
-      "results": "<string|null>",
-      "evidence_level": "directa|convergente|inferencia",
-      "evidence_detail": "<cita literal>",
-      "source_name": "<string>",
-      "published_at": "<YYYY-MM-DD|null>"
-    }
-  ],
-  "digest": "<string|null>"
-}`
-
-type FlatExcerptForRetry = {
-  bundle_key: string
-  url: string
-  title: string
-  publish_date: string | null
-  content: string
-}
-
-async function retryWithRelaxedPrompt(args: {
-  userPrompt: string
-  truncated: FlatExcerptForRetry[]
-  matchTokens: string[]
-  bundleStats: { bundle: string; parallel_results: number; excerpts_chars: number }[]
-  digest: string | null
-  aiProvider: string
-}): Promise<{ mapped: { item: any; primary: FlatExcerptForRetry; supportingExcerpts: FlatExcerptForRetry[] }[]; aiProvider: string }> {
-  let parsed: z.infer<typeof RadarFindingsSchema> = { findings: [], digest: null }
-  // Mismo schema que el flujo normal: los dos prompts piden el mismo formato.
-  const relaxedProvider = `${STRUCTURER_DEFAULT_MODEL}-relaxed`
-  try {
-    parsed = await structure({
-      schema: RadarFindingsSchema,
-      systemPrompt: TECH_RADAR_SYSTEM_RELAXED,
-      userPrompt: args.userPrompt,
-      temperature: 0.3,
-      context: "tech-radar-retry",
-    })
-  } catch (err) {
-    console.error("[v0][tech-radar][retry] relaxed structuring failed:", err)
-    return { mapped: [], aiProvider: "structuring-failed-on-retry" }
-  }
-
-  const rawRetry = parsed.findings
-  if (rawRetry.length === 0) return { mapped: [], aiProvider: relaxedProvider }
-
-  // Aplicamos los mismos filtros que en el flow normal:
-  // 1) anti-obviedad (sin cambios)
-  // 2) doble check de pertenencia a la empresa (en mapping loop)
-  const nonObvious = rawRetry.filter((f) => isNonObviousFinding(f))
-
-  const validAgents = new Set<string>(MICRO_AGENTS)
-  const validLevels = new Set<EvidenceLevel>(["directa", "convergente", "inferencia"])
-  const mapped: { item: any; primary: FlatExcerptForRetry; supportingExcerpts: FlatExcerptForRetry[] }[] = []
-
-  for (const item of nonObvious) {
-    const idx1 = Number(item.source_index)
-    if (!Number.isFinite(idx1) || idx1 < 1 || idx1 > args.truncated.length) continue
-    const primary = args.truncated[idx1 - 1]
-    if (isPersonalLinkedInProfile(primary.url)) continue
-
-    const detail = String(item.evidence_detail ?? "")
-    const mentionsInDetail = textMentionsAnyToken(detail, args.matchTokens)
-    const mentionsInSourceTitle = textMentionsAnyToken(primary.title ?? "", args.matchTokens)
-    const mentionsInSourceUrl = textMentionsAnyToken(primary.url ?? "", args.matchTokens)
-    if (!mentionsInDetail && !mentionsInSourceTitle && !mentionsInSourceUrl) continue
-    if (!mentionsInSourceTitle && !mentionsInSourceUrl && !hasConcreteEvidenceMarker(detail)) continue
-
-    const agent = String(item.micro_agent ?? "").toLowerCase()
-    if (!validAgents.has(agent)) continue
-    const level = String(item.evidence_level ?? "").toLowerCase() as EvidenceLevel
-    if (!validLevels.has(level)) continue
-
-    const supportingIdx = Array.isArray(item.supporting_source_indexes)
-      ? item.supporting_source_indexes
-          .map((n: any) => Number(n))
-          .filter((n: number) => Number.isFinite(n) && n >= 1 && n <= args.truncated.length && n !== idx1)
-      : []
-    const supportingExcerpts = supportingIdx
-      .map((n: number) => args.truncated[n - 1])
-      .filter((e: FlatExcerptForRetry) => !isPersonalLinkedInProfile(e.url))
-
-    mapped.push({ item, primary, supportingExcerpts })
-  }
-
-  return { mapped, aiProvider: relaxedProvider }
-}

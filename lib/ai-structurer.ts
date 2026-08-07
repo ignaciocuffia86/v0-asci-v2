@@ -33,7 +33,7 @@ export function companyNameTokens(name: string): string[] {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^\p{Letter}\p{Number}\s]/gu, " ")
     .split(/\s+/)
-    .filter((t) => t.length >= 4 && !stopwords.has(t))
+    .filter((t) => t.length >= 4 && !stopwords.has(t));
 }
 
 /**
@@ -56,7 +56,7 @@ export function filterRelevantToCompany<T extends Record<string, any>>(
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")
     return tokens.some((t) => haystack.includes(t))
-  })
+  });
 }
 
 /**
@@ -104,7 +104,7 @@ export async function structureWithLLM<T>({
     try {
       const { text, usage } = await generateText({
         model,
-        system: systemPrompt,
+        instructions: systemPrompt,
         prompt: userPrompt,
         temperature,
         // AI SDK v5+: el parametro es maxOutputTokens (antes maxTokens).

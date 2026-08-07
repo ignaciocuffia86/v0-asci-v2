@@ -1,6 +1,11 @@
-import Parallel from "parallel-web"
+import { gateway, generateText, stepCountIs } from "ai"
+import { RESEARCH_MODEL } from "@/lib/ai-models"
+import { logAiUsage } from "@/lib/v3/usage"
 
-const client = new Parallel({ apiKey: process.env.PARALLEL_API_KEY })
+// Desde la migracion a ai@7 este modulo ya NO usa el SDK `parallel-web` ni
+// PARALLEL_API_KEY: la unica busqueda (searchPublicDocsViaGateway) va por el AI
+// Gateway. Se conservan los tipos + buildPublicDocsSearchParams (constructor de
+// params puro) que consume la ruta /api/research/public-docs.
 
 export interface ParallelSearchOptions {
   objective: string
@@ -31,158 +36,100 @@ export interface ParallelSearchResponse {
 }
 
 /**
- * Execute a Parallel web search.
- * Returns structured results with URLs, titles, dates and LLM-optimized excerpts.
+ * Busqueda de documentos publicos ENRUTADA POR EL AI GATEWAY
+ * (`gateway.tools.parallelSearch`) en vez de pegarle directo a parallel-web con el
+ * SDK. Es el unico camino de busqueda de este modulo desde la migracion a ai@7.
+ *
+ * ── Por que ──
+ * 1. Costo VISIBLE: la busqueda se factura y reporta por el Gateway (como el resto
+ *    de la IA de v3), y ademas se registra en v3.ai_usage_log. El path directo era
+ *    invisible para la reporteria de costos.
+ * 2. Sin PARALLEL_API_KEY en la app: el Gateway tiene la credencial de Parallel.
+ *    Elimina una env var que ademas DIVERGE entre los dos proyectos Vercel.
+ *
+ * ── Trade-off (medido) ──
+ * Es una provider-executed tool: el `objective` y las `search_queries` los arma el
+ * MODELO (Haiku), no el codigo. Se le pasan las queries afinadas como prompt y se
+ * PINEA el `source_policy` (dominios + fecha) via config, que es lo que sostiene el
+ * anti-contaminacion. En la validacion con Arcos Dorados dio 12 docs (9 oficiales:
+ * earnings transcripts + annual reports) en 1 sola tool-call, respetando el
+ * include/exclude de dominios. Ruido menor de cross-mentions (marca madre /
+ * competidor) que la clasificacion + dedup downstream de la ruta ya absorbe.
+ *
+ * Devuelve un `ParallelSearchResponse` (url/title/publish_date/excerpts) listo para
+ * el caller de la ruta public-docs.
  */
-export async function parallelSearch(options: ParallelSearchOptions): Promise<ParallelSearchResponse> {
-  const search = await client.beta.search({
-    objective: options.objective,
-    search_queries: options.search_queries,
-    max_results: options.max_results ?? 10,
-    source_policy: options.source_policy,
-    excerpts: options.excerpts ?? { max_chars_per_result: 8000 },
+export async function searchPublicDocsViaGateway(
+  options: ParallelSearchOptions,
+  tracking?: { companyId?: string | null; userId?: string | null; workspaceId?: string | null },
+): Promise<ParallelSearchResponse> {
+  const sp = options.source_policy ?? {}
+  const prompt =
+    `${options.objective}\n\n` +
+    `Ejecuta UNA busqueda web con estas queries (todas en una sola llamada a la herramienta):\n` +
+    options.search_queries.map((q, i) => `${i + 1}. ${q}`).join("\n")
+
+  const results: ParallelResult[] = []
+  let usage: { inputTokens?: number; outputTokens?: number } | undefined
+
+  try {
+    const res = await generateText({
+      model: RESEARCH_MODEL,
+      prompt,
+      tools: {
+        parallelSearch: gateway.tools.parallelSearch({
+          maxResults: options.max_results ?? 10,
+          sourcePolicy: {
+            includeDomains: sp.include_domains,
+            excludeDomains: sp.exclude_domains,
+            afterDate: sp.after_date,
+          },
+          excerpts: {
+            maxCharsPerResult: options.excerpts?.max_chars_per_result ?? 8000,
+          },
+        }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      // 1 ronda de busqueda + turno de cierre. La tool trae todo en una llamada.
+      stopWhen: stepCountIs(3),
+    })
+    usage = res.usage
+    const seen = new Set<string>()
+    for (const tr of res.staticToolResults ?? []) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const out = (tr as any).output
+      if (!out || !Array.isArray(out.results)) continue
+      for (const r of out.results) {
+        const url = r.url ?? ""
+        if (!url || seen.has(url)) continue
+        seen.add(url)
+        results.push({
+          url,
+          title: r.title ?? "",
+          publish_date: r.publishDate ?? null,
+          excerpts: r.excerpt ? [r.excerpt] : [],
+        })
+      }
+    }
+  } catch (err) {
+    console.error("[v0][public-docs] searchPublicDocsViaGateway error:", err)
+  }
+
+  // Atribucion de costo. Se usa 'research-collect' (esta etapa ES descubrimiento
+  // de fuentes) + metadata.stage para poder distinguirla en auditoria; 'public-docs'
+  // no esta en el CHECK de feature y no queremos una migracion sobre esa tabla.
+  void logAiUsage({
+    workspaceId: tracking?.workspaceId ?? null,
+    userId: tracking?.userId ?? null,
+    companyId: tracking?.companyId ?? null,
+    feature: "research-collect",
+    model: RESEARCH_MODEL,
+    inputTokens: usage?.inputTokens ?? 0,
+    outputTokens: usage?.outputTokens ?? 0,
+    metadata: { stage: "public-docs-search", results: results.length },
   })
 
-  return {
-    search_id: search.search_id ?? "",
-    results: (search.results ?? []).map((r: any) => ({
-      url: r.url ?? "",
-      title: r.title ?? "",
-      publish_date: r.publish_date ?? null,
-      excerpts: r.excerpts ?? [],
-    })),
-    warnings: search.warnings ?? null,
-  }
-}
-
-/**
- * Build search queries for company NEWS (press, media, events, financials, M&A).
- * Returns both objective and search_queries optimized for Parallel best practices.
- */
-export function buildNewsSearchParams(context: {
-  company_name: string
-  industry?: string
-  country?: string
-}): ParallelSearchOptions {
-  const oneYearAgo = new Date()
-  oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1)
-  const afterDate = oneYearAgo.toISOString().split("T")[0]
-
-  const industryCtx = context.industry ? ` (industria: ${context.industry})` : ""
-  const countryCtx = context.country ? ` en ${context.country}` : " en Latinoamérica"
-
-  return {
-    objective: `Busco noticias recientes sobre la empresa "${context.company_name}"${industryCtx}${countryCtx}. ` +
-      `Necesito señales de compra B2B: inversiones en tecnología, transformación digital, expansión, cambios de liderazgo C-level, ` +
-      `alianzas estratégicas, fusiones y adquisiciones, resultados financieros, nuevos productos o mercados. ` +
-      `Priorizar fuentes de prensa de negocios y tecnología. Excluir noticias de productos al consumidor, RSE genérica, eventos sociales.`,
-    search_queries: [
-      `"${context.company_name}" noticias inversión tecnología transformación digital`,
-      `"${context.company_name}" expansión crecimiento nuevo mercado alianza`,
-      `"${context.company_name}" CEO CTO CIO nombramientos liderazgo ejecutivo`,
-      `"${context.company_name}" adquisición fusión partnership estratégico`,
-      `"${context.company_name}" resultados financieros revenue earnings innovación`,
-    ],
-    max_results: 15,
-    source_policy: {
-      exclude_domains: [
-        "linkedin.com",
-        "facebook.com",
-        "twitter.com",
-        "x.com",
-        "instagram.com",
-        "tiktok.com",
-        "youtube.com",
-      ],
-      after_date: afterDate,
-    },
-    excerpts: { max_chars_per_result: 6000 },
-  }
-}
-
-/**
- * Build search queries for company IMPLEMENTATIONS (business cases, success stories from vendors).
- * IMPORTANT: Focuses on case studies published BY vendors/consultants about the company.
- * Returns both objective and search_queries optimized for Parallel best practices.
- */
-export function buildImplementationsSearchParams(context: {
-  company_name: string
-  industry?: string
-  country?: string
-  keywords?: string[] // señales de tecnología/procesos del bookmark
-}): ParallelSearchOptions {
-  const threeYearsAgo = new Date()
-  threeYearsAgo.setFullYear(threeYearsAgo.getFullYear() - 3)
-  const afterDate = threeYearsAgo.toISOString().split("T")[0]
-
-  const industryCtx = context.industry ? ` (industria: ${context.industry})` : ""
-  const countryCtx = context.country ? ` en ${context.country}` : " en Latinoamérica"
-  const keywordsCtx = context.keywords?.length
-    ? ` Tecnologías de interés: ${context.keywords.join(", ")}.`
-    : ""
-
-  // Build technology-specific queries if keywords are available
-  const techQueries = (context.keywords ?? [])
-    .slice(0, 2)
-    .map(kw => `"${context.company_name}" "${kw}" customer success case study`)
-
-  return {
-    objective: `Busco EVIDENCIA DE TECNOLOGÍA Y SISTEMAS que utiliza o implementó la empresa "${context.company_name}"${industryCtx}${countryCtx}.${keywordsCtx} ` +
-      `Fuentes válidas (en este orden de preferencia): ` +
-      `(a) Casos de éxito oficiales de vendors (AWS, Microsoft, SAP, Salesforce, Oracle, Google Cloud, Accenture, Deloitte, IBM, Globant, etc.). ` +
-      `(b) Anuncios de partners/consultoras de implementaciones, contratos o licitaciones públicas. ` +
-      `(c) Notas técnicas, blogs corporativos y prensa especializada en tecnología. ` +
-      `(d) PDFs públicos (whitepapers, presentaciones de eventos, conferencias) que mencionen tecnologías que usan. ` +
-      `(e) Avisos de empleo de la empresa que listan stack tecnológico requerido. ` +
-      `Para CADA hallazgo necesito identificar: tecnología/vendor, año aproximado, área del negocio impactada y resultados (si se mencionan). ` +
-      `EXCLUIR noticias generales de la empresa que no involucren tecnología (esas van en la pestaña Noticias).`,
-    search_queries: [
-      `"${context.company_name}" customer success story case study technology implementation`,
-      `"${context.company_name}" caso de éxito cliente implementación tecnología`,
-      `"${context.company_name}" AWS Microsoft Azure Google Cloud SAP Salesforce Oracle`,
-      `"${context.company_name}" partner consultora "implementación" OR "deployment" OR "rollout"`,
-      `"${context.company_name}" jobs careers stack tecnología "requisitos" OR "experiencia en"`,
-      ...techQueries,
-    ].slice(0, 5), // max 5 queries
-    max_results: 12,
-    source_policy: {
-      // No usamos include_domains: con whitelist estricta no devuelve nada para
-      // empresas LATAM mid-market. Confiamos en queries + exclude_domains.
-      exclude_domains: [
-        "facebook.com",
-        "twitter.com",
-        "x.com",
-        "instagram.com",
-        "tiktok.com",
-        "youtube.com",
-        "reddit.com",
-        "pinterest.com",
-        // Excluir prensa general (va a la pestaña Noticias)
-        "reuters.com",
-        "bloomberg.com",
-        "cnbc.com",
-        "forbes.com",
-        "wsj.com",
-        "ft.com",
-        "infobae.com",
-        "clarin.com",
-        "lanacion.com.ar",
-        "perfil.com",
-        "ambito.com",
-        "ambito.com.ar",
-        "eldiarioar.com",
-        "mdzol.com",
-        "diariohoy.net",
-        "lavoz.com.ar",
-        "pagina12.com.ar",
-        "iprofesional.com",
-        "cronista.com",
-        "sec.gov", // SEC va a la pestaña Documentos
-      ],
-      after_date: afterDate,
-    },
-    excerpts: { max_chars_per_result: 8000 },
-  }
+  return { search_id: "", results, warnings: null }
 }
 
 /**

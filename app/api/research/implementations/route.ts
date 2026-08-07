@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextResponse } from "next/server"
 import { runTechRadar } from "@/lib/tech-radar"
+import { startTechRadarRun, finishTechRadarRun, type TechRadarRunHandle } from "@/lib/v3/tech-radar-runs"
 
 const IMPL_CACHE_DAYS = 30 // Refresh at most once per month per company+signal
 const MAX_IMPLEMENTATIONS = 40 // limite del Tech Radar v2 (hasta 17 micro-agentes x N hallazgos)
@@ -170,6 +171,9 @@ async function getBookmarkKeywords(supabase: any, bookmarkId: string): Promise<s
 
 // ── Main handler ─────────────────────────────────────────────────────
 export async function POST(request: Request) {
+  // Handle de la corrida en v3.tech_radar_runs. Se declara afuera del bloque de
+  // ejecucion para poder cerrarla como 'failed' desde el catch global.
+  let radarRun: TechRadarRunHandle | null = null
   try {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
@@ -233,8 +237,20 @@ export async function POST(request: Request) {
       })
     }
 
-    // ── 3. Run Tech Radar (4 bundles Parallel x 1 Gemini consolidador) ─
+    // ── 3. Run Tech Radar (4 bundles collect x 1 Gemini consolidador) ─
     console.log("[v0] Implementations: Running Tech Radar for", companyName)
+
+    // Abrir la fila de corrida (drilldown). No bloquea si falla el insert.
+    radarRun = await startTechRadarRun({
+      companyId,
+      companyName,
+      // El drilldown de bookmarks es v2: no hay workspace. userId sirve para
+      // saber quien la disparo.
+      userId: user.id,
+      caller: "drilldown",
+      bookmarkId,
+      keywords,
+    })
 
     const radar = await runTechRadar({
       companyName,
@@ -245,13 +261,22 @@ export async function POST(request: Request) {
       // de menciones a la empresa (subsidiarias, ticker, slug LinkedIn).
       ticker: company.ticker ?? null,
       linkedinSlug: company.linkedin_slug ?? null,
+      // Atribucion del gasto de IA (feature 'radar-tech' + company). Sin
+      // workspace en el drilldown.
+      tracking: { companyId, userId: user.id },
     })
 
     console.log(
       "[v0][impl] tech-radar findings:", radar.findings.length,
       "| ai_provider:", radar.ai_provider,
-      "| bundles:", radar.bundle_stats.map((b) => `${b.bundle}=${b.parallel_results}`).join(" "),
+      "| cost:", radar.usage.costUsd,
+      "| bundles:", radar.bundle_stats.map((b) => `${b.bundle}=${b.sources}`).join(" "),
     )
+
+    // Cerrar la corrida con las metricas (findings.length aca es el total mapeado
+    // post-filtros; representa lo que efectivamente produjo el radar).
+    await finishTechRadarRun(radarRun, { status: "completed", result: radar })
+    radarRun = null // ya cerrada; el catch global no debe re-cerrarla como failed
 
     const findings = radar.findings
     const radarDigest = radar.digest
@@ -343,13 +368,22 @@ export async function POST(request: Request) {
     return NextResponse.json({
       implementations: finalImpls,
       cached: false,
-      provider: "parallel",
+      provider: "tech-radar",
       canRefresh: freshCacheResult.canRefresh,
       lastSearchDate: freshCacheResult.lastSearchDate,
       daysUntilRefresh: freshCacheResult.daysUntilRefresh,
     })
   } catch (error) {
     console.error("[v0] Implementations: Error in POST handler:", error)
+    // Si la corrida quedo abierta (fallo despues de startTechRadarRun), cerrarla
+    // como 'failed' para no dejar filas 'running' colgadas —- el mismo sintoma
+    // que ya vimos en cron_executions.
+    if (radarRun) {
+      await finishTechRadarRun(radarRun, {
+        status: "failed",
+        errorMessage: error instanceof Error ? error.message : String(error),
+      })
+    }
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
   }
 }

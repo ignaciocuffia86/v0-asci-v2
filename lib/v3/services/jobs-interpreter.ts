@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import { generateObject } from "ai"
-import { z } from "zod"
+import { z } from 'zod/v3';
 import { createAdminClient } from "@/lib/supabase/admin"
 import { loadDictionary, matchTextAgainstDictionary, resolveProductByName, suggestDictionaryTerm } from "./dictionary"
 import { MODELS } from "./types"

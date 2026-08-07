@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { runTechRadar as runTechRadarCore, type TechRadarRunResult } from "@/lib/tech-radar"
 import { requireWorkspace, getWorkspaceContext } from "@/lib/v3/workspace"
+import { startTechRadarRun, finishTechRadarRun, type TechRadarRunHandle } from "@/lib/v3/tech-radar-runs"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -137,6 +138,9 @@ export async function runTechRadarForAccount(
     .update({ prospection_status: 'in_progress' })
     .eq('id', campaignAccountId)
   
+  // Handle de la corrida en v3.tech_radar_runs (fuera del try para cerrarla
+  // como 'failed' desde el catch).
+  let radarRun: TechRadarRunHandle | null = null
   try {
     // Get workspace value profile for keywords
     const { data: valueProfile } = await admin
@@ -161,6 +165,17 @@ export async function runTechRadarForAccount(
       if (match) linkedinSlug = match[1]
     }
     
+    // Abrir la fila de corrida (flujo de campañas). Tiene workspace + user.
+    radarRun = await startTechRadarRun({
+      companyId: company.id,
+      companyName: company.name,
+      workspaceId,
+      userId: user.id,
+      caller: "campaign",
+      campaignAccountId,
+      keywords: keywords.length > 0 ? keywords : undefined,
+    })
+
     // Run tech radar using v2 function
     const result = await runTechRadarCore({
       companyName: company.name,
@@ -168,7 +183,13 @@ export async function runTechRadarForAccount(
       industry: company.industry || undefined,
       keywords: keywords.length > 0 ? keywords : undefined,
       linkedinSlug,
+      // Atribucion del gasto de IA (feature 'radar-tech' + company + workspace).
+      tracking: { companyId: company.id, workspaceId, userId: user.id },
     })
+
+    // Cerrar la corrida con las metricas de esta ejecucion.
+    await finishTechRadarRun(radarRun, { status: "completed", result })
+    radarRun = null // ya cerrada; el catch no debe re-cerrarla como failed
     
     // Save findings to company_implementations (v2 cache)
     // This uses the existing v2 structure so the data is shared
@@ -233,7 +254,15 @@ export async function runTechRadarForAccount(
     
   } catch (error) {
     console.error('[v3] Tech radar error:', error)
-    
+
+    // Cerrar la corrida abierta como 'failed' (si quedo abierta).
+    if (radarRun) {
+      await finishTechRadarRun(radarRun, {
+        status: "failed",
+        errorMessage: error instanceof Error ? error.message : String(error),
+      })
+    }
+
     // Update status to failed
     await admin
       .schema('v3')

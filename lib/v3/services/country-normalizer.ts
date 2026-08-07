@@ -252,7 +252,7 @@ export async function normalizeWithAI(ambiguousLocations: string[]): Promise<Cou
     return []
   }
 
-  const client = new GoogleGenerativeAI({ apiKey })
+  const client = new Google({ apiKey })
   const model = client.getGenerativeModel({ model: "gemini-1.5-flash" })
 
   const results: CountryMapping[] = []

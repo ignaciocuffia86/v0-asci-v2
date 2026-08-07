@@ -19,7 +19,7 @@
  *    tener credenciales de un servicio de busqueda para poder leerlo.
  */
 
-import { z } from "zod"
+import { z } from 'zod/v3';
 
 /**
  * Forma esperada de la salida del structurer.

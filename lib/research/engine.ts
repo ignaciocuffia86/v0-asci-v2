@@ -32,8 +32,8 @@
  */
 
 import { anthropic } from "@ai-sdk/anthropic"
-import { generateObject, generateText, NoObjectGeneratedError, stepCountIs } from "ai"
-import type { z } from "zod"
+import { generateObject, generateText, NoObjectGeneratedError, isStepCount } from "ai"
+import { z } from 'zod/v3';
 
 import { RESEARCH_MODEL, STRUCTURER_MODEL } from "@/lib/ai-models"
 import { checkUrlsAlive, filterRelevantToCompany } from "@/lib/ai-structurer"
@@ -49,6 +49,14 @@ export type ResearchTracking = {
   companyId?: string | null
   researchJobId?: string | null
   feature?: UsageFeature
+  /**
+   * Callback opcional que recibe el uso de CADA etapa apenas se conoce, en
+   * paralelo al `logAiUsage` que ya persiste la fila. Existe para que un
+   * orquestador (ej. el Tech Radar) pueda AGREGAR costo/tokens de varias
+   * llamadas `collect`/`structure` en una sola corrida sin tener que releer
+   * `ai_usage_log`. No reemplaza el logueo: es adicional y no debe lanzar.
+   */
+  onUsage?: (usage: { model: string; inputTokens: number; outputTokens: number }) => void
 }
 
 export type CollectResult = {
@@ -104,7 +112,7 @@ export async function collect({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any,
     // Varias rondas de busqueda + la sintesis final.
-    stopWhen: stepCountIs(maxSearches + 2),
+    stopWhen: isStepCount(maxSearches + 2),
   })
 
   // Solo las URLs REALMENTE citadas por el modelo, deduplicadas.
@@ -125,6 +133,17 @@ export async function collect({
     for (const call of step.toolCalls ?? []) {
       if (call.toolName === "web_search") searchCount++
     }
+  }
+
+  // Callback de agregacion (no persiste; corre junto al logAiUsage de abajo).
+  try {
+    tracking?.onUsage?.({
+      model,
+      inputTokens: usage?.inputTokens ?? 0,
+      outputTokens: usage?.outputTokens ?? 0,
+    })
+  } catch {
+    /* el tracking no debe romper la recoleccion */
   }
 
   void logAiUsage({
@@ -150,6 +169,107 @@ export async function collect({
   )
 
   return { text, sources: verified, searchCount }
+}
+
+/**
+ * Etapa 1+2 ENCADENADAS por bundle — collect (busca) seguido de structure
+ * (estructura), pero acotando el structure a las fuentes de ESTE MISMO collect.
+ *
+ * ── Por que existe (el bug que resuelve, y por que NO es un solo turno) ──
+ * El patron collect()->structure() GLOBAL desacopla la evidencia de su fuente:
+ * `collect` da un informe en prosa + una lista de URLs, pero al juntar las
+ * fuentes de VARIOS bundles en una sola lista global el structurer elige mal el
+ * indice y el guardrail anti-contaminacion descarta el hallazgo bueno. Medido en
+ * el Tech Radar: informe excelente -> 0 hallazgos.
+ *
+ * Fusionar en UN turno (web_search + experimental_output) NO sirve con ai@5 +
+ * Anthropic: al pedir salida estructurada el modelo se SALTA el tool-calling y
+ * responde JSON sin buscar (medido: 0 busquedas, 0 fuentes). Es un conflicto
+ * conocido de experimental_output con tools.
+ *
+ * Solucion: dos turnos, pero el structure ve SOLO las fuentes de su propio
+ * bundle (10-30, no 144 mezcladas) numeradas 1..N. El mapeo por indice vuelve a
+ * ser fiable porque el conjunto es chico y homogeneo. Ambos turnos quedan
+ * atribuidos (tracking) y agregados (onUsage).
+ *
+ * `structure` recibe `{ text, sources }`; se espera que el schema use un campo
+ * `source_index` (1-based sobre `sources`). Devolvemos ademas `sources` para que
+ * el caller resuelva ese indice a la URL real.
+ */
+export async function collectStructured<S extends z.ZodType>({
+  schema,
+  systemPrompt,
+  buildStructurePrompt,
+  collectPrompt,
+  companyName,
+  countryISO,
+  maxSearches = 5,
+  model = RESEARCH_MODEL,
+  temperature = 0.3,
+  context = "collect-structured",
+  tracking,
+}: {
+  schema: S
+  /** System prompt del turno de estructuracion. */
+  systemPrompt: string
+  /** Arma el user prompt del structure a partir del informe + fuentes numeradas. */
+  buildStructurePrompt: (args: { report: string; numberedSources: string }) => string
+  /** Prompt de busqueda (turno collect). */
+  collectPrompt: string
+  companyName: string
+  /** ISO-2 para sesgar la busqueda a la region (ej. "AR"). */
+  countryISO?: string | null
+  maxSearches?: number
+  model?: string
+  temperature?: number
+  context?: string
+  tracking?: ResearchTracking
+}): Promise<{ object: z.infer<S> | null; sources: VerifiedSource[]; searchCount: number }> {
+  // Turno 1: buscar. `collect` YA hace web_search, verifica fuentes citadas,
+  // loguea y agrega uso. Reusamos ese primitivo probado en vez de reimplementarlo.
+  const collected = await collect({
+    prompt: collectPrompt,
+    companyName,
+    countryISO,
+    maxSearches,
+    model,
+    temperature,
+    context,
+    tracking,
+  })
+
+  // Sin fuentes citadas no hay nada que estructurar de forma verificable.
+  if (collected.sources.length === 0 || !collected.text.trim()) {
+    console.log(`[v0][research][${context}] collectStructured: sin fuentes citadas, se omite el structure`)
+    return { object: null, sources: collected.sources, searchCount: collected.searchCount }
+  }
+
+  // Fuentes de ESTE bundle numeradas 1..N: el conjunto que vera el structure.
+  const numberedSources = collected.sources
+    .map((s, i) => `${i + 1}. ${s.title || "(sin titulo)"} — ${s.url}`)
+    .join("\n")
+
+  // Turno 2: estructurar acotado a este bundle. Reusa el primitivo `structure`
+  // (generateObject + schema), que loguea y agrega uso con el mismo tracking.
+  let object: z.infer<S> | null = null
+  try {
+    object = await structure({
+      schema,
+      systemPrompt,
+      userPrompt: buildStructurePrompt({ report: collected.text, numberedSources }),
+      temperature,
+      context: `${context}-structure`,
+      tracking,
+    })
+  } catch (err) {
+    console.error(`[v0][research][${context}] collectStructured structure error:`, err)
+  }
+
+  console.log(
+    `[v0][research][${context}] collectStructured: ${collected.searchCount} busquedas, ${collected.sources.length} fuentes citadas, object=${object ? "ok" : "null"}`
+  )
+
+  return { object, sources: collected.sources, searchCount: collected.searchCount }
 }
 
 /**
@@ -194,11 +314,22 @@ export async function structure<S extends z.ZodType>({
     const { object, usage } = await generateObject({
       model,
       schema,
-      system: systemPrompt,
+      instructions: systemPrompt,
       prompt: userPrompt,
       temperature,
       ...(maxOutputTokens ? { maxOutputTokens } : {}),
     })
+
+    // Callback de agregacion (no persiste; corre junto al logAiUsage de abajo).
+    try {
+      tracking?.onUsage?.({
+        model,
+        inputTokens: usage?.inputTokens ?? 0,
+        outputTokens: usage?.outputTokens ?? 0,
+      })
+    } catch {
+      /* el tracking no debe romper la estructuracion */
+    }
 
     // Se loguea apenas vuelve el modelo: estos tokens ya se pagaron, pase lo
     // que pase despues con la validacion.
@@ -220,6 +351,15 @@ export async function structure<S extends z.ZodType>({
     // falla, asi que se aprovecha para (a) no perder el costo de la llamada
     // fallida y (b) dejar en el log QUE devolvio el modelo.
     if (NoObjectGeneratedError.isInstance(err)) {
+      try {
+        tracking?.onUsage?.({
+          model,
+          inputTokens: err.usage?.inputTokens ?? 0,
+          outputTokens: err.usage?.outputTokens ?? 0,
+        })
+      } catch {
+        /* el tracking no debe romper el manejo de error */
+      }
       void logAiUsage({
         workspaceId: tracking?.workspaceId ?? null,
         userId: tracking?.userId ?? null,

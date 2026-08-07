@@ -12,10 +12,10 @@
     "test:contract": "RUN_APOLLO_CONTRACT_TESTS=1 vitest run tests/contract"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^2.0.85",
-    "@ai-sdk/google": "1.0.11",
+    "@ai-sdk/anthropic": "^4.0.34",
+    "@ai-sdk/google": "4.0.37",
     "@ai-sdk/openai": "latest",
-    "@ai-sdk/react": "^2.0.212",
+    "@ai-sdk/react": "^4.0.59",
     "@google/generative-ai": "0.24.1",
     "@hookform/resolvers": "^3.10.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -52,7 +52,7 @@
     "@supabase/supabase-js": "latest",
     "@vercel/analytics": "latest",
     "@vercel/blob": "^2.6.1",
-    "ai": "latest",
+    "ai": "7.0.56",
     "autoprefixer": "^10.4.20",
     "cheerio": "^1.0.0",
     "class-variance-authority": "^0.7.1",

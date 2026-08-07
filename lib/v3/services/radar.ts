@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import { generateText, generateObject } from "ai"
-import { z } from "zod"
+import { z } from 'zod/v3';
 // `collect` centraliza la busqueda web server-side (antes duplicada aca).
 import { collect } from "@/lib/research/engine"
 import { createAdminClient } from "@/lib/supabase/admin"
@@ -257,7 +257,7 @@ REGLAS:
 /** Extrae el hostname de una URL para usar como nombre de fuente por defecto. */
 function hostnameOf(url: string): string | null {
   try {
-    return new URL(url).hostname.replace(/^www\./, "")
+    return new URL(url).hostname.replace(/^www\./, "");
   } catch {
     return null
   }

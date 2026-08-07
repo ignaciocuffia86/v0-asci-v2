@@ -14,7 +14,7 @@ const schemaOk = (o) =>
   Array.isArray(o.same) &&
   Array.isArray(o.different) &&
   typeof o.confidence === "number" &&
-  typeof o.reasoning === "string"
+  typeof o.reasoningText === "string"
 
 function safeJson(s) {
   try {
@@ -81,7 +81,7 @@ const check = (nombre, real, esperado) => {
   }
 }
 
-const v = (g) => ({ g, same: [g], different: [], confidence: 0.9, reasoning: "misma empresa" })
+const v = (g) => ({ g, same: [g], different: [], confidence: 0.9, reasoningText: "misma empresa" })
 const s = (o) => JSON.stringify(o)
 
 // 1. Respuesta completa: se rescatan todos.
@@ -144,7 +144,7 @@ check(
 
 // 9. Se preservan los valores, no solo el conteo.
 const uno = salvageVerdicts(`{"results":[{"g":7,"same":[7,8],"different":[9],"confidence":0.42,"reasoning":"dudoso"}]}`)
-check("preserva valores", uno[0], { g: 7, same: [7, 8], different: [9], confidence: 0.42, reasoning: "dudoso" })
+check("preserva valores", uno[0], { g: 7, same: [7, 8], different: [9], confidence: 0.42, reasoningText: "dudoso" })
 
 console.log(fallos === 0 ? "\nTODO OK" : `\n${fallos} FALLOS`)
 process.exit(fallos === 0 ? 0 : 1)
