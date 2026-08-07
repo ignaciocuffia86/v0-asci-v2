@@ -18,6 +18,8 @@ export interface ApiKeyOwnerOption {
   role: "admin" | "member"
 }
 
+export type ApiKeyType = "standard" | "explore"
+
 export interface ApiKeyListItem {
   id: string
   name: string
@@ -28,6 +30,29 @@ export interface ApiKeyListItem {
   owner_user_id: string
   owner_email: string | null
   owner_name: string | null
+  key_type: ApiKeyType
+}
+
+/**
+ * Scopes por tipo de key.
+ * - standard: el MCP actual (señales v2, research, icebreakers, contactos).
+ * - explore: el MCP paralelo sobre la tabla cruda. Incluye explore:read y los
+ *   scopes de las capas pagas del embudo (scrape de vacantes y Apollo).
+ */
+const SCOPES_BY_TYPE: Record<ApiKeyType, { scopes: string[]; allowedModes: string[] }> = {
+  standard: {
+    scopes: ["companies:read", "signals:read", "accounts:read", "research:run", "research:prepare", "research:submit", "icebreakers:generate", "icebreakers:prepare", "icebreakers:submit", "usage:read"],
+    allowedModes: ["read", "server_managed", "client_assisted"],
+  },
+  explore: {
+    scopes: ["explore:read", "research:run", "accounts:read", "accounts:write", "contacts:write", "usage:read"],
+    allowedModes: ["read", "server_managed"],
+  },
+}
+
+/** Deriva el tipo de una key a partir de sus scopes guardados. */
+function keyTypeFromScopes(scopes: string[] | null): ApiKeyType {
+  return (scopes ?? []).includes("explore:read") ? "explore" : "standard"
 }
 
 async function getAuthenticatedUserId(): Promise<string | null> {
