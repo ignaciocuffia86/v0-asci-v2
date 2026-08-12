@@ -47,7 +47,7 @@ export function VendorsTable() {
 
     if (vendorsData) {
       const vendorsWithProducts = await Promise.all(
-        vendorsData.map(async (vendor) => {
+        vendorsData.map(async (vendor: any) => {
           const { data: products } = await supabase
             .from("dictionary_products")
             .select("*")

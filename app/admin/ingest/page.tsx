@@ -122,7 +122,7 @@ export default function IngestPage() {
         }),
       })
 
-      let result
+      let result: any
       try {
         result = await processResponse.json()
       } catch {

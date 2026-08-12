@@ -16,6 +16,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { Cpu, Workflow, SlidersHorizontal, Loader2, AlertTriangle, Check } from "lucide-react"
 import { updateBookmarkScope, getAvailableSignalsForCompany } from "@/app/actions/bookmarks"
 import { cn } from "@/lib/utils"
+import { toast } from "sonner"
 
 // -------------------------------------------------------
 // Types

@@ -437,8 +437,8 @@ export function ProspectsTab({
     setTechnologies(tabData.context.technologies)
     setProcesses(tabData.context.processes)
     setCompany(tabData.context.company)
-    setProspects(tabData.active as Prospect[])
-    setRemovedProspects(tabData.removed as Prospect[])
+    setProspects(tabData.active as unknown as Prospect[])
+    setRemovedProspects(tabData.removed as unknown as Prospect[])
   }, [tabData])
 
   // Feedback de error (una vez, no en cada render)

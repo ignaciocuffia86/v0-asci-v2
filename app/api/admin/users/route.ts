@@ -47,7 +47,7 @@ export async function GET(request: NextRequest) {
       email_confirmed_at: authUser.email_confirmed_at,
       created_at: authUser.created_at,
       last_sign_in_at: authUser.last_sign_in_at,
-      banned_until: authUser.banned_until,
+      banned_until: (authUser as { banned_until?: string | null }).banned_until,
       // Profile data
       full_name: profile?.full_name,
       company: profile?.company,

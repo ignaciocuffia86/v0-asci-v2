@@ -91,7 +91,6 @@ const COUNTRY_ISO_DICT: Record<string, string> = {
   us: "US",
   america: "US",
   canada: "CA",
-  mexico: "MX",
   china: "CN",
   japan: "JP",
   south_korea: "KR",
@@ -252,7 +251,7 @@ export async function normalizeWithAI(ambiguousLocations: string[]): Promise<Cou
     return []
   }
 
-  const client = new Google({ apiKey })
+  const client = new GoogleGenerativeAI(apiKey)
   const model = client.getGenerativeModel({ model: "gemini-1.5-flash" })
 
   const results: CountryMapping[] = []

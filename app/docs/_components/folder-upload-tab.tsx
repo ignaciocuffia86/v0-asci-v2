@@ -130,7 +130,7 @@ export function FolderUploadTab({ onDocumentCreated, onOpenChange }: FolderUploa
 
     if (!existing) return entries
 
-    const existingSet = new Set(existing.map((d) => `${d.title}::${d.type}`))
+    const existingSet = new Set(existing.map((d: { title: string; type: string }) => `${d.title}::${d.type}`))
 
     return entries.map((entry) => {
       const title = entry.name.replace(`.${entry.ext}`, "")

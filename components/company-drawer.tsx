@@ -53,6 +53,7 @@ type Signal = {
   job_posting_id: string | null
   signal_id: string
   source_url: string | null
+  process?: string | null
   contact: {
     id?: string
     name: string
@@ -829,9 +830,9 @@ const SignalCard = ({ signal, company }: { signal: Signal; company: CompanyDetai
                     const e2t = signal.contact?.email2_type
                     const e2s = signal.contact?.email2_status
 
-                    let primaryEmail = null
-                    let primaryEmailStatus = null
-                    let primaryEmailType = null
+                    let primaryEmail: string | null = null
+                    let primaryEmailStatus: string | null | undefined = null
+                    let primaryEmailType: string | null | undefined = null
 
                     // 1. Main Job Priority
                     if (e1 && e1t === "main job") {
@@ -872,7 +873,7 @@ const SignalCard = ({ signal, company }: { signal: Signal; company: CompanyDetai
                     }
 
                     if (primaryEmail) {
-                      const emailLabel = getEmailLabel(primaryEmailType)
+                      const emailLabel = getEmailLabel(primaryEmailType ?? null)
 
                       return (
                         <Badge
@@ -905,7 +906,7 @@ const SignalCard = ({ signal, company }: { signal: Signal; company: CompanyDetai
                       variant="outline"
                       className="font-normal bg-slate-50 text-slate-600 border-slate-100 hover:bg-slate-100 cursor-pointer gap-1.5 py-0.5 px-2 h-6 transition-colors"
                       onClick={() => {
-                        navigator.clipboard.writeText(signal.contact.phone1 || "")
+                        navigator.clipboard.writeText(signal.contact?.phone1 || "")
                         toast({ title: "Copiado", description: "Teléfono copiado al portapapeles" })
                       }}
                     >

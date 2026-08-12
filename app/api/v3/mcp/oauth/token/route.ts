@@ -1,8 +1,9 @@
 import crypto from "crypto"
+import { NextResponse } from "next/server"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { hashOAuthValue, randomOAuthValue } from "@/lib/v3/mcp-oauth"
 
-const tokenResponse = (body: Record<string, unknown>, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store", Pragma: "no-cache" } })
+const tokenResponse = (body: Record<string, unknown>, status = 200) => NextResponse.json(body, { status, headers: { "Cache-Control": "no-store", Pragma: "no-cache" } })
 const verifyPkce = (verifier: string, challenge: string) => crypto.createHash("sha256").update(verifier).digest("base64url") === challenge
 
 export async function POST(request: Request) {
