@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { assertCron } from "@/lib/cron-auth"
 import { createAdminClient } from "@/lib/supabase/admin"
-import { apolloRequest, type ApolloResult } from "@/lib/apollo/client"
+import { apolloRequest } from "@/lib/apollo/client"
 import { normalizePerson } from "@/lib/apollo/parsers"
 
 export const dynamic = "force-dynamic"
@@ -55,16 +55,12 @@ export async function GET(request: Request) {
         continue
       }
 
-      // FIXME(typecheck): apolloRequest now takes a single `opts` object
-      // ({ endpoint, requestBody, ... }), but this call still passes the old
-      // (url, body, options) 3-argument shape. Cast preserves the current
-      // runtime call unchanged; the call site needs to be migrated to the new
-      // signature (endpoint "people/match", requestBody { id }, contextLabel).
-      const matchResult = await (apolloRequest as any)(
-        "https://api.apollo.io/api/v1/people/match",
-        { id: c.apollo_person_id },
-        { contextLabel: "reverify_match" },
-      ) as ApolloResult<{ person: unknown }>
+      const matchResult = await apolloRequest<{ person: unknown }>({
+        endpoint: "people/match",
+        userId: null,
+        companyId: c.company_id ?? null,
+        requestBody: { id: c.apollo_person_id },
+      })
 
       if (!matchResult.ok) {
         errors++
