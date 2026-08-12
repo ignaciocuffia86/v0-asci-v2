@@ -144,6 +144,31 @@ function partirSentencias(texto) {
   return out
 }
 
+/**
+ * Detecta control de transaccion propio del SQL (BEGIN/COMMIT/ROLLBACK/...).
+ *
+ * Por que importa (OPT-15): el runner administra la transaccion (BEGIN + el
+ * COMMIT/ROLLBACK final segun --commit). Si el .sql trae su propio COMMIT en el
+ * medio, lo que se commitea ya NO lo revierte el ROLLBACK final: se rompe la
+ * red de seguridad del dry-run y podes escribir en prod sin querer, que es
+ * exactamente el incidente que este script existe para prevenir.
+ *
+ * Usa partirSentencias() para no confundir un COMMIT real con la palabra dentro
+ * de un string, un comentario o el cuerpo dollar-quoted de una funcion (ahi el
+ * END; del PL/pgSQL vive dentro del $$...$$ y no cuenta como sentencia suelta).
+ */
+function detectarControlDeTransaccion(texto) {
+  const CONTROL = /^(begin\b|start\s+transaction\b|commit\b|rollback\b|end\b|savepoint\b|release\s+savepoint\b)/i
+  const hits = new Set()
+  for (const s of partirSentencias(texto)) {
+    // Saca comentarios/espacios iniciales para no perder un COMMIT precedido de comentario.
+    const limpia = s.replace(/^(?:\s|--[^\n]*\n|\/\*[\s\S]*?\*\/)+/, "").trim()
+    const m = CONTROL.exec(limpia)
+    if (m) hits.add(m[1].replace(/\s+/g, " ").toUpperCase())
+  }
+  return [...hits]
+}
+
 let sql
 let origen
 
@@ -162,6 +187,24 @@ if (idxStmt !== -1) {
   }
   sql = await readFile(ruta, "utf8")
   origen = ruta
+}
+
+// OPT-15: cuando el runner administra la transaccion (todo salvo
+// --sin-transaccion), rechazamos un COMMIT/ROLLBACK/BEGIN embebido en el SQL.
+// Defeat-ea la red de seguridad del dry-run (un COMMIT en el medio persiste
+// aunque el runner haga ROLLBACK al final). Si de verdad necesitas manejar la
+// transaccion a mano, esa es la funcion de --sin-transaccion --commit.
+if (!sinTransaccion) {
+  const control = detectarControlDeTransaccion(sql)
+  if (control.length > 0) {
+    console.error(`[v0] El SQL trae control de transaccion propio: ${control.join(", ")}.`)
+    console.error("[v0] Este runner ya administra la transaccion (BEGIN + COMMIT/ROLLBACK).")
+    console.error("[v0] Un COMMIT/ROLLBACK embebido rompe el dry-run: lo que se commitea")
+    console.error("[v0] en el medio NO lo revierte el ROLLBACK final.")
+    console.error("[v0] Saca esas sentencias, o usa --sin-transaccion --commit si de verdad")
+    console.error("[v0] necesitas manejar la transaccion vos mismo.")
+    process.exit(1)
+  }
 }
 
 // La conexion directa de Supabase presenta un certificado auto-firmado en la
