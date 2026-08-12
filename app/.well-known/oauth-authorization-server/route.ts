@@ -1,8 +1,9 @@
+import { NextResponse } from "next/server"
 import { getOAuthIssuer, MCP_OAUTH_SCOPES } from "@/lib/v3/mcp-oauth"
 
 export async function GET(request: Request) {
   const issuer = getOAuthIssuer(request)
-  return Response.json({
+  return NextResponse.json({
     issuer,
     authorization_endpoint: `${issuer}/api/v3/mcp/oauth/authorize`,
     token_endpoint: `${issuer}/api/v3/mcp/oauth/token`,

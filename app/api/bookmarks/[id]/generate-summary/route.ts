@@ -2,8 +2,8 @@ import { createClient } from "@/lib/supabase/server"
 import { type NextRequest, NextResponse } from "next/server"
 import { generateGeminiContent } from "@/lib/ai-service"
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  const { id: bookmarkId } = params
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id: bookmarkId } = await params
 
   try {
     const supabase = await createClient()
