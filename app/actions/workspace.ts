@@ -1532,10 +1532,18 @@ export async function getBookmarkSmartContext(bookmarkId: string, countryFilter?
         email2,
         email2_status,
         email2_type,
+        email3,
+        email3_status,
+        email3_type,
+        email4,
+        email4_status,
+        email4_type,
         phone1,
         phone1_type,
+        phone1_status,
         phone2,
-        phone2_type
+        phone2_type,
+        phone2_status
       )
     `)
     .eq("company_id", bookmark.company_id)
@@ -1603,6 +1611,9 @@ export async function getBookmarkSmartContext(bookmarkId: string, countryFilter?
   }
 
   // Agrupar por contacto
+  type ContactEmail = { value: string; status: string | null; type: string | null }
+  type ContactPhone = { value: string; type: string | null; status: string | null }
+
   const contactMap = new Map<
     string,
     {
@@ -1613,24 +1624,48 @@ export async function getBookmarkSmartContext(bookmarkId: string, countryFilter?
       isCurrent: boolean
       keywords: string[]
       linkedinUrl: string | null
-      email: string | null
-      emailStatus: string | null
-      emailType: string | null
-      phone: string | null
-      phoneType: string | null
+      // Todos los emails/telefonos disponibles del contacto (hasta 4 emails / 2
+      // telefonos en la fuente). Antes se colapsaba a `email1 || email2`, lo que
+      // ocultaba el email corporativo cuando estaba en email2/3/4.
+      emails: ContactEmail[]
+      phones: ContactPhone[]
     }
   >()
+
+  // Recolecta los slots no vacios en orden (email1..email4 / phone1..phone2),
+  // deduplicando por valor normalizado.
+  const collectContactChannels = (contact: any) => {
+    const emails: ContactEmail[] = []
+    const seenEmails = new Set<string>()
+    for (const i of [1, 2, 3, 4]) {
+      const value = contact[`email${i}`]
+      if (!value) continue
+      const key = String(value).trim().toLowerCase()
+      if (!key || seenEmails.has(key)) continue
+      seenEmails.add(key)
+      emails.push({ value, status: contact[`email${i}_status`] || null, type: contact[`email${i}_type`] || null })
+    }
+
+    const phones: ContactPhone[] = []
+    const seenPhones = new Set<string>()
+    for (const i of [1, 2]) {
+      const value = contact[`phone${i}`]
+      if (!value) continue
+      const key = String(value).replace(/\D/g, "")
+      if (!key || seenPhones.has(key)) continue
+      seenPhones.add(key)
+      phones.push({ value, type: contact[`phone${i}_type`] || null, status: contact[`phone${i}_status`] || null })
+    }
+
+    return { emails, phones }
+  }
 
   for (const signal of signals) {
     const contact = signal.contacts as any
     if (!contact?.id) continue
 
     if (!contactMap.has(contact.id)) {
-      const bestEmail = contact.email1 || contact.email2 || null
-      const bestEmailStatus = contact.email1 ? contact.email1_status : contact.email2_status
-      const bestEmailType = contact.email1 ? contact.email1_type : contact.email2_type
-      const bestPhone = contact.phone1 || contact.phone2 || null
-      const bestPhoneType = contact.phone1 ? contact.phone1_type : contact.phone2_type
+      const { emails, phones } = collectContactChannels(contact)
 
       contactMap.set(contact.id, {
         contactId: contact.id,
@@ -1640,11 +1675,8 @@ export async function getBookmarkSmartContext(bookmarkId: string, countryFilter?
         isCurrent: signal.is_current_employee,
         keywords: [],
         linkedinUrl: contact.linkedin_url || null,
-        email: bestEmail,
-        emailStatus: bestEmailStatus || null,
-        emailType: bestEmailType || null,
-        phone: bestPhone,
-        phoneType: bestPhoneType || null,
+        emails,
+        phones,
       })
     }
 

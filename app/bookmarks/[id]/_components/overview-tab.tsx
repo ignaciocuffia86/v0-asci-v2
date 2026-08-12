@@ -24,6 +24,9 @@ import { Input } from "@/components/ui/input"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { toast } from "sonner"
 
+type ContactEmail = { value: string; status: string | null; type: string | null }
+type ContactPhone = { value: string; type: string | null; status: string | null }
+
 type GroupedContact = {
   contactId: string
   contactName: string
@@ -32,11 +35,8 @@ type GroupedContact = {
   isCurrent: boolean
   keywords: string[]
   linkedinUrl: string | null
-  email: string | null
-  emailStatus: string | null
-  emailType: string | null
-  phone: string | null
-  phoneType: string | null
+  emails: ContactEmail[]
+  phones: ContactPhone[]
 }
 
 type SmartContext = {
@@ -184,56 +184,57 @@ export function BookmarkOverview({ bookmarkId, company, countryFilter, scopeVers
               </Tooltip>
             )}
 
-            {/* Email */}
-            {!isAlumni && contact.email && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 px-2 gap-1 bg-transparent"
-                    onClick={() => copyToClipboard(contact.email!, "Email")}
-                  >
-                    <Mail className="h-3.5 w-3.5" />
-                    {getEmailStatusIcon(contact.emailStatus)}
-                    <span className="text-xs max-w-[100px] truncate">{contact.email}</span>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <div className="text-xs">
-                    <div>{contact.email}</div>
-                    <div className="text-muted-foreground">
-                      {getEmailStatusLabel(contact.emailStatus, contact.emailType)}
+            {/* Emails: se muestran TODOS los disponibles (corporativo + personales),
+                antes se colapsaba a uno solo y el corporativo quedaba oculto. */}
+            {!isAlumni &&
+              contact.emails.map((em, i) => (
+                <Tooltip key={`email-${i}-${em.value}`}>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2 gap-1 bg-transparent"
+                      onClick={() => copyToClipboard(em.value, "Email")}
+                    >
+                      <Mail className="h-3.5 w-3.5" />
+                      {getEmailStatusIcon(em.status)}
+                      <span className="text-xs max-w-[100px] truncate">{em.value}</span>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <div className="text-xs">
+                      <div>{em.value}</div>
+                      <div className="text-muted-foreground">{getEmailStatusLabel(em.status, em.type)}</div>
+                      <div className="text-muted-foreground mt-1">Click para copiar</div>
                     </div>
-                    <div className="text-muted-foreground mt-1">Click para copiar</div>
-                  </div>
-                </TooltipContent>
-              </Tooltip>
-            )}
+                  </TooltipContent>
+                </Tooltip>
+              ))}
 
-            {/* Teléfono */}
-            {!isAlumni && contact.phone && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 px-2 gap-1 bg-transparent"
-                    onClick={() => copyToClipboard(contact.phone!, "Teléfono")}
-                  >
-                    <Phone className="h-3.5 w-3.5" />
-                    <span className="text-xs">{contact.phone}</span>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <div className="text-xs">
-                    <div>{contact.phone}</div>
-                    {contact.phoneType && <div className="text-muted-foreground">{contact.phoneType}</div>}
-                    <div className="text-muted-foreground mt-1">Click para copiar</div>
-                  </div>
-                </TooltipContent>
-              </Tooltip>
-            )}
+            {/* Teléfonos: se muestran TODOS los disponibles. */}
+            {!isAlumni &&
+              contact.phones.map((ph, i) => (
+                <Tooltip key={`phone-${i}-${ph.value}`}>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2 gap-1 bg-transparent"
+                      onClick={() => copyToClipboard(ph.value, "Teléfono")}
+                    >
+                      <Phone className="h-3.5 w-3.5" />
+                      <span className="text-xs">{ph.value}</span>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <div className="text-xs">
+                      <div>{ph.value}</div>
+                      {ph.type && <div className="text-muted-foreground">{ph.type}</div>}
+                      <div className="text-muted-foreground mt-1">Click para copiar</div>
+                    </div>
+                  </TooltipContent>
+                </Tooltip>
+              ))}
           </TooltipProvider>
         </div>
 
