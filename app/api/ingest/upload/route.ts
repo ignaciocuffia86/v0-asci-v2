@@ -174,7 +174,7 @@ export async function POST(request: Request) {
     const headers = parseResult.meta.fields || []
 
     // 6. Validate headers
-    const requiredHeaders = BATCH_TYPES[batchType].requiredHeaders
+    const requiredHeaders: readonly string[] = BATCH_TYPES[batchType].requiredHeaders
     const missingHeaders = requiredHeaders.filter((h) => !headers.includes(h))
 
     if (missingHeaders.length > 0) {

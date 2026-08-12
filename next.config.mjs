@@ -31,10 +31,6 @@ const securityHeaders = [
 ]
 
 const nextConfig = {
-  typescript: {
-    // TODO(OPT/P1.2): stop ignoring build errors once the CI gate lands.
-    ignoreBuildErrors: true,
-  },
   images: {
     unoptimized: true,
   },
