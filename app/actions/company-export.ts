@@ -1,6 +1,7 @@
 "use server"
 
 import { createClient } from "@/lib/supabase/server"
+import { requireSuperadmin } from "@/lib/auth/require-superadmin"
 
 export type ExportSortBy = "signals" | "signals_asc" | "contacts" | "job_postings" | "no_linkedin"
 
@@ -24,6 +25,9 @@ export interface CompanyExportRow {
 }
 
 export async function getAvailableCountries() {
+  const auth = await requireSuperadmin()
+  if ("error" in auth) return []
+
   const supabase = await createClient()
 
   // Use RPC to avoid 1000 row limit from direct queries
@@ -44,6 +48,9 @@ export async function getCompaniesForExport(filters: CompanyExportFilters): Prom
   data: CompanyExportRow[]
   total: number
 }> {
+  const auth = await requireSuperadmin()
+  if ("error" in auth) return { data: [], total: 0 }
+
   const supabase = await createClient()
 
   // Build the query using RPC for complex aggregations
@@ -68,6 +75,9 @@ export async function getCompaniesForExport(filters: CompanyExportFilters): Prom
 }
 
 export async function getExportStats() {
+  const auth = await requireSuperadmin()
+  if ("error" in auth) return null
+
   const supabase = await createClient()
 
   const { data, error } = await supabase.rpc("get_export_stats")

@@ -1,6 +1,7 @@
 "use server"
 
 import { createClient } from "@/lib/supabase/server"
+import { requireSuperadmin } from "@/lib/auth/require-superadmin"
 
 /**
  * Filtros de exportación de jobpostings.
@@ -103,6 +104,9 @@ export async function getJobDictionaryTechnologies(): Promise<DictionaryEntry[]>
 
 /** Países disponibles (vía empresa del jobposting), con su conteo de jobs. */
 export async function getJobCountries(): Promise<{ country: string; job_count: number }[]> {
+  const auth = await requireSuperadmin()
+  if ("error" in auth) return []
+
   const supabase = await createClient()
   const { data, error } = await supabase.rpc("export_job_postings_countries")
 
@@ -115,6 +119,9 @@ export async function getJobCountries(): Promise<{ country: string; job_count: n
 
 /** Industrias disponibles (vía empresa del jobposting), con su conteo de jobs. */
 export async function getJobIndustries(): Promise<{ industry: string; job_count: number }[]> {
+  const auth = await requireSuperadmin()
+  if ("error" in auth) return []
+
   const supabase = await createClient()
   const { data, error } = await supabase.rpc("export_job_postings_industries")
 
@@ -127,6 +134,9 @@ export async function getJobIndustries(): Promise<{ industry: string; job_count:
 
 /** Totales globales para mostrar el panorama y acotar el rango de fechas. */
 export async function getJobExportStats(): Promise<JobExportStats | null> {
+  const auth = await requireSuperadmin()
+  if ("error" in auth) return null
+
   const supabase = await createClient()
   const { data, error } = await supabase.rpc("export_job_postings_stats")
 
@@ -145,6 +155,9 @@ export async function getJobExportStats(): Promise<JobExportStats | null> {
 export async function previewJobExport(
   filters: JobExportFilters,
 ): Promise<{ data: JobExportRow[]; total: number; error: string | null }> {
+  const auth = await requireSuperadmin()
+  if ("error" in auth) return { data: [], total: 0, error: auth.error }
+
   const supabase = await createClient()
   const params = toRpcParams(filters)
 

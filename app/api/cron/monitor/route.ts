@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { assertCron } from "@/lib/cron-auth"
 import { runHealthCheck, sendAlertEmail } from "@/lib/monitoring"
 import { createClient } from "@/lib/supabase/server"
 import { createClient as createServiceClient } from "@supabase/supabase-js"
@@ -6,11 +7,8 @@ import { createClient as createServiceClient } from "@supabase/supabase-js"
 export const maxDuration = 30
 
 export async function GET(request: Request) {
-  // Verify cron secret
-  const authHeader = request.headers.get("authorization")
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-  }
+  const denied = assertCron(request)
+  if (denied) return denied
 
   // Use service role for cron_executions
   const serviceSupabase = createServiceClient(

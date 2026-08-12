@@ -1,8 +1,12 @@
 "use server"
 
 import { createClient } from "@supabase/supabase-js"
+import { requireSuperadmin } from "@/lib/auth/require-superadmin"
 
 export async function processDictionaryJobs() {
+  const auth = await requireSuperadmin()
+  if ("error" in auth) return { success: false, error: auth.error }
+
   const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 
   const startTime = Date.now()
@@ -77,6 +81,9 @@ export async function processDictionaryJobs() {
 }
 
 export async function getPendingDictionaryJobs() {
+  const auth = await requireSuperadmin()
+  if ("error" in auth) return { jobs: [], count: 0 }
+
   const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 
   // Use exact count to get the real total, not capped by limit

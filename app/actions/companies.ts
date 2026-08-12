@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
+import { assertSuperadmin, requireSuperadmin } from "@/lib/auth/require-superadmin"
 
 export interface CompanyDuplicateGroup {
   normalized_name: string
@@ -30,6 +31,7 @@ export async function getPotentialDuplicates(limit = 100): Promise<CompanyDuplic
 }
 
 export async function mergeCompanies(masterId: string, duplicateId: string) {
+  await assertSuperadmin()
   const supabase = await createClient()
 
   const { error } = await supabase.rpc("merge_companies", {
@@ -43,6 +45,9 @@ export async function mergeCompanies(masterId: string, duplicateId: string) {
 }
 
 export async function autoMergeSafeDuplicates() {
+  const auth = await requireSuperadmin()
+  if ("error" in auth) return { success: false, merged: 0, error: auth.error }
+
   const supabase = await createClient()
 
   try {
@@ -99,6 +104,7 @@ export async function updateCompany(
     description?: string | null
   }
 ) {
+  await assertSuperadmin()
   const supabase = await createClient()
 
   const { error } = await supabase

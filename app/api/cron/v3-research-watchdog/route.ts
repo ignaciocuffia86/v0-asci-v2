@@ -1,14 +1,13 @@
 import { NextResponse } from "next/server"
+import { assertCron } from "@/lib/cron-auth"
 import { recoverResearchJobs } from "@/lib/v3/services/research-watchdog"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 300
 
 export async function GET(request: Request) {
-  const authorization = request.headers.get("authorization")
-  if (process.env.NODE_ENV === "production" && authorization !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-  }
+  const denied = assertCron(request)
+  if (denied) return denied
 
   try {
     const result = await recoverResearchJobs()

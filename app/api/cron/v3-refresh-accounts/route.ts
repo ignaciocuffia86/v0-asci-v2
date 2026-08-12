@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { createAdminClient } from "@/lib/supabase/admin"
+import { assertCron } from "@/lib/cron-auth"
 import { createResearchBatch, runResearchJob } from "@/lib/v3/services/research-pipeline"
 import { buildDigestData, sendAccountDigest } from "@/lib/v3/services/digest"
 
@@ -61,11 +62,8 @@ const LOCK_NAME = "v3-refresh-accounts"
 const LOCK_TTL_SECS = 600
 
 export async function GET(request: Request) {
-  const authHeader = request.headers.get("authorization")
-  const isAuthorized = authHeader === `Bearer ${process.env.CRON_SECRET}`
-  if (!isAuthorized && process.env.NODE_ENV === "production") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-  }
+  const denied = assertCron(request)
+  if (denied) return denied
 
   const url = new URL(request.url)
   // Forzar re-investigación ignorando el cache es una acción de super-admin, no

@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js"
 import { NextResponse } from "next/server"
+import { assertCron } from "@/lib/cron-auth"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 60
@@ -11,10 +12,8 @@ const TIME_BUDGET_MS = 45_000  // stop calling RPCs after 45s (leave 15s buffer 
 const MAX_CONSECUTIVE_FAILURES = 5 // skip batch after N consecutive failures
 
 export async function GET(request: Request) {
-  const authHeader = request.headers.get("authorization")
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}` && process.env.NODE_ENV === "production") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-  }
+  const denied = assertCron(request)
+  if (denied) return denied
 
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
