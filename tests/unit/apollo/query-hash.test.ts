@@ -66,8 +66,9 @@ describe("hashSearchParams", () => {
     expect(h1).toBe(h2)
   })
 
-  it("genera hash de 32 chars hex", () => {
-    expect(hashSearchParams(base)).toMatch(/^[a-f0-9]{32}$/)
+  it("genera un hash versionado (prefijo v2: + 29 hex, 32 chars en total)", () => {
+    expect(hashSearchParams(base)).toMatch(/^v2:[a-f0-9]{29}$/)
+    expect(hashSearchParams(base)).toHaveLength(32)
   })
 })
 
