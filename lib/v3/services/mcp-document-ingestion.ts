@@ -3,6 +3,7 @@ import { isIP } from "node:net"
 import { get, put } from "@vercel/blob"
 import { OfficeParser } from "officeparser"
 import { createAdminClient } from "@/lib/supabase/admin"
+import { getAppUrl, V3_BASE_URL } from "@/lib/site-url"
 
 const MAX_BYTES = 25 * 1024 * 1024
 const COMPLETE_TEXT_LIMIT = 120_000
@@ -23,7 +24,8 @@ export function randomToken() {
 }
 
 function baseUrl() {
-  return process.env.NEXT_PUBLIC_APP_URL || process.env.NEXT_PUBLIC_SITE_URL || "https://app.asci.ai"
+  // v3 (bot): si falta la env, cae al dominio v3 real (antes: app.asci.ai, inexistente).
+  return getAppUrl(V3_BASE_URL)
 }
 
 function isPrivateHost(hostname: string) {
