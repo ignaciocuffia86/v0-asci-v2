@@ -11,17 +11,19 @@
 
 ## 1. Resumen ejecutivo
 
-La plataforma está conceptualmente bien: dos productos (v2 producción, v3 multitenant) conviven en un repo, un deploy y una base, aislados por *schema* de Postgres. El value-prop de v3 —reusar el cache pago de v2 (488k empresas, señales, Apollo)— depende justamente de esa base compartida.
+La plataforma está conceptualmente bien: dos productos (v2 producción, v3 multitenant) conviven en **un repo, dos proyectos Vercel y una sola base**, aislados por *schema* de Postgres. El value-prop de v3 —reusar el cache pago de v2 (488k empresas, señales, Apollo)— depende justamente de esa base compartida.
+
+> **Topología real (verificada en el PR #91):** el mismo repo despliega en **dos proyectos Vercel independientes** — `v0-asci-v2` (→ `asci.bigua.lat`) y `v0-asci-bot` (→ `bot.bigua.lat`). No es "un solo deploy": los subdominios ya tienen deploys separados. Esto cambia el encuadre de la Sección 4 (la "Opción B" ya está parcialmente implementada) pero **no** la conclusión central: el acoplamiento crítico sigue siendo la base compartida, no el deploy.
 
 El cuello de botella para **administrar y actualizar** la plataforma **no es el código de features**. Son tres cosas estructurales:
 
 1. **El esquema de datos cambia sin migraciones versionadas.** 235 scripts SQL sueltos, sin historial aplicado ni orden garantizado (`OPT-14`). Es el mayor riesgo operativo: no hay forma confiable de saber qué se aplicó, ni de reproducir el estado en otro entorno.
-2. **No existe una frontera v2/v3 verificable.** La regla "v3 no rompe v2" es una convención escrita, no una barrera que el compilador o el lint hagan cumplir (`OPT-12`, `OPT-13`). El acoplamiento real vive en la DB compartida —sobre todo `public.companies`— no en el deploy.
-3. **No hay pipeline de release con gates.** El deploy va v0.app → GitHub → Vercel sin correr Vitest ni `tsc` (de hecho `next.config.mjs` **ignora** errores de TypeScript en build). Cualquier regresión llega a producción sin red de seguridad.
+2. **No existe una frontera v2/v3 verificable.** La regla "v3 no rompe v2" es una convención escrita, no una barrera que el compilador o el lint hagan cumplir (`OPT-12`, `OPT-13`). El acoplamiento real vive en la DB compartida —sobre todo `public.companies`— no en el deploy. Esto pesa **más** dado que los deploys ya están separados: dos runtimes distintos siguen escribiendo la misma base sin frontera declarada.
+3. **No hay pipeline de release con gates.** El deploy va v0.app → GitHub → Vercel sin correr Vitest ni `tsc` (de hecho `next.config.mjs` **ignora** errores de TypeScript en build), y ese mismo push dispara **los dos** proyectos Vercel a la vez. Cualquier regresión llega a producción sin red de seguridad.
 
 Encima de eso hay **cinco P0 de seguridad de administración** ya diagnosticados (guard de admin, crons, RPCs de export, SSRF) que conviene cerrar antes de escalar.
 
-**La topología de subdominios es secundaria.** Separar el deploy de v2 y v3 no resuelve el acoplamiento crítico, porque la DB sigue compartida. La recomendación es **endurecer el monolito ahora** (frontera verificable + migraciones + contrato de datos) y **posponer el split de deploy** hasta que las cadencias de release diverjan de verdad.
+**La topología de subdominios ya está resuelta a nivel de deploy; el problema es la base compartida.** v2 y v3 tienen deploys Vercel independientes, pero comparten la misma Supabase, así que separar más el deploy no resuelve el acoplamiento crítico. La recomendación es **declarar y hacer cumplir la frontera v2/v3 en la base** (contrato de datos + migraciones + lint/tipos), no seguir partiendo la topología.
 
 **Orden de ejecución recomendado:** P0 seguridad → migraciones + CI → frontera v2/v3 → contrato de la DB compartida → (recién ahí) evaluar topología.
 
@@ -51,7 +53,7 @@ Hoy hay 235 `.sql` sueltos en `scripts/` (numerados `001_…` en adelante) sin r
 - Endurecer el runner: que **rechace** archivos con `COMMIT`/`ROLLBACK` cuando no se pasó `--commit`, porque hoy un `COMMIT` dentro del `.sql` anula el dry-run (`OPT-15`).
 
 **P1.2 — Pipeline de release con gates automáticos.**
-No hay CI ni Dockerfile en el repo; el deploy es v0.app → GitHub → Vercel sin validación previa. Además `next.config.mjs` ignora errores de TypeScript en build.
+No hay CI ni Dockerfile en el repo; el deploy es v0.app → GitHub → Vercel sin validación previa, y un mismo push redespliega **los dos** proyectos Vercel (`v0-asci-v2` y `v0-asci-bot`) a la vez. Además `next.config.mjs` ignora errores de TypeScript en build. El gate importa el doble: un solo merge sin validar impacta ambos deploys.
 - Agregar GitHub Actions que en cada PR corra `tsc --noEmit`, unit tests (`vitest run tests/unit`) y lint, **bloqueando el merge** si fallan.
 - Mantener los *contract tests* (que pegan a Apollo/Supabase reales y cuestan plata) en un job **manual** gateado por `RUN_APOLLO_CONTRACT_TESTS` etc. — nunca en el gate obligatorio.
 - Dejar de ignorar errores de TS en build: un error de tipos hoy llega a producción silenciosamente.
@@ -102,32 +104,40 @@ Los otros cinco (`cp_auth`, `cp_signals`, `cp_apollo`, `cp_news`, `cp_jobs`) son
 
 ### Estado actual
 
-| App | Subdominio | Rutas | Schema | Naturaleza |
-|-----|-----------|-------|--------|------------|
-| ASCI **v2** | `asci.bigua.lat` | `/` (`/search`, `/admin`, `/docs`) | `public.*` | Producción, usuarios reales, single-tenant |
-| ASCI **v3** | `bot.bigua.lat` | `/v3/*`, `/api/v3/*` | `v3.*` | Multitenant, MCP + OAuth, iterando |
-| Bigua (corporativo) | `bigua.lat` | — | — | Sitio de la empresa madre |
+| App | Subdominio | Proyecto Vercel | Rutas | Schema | Naturaleza |
+|-----|-----------|-----------------|-------|--------|------------|
+| ASCI **v2** | `asci.bigua.lat` | `v0-asci-v2` | `/` (`/search`, `/admin`, `/docs`) | `public.*` | Producción, usuarios reales, single-tenant |
+| ASCI **v3** | `bot.bigua.lat` | `v0-asci-bot` | `/v3/*`, `/api/v3/*` | `v3.*` | Multitenant, MCP + OAuth, iterando |
+| Bigua (corporativo) | `bigua.lat` | — | — | — | Sitio de la empresa madre |
 
-Un repo, un deploy Vercel, una base Supabase. Los subdominios son **alias cosméticos** configurados en Vercel/DNS: no hay routing por host en el código (`proxy.ts` solo normaliza URLs malformadas de `/v3` y refresca la sesión de Supabase). La distinción v2/v3 es puramente por **prefijo de ruta** + **schema**.
+**Un repo, dos proyectos Vercel, una base Supabase.** El mismo código y branch se despliegan en dos proyectos Vercel independientes (`v0-asci-v2` y `v0-asci-bot`), cada uno atado a su subdominio en Vercel/DNS. No hay routing por host en el código (`proxy.ts` solo normaliza URLs malformadas de `/v3` y refresca la sesión de Supabase): la distinción v2/v3 es por **prefijo de ruta** + **schema**, y cada proyecto Vercel sirve el mismo bundle bajo su dominio. La consecuencia práctica: **el runtime ya está separado por producto, pero el código, los env vars y la base son compartidos.**
 
-### Las tres topologías posibles
+### Dónde estás parado hoy
 
-**Opción A — Monolito endurecido. ✅ Recomendado ahora.**
-Un repo, un deploy, pero con la frontera v2/v3 hecha cumplir por lint + tipos por schema + migraciones versionadas (secciones 2 y 3).
-- **Ventajas:** costo bajo; preserva el value-prop de v3 (reusar el cache pago de v2); elimina la mayor parte del riesgo real sin tocar la topología; un solo pipeline de deploy que administrar.
-- **Desventajas:** v2 y v3 comparten cadencia de release y runtime; un deploy roto afecta a ambos (mitigable con el gate de CI de P1.2).
+La topología actual es un **híbrido**: no es un monolito de un solo deploy (Opción A pura) ni un split limpio (Opción B completa). Es "un repo → dos deploys sobre la misma base". Eso significa que:
 
-**Opción B — Split de deploy (proyectos Vercel separados desde el mismo repo).**
-Justificado **solo cuando las cadencias de release diverjan de verdad** (v2 estable/congelado, v3 iterando rápido).
-- **Ventajas:** releases y rollbacks independientes; el runtime de v3 no puede tumbar v2; `maxDuration`/crons por proyecto.
-- **Desventajas:** **la DB sigue compartida**, así que sin el contrato de datos de la sección 3 el beneficio es parcial. Agrega complejidad: routing por host, `lib/shared` publicable, dos sets de env vars y crons que mantener sincronizados. No hacer esto *antes* de A.
+- Lo **bueno de B ya lo tenés gratis:** cada subdominio tiene su propio deploy/rollback y su runtime aislado; un cuelgue de runtime en v3 no tumba el proceso de v2.
+- Lo **caro de B todavía no lo pagaste** (routing por host, código publicable) porque ambos proyectos buildean el mismo repo — pero tampoco tenés el **aislamiento real**, porque la frontera v2/v3 no está declarada y la base es una sola.
+- El **riesgo residual está intacto:** dos runtimes distintos escriben la misma Supabase sin contrato. Un cambio de v3 sobre `public.*` sigue pudiendo romper v2 (Sección 3), y un push al repo redespliega **los dos** proyectos a la vez sin gates (P1.2).
+
+### Las tres topologías
+
+**Opción A — Consolidar sobre lo actual. ✅ Recomendado ahora.**
+Mantener un repo y los dos proyectos Vercel, y poner el esfuerzo en la **frontera v2/v3 verificable** (lint + tipos por schema + migraciones) y el **contrato de la DB compartida** (Secciones 2 y 3). No toca la topología de deploy — la aprovecha.
+- **Ventajas:** costo bajo; preserva el value-prop de v3 (reusar el cache pago de v2); elimina el grueso del riesgo real (que está en la base, no en el deploy); no agrega infraestructura nueva.
+- **Desventajas:** v2 y v3 comparten código, env vars y cadencia de merge; un push redespliega ambos (mitigable con el gate de CI de P1.2).
+
+**Opción B — Completar el split (repos/env/config separados).**
+Justificado **solo cuando las cadencias de release diverjan de verdad** (v2 congelado, v3 iterando rápido) y se quiera cadena de build y env vars independientes. Nota: el split de *runtime* ya existe; esto es completar el split de *código y configuración*.
+- **Ventajas:** cadenas de build, env vars y dependencias independientes; imposible que un cambio de v3 recompile v2 por accidente.
+- **Desventajas:** **la DB sigue compartida**, así que sin el contrato de datos de la Sección 3 el beneficio es parcial. Agrega complejidad: `lib/shared` publicable (paquete o submódulo), dos sets de env vars/crons que mantener sincronizados, y coordinación de migraciones. No hacer esto *antes* de A.
 
 **Opción C — Split total (base de datos por producto).**
 No recomendado. v3 pierde su razón de ser: el cache de 488k empresas que v2 ya pagó. Solo tendría sentido si v3 se convierte en un producto independiente con datos propios (spin-off).
 
 ### Regla de decisión
 
-> **A ahora. B cuando las cadencias de release de v2 y v3 diverjan de verdad y la sección 3 ya esté hecha. C nunca, salvo spin-off de v3 como producto independiente.**
+> **A ahora** (consolidar el híbrido actual: frontera + contrato de DB, aprovechando los dos deploys que ya existen). **B cuando las cadencias de release de v2 y v3 diverjan de verdad y la Sección 3 ya esté hecha.** **C nunca, salvo spin-off de v3 como producto independiente.**
 
 ### Nombres y dominios
 
@@ -168,7 +178,7 @@ Ordenada para ejecución. Esfuerzo: S (horas), M (días), L (semana+).
 | 10 | Centralizar Supabase (`OPT-06`) + base-URL única | `OPT-06` | Media | M | Consistencia de acceso y dominios |
 | 11 | Registry MCP + separar rate-limit del log | `OPT-07`,`OPT-08` | Media | M | Servidores MCP mantenibles |
 | 12 | Retención `cron_executions` + limpieza dead-code | `OPT-05`,`DEAD-*` | Media | S | Menos ruido operativo |
-| 13 | (Decisión) Evaluar split de deploy A→B | §4 | — | — | Solo si divergen cadencias |
+| 13 | (Decisión) Completar split de código/env A→B (el de runtime ya existe) | §4 | — | — | Solo si divergen cadencias |
 
 **Secuencia sugerida:** 1–5 (seguridad, primer PR) → 6–7 (base de actualización) → 8–9 (frontera + contrato) → 10–12 (mantenibilidad) → 13 (topología, decisión de negocio).
 
