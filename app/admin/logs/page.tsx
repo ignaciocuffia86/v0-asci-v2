@@ -243,7 +243,7 @@ export default async function LogsPage() {
                 {Object.entries(eventsByType).map(([type, count]) => (
                   <div key={type} className="flex items-center justify-between p-2 rounded border bg-muted/50">
                     <span className="text-sm font-medium">{type}</span>
-                    <Badge variant="secondary">{count}</Badge>
+                    <Badge variant="secondary">{String(count)}</Badge>
                   </div>
                 ))}
               </div>

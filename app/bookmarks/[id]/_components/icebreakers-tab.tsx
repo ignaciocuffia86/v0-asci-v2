@@ -234,14 +234,15 @@ export function BookmarkIcebreakers({ bookmarkId, companyName }: { bookmarkId: s
       } else if (ib.message_type === "email") {
         acc[key].email = ib
       } else {
-        acc[key].parsedFromLegacy = parseGeneratedText(ib.generated_text)
+        const parsedFromLegacy = parseGeneratedText(ib.generated_text)
+        acc[key].parsedFromLegacy = parsedFromLegacy
         // Crear objetos fake para mantener compatibilidad
-        acc[key].linkedin = { ...ib, generated_text: acc[key].parsedFromLegacy.linkedin, message_type: "linkedin" }
-        if (acc[key].parsedFromLegacy.email) {
+        acc[key].linkedin = { ...ib, generated_text: parsedFromLegacy.linkedin, message_type: "linkedin" }
+        if (parsedFromLegacy.email) {
           acc[key].email = {
             ...ib,
             id: ib.id + "-email",
-            generated_text: acc[key].parsedFromLegacy.email,
+            generated_text: parsedFromLegacy.email,
             message_type: "email",
           }
         }

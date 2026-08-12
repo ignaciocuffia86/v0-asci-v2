@@ -77,7 +77,7 @@ export async function syncAllUsers() {
     let successCount = 0
     let failCount = 0
 
-    for (const user of users) {
+    for (const user of users.users) {
       const result = await syncUserToResend(user.id)
       if (result.success) {
         successCount++

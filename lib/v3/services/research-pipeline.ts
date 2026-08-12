@@ -147,7 +147,7 @@ async function updateJob(
     preliminary_ready_at: string
     external_started_at: string
     original_company_id: string | null
-    resolution_matched_by: "domain" | "alias" | "exact_name" | "ranked"
+    resolution_matched_by: "company_id" | "domain" | "alias" | "exact_name" | "ranked"
     resolution_confidence: number
     resolution_reason: string
   }>

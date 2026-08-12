@@ -108,7 +108,7 @@ export default function CompaniesAdminPage() {
     setIsLoadingDuplicates(true)
     try {
       const data = await findDuplicates(companyId)
-      setDuplicates(data || [])
+      setDuplicates((data as Company[]) || [])
     } catch (error: any) {
       console.error("Error loading duplicates:", error)
     }

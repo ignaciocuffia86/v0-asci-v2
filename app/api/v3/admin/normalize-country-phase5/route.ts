@@ -1,4 +1,5 @@
 import "server-only"
+import { NextResponse } from "next/server"
 import type { NextRequest } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { normalizeCountries } from "@/lib/v3/services/country-normalizer"
@@ -104,7 +105,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     const auth = req.headers.get("authorization")
     const expectedSecret = process.env.CRON_SECRET || process.env.API_SECRET
     if (!expectedSecret || !auth?.startsWith(`Bearer ${expectedSecret}`)) {
-      return Response.json({ error: "Unauthorized" }, { status: 401 })
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
     console.log("[normalize-phase5] Iniciando Fase 5 (IA)...")
@@ -114,7 +115,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     console.log(`[normalize-phase5] Encontrados ${unmapped.length} valores únicos sin mapear`)
 
     if (unmapped.length === 0) {
-      return Response.json(
+      return NextResponse.json(
         {
           message: "No hay valores sin normalizar",
           totalUnmapped: 0,
@@ -160,10 +161,10 @@ export async function POST(req: NextRequest): Promise<Response> {
       `[normalize-phase5] Completado en ${duration}ms. Normalizadas: ${updated}, Fallidas: ${failed}`,
     )
 
-    return Response.json(response, { status: 200 })
+    return NextResponse.json(response, { status: 200 })
   } catch (error) {
     console.error("[normalize-phase5] Error:", error)
-    return Response.json(
+    return NextResponse.json(
       {
         error: error instanceof Error ? error.message : "Unknown error",
         duration: Date.now() - start,

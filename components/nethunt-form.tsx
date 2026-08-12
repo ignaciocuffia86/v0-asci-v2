@@ -9,7 +9,7 @@ export function NetHuntForm() {
         src="https://nethunt.com/service/automation/forms/69265b521fe70839b7c0d058?embed=script"
         strategy="afterInteractive"
       />
-      <Script strategy="afterInteractive">
+      <Script id="nethunt-form-init" strategy="afterInteractive">
         {`
           function nhform() {
             (nhform.data || (nhform.data = [])).push(arguments);

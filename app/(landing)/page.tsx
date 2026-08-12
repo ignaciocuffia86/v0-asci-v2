@@ -22,9 +22,9 @@ import {
 import { NetHuntForm } from "@/components/nethunt-form"
 
 /* ─── ASCI Sonar Logo ─── */
-function AsciLogo({ size = 40, className = "" }: { size?: number; className?: string }) {
+function AsciLogo({ size = 40, className = "", style }: { size?: number; className?: string; style?: React.CSSProperties }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+    <svg width={size} height={size} viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} style={style}>
       <path d="M60 10 C87.6 10 110 32.4 110 60" stroke="currentColor" strokeWidth="4" strokeLinecap="round" opacity="0.25" />
       <path d="M60 28 C77.7 28 92 42.3 92 60" stroke="currentColor" strokeWidth="4.5" strokeLinecap="round" opacity="0.5" />
       <path d="M60 46 C67.7 46 74 52.3 74 60" stroke="currentColor" strokeWidth="5" strokeLinecap="round" opacity="0.8" />

@@ -4,10 +4,10 @@ import React from "react"
 import { Building2, MapPin, Users, GraduationCap, Flame } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { ScoreTooltip } from "@/components/search/score-tooltip"
-import type { ProcessSearchResult } from "@/app/actions/search-v2"
+import type { ProcessSearchResult, TechnologySearchResult } from "@/app/actions/search-v2"
 
 interface ResultItemProps {
-  company: ProcessSearchResult
+  company: ProcessSearchResult | TechnologySearchResult
   isSelected: boolean
   onToggleSelect: (companyId: string) => void
   onOpenDrawer: (companyId: string) => void

@@ -69,8 +69,9 @@ export default async function AdminUsagePage() {
   // Filter out banned users and users scheduled for deletion
   const activeUsers = (authUsers || []).filter((u) => {
     // Exclude banned users
-    if (u.banned_until) {
-      const bannedUntil = new Date(u.banned_until)
+    const bannedUntilRaw = (u as { banned_until?: string | null }).banned_until
+    if (bannedUntilRaw) {
+      const bannedUntil = new Date(bannedUntilRaw)
       if (bannedUntil > new Date()) return false
     }
     // Exclude users scheduled for deletion

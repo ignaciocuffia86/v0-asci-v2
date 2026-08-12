@@ -1,0 +1,69 @@
+name: CI
+
+# Gate for PRs (and pushes to main). Deploys still go through Vercel; this adds
+# the pre-merge checks the repo was missing (report OPT/P1.2).
+#
+# The three jobs are independent so branch protection can require them one at a
+# time. All three are green: `test` (Vitest unit suite), `typecheck`
+# (`tsc --noEmit`, 0 errors) and `lint` (ESLint 9 flat config, 0 errors —
+# warnings track pre-existing debt). Wire them into branch protection as required
+# checks to block merges on regressions.
+#
+# Contract tests (tests/contract/**) are NOT run here: they hit real Apollo /
+# Supabase and some cost money. vitest auto-excludes them unless a RUN_* flag is
+# set, so `pnpm test` runs the unit suite only.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint

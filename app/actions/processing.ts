@@ -16,6 +16,7 @@ export async function getDashboardCounts() {
     signals_process: number
     signals_technology: number
     contacts_total: number
+    job_postings_total: number
     companies_total: number
     dictionary_processes: number
     dictionary_products: number

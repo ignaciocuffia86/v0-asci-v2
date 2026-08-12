@@ -420,7 +420,7 @@ export function SummaryTab({
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            {fitReasons.map((reason, idx) => (
+            {fitReasons.map((reason: FitReason, idx: number) => (
               <div key={idx} className="flex items-start gap-2 p-2 bg-muted/30 rounded-lg">
                 <span className="text-sm font-bold text-muted-foreground">{idx + 1}.</span>
                 <div className="flex-1">
@@ -447,7 +447,7 @@ export function SummaryTab({
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            {risks.map((risk, idx) => (
+            {risks.map((risk: Risk, idx: number) => (
               <div key={idx} className="p-2 bg-white/50 rounded-lg border border-amber-100">
                 <p className="text-sm font-medium text-amber-900">{risk.description}</p>
                 {risk.mitigation && (
