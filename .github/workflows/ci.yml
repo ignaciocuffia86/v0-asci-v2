@@ -1,0 +1,68 @@
+name: CI
+
+# Gate for PRs (and pushes to main). Deploys still go through Vercel; this adds
+# the pre-merge checks the repo was missing (report OPT/P1.2).
+#
+# The three jobs are independent so branch protection can require them one at a
+# time as they go green. Start by requiring `test`; promote `typecheck` once the
+# existing type errors are cleared (today the app builds with
+# next.config.mjs `typescript.ignoreBuildErrors`), and `lint` once it is clean.
+#
+# Contract tests (tests/contract/**) are NOT run here: they hit real Apollo /
+# Supabase and some cost money. vitest auto-excludes them unless a RUN_* flag is
+# set, so `pnpm test` runs the unit suite only.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+
+  typecheck:
+    name: Typecheck (informational)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+
+  lint:
+    name: Lint (informational)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
