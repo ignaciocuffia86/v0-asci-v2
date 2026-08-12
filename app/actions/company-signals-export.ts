@@ -1,6 +1,7 @@
 "use server"
 
 import { createClient } from "@/lib/supabase/server"
+import { requireSuperadmin } from "@/lib/auth/require-superadmin"
 
 // Filtros para el export de compañías por señales del diccionario.
 export interface CompanyExportFilters {
@@ -50,6 +51,9 @@ export async function getDictionaryTechnologies(): Promise<DictionaryEntry[]> {
 
 // Países disponibles (empresas).
 export async function getCompanyCountries(): Promise<string[]> {
+  const auth = await requireSuperadmin()
+  if ("error" in auth) return []
+
   const supabase = await createClient()
   const { data, error } = await supabase.rpc("export_companies_countries")
   if (error) {
@@ -61,6 +65,9 @@ export async function getCompanyCountries(): Promise<string[]> {
 
 // Industrias disponibles (empresas).
 export async function getCompanyIndustries(): Promise<string[]> {
+  const auth = await requireSuperadmin()
+  if ("error" in auth) return []
+
   const supabase = await createClient()
   const { data, error } = await supabase.rpc("export_companies_industries")
   if (error) {
@@ -84,6 +91,9 @@ function rpcParams(filters: CompanyExportFilters, limit: number) {
 export async function previewCompanyExport(
   filters: CompanyExportFilters,
 ): Promise<{ data: CompanyExportRow[]; total: number }> {
+  const auth = await requireSuperadmin()
+  if ("error" in auth) return { data: [], total: 0 }
+
   const supabase = await createClient()
   const { data, error } = await supabase.rpc("export_companies", rpcParams(filters, 10000))
   if (error) {
@@ -96,6 +106,9 @@ export async function previewCompanyExport(
 
 // Export completo para CSV.
 export async function exportCompaniesToCSV(filters: CompanyExportFilters): Promise<CompanyExportRow[]> {
+  const auth = await requireSuperadmin()
+  if ("error" in auth) return []
+
   const supabase = await createClient()
   const { data, error } = await supabase.rpc("export_companies", rpcParams(filters, Math.min(filters.limit, 10000)))
   if (error) {

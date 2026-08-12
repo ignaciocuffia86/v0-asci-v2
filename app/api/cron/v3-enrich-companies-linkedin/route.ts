@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { runLinkedInEnrichment } from "@/lib/v3/services/linkedin-company-enrichment"
+import { assertCron } from "@/lib/cron-auth"
 
 /**
  * CRON: enrichment incremental de companies via LinkedIn.
@@ -39,10 +40,8 @@ function admin() {
 }
 
 export async function GET(request: Request) {
-  const authorization = request.headers.get("authorization")
-  if (process.env.NODE_ENV === "production" && authorization !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-  }
+  const denied = assertCron(request)
+  if (denied) return denied
 
   const url = new URL(request.url)
   const dryRun = url.searchParams.get("dryRun") === "1"

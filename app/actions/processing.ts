@@ -1,6 +1,7 @@
 "use server"
 
 import { createClient } from "@/lib/supabase/server"
+import { requireSuperadmin } from "@/lib/auth/require-superadmin"
 
 // ─── Dashboard totals (contacts, companies, signals, job_postings) ───
 export async function getDashboardCounts() {
@@ -315,6 +316,9 @@ export async function getInconsistentBatches() {
 
 // ─── Requeue a batch that was wrongly marked completed ───
 export async function requeueImportBatch(batchId: string) {
+  const auth = await requireSuperadmin()
+  if ("error" in auth) return { success: false, error: auth.error }
+
   const supabase = await createClient()
 
   const { data, error } = await supabase.rpc("requeue_import_batch", { p_batch_id: batchId })

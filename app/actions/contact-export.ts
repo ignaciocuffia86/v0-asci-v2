@@ -1,6 +1,7 @@
 "use server"
 
 import { createClient } from "@/lib/supabase/server"
+import { requireSuperadmin } from "@/lib/auth/require-superadmin"
 
 // Unified export filters - multi-señal support
 export interface ExportFilters {
@@ -129,6 +130,9 @@ export async function getContactCountries(): Promise<string[]> {
 export async function previewExport(
   filters: ExportFilters
 ): Promise<{ data: ExportRow[]; total: number }> {
+  const auth = await requireSuperadmin()
+  if ("error" in auth) return { data: [], total: 0 }
+
   const supabase = await createClient()
 
   const { data, error } = await supabase.rpc("export_contacts", {
@@ -156,6 +160,9 @@ export async function previewExport(
 export async function exportToCSV(
   filters: ExportFilters
 ): Promise<ExportRow[]> {
+  const auth = await requireSuperadmin()
+  if ("error" in auth) return []
+
   const supabase = await createClient()
 
   const { data, error } = await supabase.rpc("export_contacts", {

@@ -1,13 +1,12 @@
 import { createClient } from "@supabase/supabase-js"
 import { NextResponse } from "next/server"
+import { assertCron } from "@/lib/cron-auth"
 
 export const dynamic = "force-dynamic"
 
 export async function GET(request: Request) {
-  const authHeader = request.headers.get("authorization")
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}` && process.env.NODE_ENV === "production") {
-    console.warn("[Cleanup Cron] Unauthorized attempt")
-  }
+  const denied = assertCron(request)
+  if (denied) return denied
 
   const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 
