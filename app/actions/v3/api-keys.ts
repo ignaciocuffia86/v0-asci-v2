@@ -18,7 +18,7 @@ export interface ApiKeyOwnerOption {
   role: "admin" | "member"
 }
 
-export type ApiKeyType = "standard" | "explore"
+export type ApiKeyType = "standard" | "explore" | "profiles"
 
 export interface ApiKeyListItem {
   id: string
@@ -38,6 +38,9 @@ export interface ApiKeyListItem {
  * - standard: el MCP actual (señales v2, research, icebreakers, contactos).
  * - explore: el MCP paralelo sobre la tabla cruda. Incluye explore:read y los
  *   scopes de las capas pagas del embudo (scrape de vacantes y Apollo).
+ * - profiles: el tercer MCP, persona-first, para búsqueda de talento. Es de solo
+ *   lectura sobre la tabla cruda de contactos, así que solo lleva profiles:read
+ *   (más usage:read para consultar consumo). No tiene capas pagas.
  */
 const SCOPES_BY_TYPE: Record<ApiKeyType, { scopes: string[]; allowedModes: string[] }> = {
   standard: {
@@ -48,11 +51,22 @@ const SCOPES_BY_TYPE: Record<ApiKeyType, { scopes: string[]; allowedModes: strin
     scopes: ["explore:read", "research:run", "accounts:read", "accounts:write", "contacts:write", "usage:read"],
     allowedModes: ["read", "server_managed"],
   },
+  profiles: {
+    scopes: ["profiles:read", "usage:read"],
+    allowedModes: ["read"],
+  },
 }
 
-/** Deriva el tipo de una key a partir de sus scopes guardados. */
+/**
+ * Deriva el tipo de una key a partir de sus scopes guardados. El orden importa:
+ * profiles:read y explore:read son marcadores exclusivos de cada MCP; se chequean
+ * antes de caer en standard.
+ */
 function keyTypeFromScopes(scopes: string[] | null): ApiKeyType {
-  return (scopes ?? []).includes("explore:read") ? "explore" : "standard"
+  const list = scopes ?? []
+  if (list.includes("profiles:read")) return "profiles"
+  if (list.includes("explore:read")) return "explore"
+  return "standard"
 }
 
 async function getAuthenticatedUserId(): Promise<string | null> {
@@ -142,7 +156,7 @@ export async function generateApiKey(
   const userId = await getAuthenticatedUserId()
   if (!userId) return { success: false, error: "No autenticado" }
   if (!name.trim()) return { success: false, error: "Ingresa un nombre para la API key" }
-  if (keyType !== "standard" && keyType !== "explore") {
+  if (keyType !== "standard" && keyType !== "explore" && keyType !== "profiles") {
     return { success: false, error: "Tipo de API key inválido" }
   }
 
@@ -164,8 +178,8 @@ export async function generateApiKey(
     .maybeSingle()
   if (!ownerMembership) return { success: false, error: "El propietario debe ser un miembro activo del workspace" }
 
-  // Se permite una key activa por tipo (standard + explore) para poder correr
-  // los dos MCP en paralelo. No hay constraint en DB: el límite se valida acá.
+  // Se permite una key activa por tipo (standard + explore + profiles) para poder
+  // correr los tres MCP en paralelo. No hay constraint en DB: se valida acá.
   const { data: existingKeys } = await admin
     .schema("v3")
     .from("mcp_api_keys")
@@ -179,7 +193,9 @@ export async function generateApiKey(
       success: false,
       error: keyType === "explore"
         ? "Ese usuario ya tiene una API key de exploración activa"
-        : "Ese usuario ya tiene una API key activa",
+        : keyType === "profiles"
+          ? "Ese usuario ya tiene una API key de perfiles activa"
+          : "Ese usuario ya tiene una API key activa",
     }
   }
 
