@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js"
 import { NextResponse } from "next/server"
-import { createClient as createServerClient } from "@/lib/supabase/server"
+import { requireSuperadmin } from "@/lib/auth/require-superadmin"
 import { del } from "@vercel/blob"
 import Papa from "papaparse"
 
@@ -113,14 +113,12 @@ function formatJobPostingRow(row: any) {
 }
 
 export async function POST(request: Request) {
-  // 1. Authenticate the user
-  const supabaseAuth = await createServerClient()
-  const {
-    data: { user },
-  } = await supabaseAuth.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: "No autenticado" }, { status: 401 })
+  // 1. Only superadmins may ingest (A1 hardening): this route uses the service
+  // role to bulk-insert into public.contacts (superadmin-write by RLS), so the
+  // endpoint must enforce the same bar instead of accepting any authenticated user.
+  const auth = await requireSuperadmin()
+  if ("error" in auth) {
+    return NextResponse.json({ error: auth.error }, { status: 403 })
   }
 
   // 2. Parse the JSON body (contains blobUrl, filename, batchType)
@@ -216,7 +214,7 @@ export async function POST(request: Request) {
     const { data: batch, error: batchError } = await supabase
       .from("import_batches")
       .insert({
-        user_id: user.id,
+        user_id: auth.userId,
         filename,
         status: "uploading",
         total_rows: totalRows,
