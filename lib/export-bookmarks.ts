@@ -32,6 +32,12 @@ export interface BookmarkExportData {
     email2: string | null
     email2_type: string | null
     email2_status: string | null
+    email3: string | null
+    email3_type: string | null
+    email3_status: string | null
+    email4: string | null
+    email4_type: string | null
+    email4_status: string | null
     // Slots de telefono con tipo y status
     phone1: string | null
     phone1_type: string | null
@@ -157,6 +163,12 @@ export async function generateBookmarkExcel(
     "Email 2",
     "Tipo Email 2",
     "Estado Email 2",
+    "Email 3",
+    "Tipo Email 3",
+    "Estado Email 3",
+    "Email 4",
+    "Tipo Email 4",
+    "Estado Email 4",
     "Teléfono 1",
     "Tipo Teléfono 1",
     "Estado Teléfono 1",
@@ -169,7 +181,7 @@ export async function generateBookmarkExcel(
   ])
   setColumnWidths(empSheet, [
     15, 15, 30,
-    30, 14, 14, 30, 14, 14,
+    30, 14, 14, 30, 14, 14, 30, 14, 14, 30, 14, 14,
     18, 14, 14, 18, 14, 14,
     40, 12, 60,
   ])
@@ -188,6 +200,12 @@ export async function generateBookmarkExcel(
       emp.email2 || "",
       emp.email2_type || "",
       emp.email2_status || "",
+      emp.email3 || "",
+      emp.email3_type || "",
+      emp.email3_status || "",
+      emp.email4 || "",
+      emp.email4_type || "",
+      emp.email4_status || "",
       emp.phone1 || "",
       emp.phone1_type || "",
       emp.phone1_status || "",

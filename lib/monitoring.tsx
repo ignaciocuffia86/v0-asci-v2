@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server"
 import { Resend } from "resend"
+import { getAppUrl } from "@/lib/site-url"
 
 export interface HealthCheckResult {
   status: "healthy" | "warning" | "critical"
@@ -292,7 +293,7 @@ export async function sendAlertEmail(healthCheck: HealthCheckResult): Promise<bo
           ${metricsHtml}
           
           <p style="margin-top: 24px; color: #6b7280; font-size: 14px;">
-            <a href="${process.env.NEXT_PUBLIC_APP_URL || "https://asci.vercel.app"}/admin/processing">
+            <a href="${getAppUrl()}/admin/processing">
               Ver Dashboard de Procesamiento →
             </a>
           </p>
