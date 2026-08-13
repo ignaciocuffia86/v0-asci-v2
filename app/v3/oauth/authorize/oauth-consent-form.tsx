@@ -9,15 +9,20 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { MCP_SCOPE_GROUPS } from "@/lib/v3/mcp-oauth"
+import { MCP_SCOPE_GROUPS, MCP_RESOURCE_SERVERS } from "@/lib/v3/mcp-oauth"
 
 type Workspace = { id: string; name: string; role: string }
 // Todo grupo de MCP_SCOPE_GROUPS tiene que estar acá. Faltaban accounts,
 // contacts y documents: sus scopes existían en el catálogo pero ningún usuario
 // podía tildarlos, así que ningún token OAuth llegaba a tenerlos y las tools
 // correspondientes fallaban con "scope insuficiente" por más que se reconectara.
-const groups = [
+// Después faltaron explore y profiles (los MCP Explore y Perfiles): sin su grupo
+// acá, un token OAuth nunca podía llevar explore:read / profiles:read y esos MCP
+// solo funcionaban con API key.
+const groups: { id: string; label: string; description: string; scopes: string[] }[] = [
   { id: "read", label: "Lectura", description: "Empresas, señales, cuentas y uso", scopes: [...MCP_SCOPE_GROUPS.read] },
+  { id: "explore", label: "Explore", description: "Explorar empresas y personas por tecnología sobre la base cruda (país → industria → empresa). Solo lectura; las capas pagas usan Research / Guardar cuentas / Contactos.", scopes: [...MCP_SCOPE_GROUPS.explore] },
+  { id: "profiles", label: "Perfiles", description: "Buscar personas por skill y experiencia, con su contacto personal (email, teléfono) y LinkedIn. Solo lectura.", scopes: [...MCP_SCOPE_GROUPS.profiles] },
   { id: "accounts", label: "Guardar cuentas", description: "Guardar y quitar cuentas del workspace. Ocupa lugares del plan.", scopes: [...MCP_SCOPE_GROUPS.accounts] },
   { id: "research", label: "Research", description: "Preparar, ejecutar y guardar investigaciones", scopes: [...MCP_SCOPE_GROUPS.research] },
   { id: "icebreakers", label: "Icebreakers", description: "Preparar, generar y guardar icebreakers", scopes: [...MCP_SCOPE_GROUPS.icebreakers] },
@@ -25,11 +30,33 @@ const groups = [
   { id: "documents", label: "Documentos", description: "Cargar documentación comercial y pedir cuentas recomendadas", scopes: [...MCP_SCOPE_GROUPS.documents] },
 ]
 
-export function OAuthConsentForm(props: { clientId: string; redirectUri: string; state?: string; codeChallenge: string; requestedScope: string }) {
+/**
+ * Permisos pre-tildados según a QUÉ MCP te estás conectando. Prioridad:
+ *   1. `resource` (RFC 8707): cada MCP publica /api/v3/mcp/<server>/... como su
+ *      resource, así que el segmento identifica el server y su grupo base.
+ *   2. `scope` solicitado: se tilda un grupo solo si TODOS sus scopes fueron pedidos
+ *      (subset), para que pedir [profiles:read, usage:read] tilde Perfiles y no Lectura.
+ *   3. Fallback histórico: Lectura.
+ * Si el cliente no manda ninguna señal, cae en Lectura y no rompe nada.
+ */
+function initialGroups(resource: string, requestedScope: string): string[] {
+  const byResource = resource.match(/\/api\/v3\/mcp\/([a-z]+)\b/)?.[1]
+  if (byResource && byResource in MCP_RESOURCE_SERVERS) {
+    return [...MCP_RESOURCE_SERVERS[byResource as keyof typeof MCP_RESOURCE_SERVERS].consentGroups]
+  }
+  const requested = requestedScope.split(/\s+/).filter(Boolean)
+  if (requested.length) {
+    const matched = groups.filter((group) => group.scopes.length > 0 && group.scopes.every((scope) => requested.includes(scope))).map((group) => group.id)
+    if (matched.length) return matched
+  }
+  return ["read"]
+}
+
+export function OAuthConsentForm(props: { clientId: string; redirectUri: string; state?: string; codeChallenge: string; requestedScope: string; resource: string }) {
   const [clientName, setClientName] = useState("Claude")
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [workspaceId, setWorkspaceId] = useState("")
-  const [selected, setSelected] = useState<string[]>(["read"])
+  const [selected, setSelected] = useState<string[]>(() => initialGroups(props.resource, props.requestedScope))
   const [error, setError] = useState("")
   const [pending, startTransition] = useTransition()
 

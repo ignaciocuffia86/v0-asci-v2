@@ -22,6 +22,16 @@ export const MCP_OAUTH_SCOPES = [
   "documents:read",
   "documents:write",
   "recommendations:read",
+  // MCP Explore (empresa-first sobre la tabla cruda). Mismo problema que Perfiles:
+  // explore:read existía como scope de API key pero no en el catálogo OAuth, así
+  // que sanitizeScopes lo descartaba y el embudo de Explore no se podía usar con un
+  // token OAuth. Las capas pagas de Explore ya las cubren research/accounts/contacts.
+  "explore:read",
+  // Tercer MCP (Perfiles, persona-first). Sin este scope en el catálogo,
+  // sanitizeScopes descartaba profiles:read y ningún token OAuth podía usar
+  // profiles_search: el consentimiento no lo ofrecía y la conexión OAuth moría
+  // con SCOPE_REQUIRED por más que se reconectara. Es solo lectura.
+  "profiles:read",
 ] as const
 
 export const MCP_SCOPE_GROUPS = {
@@ -33,7 +43,45 @@ export const MCP_SCOPE_GROUPS = {
   research: ["research:run", "research:prepare", "research:submit"],
   icebreakers: ["icebreakers:generate", "icebreakers:prepare", "icebreakers:submit"],
   documents: ["documents:read", "documents:write", "recommendations:read"],
+  // Scope base (solo lectura) de cada MCP paralelo. Se agrupan aparte para que el
+  // consentimiento pueda ofrecerlos y pre-seleccionarlos según a qué MCP conectás.
+  // Las capas pagas de Explore (scrape de vacantes, Apollo) usan research/accounts/
+  // contacts, que son grupos propios: otorgar el embudo nunca habilita gasto.
+  explore: ["explore:read"],
+  profiles: ["profiles:read"],
 } as const
+
+/**
+ * Metadata protected-resource POR MCP. Antes había una sola (hardcodeada al server
+ * standard, con TODOS los scopes), así que los tres MCP anunciaban lo mismo y el
+ * cliente OAuth no podía saber a cuál se conectaba: el consentimiento no tenía cómo
+ * pre-seleccionar el permiso correcto. Con una entrada por server, cada MCP publica
+ * SU `resource` y SOLO sus scopes, y el consent deriva de ahí qué tildar.
+ *
+ * `key` es el segmento de la URL del MCP (/api/v3/mcp/<key>/...), que es también lo
+ * que se usa para reconstruir el `resource` y para el match en el consentimiento.
+ */
+export const MCP_RESOURCE_SERVERS = {
+  server: {
+    scopes: [...MCP_OAUTH_SCOPES],
+    // El MCP standard reparte sus permisos en varios grupos; el consent arranca en
+    // lectura y el usuario suma lo que necesite.
+    consentGroups: ["read"],
+  },
+  explore: {
+    // Solo el scope base (embudo de lectura). Las capas pagas (scrape de vacantes,
+    // Apollo) se otorgan tildando a mano Research / Guardar cuentas / Contactos, para
+    // no pre-seleccionar gasto al conectar.
+    scopes: ["explore:read", "usage:read"],
+    consentGroups: ["explore"],
+  },
+  profiles: {
+    scopes: ["profiles:read", "usage:read"],
+    consentGroups: ["profiles"],
+  },
+} as const
+
+export type McpResourceKey = keyof typeof MCP_RESOURCE_SERVERS
 
 export const hashOAuthValue = (value: string) => crypto.createHash("sha256").update(value).digest("hex")
 export const randomOAuthValue = (prefix: string) => `${prefix}_${crypto.randomBytes(32).toString("base64url")}`

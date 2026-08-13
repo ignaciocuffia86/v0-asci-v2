@@ -299,7 +299,9 @@ const authedHandler = withMcpAuth(
     await logMcpRequest({ principal, method: req.method, statusCode: 200, requestId: crypto.randomUUID(), metadata: { phase: "transport", server: "profiles" } })
     return { token, clientId: result.keyId, scopes: principal.scopes, extra: principal as unknown as Record<string, unknown> }
   },
-  { required: true, resourceMetadataPath: "/.well-known/oauth-protected-resource" }
+  // Metadata propia de Perfiles: publica su resource + solo profiles:read/usage:read,
+  // para que el consentimiento pre-seleccione el permiso de Perfiles al conectarse.
+  { required: true, resourceMetadataPath: "/.well-known/oauth-protected-resource/profiles" }
 )
 
 export { authedHandler as GET, authedHandler as POST, authedHandler as DELETE }
