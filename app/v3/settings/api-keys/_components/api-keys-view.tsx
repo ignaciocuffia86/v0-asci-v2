@@ -21,11 +21,18 @@ import { McpSetupWizard } from "./mcp-setup-wizard"
 const MCP_SERVER_URL = "https://bot.bigua.lat/api/v3/mcp/server/mcp"
 /** MCP Explore: embudo conversacional sobre la tabla cruda de contactos + vacantes. */
 const MCP_EXPLORE_URL = "https://bot.bigua.lat/api/v3/mcp/explore/mcp"
+/** MCP Perfiles: búsqueda de talento persona-first, con contacto personal. */
+const MCP_PROFILES_URL = "https://bot.bigua.lat/api/v3/mcp/profiles/mcp"
 
 const KEY_TYPE_LABELS: Record<string, { label: string; description: string }> = {
   standard: { label: "Estándar", description: "Señales procesadas, research e icebreakers." },
   explore: { label: "Explore", description: "Exploración conversacional sobre datos crudos." },
+  profiles: { label: "Perfiles", description: "Búsqueda de talento por skill/industria, con contacto personal." },
 }
+
+/** Tipos de key generables desde la UI. */
+const KEY_TYPES = ["standard", "explore", "profiles"] as const
+type NewKeyType = (typeof KEY_TYPES)[number]
 
 interface ApiKeysViewProps {
   workspaces: ApiKeyWorkspaceOption[]
@@ -43,7 +50,7 @@ export function ApiKeysView({ workspaces, defaultWorkspaceId, isSuperAdmin }: Ap
   const [loading, setLoading] = useState(true)
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [newKeyName, setNewKeyName] = useState("")
-  const [newKeyType, setNewKeyType] = useState<"standard" | "explore">("standard")
+  const [newKeyType, setNewKeyType] = useState<NewKeyType>("standard")
   const [creating, setCreating] = useState(false)
   const [newKey, setNewKey] = useState<string | null>(null)
   const [keyToRevoke, setKeyToRevoke] = useState<ApiKeyListItem | null>(null)
@@ -54,9 +61,9 @@ export function ApiKeysView({ workspaces, defaultWorkspaceId, isSuperAdmin }: Ap
     () => owners.filter((owner) => !keys.some((key) => key.owner_user_id === owner.id && key.key_type === newKeyType)),
     [keys, owners, newKeyType]
   )
-  // Hay algo para generar si algún owner puede recibir una key estándar o explore.
+  // Hay algo para generar si algún owner puede recibir una key de algún tipo.
   const canGenerateAny = useMemo(
-    () => owners.some((owner) => (["standard", "explore"] as const).some((type) => !keys.some((key) => key.owner_user_id === owner.id && key.key_type === type))),
+    () => owners.some((owner) => KEY_TYPES.some((type) => !keys.some((key) => key.owner_user_id === owner.id && key.key_type === type))),
     [keys, owners]
   )
 
@@ -156,6 +163,7 @@ export function ApiKeysView({ workspaces, defaultWorkspaceId, isSuperAdmin }: Ap
           {([
             { url: MCP_SERVER_URL, ...KEY_TYPE_LABELS.standard },
             { url: MCP_EXPLORE_URL, ...KEY_TYPE_LABELS.explore },
+            { url: MCP_PROFILES_URL, ...KEY_TYPE_LABELS.profiles },
           ] as const).map((server) => (
             <div key={server.url} className="flex flex-col gap-2 rounded-lg border bg-muted/50 p-4">
               <div className="flex items-center gap-2">
@@ -206,7 +214,7 @@ export function ApiKeysView({ workspaces, defaultWorkspaceId, isSuperAdmin }: Ap
               {keys.map((key) => (
                 <div key={key.id} className="flex flex-col justify-between gap-4 rounded-lg border p-4 sm:flex-row sm:items-center">
                   <div className="flex min-w-0 flex-col gap-2">
-                    <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{key.name}</span><Badge variant={key.key_type === "explore" ? "default" : "secondary"} className="text-xs">{KEY_TYPE_LABELS[key.key_type]?.label ?? key.key_type}</Badge><Badge variant="outline" className="font-mono text-xs">{key.key_prefix}...</Badge></div>
+                    <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{key.name}</span><Badge variant={key.key_type === "standard" ? "secondary" : "default"} className="text-xs">{KEY_TYPE_LABELS[key.key_type]?.label ?? key.key_type}</Badge><Badge variant="outline" className="font-mono text-xs">{key.key_prefix}...</Badge></div>
                     <p className="text-sm text-muted-foreground">Propietario: {key.owner_name || key.owner_email || key.owner_user_id}</p>
                     <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground"><span className="flex items-center gap-1"><Clock />Creada {formatDistanceToNow(new Date(key.created_at), { addSuffix: true, locale: es })}</span><span className="flex items-center gap-1"><Activity />{key.request_count} requests</span>{key.last_used_at && <span>Último uso: {formatDistanceToNow(new Date(key.last_used_at), { addSuffix: true, locale: es })}</span>}</div>
                   </div>
@@ -225,13 +233,14 @@ export function ApiKeysView({ workspaces, defaultWorkspaceId, isSuperAdmin }: Ap
             <div className="flex flex-col gap-2"><Label htmlFor="key-name">Nombre</Label><Input id="key-name" placeholder="Ej: Claude Desktop" value={newKeyName} onChange={(event) => setNewKeyName(event.target.value)} /></div>
             <div className="flex flex-col gap-2">
               <Label htmlFor="key-type">Tipo de MCP</Label>
-              <Select value={newKeyType} onValueChange={(value) => setNewKeyType(value as "standard" | "explore")}>
+              <Select value={newKeyType} onValueChange={(value) => setNewKeyType(value as NewKeyType)}>
                 <SelectTrigger id="key-type"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
                     <SelectLabel>Tipo de servidor</SelectLabel>
                     <SelectItem value="standard">Estándar · señales procesadas</SelectItem>
                     <SelectItem value="explore">Explore · exploración conversacional</SelectItem>
+                    <SelectItem value="profiles">Perfiles · búsqueda de talento</SelectItem>
                   </SelectGroup>
                 </SelectContent>
               </Select>
