@@ -1,70 +1,111 @@
 -- =============================================================================
--- MCP Perfiles (tercer MCP, persona-first). Para busqueda de TALENTO / perfiles.
+-- MCP Perfiles (tercer MCP, persona-first). Busqueda de TALENTO / perfiles.
 --
--- Los otros dos MCP son empresa-first: "que empresas usan SAP" y, dentro de una
--- empresa, "quien sabe de esto". Este invierte el eje: el usuario busca PERSONAS
--- por tecnologia/proceso + experiencia de industria (+ pais + cargo) sobre la
--- tabla CRUDA de contactos, y lo que quiere es el dato de contacto PERSONAL
--- (mail y telefono) para llegarle directo, no a traves del empleador.
+-- Los otros dos MCP son empresa-first. Este invierte el eje: el usuario busca
+-- PERSONAS por tecnologia/proceso/skill + experiencia de industria (+ pais +
+-- cargo) sobre la tabla CRUDA de contactos, y quiere el contacto PERSONAL (mail
+-- y telefono) para llegarle directo, no a traves del empleador.
 --
 -- Regla de oro del proyecto: v2 esta en produccion y no se puede romper. Esta
--- migracion NO crea, altera ni indexa NINGUNA tabla de v2. Solo agrega UNA
--- funcion nueva en el schema v3 que LEE public.contacts / public.companies /
--- public.master_industries, y reusa objetos que ya existen:
---   - v3._explore_predicate(...)  (el predicado de texto index-friendly del MCP
---     Explore; misma tecnica ILIKE-trigram + refinado por limite de palabra).
---   - public.is_personal_email(...) (heuristica de dominio personal ya usada por
---     el export de bookmarks).
+-- migracion NO crea, altera ni indexa NINGUNA tabla de v2. Solo agrega objetos
+-- nuevos en el schema v3 que LEEN v2, y reusa objetos existentes:
+--   - public.is_personal_email(...)        (heuristica de dominio personal)
+--   - public.contacts_prevpos_text(jsonb)  (extrae titulo+descripcion de los
+--     puestos ANTERIORES; ya viene con indice GIN trigram idx_contacts_prevpos_trgm)
+--   - los 4 indices GIN trigram de public.contacts (headline, about,
+--     current_position_title, current_position_description).
 --
--- Las FACETAS de pais e industria del embudo persona-first NO se redefinen aca:
--- v3.explore_geo_facets y v3.explore_industry_facets ya cuentan PERSONAS por
--- termino y se reusan tal cual desde la capa de aplicacion. Este archivo agrega
--- solo lo que faltaba: la lista de PERSONAS global (no acotada a una empresa) con
--- el contacto personal resuelto.
+-- DISENO (v2), sobre 3 aprendizajes medidos contra la base real:
+--
+--  A. HISTORIAL. La v1 solo miraba el puesto ACTUAL (headline, about, titulo y
+--     descripcion actuales) y se perdia ~21.500 perfiles que mencionan una
+--     tecnologia solo en su experiencia PASADA. Ahora, con p_include_past=true,
+--     se suma como 5ta "columna" la expresion indexada
+--     public.contacts_prevpos_text(previous_positions), asi el planner usa
+--     idx_contacts_prevpos_trgm y no hace seq scan.
+--
+--  B. GRUPOS AND. Una nube de terminos es un OR (sinonimos de UN concepto:
+--     SAP, S/4HANA, ABAP...). Para "SAP Y experiencia en energia" o "full stack Y
+--     SQL Y .NET" hacen falta VARIOS requisitos ANDeados. p_groups es un array de
+--     grupos: dentro de cada grupo OR, entre grupos AND. Ademas de precision, esto
+--     da PERFORMANCE: el planner hace BitmapAnd de los indices de cada grupo e
+--     interseca ANTES de tocar el heap (medido: "SAP" solo = 14s / 42k filas;
+--     "SAP" AND "energia" = 3,1s / 4k filas). El termino amplio SOLO es el unico
+--     caso lento; por eso el MCP guia a sumar un segundo requisito o a acotar por
+--     pais/industria.
+--
+--  C. TOKENS CON SIMBOLOS. El refinado por limite de palabra \yTERM\y rompia con
+--     .NET / C# / C++ (el simbolo inicial/final no es "palabra"): .NET pasaba de
+--     7007 matches a 2086. Ahora las anclas \y se agregan del lado de la app SOLO
+--     del lado que empieza/termina en caracter de palabra, asi .NET matchea bien.
+--     El SQL recibe el regex YA anclado y no vuelve a envolver.
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
--- Busqueda de personas persona-first.
+-- Helper: predicado de UN grupo (OR interno) sobre una lista de EXPRESIONES de
+-- columna. A diferencia de v3._explore_predicate:
+--   - Recibe EXPRESIONES ya calificadas (ej 'public.contacts_prevpos_text(c.previous_positions)'),
+--     no nombres de columna, para poder incluir el historial.
+--   - NO agrega \y: el regex llega ya anclado desde la app (fix C). Los terminos
+--     entran como datos via %L (sin inyeccion); las expresiones son constantes del
+--     server, nunca input del usuario.
+-- -----------------------------------------------------------------------------
+create or replace function v3._profiles_group_predicate(
+  p_col_exprs text[],
+  p_like  text[],
+  p_regex text[]
+) returns text
+language plpgsql
+immutable
+as $$
+declare
+  expr text;
+  t    text;
+  like_ors  text[] := '{}';
+  regex_ors text[] := '{}';
+begin
+  -- Sin terminos el grupo no filtra nada: 'false' para no devolver toda la tabla.
+  if p_like is null or array_length(p_like, 1) is null then
+    return 'false';
+  end if;
+  foreach expr in array p_col_exprs loop
+    foreach t in array p_like loop
+      like_ors := like_ors || format('%s ILIKE %L', expr, t);
+    end loop;
+    foreach t in array p_regex loop
+      regex_ors := regex_ors || format('%s ~* %L', expr, t);
+    end loop;
+  end loop;
+  return '(' || array_to_string(like_ors, ' OR ') || ') AND ('
+             || array_to_string(regex_ors, ' OR ') || ')';
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
+-- Busqueda de personas persona-first (v2).
 --
--- Diferencia con v3.explore_company_people: aquella exige un company_id (detalle
--- dentro de UNA empresa). Esta busca en TODA la base, acotando por pais/industria
--- /cargo, que es el caso de un reclutador que arranca por la tecnologia.
---
--- Performance (misma logica que valido el MCP Explore contra la base real):
---   - El predicado de TERMINOS va primero y usa el indice GIN trigram de
---     public.contacts. Es el filtro mas selectivo; pais/industria/cargo NO tienen
---     indice y solo salen baratos DESPUES de que los terminos ya recortaron.
---   - Por eso los terminos son obligatorios (sin ellos el predicado es 'false' y
---     no se devuelve nada, en vez de escanear la tabla entera).
---   - El ORDER BY usa solo chequeos de columna baratos (hay dato de contacto?),
---     nunca las subconsultas de resolucion de mail/telefono.
---
--- Contacto PERSONAL (lo que pidio el caso de uso):
---   - personal_email: el primer email (email1..email4) cuyo dominio es personal
---     segun public.is_personal_email (gmail, hotmail, outlook, ...). Si no hay
---     ninguno personal, queda NULL y se expone work_email como fallback ETIQUETADO
---     (email_is_personal=false), para que el reclutador decida. Nunca se deja sin
---     ningun dato si hay alguno.
---   - personal_phone: se prioriza el telefono cuyo _type indica movil/personal
---     (mobile, cell, personal, movil, celular); si ninguno lo indica, gana phone1.
---     Los telefonos crudos no traen dominio, asi que el _type es la unica pista.
+-- p_groups: jsonb array. Cada elemento es {"raw":[...],"like":[...],"regex":[...]}:
+--   - raw:   terminos crudos, para la evidencia matched_terms.
+--   - like:  terminos envueltos en % y escapados, para el ILIKE indexable.
+--   - regex: terminos YA anclados (\y donde corresponde) y regex-escapados.
+-- Todos los grupos se ANDean; dentro de un grupo, OR. Sin grupos -> TERMS_REQUIRED
+-- (nunca se escanea la tabla entera).
 -- -----------------------------------------------------------------------------
 create or replace function v3.profiles_search_people(
-  p_like    text[],
-  p_regex   text[],
+  p_groups jsonb,
   p_country text default null,
   p_industry_ids text[] default null,
   p_include_unclassified boolean default true,
-  -- Filtro OPCIONAL por cargo/seniority: se aplica sobre title + headline. Si
-  -- viene null, no filtra (no confundir con el predicado de concepto, que es
-  -- obligatorio y corre sobre 4 columnas de texto).
+  -- Buscar tambien en los puestos ANTERIORES (5ta columna indexada). true por
+  -- defecto: "experiencia en X" incluye el pasado. false = solo puesto actual
+  -- (mas rapido, y util para "quien trabaja con X HOY").
+  p_include_past boolean default true,
+  -- Filtro OPCIONAL por cargo/seniority: solo sobre titulo + headline ACTUALES.
   p_title_like  text[] default null,
   p_title_regex text[] default null,
-  -- Si es true, solo devuelve personas con AL MENOS un dato de contacto (mail o
-  -- telefono). Util cuando el reclutador solo quiere gente a la que puede llegar.
   p_only_contactable boolean default false,
-  p_limit   int default 25,
-  p_offset  int default 0
+  p_limit  int default 25,
+  p_offset int default 0
 ) returns table (
   contact_id text,
   full_name text,
@@ -89,34 +130,67 @@ language plpgsql
 stable
 as $$
 declare
-  -- Concepto: mismo helper y mismas 4 columnas que el MCP Explore.
-  pred text := v3._explore_predicate(
-    'c',
-    array['headline','about','current_position_title','current_position_description'],
-    p_like, p_regex
-  );
-  -- Cargo (opcional): solo si vino la lista; si no, no restringe.
-  title_pred text := case
-    when p_title_like is null or array_length(p_title_like, 1) is null then 'true'
-    else v3._explore_predicate('c', array['current_position_title','headline'], p_title_like, p_title_regex)
-  end;
-  -- Industria de la empresa ACTUAL de la persona (misma semantica que el embudo
-  -- de Explore). include_unclassified suma las empresas sin industria mapeada.
+  base_cols text[] := array[
+    'c.headline', 'c.about', 'c.current_position_title', 'c.current_position_description'
+  ];
+  col_exprs text[];
+  grp jsonb;
+  g_like text[];
+  g_regex text[];
+  g_raw text[];
+  group_preds text[] := '{}';
+  content_pred text;
+  title_pred text;
   industry_filter text;
-  -- Datos de contacto: al menos un mail o telefono no vacio.
-  contactable_filter text := case
-    when p_only_contactable then $f$(
-      coalesce(c.email1,'') <> '' or coalesce(c.email2,'') <> '' or
-      coalesce(c.email3,'') <> '' or coalesce(c.email4,'') <> '' or
-      coalesce(c.phone1,'') <> '' or coalesce(c.phone2,'') <> ''
-    )$f$
-    else 'true'
-  end;
-  -- "Que termino matcheo cada persona": mismo patron que explore_company_people.
-  matched_expr text := '';
-  t text;
+  -- Expresion booleana "tiene algun dato de contacto?": se usa para ORDENAR
+  -- (contactables primero) y, si p_only_contactable, tambien para filtrar.
+  contactable_expr text := $c$(coalesce(c.email1,'')<>'' or coalesce(c.email2,'')<>'' or coalesce(c.email3,'')<>'' or coalesce(c.email4,'')<>'' or coalesce(c.phone1,'')<>'' or coalesce(c.phone2,'')<>'')$c$;
+  contactable_filter text;
+  all_raw text[] := '{}';
+  all_regex text[] := '{}';
+  matched_expr text;
+  i int;
+  cond text;
   parts text[] := '{}';
 begin
+  if p_groups is null or jsonb_typeof(p_groups) <> 'array' or jsonb_array_length(p_groups) = 0 then
+    raise exception 'TERMS_REQUIRED:Pasá al menos un grupo de términos (concepto) para buscar.';
+  end if;
+
+  -- Historial como 5ta columna (indexada). Es lo que recupera a los perfiles con
+  -- experiencia pasada; sin esto se perdian ~21.500 en SAP.
+  col_exprs := case
+    when p_include_past then base_cols || array['public.contacts_prevpos_text(c.previous_positions)']
+    else base_cols
+  end;
+
+  -- Un predicado por grupo; todos ANDeados. all_raw/all_regex juntan los terminos
+  -- de todos los grupos para la evidencia matched_terms.
+  for grp in select value from jsonb_array_elements(p_groups) loop
+    g_like  := array(select jsonb_array_elements_text(grp->'like'));
+    g_regex := array(select jsonb_array_elements_text(grp->'regex'));
+    g_raw   := array(select jsonb_array_elements_text(grp->'raw'));
+    if array_length(g_like, 1) is null then
+      continue;
+    end if;
+    group_preds := group_preds || v3._profiles_group_predicate(col_exprs, g_like, g_regex);
+    all_raw := all_raw || g_raw;
+    all_regex := all_regex || g_regex;
+  end loop;
+
+  if array_length(group_preds, 1) is null then
+    raise exception 'TERMS_REQUIRED:Ningún grupo trajo términos válidos (mínimo 3 caracteres, o 2 con símbolo).';
+  end if;
+  content_pred := '(' || array_to_string(group_preds, ') AND (') || ')';
+
+  -- Cargo/seniority: opcional, SOLO titulo + headline actuales (un "Manager" en el
+  -- about no lo hace manager). Mismo helper.
+  title_pred := case
+    when p_title_like is null or array_length(p_title_like, 1) is null then 'true'
+    else v3._profiles_group_predicate(array['c.current_position_title', 'c.headline'], p_title_like, p_title_regex)
+  end;
+
+  -- Industria de la empresa ACTUAL de la persona (misma semantica que Explore).
   if p_industry_ids is null or array_length(p_industry_ids, 1) is null then
     industry_filter := 'true';
   elsif p_include_unclassified then
@@ -125,19 +199,41 @@ begin
     industry_filter := format('co.master_industry_id::text = any(%L)', p_industry_ids);
   end if;
 
-  if p_regex is null or array_length(p_regex, 1) is null then
+  contactable_filter := case when p_only_contactable then contactable_expr else 'true' end;
+
+  -- matched_terms: por cada termino (de cualquier grupo), si alguna de las
+  -- columnas (incl. historial si aplica) lo matchea, se lista el termino crudo.
+  if array_length(all_regex, 1) is null then
     matched_expr := 'array[]::text[]';
   else
-    foreach t in array p_regex loop
-      parts := parts || format(
-        'case when (c.headline ~* %L or c.about ~* %L or c.current_position_title ~* %L or c.current_position_description ~* %L) then %L end',
-        '\y'||t||'\y', '\y'||t||'\y', '\y'||t||'\y', '\y'||t||'\y', t
-      );
+    for i in 1 .. array_length(all_regex, 1) loop
+      cond := (select string_agg(format('%s ~* %L', expr, all_regex[i]), ' or ') from unnest(col_exprs) as u(expr));
+      parts := parts || format('case when (%s) then %L end', cond, all_raw[i]);
     end loop;
     matched_expr := 'array_remove(array[' || array_to_string(parts, ',') || '], null)';
   end if;
 
+  -- DOS FASES (clave de performance):
+  --   Fase 1 (hits): WHERE + ORDER BY + LIMIT/OFFSET trayendo SOLO columnas
+  --     baratas (id, nombre, flag contactable). Aca esta el costo de matching
+  --     (bitmap + recheck), pero NO se calcula nada caro por fila.
+  --   Fase 2: sobre las <=limit filas de hits, recien se calculan matched_terms
+  --     (que recomputa contacts_prevpos_text) y las subconsultas de mail/telefono.
+  -- Sin esto, esas expresiones se evaluaban para TODAS las filas que matchean
+  -- antes del LIMIT (medido: 3 grupos = 17,7s; con dos fases baja a segundos).
   return query execute format($q$
+    with hits as (
+      select c.id as cid, c.full_name as fname, %s as contactable
+      from public.contacts c
+      left join public.companies co on co.id = c.current_company_id
+      where (%s)
+        and (%L is null or c.country_normalized = %L)
+        and (%s)   -- cargo (opcional)
+        and (%s)   -- industria
+        and (%s)   -- contactable (opcional)
+      order by contactable desc, fname
+      limit %s offset %s
+    )
     select
       c.id::text,
       c.full_name,
@@ -150,25 +246,18 @@ begin
       co.master_industry_id::text,
       mi.name_es,
       %s as matched_terms,
-      -- Mail personal: primer email de dominio personal, por prioridad email1..4.
       (select em.email
          from (values (1, c.email1), (2, c.email2), (3, c.email3), (4, c.email4)) em(ord, email)
         where coalesce(em.email, '') <> '' and public.is_personal_email(em.email)
-        order by em.ord
-        limit 1) as personal_email,
-      -- Flag: hay al menos un email personal? (si no, la capa de app cae al work).
+        order by em.ord limit 1) as personal_email,
       exists (
-        select 1
-          from (values (c.email1), (c.email2), (c.email3), (c.email4)) e(email)
+        select 1 from (values (c.email1), (c.email2), (c.email3), (c.email4)) e(email)
          where coalesce(e.email, '') <> '' and public.is_personal_email(e.email)
       ) as email_is_personal,
-      -- Fallback corporativo ETIQUETADO: primer email NO personal, por prioridad.
       (select em.email
          from (values (1, c.email1), (2, c.email2), (3, c.email3), (4, c.email4)) em(ord, email)
         where coalesce(em.email, '') <> '' and not public.is_personal_email(em.email)
-        order by em.ord
-        limit 1) as work_email,
-      -- Telefono personal: se prioriza el de tipo movil/personal; si ninguno, phone1.
+        order by em.ord limit 1) as work_email,
       (select ph.phone
          from (values (1, c.phone1, c.phone1_type), (2, c.phone2, c.phone2_type)) ph(ord, phone, ptype)
         where coalesce(ph.phone, '') <> ''
@@ -179,7 +268,6 @@ begin
         where coalesce(ph.phone, '') <> ''
         order by (coalesce(ph.ptype, '') ~* '(mobile|cell|personal|m[oó]vil|celular)') desc, ph.ord
         limit 1) as personal_phone_type,
-      -- El OTRO telefono (el que no gano), por si el reclutador quiere ambos.
       (select ph.phone
          from (values (1, c.phone1, c.phone1_type), (2, c.phone2, c.phone2_type)) ph(ord, phone, ptype)
         where coalesce(ph.phone, '') <> ''
@@ -190,45 +278,39 @@ begin
         where coalesce(ph.phone, '') <> ''
         order by (coalesce(ph.ptype, '') ~* '(mobile|cell|personal|m[oó]vil|celular)') desc, ph.ord
         offset 1 limit 1) as phone_alt_type
-    from public.contacts c
+    from hits h
+    join public.contacts c on c.id = h.cid
     left join public.companies co on co.id = c.current_company_id
     left join public.master_industries mi on mi.id = co.master_industry_id
-    where %s
-      and (%L is null or c.country_normalized = %L)
-      and %s   -- cargo (opcional)
-      and %s   -- industria
-      and %s   -- contactable (opcional)
-    order by
-      -- Contactables primero: los que tienen algun mail o telefono son los utiles.
-      ((coalesce(c.email1,'') <> '' or coalesce(c.email2,'') <> '' or
-        coalesce(c.email3,'') <> '' or coalesce(c.email4,'') <> '' or
-        coalesce(c.phone1,'') <> '' or coalesce(c.phone2,'') <> '')) desc,
-      c.full_name
-    limit %s offset %s
+    order by h.contactable desc, h.fname
   $q$,
-    matched_expr,
-    pred,
+    contactable_expr,
+    content_pred,
     p_country, p_country,
     title_pred,
     industry_filter,
     contactable_filter,
-    p_limit, p_offset
+    p_limit, p_offset,
+    matched_expr
   );
 end;
 $$;
 
 -- -----------------------------------------------------------------------------
--- Permisos. Igual que el resto de v3: EXECUTE solo para service_role (el admin
--- client con el que corre el MCP), revocado de public/anon/authenticated.
--- OJO (verificado en este proyecto): un REVOKE a PUBLIC NO le quita EXECUTE a
--- anon; hay que revocar explicitamente de anon y authenticated.
+-- Permisos: EXECUTE solo para service_role, revocado de public/anon/authenticated.
 -- -----------------------------------------------------------------------------
 do $$
-declare fn text := 'v3.profiles_search_people(text[], text[], text, text[], boolean, text[], text[], boolean, int, int)';
+declare fn text;
 begin
-  execute format('revoke all on function %s from public', fn);
-  execute format('revoke all on function %s from anon', fn);
-  execute format('revoke all on function %s from authenticated', fn);
-  execute format('grant execute on function %s to service_role', fn);
+  foreach fn in array array[
+    'v3._profiles_group_predicate(text[], text[], text[])',
+    'v3.profiles_search_people(jsonb, text, text[], boolean, boolean, text[], text[], boolean, int, int)'
+  ]
+  loop
+    execute format('revoke all on function %s from public', fn);
+    execute format('revoke all on function %s from anon', fn);
+    execute format('revoke all on function %s from authenticated', fn);
+    execute format('grant execute on function %s to service_role', fn);
+  end loop;
 end;
 $$;

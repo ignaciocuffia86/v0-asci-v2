@@ -149,29 +149,34 @@ const handler = createMcpHandler(
     // -------------------------------------------------------------------------
     server.tool(
       "profiles_search",
-      "Busca PERSONAS (perfiles/talento) en la base cruda de contactos por lo que saben, y devuelve su CONTACTO PERSONAL (email y teléfono) para llegarles directo. Es la tool para 'buscame perfiles con experiencia en SAP en banca en Argentina'. Pasá en `terms` la NUBE DE TÉRMINOS ya expandida por vos (si el usuario pide 'SAP', mandá ['SAP','S/4HANA','ABAP','Fiori','SuccessFactors','Ariba','HANA']): el servidor los busca como palabra completa en el texto libre del perfil (headline, about, cargo y descripción del puesto), así 'SAP' no matchea 'WhatsApp'. Filtros OPCIONALES para acotar: `country` (nombre exacto, ej 'Argentina'), `industryIds` (hasta 3, de profiles_industries), `titleTerms` (nube para el CARGO/seniority, ej ['Manager','Director','Head']) y `onlyContactable` (true = solo quien tiene algún dato de contacto). CONTACTO: `personalEmail` es el mail de dominio personal (gmail/hotmail/...); si la persona no tiene uno, `personalEmail` viene null y se expone `workEmail` (corporativo) con `emailIsPersonal:false` para que decidas. `personalPhone` prioriza el teléfono de tipo móvil/personal. `linkedinUrl` es el perfil de LinkedIn de la persona (siempre presente): mostralo para que el usuario pueda verificar el perfil. `matchedTerms` explica por qué entró cada persona (auditable, sin diccionario). Si el resultado es enorme, acotá con country/industry (usá profiles_countries / profiles_industries) o paginá con `offset`. PII sensible: mostrá el contacto solo para el uso legítimo de contacto profesional que pidió el usuario.",
+      "Busca PERSONAS (perfiles/talento) en la base cruda de contactos por lo que saben, y devuelve su CONTACTO PERSONAL (email y teléfono) + LinkedIn para llegarles directo. Es la tool para 'buscame perfiles con SAP y experiencia en energía en Argentina' o 'un full stack con SQL y .NET'.\n\nREQUISITOS (`requirements`): es una lista de requisitos que se INTERSECAN (AND). Dentro de CADA requisito, pasá una nube de sinónimos que se combinan con OR. Ejemplos:\n • 'SAP + energía' → requirements: [{terms:['SAP','S/4HANA','ABAP','SuccessFactors']}, {terms:['energía','energy','oil & gas','petróleo','utilities']}]\n • 'full stack con SQL y .NET' → requirements: [{terms:['full stack','fullstack']}, {terms:['SQL','T-SQL','PL/SQL']}, {terms:['.NET','ASP.NET','dotnet','C#']}]\nUN solo requisito = búsqueda simple. VOS aportás el vocabulario (no hay diccionario). El match es por palabra completa sobre el texto libre del perfil, así 'SAP' no matchea 'WhatsApp'. Los tokens con símbolo (.NET, C#, C++) se manejan bien.\n\nHISTORIAL (`includePast`, default true): busca también en los PUESTOS ANTERIORES, no solo el actual — es lo que capta 'experiencia en X'. Ponelo en false para 'quien trabaja con X HOY' (además es bastante más rápido).\n\nOTROS FILTROS: `country` (nombre exacto, ej 'Argentina'), `industryIds` (hasta 3, de profiles_industries; industria de la empresa ACTUAL), `titleTerms` (cargo/seniority, solo sobre título+headline actuales) y `onlyContactable` (solo con algún dato de contacto).\n\nCONTACTO: `personalEmail` = mail de dominio personal (gmail/hotmail/...); si no hay, viene null y se expone `workEmail` con `emailIsPersonal:false`. `personalPhone` prioriza el móvil. `linkedinUrl` siempre viene. `matchedTerms` muestra qué términos matchearon (auditable).\n\nPERFORMANCE: sumar requisitos NO es más lento, es más RÁPIDO y preciso (el motor interseca índices). Lo lento es UN término solo, amplio y muy común (ej solo 'SQL') con historial: en ese caso acotá con country/industry (profiles_countries / profiles_industries), sumá un requisito, o poné includePast:false. PII sensible: mostralo solo para el contacto profesional que pidió el usuario.",
       {
-        concept: z.string().min(2).max(120).describe("El término tal como lo pidió el usuario, para mostrarlo (ej 'SAP')."),
-        terms: z.array(z.string().min(2).max(120)).min(1).max(25).describe("Nube de términos del skill/tecnología/proceso, expandida por vos."),
+        concept: z.string().min(2).max(120).describe("El pedido tal como lo dijo el usuario, para mostrarlo (ej 'SAP + energía')."),
+        requirements: z.array(z.object({
+          label: z.string().max(80).optional().describe("Etiqueta opcional del requisito (ej 'skill', 'industria')."),
+          terms: z.array(z.string().min(2).max(120)).min(1).max(25).describe("Nube de sinónimos de ESTE requisito (OR interno)."),
+        })).min(1).max(6).describe("Requisitos ANDeados. Uno solo = búsqueda simple; varios = intersección."),
         country: z.string().min(2).max(80).optional().describe("Nombre exacto del país (ej 'Argentina'). Filtra por dónde vive la persona."),
-        industryIds: z.array(z.string().min(1).max(80)).max(3).optional().describe("Ids de master_industries (de profiles_industries). Industria de la empresa ACTUAL de la persona."),
+        industryIds: z.array(z.string().min(1).max(80)).max(3).optional().describe("Ids de master_industries (de profiles_industries). Industria de la empresa ACTUAL."),
         includeUnclassified: z.boolean().default(true).describe("Al filtrar por industria, incluir también empresas sin industria clasificada (la mayoría)."),
+        includePast: z.boolean().default(true).describe("Buscar también en puestos anteriores. true = 'experiencia en X'; false = 'trabaja con X hoy' (más rápido)."),
         titleTerms: z.array(z.string().min(2).max(120)).max(15).optional().describe("Nube opcional para acotar por CARGO/seniority (ej ['Manager','Lead','Architect'])."),
         onlyContactable: z.boolean().default(false).describe("true = solo personas con algún email o teléfono cargado."),
         limit: z.number().int().min(1).max(50).default(25),
         offset: z.number().int().min(0).max(5000).default(0).describe("Para paginar cuando hay muchas personas."),
       },
-      async ({ concept, terms, country, industryIds, includeUnclassified, titleTerms, onlyContactable, limit, offset }, extra) =>
+      async ({ concept, requirements, country, industryIds, includeUnclassified, includePast, titleTerms, onlyContactable, limit, offset }, extra) =>
         safely(async () => {
           const auth = authOf(extra)
           await requirePaidMcp(auth, "profiles:read", "read")
-          const prepared = prepareTerms(terms)
+          const groups = requirements.map((r) => r.terms)
           const people = await searchPeople(
-            prepared,
+            groups,
             {
               country: country ?? null,
               industryIds: industryIds ?? [],
               includeUnclassified,
+              includePast,
               titleTerms: titleTerms ?? [],
               onlyContactable,
             },
@@ -182,20 +187,20 @@ const handler = createMcpHandler(
           const withPhone = people.filter((p) => p.personalPhone).length
           return {
             concept,
-            searchedTerms: prepared.raw,
-            filters: { country: country ?? null, industryIds: industryIds ?? [], includeUnclassified, titleTerms: titleTerms ?? [], onlyContactable },
+            requirements: requirements.map((r) => ({ label: r.label ?? null, terms: r.terms })),
+            filters: { country: country ?? null, industryIds: industryIds ?? [], includeUnclassified, includePast, titleTerms: titleTerms ?? [], onlyContactable },
             page: { limit, offset, returned: people.length },
             people,
             summary:
               people.length === 0
-                ? `Nadie menciona ${prepared.raw.join(", ")} en el texto libre con estos filtros. Ampliá la nube de términos, sacá el filtro de cargo, o relajá país/industria.`
-                : `${people.length} personas (página desde ${offset}). ${withPersonalEmail} con email personal, ${withPhone} con teléfono. 'personalEmail' es el mail de dominio personal; si viene null, mirá 'workEmail' (corporativo, emailIsPersonal:false).`,
+                ? `Ninguna persona cumple TODOS los requisitos con estos filtros. Aflojá un requisito, ampliá sus sinónimos, sacá el filtro de cargo, o relajá país/industria.`
+                : `${people.length} personas (página desde ${offset}). ${withPersonalEmail} con email personal, ${withPhone} con teléfono. 'matchedTerms' muestra qué matcheó de cada requisito; 'personalEmail' null ⇒ mirá 'workEmail' (corporativo, emailIsPersonal:false).`,
             nextStep:
               people.length === 0
-                ? "Sin resultados: relajá filtros o cambiá la nube de términos y reintentá. Para ver dónde SÍ aparece el concepto, usá profiles_countries."
+                ? "Sin resultados: aflojá/ampliá requisitos o relajá filtros. Para ver dónde SÍ aparece el concepto, usá profiles_countries."
                 : people.length >= limit
-                  ? "Hay más personas: paginá subiendo `offset`, o acotá con country/industry (profiles_countries / profiles_industries) para achicar el universo."
-                  : "Presentá los perfiles al usuario en tabla: NOMBRE · CARGO · EMPRESA · PAÍS · LINKEDIN · EMAIL PERSONAL · TELÉFONO. Aclarale cuando el mail sea corporativo (emailIsPersonal:false).",
+                  ? "Hay más personas: paginá subiendo `offset`, o acotá con country/industry (profiles_countries / profiles_industries)."
+                  : "Presentá los perfiles en tabla: NOMBRE · CARGO · EMPRESA · PAÍS · LINKEDIN · EMAIL PERSONAL · TELÉFONO. Aclarale cuando el mail sea corporativo (emailIsPersonal:false).",
           }
         })
     )
@@ -271,10 +276,11 @@ const handler = createMcpHandler(
   {
     serverInfo: { name: "asci-profiles", version: "1.0.0" },
     instructions: [
-      "MCP Perfiles es persona-first: busca TALENTO en la base cruda de contactos por lo que la persona sabe (tecnología/proceso/skill) y su experiencia de industria, y devuelve el CONTACTO PERSONAL (email y teléfono) para llegarle directo. La tool central es profiles_search; profiles_countries y profiles_industries son cortes de apoyo para acotar cuando hay demasiados resultados.",
-      "VOS aportás el vocabulario: cuando el usuario nombra una tecnología/proceso/skill, expandilo a una nube de términos (sinónimos, productos, siglas) y pasala en `terms`. No hay diccionario fijo; la riqueza de la búsqueda depende de esa expansión. Mostrale la nube al usuario para que la ajuste.",
-      "Contacto PERSONAL: `personalEmail` es el mail de dominio personal (gmail/hotmail/...). Si la persona no tiene uno, viene null y se expone `workEmail` (corporativo) con `emailIsPersonal:false`; presentalo aclarando que es corporativo. `personalPhone` prioriza el teléfono de tipo móvil/personal. `linkedinUrl` (el perfil de LinkedIn de la persona) viene siempre: mostralo junto al contacto para poder verificar el perfil. Nunca inventes datos de contacto: si no están, decilo.",
-      "Seguí SIEMPRE el `nextStep` de cada respuesta. Un resultado vacío indica cómo corregir el filtro (ampliar términos, sacar cargo, relajar país/industria): hacelo, no te quedes en 'no hay datos'.",
+      "MCP Perfiles es persona-first: busca TALENTO en la base cruda de contactos por lo que la persona sabe (tecnología/proceso/skill) y su experiencia de industria, y devuelve el CONTACTO PERSONAL (email, teléfono) + LinkedIn para llegarle directo. La tool central es profiles_search; profiles_countries y profiles_industries son cortes de apoyo para acotar.",
+      "REQUISITOS ANDeados: profiles_search toma `requirements`, una lista de requisitos que se intersecan. Dentro de cada requisito, una nube de sinónimos (OR). Para 'SAP con experiencia en energía' → un requisito SAP + un requisito energía. Para 'full stack con SQL y .NET' → tres requisitos. Un requisito solo = búsqueda simple. VOS aportás el vocabulario (no hay diccionario); mostrale las nubes al usuario para ajustarlas.",
+      "El match es literal por palabra completa sobre texto libre (no semántico). Por defecto incluye los PUESTOS ANTERIORES (includePast) — es lo que capta 'experiencia'; para 'quien trabaja con X hoy' pasá includePast:false. Las facetas profiles_countries/industries miran el puesto ACTUAL, así que son una aproximación para acotar, no el conteo exacto de la búsqueda con historial.",
+      "Contacto PERSONAL: `personalEmail` es el mail de dominio personal (gmail/hotmail/...). Si no hay, viene null y se expone `workEmail` (corporativo) con `emailIsPersonal:false`; presentalo aclarando que es corporativo. `personalPhone` prioriza el móvil. `linkedinUrl` viene siempre: mostralo. `matchedTerms` muestra qué matcheó de cada requisito. Nunca inventes datos de contacto.",
+      "PERFORMANCE: sumar requisitos es más rápido y preciso (el motor interseca índices). Lo lento es un único término amplio y común (ej solo 'SQL') con historial: acotá con país/industria, sumá un requisito, o poné includePast:false. Seguí SIEMPRE el `nextStep`.",
       "Son datos de contacto PERSONALES (PII sensible). Usalos y mostralos solo para el objetivo de contacto profesional que pidió el usuario. Nunca presentes como dato de ASCI algo que hayas buscado por fuera.",
     ].join("\n"),
   },
