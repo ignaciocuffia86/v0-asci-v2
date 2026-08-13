@@ -478,7 +478,9 @@ const authedHandler = withMcpAuth(
     await logMcpRequest({ principal, method: req.method, statusCode: 200, requestId: crypto.randomUUID(), metadata: { phase: "transport", server: "explore" } })
     return { token, clientId: result.keyId, scopes: principal.scopes, extra: principal as unknown as Record<string, unknown> }
   },
-  { required: true, resourceMetadataPath: "/.well-known/oauth-protected-resource" }
+  // Metadata propia de Explore: publica su resource + solo sus scopes, para que el
+  // consentimiento sepa que se está conectando Explore y pre-seleccione ese permiso.
+  { required: true, resourceMetadataPath: "/.well-known/oauth-protected-resource/explore" }
 )
 
 export { authedHandler as GET, authedHandler as POST, authedHandler as DELETE }
