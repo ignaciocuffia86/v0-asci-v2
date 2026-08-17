@@ -287,7 +287,15 @@ reemplazo* (dispara el flujo de prospects que ya existe), *descartar*.
 marcando contactos que nadie mira. **Es el cambio de menor esfuerzo y mayor efecto
 inmediato.**
 
-### 7.3 Feed global `/movements`
+### 7.3 Feed global `/movements` — ⚠️ SUPERSEDIDO
+
+> **Actualización:** esta sección quedó reemplazada por
+> `docs/feature-centro-de-notificaciones-v2.md`. Los movimientos pasan a ser un
+> tipo de notificación (`kind = 'contact_movement'`) dentro del centro de
+> notificaciones, en lugar de tener un feed propio. El tab por cuenta (§7.1) y el
+> badge (§7.2) se mantienen; **la fase 2 de §8 se absorbe en esa feature**.
+>
+> Se conserva el texto original abajo como referencia del razonamiento.
 
 Ruta nueva en el sidebar (`components/main-sidebar.tsx`, entre *Bookmarks* y
 *Documentos*), con `AppShell` y layout con guard de auth como el resto de v2. Es la
