@@ -3,6 +3,10 @@
 Fecha: 2026-08-17
 Estado: análisis previo a implementación (no se cambió código de la app)
 
+> **Actualización (mismo día):** ver **§9 — Alcance v2-only**. Si el alcance se
+> limita a v2, la conclusión de las secciones 4 y 6 cambia: técnicamente es
+> posible aislarlo, pero el beneficio se concentra en v3 y el ROI en v2 es bajo.
+
 ---
 
 ## 1. Qué es "Instant Navigations"
@@ -231,3 +235,141 @@ Beneficio grande, riesgo casi nulo, no requiere Next 16.3.
 - Skills oficiales de Vercel para agentes:
   `npx skills add vercel/next.js --skill next-cache-components-adoption`
   `npx skills add vercel/next.js --skill next-partial-prefetching-adoption`
+
+---
+
+## 9. Alcance v2-only: ¿es posible?
+
+Pregunta: *aplicar Instant Navigations solamente en v2, sin tocar v3.*
+**Respuesta corta: sí es técnicamente posible, pero el ROI es bajo, porque el
+problema que Instant Navigations resuelve está casi todo en v3.**
+
+### 9.1 La frontera v2/v3, según los documentos de arquitectura
+
+De `docs/architecture-map.json` (nodos de capa 1 — UI) y
+`docs/ARCHITECTURE-RECOMMENDATIONS.md`:
+
+| Zona | Rutas |
+|---|---|
+| **v2** | `app/(landing)/`, `app/search/`, `app/bookmarks/`, `app/admin/` (13 páginas) |
+| **shared** | `app/auth/`, `app/invite/[token]/` (+ `app/profile/`, `app/docs/`, que usan el `AppShell` de v2) |
+| **v3** | `app/v3/**` |
+
+Topología (verificada en el PR #91, documentada en `ARCHITECTURE-RECOMMENDATIONS.md:16`):
+**un repo, dos proyectos Vercel** — `v0-asci-v2` → `asci.bigua.lat` y
+`v0-asci-bot` → `bot.bigua.lat` — sobre **una sola base Supabase**, aisladas por
+schema (`public` vs `v3`). Invariante del proyecto: *"v2 está en producción con
+usuarios reales; ningún cambio de v3 puede afectar v2"*.
+
+### 9.2 Lo que se puede aislar y lo que no
+
+| Cambio | ¿Se puede limitar a v2? |
+|---|---|
+| `<Suspense>`, `loading.tsx`, `<Link>` vs `router.push`, sacar auth del layout | **Sí**, es por archivo. Aislamiento perfecto. |
+| `"use cache"` / `"use cache: private"` | **Sí**, es por función. |
+| `cacheComponents: true` | **No por ruta.** Es un flag global de `next.config.mjs`. |
+| `partialPrefetching: true` | **No por ruta.** Ídem. |
+
+El escape hatch oficial no es por deploy sino **por segmento**: una línea en
+`app/v3/layout.tsx`
+
+```tsx
+export const instant = false
+```
+
+opta a **todo el árbol `/v3`** fuera de la validación de instant navigation, y
+lo deja bloqueando como hoy. Eso es exactamente el mecanismo que Next documenta
+para adopción incremental.
+
+**Advertencia importante sobre el deploy compartido:** los dos proyectos Vercel
+buildean **el mismo `next.config.mjs`**. No hay branching por dominio ni por
+variable de entorno en la config (verificado). Encender `cacheComponents` toca
+los dos deploys, así que "solo v2" es un aislamiento **de código, no de deploy**.
+Y `instant = false` **no** neutraliza dos efectos globales del flag:
+
+1. Los `export const dynamic / revalidate / fetchCache` erroran el build en
+   cualquier segmento, v3 incluido.
+2. El IO síncrono (`new Date()`, `Date.now()`, `Math.random()`,
+   `crypto.randomUUID()`) durante el prerender rompe el build y `instant = false`
+   **no lo tapa**. En `app/v3/**/*.tsx` no hay ninguno, pero en `lib/v3`,
+   `app/actions/v3` y `components/v3` hay **142 ocurrencias** a auditar.
+
+O sea: el riesgo sobre v3 no es cero, es "acotado y auditable".
+
+### 9.3 El hallazgo que cambia la recomendación
+
+**Las páginas de v2 ya son client components.**
+
+| Ruta v2 | Tipo |
+|---|---|
+| `app/(landing)/page.tsx` | `"use client"` |
+| `app/search/page.tsx` | `"use client"` |
+| `app/bookmarks/page.tsx` | `"use client"` |
+| `app/bookmarks/[id]/page.tsx` | `"use client"` |
+| `app/docs/page.tsx`, `app/profile/page.tsx` | `"use client"` |
+| `app/admin/**` | 6 client, 5 server async, 2 server sync |
+
+La guía de Next lo dice explícitamente: *"A soft navigation into a page with
+`"use client"` at the top behaves like a single-page app transition, with no
+server render at navigation time, **which makes it instant**."*
+
+Además, de los 4 `loading.tsx` del repo, **3 ya están en v2** (`/`, `/search`,
+`/bookmarks`, `/bookmarks/[id]`). v3 no tiene ninguno.
+
+Conclusión: **la cascada de servidor que bloquea el render es un problema de v3**
+(layout async + `getOnboardingStatus()` repetido por página + datos, todo
+secuencial). v2 ya navega como SPA.
+
+### 9.4 Qué queda por ganar en v2 (poco, pero real)
+
+1. **Los 5 layouts con auth en el top level** — `search`, `bookmarks`, `admin`,
+   `profile`, `docs` — son el mismo patrón copiado:
+
+   ```tsx
+   const supabase = await createClient()
+   const { data: { user } } = await supabase.auth.getUser()   // ← bloquea
+   if (!user) redirect("/auth/login")
+   return <AppShell>{children}</AppShell>
+   ```
+
+   Se paga en carga directa y al cruzar de un layout a otro (`/search → /bookmarks`).
+   `admin` suma una query a `profiles`. **Este es el único punto donde Instant
+   Navigations mueve la aguja en v2**, y se arregla igual de bien sin los flags:
+   unificar los 5 en un componente dentro de `<Suspense>` (o mover el guard a `proxy.ts`).
+
+2. **Landing y `/docs`**: contenido no personalizado → shell estático real y `"use cache"`.
+
+3. **`/search`**: el catálogo de empresas es dato compartido (no per-tenant),
+   candidato legítimo a `"use cache"` en servidor.
+
+### 9.5 Lo que Instant Navigations NO arregla en v2
+
+La lentitud percibida de v2 **no es render de servidor, es fetching en el cliente**:
+`app/bookmarks/page.tsx`, `components/search/process-search.tsx`, etc. montan y
+recién ahí disparan `useEffect` + `createClient()` del browser contra Supabase.
+Instant Navigations no ve nada de eso: la navegación ya es instantánea, lo que
+falta son los datos. Para eso sirven SWR con `fallbackData`, prefetch de datos al
+hover, o subir esas queries a server components — no `cacheComponents`.
+
+### 9.6 Recomendación para alcance v2-only
+
+**No conviene encender `cacheComponents` + `partialPrefetching` sólo para v2.**
+Se paga el costo completo (upgrade a 16.3, validación global, riesgo sobre el
+deploy compartido con v3, auditoría de 142 sync IO) para mejorar rutas que ya
+navegan como SPA.
+
+Lo que sí conviene hacer en v2, **hoy y sin cambiar de versión de Next**:
+
+| # | Acción | Archivos | Esfuerzo |
+|---|---|---|---|
+| 1 | Unificar los 5 layouts en uno con el auth read dentro de `<Suspense>` | `app/{search,bookmarks,admin,profile,docs}/layout.tsx` | 0,5 día |
+| 2 | `loading.tsx` en `/admin` y `/profile` (los que faltan) | 2 archivos nuevos | 1 h |
+| 3 | Server-side + `<Suspense>` en las 5 páginas admin async | `app/admin/{dictionary,logs,prompts,templates,usage}` | 0,5 día |
+| 4 | Atacar el fetching en `useEffect` de `/search` y `/bookmarks` (SWR + `fallbackData`) | `components/search/*`, `app/bookmarks/*` | 1–2 días |
+
+Eso da la mejora que se busca, con cero riesgo para v3 y sin tocar `next.config.mjs`.
+
+**Y si en algún momento se quiere el paquete completo:** el orden natural es al
+revés del pedido — adoptarlo **primero en v3** (que es donde está el dolor), con
+`instant = false` en los layouts de v2 para blindar producción. El invariante del
+proyecto ("v3 no puede afectar a v2") juega a favor de esa dirección, no en contra.
