@@ -289,12 +289,325 @@ La fase 1 es la que más rinde: no toca ningún cron, no agrega filas, y ya resu
 | **Crecimiento de `user_notifications`.** | Retención desde el día uno en `/api/cron/cleanup`, que ya corre semanal. |
 | **Ruido en usuarios con muchos bookmarks.** | Ordenar por `priority` del bookmark (`alta` primero): el campo ya existe en `public.bookmarks`. |
 
-### Decisiones que quiero confirmar
+### Decisiones tomadas (2026-08-17)
 
-1. **¿Watermark por cuenta o por tab?** Propongo empezar por cuenta (simple) y usar
-   `seen_by_tab` sólo para el puntito de los tabs.
-2. **¿Panel en la campanita o página `/notifications`?** Propongo panel; página sólo
-   si el historial se vuelve necesario.
-3. **¿El email semanal entra en el alcance inicial?** Propongo que no: primero medir
-   si la gente usa el panel. El email sin uso previo es la vía rápida a que lo marquen
-   como spam.
+1. **Watermark por cuenta**, no por tab. Se descarta `seen_by_tab` en fase 1.
+2. **Panel en la campanita.** Sin página `/notifications`.
+3. **Sin email.** Primero medir si el panel se usa.
+
+La spec de construcción con estas decisiones está en §11.
+
+---
+
+## 11. Especificación de construcción — Fase 1
+
+Decisiones cerradas: **watermark por cuenta, panel en la campanita, sin email.**
+
+### 11.1 Volumen real (medido en producción, 2026-08-17)
+
+| Tabla | Filas totales | Últimos 30 días |
+|---|---:|---:|
+| `signals` | **1.694.025** | **189.914** |
+| `job_postings` | 41.224 | 7.767 |
+| `company_news` | 1.133 | — |
+| `company_implementations` | 727 | — |
+| `radar_findings` | 706 | 310 |
+| `bookmarks` | 2.322 (67 usuarios) | — |
+
+Bookmarks por usuario: **promedio 35, p90 108, máximo 411**.
+
+### 11.2 Consecuencia: `signals` queda afuera
+
+190 mil filas en 30 días es un **firehose del ETL**, no una novedad comercial: las
+señales se generan cuando se ingestan contactos y vacantes, no cuando pasa algo en
+la cuenta. Contarlas produciría cards del tipo *"Arcor · 4.812 señales nuevas"*, que
+es ruido puro.
+
+Además `signals` no tiene índice compuesto `(company_id, created_at)` — sólo
+`idx_signals_company_id` (script 001) — así que contar por fecha sobre 1,7M de
+filas sería el único riesgo de performance de toda la feature.
+
+**Fase 1 cuenta cuatro productores: noticias, implementaciones, vacantes y radar.**
+Las señales, si alguna vez entran, lo hacen agregadas por diccionario
+(*"3 tecnologías nuevas detectadas"*), no por fila.
+
+Con esos cuatro, el peor caso —un usuario con 411 bookmarks— cuenta sobre tablas de
+41k, 1,1k, 727 y 706 filas, todas indexadas por la clave de acceso. No hace falta
+contador materializado.
+
+### 11.3 Migración: `scripts/503_notifications_watermarks.sql`
+
+```sql
+-- 1. Tabla de watermarks (una fila por usuario × cuenta)
+create table if not exists public.user_account_watermarks (
+  user_id      uuid not null references auth.users(id) on delete cascade,
+  bookmark_id  uuid not null references public.bookmarks(id) on delete cascade,
+  last_seen_at timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
+  primary key (user_id, bookmark_id)
+);
+
+create index if not exists idx_watermarks_user
+  on public.user_account_watermarks (user_id);
+
+alter table public.user_account_watermarks enable row level security;
+
+drop policy if exists "own watermarks" on public.user_account_watermarks;
+create policy "own watermarks" on public.user_account_watermarks
+  for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);   -- WITH CHECK explícito (auditoría P0.4)
+```
+
+```sql
+-- 2. Índices que faltan en los productores.
+--    CONCURRENTLY no corre dentro de una transacción: este bloque va en un
+--    archivo aparte o se ejecuta suelto (precedente: script 165).
+create index concurrently if not exists idx_job_postings_company_created
+  on public.job_postings (company_id, created_at desc);
+
+create index concurrently if not exists idx_company_news_bookmark_created
+  on public.company_news (bookmark_id, created_at desc);
+
+create index concurrently if not exists idx_company_impl_bookmark_created
+  on public.company_implementations (bookmark_id, created_at desc);
+
+-- radar_findings ya tiene (company_id, detected_at desc) — script 400
+```
+
+```sql
+-- 3. RPC de novedades
+create or replace function public.get_account_updates(p_limit int default 100)
+returns table (
+  bookmark_id    uuid,
+  company_id     uuid,
+  company_name   text,
+  priority       text,
+  since          timestamptz,
+  news_count     int,
+  impl_count     int,
+  jobs_count     int,
+  radar_count    int,
+  total_count    int,
+  last_update_at timestamptz
+)
+language sql
+stable
+security definer          -- obligatorio: radar_findings sólo es legible por service_role
+set search_path = public  -- evita search_path hijacking
+as $$
+  with mine as (
+    select
+      b.id as bookmark_id,
+      b.company_id,
+      b.priority,
+      coalesce(w.last_seen_at, b.created_at) as since
+    from public.bookmarks b
+    left join public.user_account_watermarks w
+      on w.bookmark_id = b.id and w.user_id = b.user_id
+    where b.user_id = auth.uid()          -- nunca un parámetro: no se puede suplantar
+  ),
+  counted as (
+    select
+      m.*,
+      (select count(*) from public.company_news n
+         where n.bookmark_id = m.bookmark_id and n.created_at > m.since) as news_count,
+      (select count(*) from public.company_implementations i
+         where i.bookmark_id = m.bookmark_id and i.created_at > m.since) as impl_count,
+      (select count(*) from public.job_postings j
+         where j.company_id = m.company_id and j.created_at > m.since) as jobs_count,
+      (select count(*) from public.radar_findings r
+         where r.company_id = m.company_id and r.detected_at > m.since) as radar_count,
+      greatest(
+        coalesce((select max(n.created_at) from public.company_news n
+                   where n.bookmark_id = m.bookmark_id and n.created_at > m.since), m.since),
+        coalesce((select max(i.created_at) from public.company_implementations i
+                   where i.bookmark_id = m.bookmark_id and i.created_at > m.since), m.since),
+        coalesce((select max(j.created_at) from public.job_postings j
+                   where j.company_id = m.company_id and j.created_at > m.since), m.since),
+        coalesce((select max(r.detected_at) from public.radar_findings r
+                   where r.company_id = m.company_id and r.detected_at > m.since), m.since)
+      ) as last_update_at
+    from mine m
+  )
+  select
+    c.bookmark_id, c.company_id, co.name, c.priority, c.since,
+    c.news_count::int, c.impl_count::int, c.jobs_count::int, c.radar_count::int,
+    (c.news_count + c.impl_count + c.jobs_count + c.radar_count)::int as total_count,
+    c.last_update_at
+  from counted c
+  join public.companies co on co.id = c.company_id
+  where (c.news_count + c.impl_count + c.jobs_count + c.radar_count) > 0
+  order by
+    case c.priority when 'alta' then 0 when 'transaccional' then 1 else 2 end,
+    c.last_update_at desc
+  limit p_limit;
+$$;
+
+revoke all on function public.get_account_updates(int) from public;
+grant execute on function public.get_account_updates(int) to authenticated;
+```
+
+> **Nota de seguridad:** el `auth.uid()` va *dentro* de la función, no como
+> parámetro. Es más estricto que `get_prospects_for_icebreakers(p_bookmark_id,
+> p_user_id)` (script 098), que confía en un `user_id` que manda el cliente.
+
+```sql
+-- 4. Marcar cuenta como vista (upsert idempotente)
+create or replace function public.mark_account_seen(p_bookmark_id uuid)
+returns timestamptz            -- devuelve el watermark ANTERIOR
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_previous timestamptz;
+begin
+  select coalesce(w.last_seen_at, b.created_at) into v_previous
+  from public.bookmarks b
+  left join public.user_account_watermarks w
+    on w.bookmark_id = b.id and w.user_id = b.user_id
+  where b.id = p_bookmark_id and b.user_id = auth.uid();
+
+  if v_previous is null then
+    raise exception 'bookmark no encontrado o no pertenece al usuario';
+  end if;
+
+  insert into public.user_account_watermarks (user_id, bookmark_id, last_seen_at, updated_at)
+  values (auth.uid(), p_bookmark_id, now(), now())
+  on conflict (user_id, bookmark_id)
+  do update set last_seen_at = now(), updated_at = now();
+
+  return v_previous;
+end;
+$$;
+
+revoke all on function public.mark_account_seen(uuid) from public;
+grant execute on function public.mark_account_seen(uuid) to authenticated;
+```
+
+### 11.4 La regla del watermark (lo más importante del diseño)
+
+**Se lee primero, se actualiza después.** `mark_account_seen` devuelve el watermark
+*anterior* justamente para eso:
+
+1. El usuario abre `/bookmarks/{id}`.
+2. La página llama `mark_account_seen(id)` → recibe `previousSeenAt` y ya deja el
+   watermark en `now()`.
+3. `previousSeenAt` baja por props a los tabs, que marcan como **"nuevo"** las filas
+   posteriores a esa fecha.
+
+Sin esto, abrir la cuenta borraría la novedad antes de que el usuario la vea, que es
+el error clásico de esta feature.
+
+**El trade-off aceptado de "watermark por cuenta":** abrir la cuenta marca como
+vista *toda* la cuenta, incluidos los tabs que no se abrieron. Se compensa con el
+resaltado por `previousSeenAt`, que sobrevive a la visita.
+
+### 11.5 Archivos
+
+**Nuevos**
+
+| Archivo | Qué |
+|---|---|
+| `scripts/503_notifications_watermarks.sql` | Tabla + RPCs + grants |
+| `scripts/504_notifications_indexes.sql` | Los 3 `CREATE INDEX CONCURRENTLY` (fuera de transacción) |
+| `app/actions/notifications.ts` | `getAccountUpdates()`, `markAccountSeen(bookmarkId)` |
+| `components/notifications/notification-bell.tsx` | Campanita + badge + `Popover` |
+| `components/notifications/notification-card.tsx` | Card de cuenta con deep-link |
+| `hooks/use-account-updates.ts` | SWR con `refreshInterval: 60_000` |
+
+**Modificados**
+
+| Archivo | Cambio |
+|---|---|
+| `components/main-sidebar.tsx` | Montar `<NotificationBell />` en el header del sidebar y en la barra mobile |
+| `app/bookmarks/[id]/page.tsx` | Llamar `markAccountSeen` al montar; pasar `previousSeenAt` a los tabs |
+| `app/bookmarks/[id]/_components/{news,job-postings,intelligence}-tab.tsx` | Badge "nuevo" en las filas posteriores a `previousSeenAt` |
+| `app/api/cron/cleanup/route.ts` | Borrar watermarks huérfanos (defensivo; el cascade ya cubre el caso normal) |
+
+### 11.6 Contratos
+
+```ts
+// app/actions/notifications.ts
+export type AccountUpdate = {
+  bookmarkId: string
+  companyId: string
+  companyName: string
+  priority: "alta" | "transaccional" | "baja" | null
+  since: string
+  newsCount: number
+  implCount: number
+  jobsCount: number
+  radarCount: number
+  totalCount: number
+  lastUpdateAt: string
+}
+
+export async function getAccountUpdates(limit = 100): Promise<AccountUpdate[]>
+export async function markAccountSeen(bookmarkId: string): Promise<string> // previousSeenAt
+```
+
+**Deep-link por productor dominante** (el de mayor conteo define el tab destino):
+
+| Productor | Destino |
+|---|---|
+| `newsCount` | `/bookmarks/{id}?tab=news` |
+| `implCount` / `radarCount` | `/bookmarks/{id}?tab=intelligence` |
+| `jobsCount` | `/bookmarks/{id}?tab=jobpostings` |
+
+`?tab=` ya funciona sin tocar nada (`app/bookmarks/[id]/page.tsx:58`).
+
+### 11.7 Copy de las cards
+
+```
+Cencosud                                    hace 2 h
+3 noticias · 1 vacante                   [Ver novedades →]
+
+Falabella                                   ayer
+4 vacantes nuevas                        [Ver novedades →]
+
+Arcor                                       hace 3 días
+2 implementaciones detectadas            [Ver novedades →]
+```
+
+Sin cuentas con novedades: *"Estás al día. Te avisamos cuando haya algo nuevo en
+tus cuentas guardadas."*
+
+Badge de la campanita = **cantidad de cuentas con novedades**, no la suma de hechos
+(un badge en "47" por 47 vacantes de una sola cuenta es ansiedad, no información).
+
+### 11.8 Casos borde
+
+| Caso | Comportamiento |
+|---|---|
+| Bookmark sin watermark (nunca abierto) | `since = bookmarks.created_at`: lo anterior a guardarlo no cuenta como novedad |
+| Usuario con 411 bookmarks | `p_limit` + orden por `priority` y recencia; el panel muestra top 10 con "ver todas" |
+| `created_at` nulo en news/implementations | La comparación `> since` lo descarta. Aceptable: son filas viejas anteriores al default |
+| Bookmark borrado | `on delete cascade` limpia el watermark |
+| Dato creado por el propio usuario (`requested_by = él`) | **Cuenta igual**: pidió un research asincrónico y el aviso de que terminó es justamente el valor |
+| Dos pestañas abiertas | El upsert es idempotente; gana el `now()` más reciente |
+
+### 11.9 Plan de prueba
+
+- **SQL**: correr `get_account_updates()` como un usuario real con `EXPLAIN ANALYZE`
+  antes y después de los índices. Objetivo: **< 200 ms** para el usuario de 411 bookmarks.
+- **Unit (vitest)**: la lógica de derivación de la card — tab destino según el
+  productor dominante, armado del copy, pluralización. Es lo único puro que hay.
+- **Manual**: bookmarkear una cuenta, insertar una noticia con fecha posterior,
+  verificar que la card aparece, abrir la cuenta, verificar que las filas nuevas
+  quedan resaltadas y que la card desaparece al recargar.
+- **RLS**: con dos usuarios, confirmar que `get_account_updates()` nunca devuelve
+  bookmarks ajenos y que `mark_account_seen` de un bookmark ajeno tira excepción.
+
+### 11.10 Definition of done
+
+- [ ] `503` y `504` aplicados; `EXPLAIN ANALYZE` bajo 200 ms en el peor caso
+- [ ] Campanita visible en desktop y mobile, con badge por cantidad de cuentas
+- [ ] Card lleva al tab correcto y la cuenta se marca como vista
+- [ ] Las filas nuevas quedan resaltadas usando `previousSeenAt` en esa misma visita
+- [ ] Estado vacío implementado
+- [ ] Test de RLS con dos usuarios en verde
+- [ ] `pnpm typecheck` y `pnpm test` en verde
+
+**Estimación: 3–4 días.** No toca ningún cron y no agrega filas por evento.
