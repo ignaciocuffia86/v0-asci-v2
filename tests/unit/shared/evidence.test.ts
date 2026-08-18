@@ -202,6 +202,17 @@ describe("columna legacy `source` de company_news", () => {
   })
 })
 
+describe("atribución del modelo colaborativo", () => {
+  it("propaga el workspace en las tres formas de evidencia", () => {
+    const ws = "33333333-3333-3333-3333-333333333333"
+    const base = { companyId: COMPANY, title: "t", producedBy: "mcp_client" as const, sourcedByWorkspace: ws }
+
+    expect(buildEvidenceRow({ ...base, kind: "news" }).row.sourced_by_workspace).toBe(ws)
+    expect(buildEvidenceRow({ ...base, kind: "implementation" }).row.sourced_by_workspace).toBe(ws)
+    expect(buildEvidenceRow({ ...base, kind: "radar", radarType: "tech" }).row.sourced_by_workspace).toBe(ws)
+  })
+})
+
 describe("isProducedBy", () => {
   it("acepta el vocabulario y rechaza el resto", () => {
     expect(isProducedBy("mcp_client")).toBe(true)

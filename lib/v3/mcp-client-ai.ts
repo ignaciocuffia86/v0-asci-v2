@@ -511,6 +511,7 @@ async function submitExternalDrilldown(
     ? await persistClientSuccessCases({
         companyId: execution.company_id,
         companyName: evidence.companyName,
+        workspaceId: principal.workspaceId,
         userId: principal.userId,
         searchContext: evidence.term ?? "v3-drilldown",
         // Normalización explícita: zod devuelve `undefined` para lo ausente y el

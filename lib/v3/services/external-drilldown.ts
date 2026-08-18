@@ -128,6 +128,13 @@ async function applyGuardrails<T extends { title: string; sourceUrl: string }>(
 export async function persistClientSuccessCases(params: {
   companyId: string
   companyName: string
+  /**
+   * Workspace que disparó la búsqueda. El dato es compartido —cualquier tenant
+   * lo lee— pero la atribución permite auditar quién lo trajo y revertir en
+   * bloque. Las noticias ya lo guardaban; los casos de éxito no, así que la
+   * mitad de la evidencia del MCP quedaba sin origen.
+   */
+  workspaceId?: string | null
   userId: string
   searchContext: string
   cases: ClientSuccessCase[]
@@ -167,6 +174,7 @@ export async function persistClientSuccessCases(params: {
       // lee la UI de v2 (directa|convergente|inferencia).
       evidenceLevel: canonical,
       searchContext: params.searchContext,
+      sourcedByWorkspace: params.workspaceId ?? null,
       convergentSources: 1 + supporting.length,
       supportingSources: supporting,
       producedBy: "mcp_client" as const,
@@ -238,6 +246,11 @@ export async function persistClientNews(params: {
       sourceName: item.sourceName?.slice(0, 120) ?? null,
       occurredAt: item.publishedAt,
       direction,
+      // Estas notas pasaron el guardrail de URL viva, así que no son una
+      // inferencia. Se aplica el mismo criterio que en los casos de éxito: una
+      // sola fuente viva es techo `Probable`; `Confirmado` exige convergencia y
+      // ClientNewsItem no trae fuentes de respaldo, así que nunca puede llegar.
+      evidenceLevel: "Probable" as const,
       producedBy: "mcp_client" as const,
       sourcedByWorkspace: params.workspaceId,
       // Marca de que las URLs pasaron por checkUrlsAlive en este momento.

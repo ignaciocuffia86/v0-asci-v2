@@ -4,6 +4,14 @@ import type { TechRadarRunResult } from "@/lib/tech-radar"
 /**
  * Registro de corridas del Tech Radar en `v3.tech_radar_runs`.
  *
+ * OJO con el alcance, porque el nombre engaña: acá se indexan sólo las corridas
+ * cuyos hallazgos aterrizan en `public.company_implementations` (los dos callers
+ * de abajo). NO se indexa `public.radar_findings` —eso lo escribe
+ * `services/radar.ts`, que lleva su propio índice en
+ * `public.radar_research_runs`— ni el research de noticias, que se audita en
+ * `v3.client_ai_executions` y por artículo en `public.company_news`.
+ * Confundirlos ya llevó una vez a diagnosticar una pérdida de datos inexistente.
+ *
  * Es el equivalente, POR CORRIDA, a lo que las noticias dejan por artículo: quién
  * disparó el radar, cuándo, con qué señales, cuánto costó y cuántos hallazgos
  * produjo. Además es la base para que el MCP consuma el Tech Radar como una nueva

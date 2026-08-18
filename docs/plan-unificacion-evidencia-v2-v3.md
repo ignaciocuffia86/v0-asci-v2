@@ -79,6 +79,36 @@ recomendado** — de menos a más riesgoso, un PR cada uno:
 5. `app/api/research/implementations/route.ts`
 6. `app/api/research/news/route.ts` *(el último: es el que más tráfico tiene)*
 
+### 0.3 Invariante de atribución: el cache es compartido
+
+`sourced_by_workspace` marca **quién trajo** el dato, **no quién puede leerlo**.
+La evidencia se paga una vez y la aprovechan todos: si un workspace investiga una
+compañía, cualquier usuario que la tenga en bookmarks ve esas noticias y recibe la
+notificación correspondiente.
+
+Verificado en producción el 2026-08-18 — **ninguna policy de SELECT mira la
+columna**:
+
+| Tabla | SELECT | UPDATE |
+|---|---|---|
+| `company_news` | `auth.uid() IS NOT NULL` (todo autenticado) | `sourced_by_workspace` propio, o superadmin |
+| `company_implementations` | compañías que el usuario tiene en bookmarks | `auth.uid() IS NOT NULL` |
+
+La atribución gobierna la **escritura** (quién puede corregir lo que trajo) y la
+**auditoría** (revertir en bloque si el contenido de un workspace resultara malo).
+Nunca la lectura. Quedó asentado como comentario en las cuatro columnas
+(`20260818061000_evidence_attribution_invariant`) para que una policy futura no lo
+rompa por descuido.
+
+> **Asimetría abierta:** `company_news` es visible para todo autenticado, mientras
+> `company_implementations` sólo se ve si la compañía está bookmarkeada. Para las
+> notificaciones no cambia nada —la RPC es `security definer`— pero son dos
+> criterios distintos para el mismo cache compartido. Abrir el SELECT de
+> implementations sería *ampliar* acceso sobre una tabla de v2 en producción, así
+> que no se tocó: queda como decisión pendiente.
+
+---
+
 ### 0.2 Hallazgo durante la migración: un tercer dialecto
 
 `evidence_level` usa **dos vocabularios distintos** en producción, verificado:
