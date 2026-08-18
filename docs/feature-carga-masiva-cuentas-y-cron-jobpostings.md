@@ -225,6 +225,27 @@ Matching síncrono hasta 500 filas (queries en chunks de 50 nombres por IN, como
 blueprint); si en la práctica se queda corto, se pasa a procesamiento por polling del
 status (la persistencia ya lo permite).
 
+### 4.7 Alcance respecto de v2 (bookmarks)
+
+El alta masiva escribe **solo** `v3.followed_accounts`: no crea bookmarks v2. No es una
+omisión sino una imposibilidad del modelo — en v2 no existen workspaces, los bookmarks
+son por usuario (`public.bookmarks.user_id`), así que "dar de alta en el workspace v2"
+no es una operación definida.
+
+Lo que sí cruza a v2 sin trabajo extra: `companies`, `job_postings` y `signals` son
+tablas globales compartidas. El cron mensual (Parte 3) enriquece esas tablas, así que
+los usuarios v2 con bookmarks de las mismas compañías ven las vacantes y señales nuevas
+automáticamente (hoy: 67 usuarios y 2.323 bookmarks en v2, 48 de ellos ya apuntan a
+compañías seguidas en v3).
+
+**Puente opcional (decisión de producto pendiente, ver Preguntas abiertas):** checkbox
+en el paso de confirmación del wizard — "crear también bookmarks v2 para [usuarios]" —
+implementado con `bookmarkCompanyBatch()` (ya existe en `app/actions/bookmarks.ts`).
+Sería un alta única en el momento del import, **no** una sincronización bidireccional:
+unfollow v3 no borra bookmarks, y el status/prioridad del kanban v2 no tiene
+equivalente en v3, así que mantener espejo permanente es un problema de semántica que
+no vale su costo.
+
 ---
 
 ## 5. Parte 2 — LinkedIn company ID numérico (prerequisito del scraping "bien apuntado")
@@ -456,3 +477,6 @@ Fases 3 y 4 son independientes de la 2; el cron mejora su puntería solo con des
    propia? (Hoy las señales derivadas ya entran; es cuestión de presentación.)
 4. Límite de 500 filas por import: validar contra el tamaño real de listas ABM de los
    clientes actuales.
+5. Puente a v2 (ver 4.7): ¿se ofrece el checkbox de crear bookmarks v2 en el import, y
+   para qué usuarios? Relevante mientras la base activa siga mayormente en v2
+   (67 usuarios v2 vs 3 v3 a ago 2026).
