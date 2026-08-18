@@ -1,8 +1,8 @@
 import "server-only"
 
-import { createAdminClient } from "@/lib/supabase/admin"
+import { recordEvidenceBatch } from "@/lib/shared/evidence"
 import { checkUrlsAlive, filterRelevantToCompany } from "@/lib/ai-structurer"
-import { toSignalDirection, toV2EvidenceLevel, toEvidenceLevel, normalizeNewsCategory, type SignalDirection } from "./evidence-level"
+import { toSignalDirection, toEvidenceLevel, normalizeNewsCategory, type SignalDirection } from "./evidence-level"
 
 // ═══════════════════════════════════════════════════════════
 // Drilldown externo: casos de éxito y noticias buscados por el CLIENTE.
@@ -140,8 +140,7 @@ export async function persistClientSuccessCases(params: {
 
   if (!kept.length) return report
 
-  const admin = createAdminClient()
-  const rows = kept.map((item) => {
+  const evidencias = kept.map((item) => {
     const supporting = (item.supportingSourceUrls ?? []).filter(Boolean)
     // El nivel NO se toma tal cual del cliente: un modelo no puede autoadjudicarse
     // evidencia directa por afirmarlo. Se deriva de lo que quedó verificado.
@@ -153,28 +152,30 @@ export async function persistClientSuccessCases(params: {
     const ceiling = supporting.length >= 1 ? "Confirmado" as const : "Probable" as const
     const canonical = declared === "Inferido" ? "Inferido" as const : ceiling
     return {
-      company_id: params.companyId,
-      user_id: params.userId,
+      kind: "implementation" as const,
+      companyId: params.companyId,
+      userId: params.userId,
       title: item.title.slice(0, 300),
-      provider_name: item.providerName?.slice(0, 240) ?? null,
+      providerName: item.providerName?.slice(0, 240) ?? null,
       technology: item.technology?.slice(0, 240) ?? null,
       summary: item.summary?.slice(0, 2000) ?? null,
       results: item.results?.slice(0, 800) ?? null,
-      source_url: item.sourceUrl,
-      source_name: item.sourceName?.slice(0, 120) ?? null,
-      published_at: item.publishedAt,
-      // Traducido al vocabulario de v2: la UI de v2 lee esta columna.
-      evidence_level: toV2EvidenceLevel(canonical),
-      search_context: params.searchContext,
-      convergent_sources: 1 + supporting.length,
-      supporting_source_urls: supporting,
-      ai_provider: "client_mcp",
-      prompt_version: "v3-client",
+      sourceUrl: item.sourceUrl,
+      sourceName: item.sourceName?.slice(0, 120) ?? null,
+      occurredAt: item.publishedAt,
+      // Se declara el canónico; recordEvidence lo traduce al vocabulario que
+      // lee la UI de v2 (directa|convergente|inferencia).
+      evidenceLevel: canonical,
+      searchContext: params.searchContext,
+      convergentSources: 1 + supporting.length,
+      supportingSources: supporting,
+      producedBy: "mcp_client" as const,
+      aiProvider: "client_mcp",
+      promptVersion: "v3-client",
     }
   })
 
-  const { error } = await admin.from("company_implementations").insert(rows)
-  if (error) throw new Error(`No se pudieron guardar los casos de éxito: ${error.message}`)
+  await recordEvidenceBatch(evidencias)
   return report
 }
 
@@ -215,12 +216,11 @@ export async function persistClientNews(params: {
   const directions: Record<SignalDirection, number> = { expansion: 0, contraccion: 0, neutro: 0 }
   if (!kept.length) return { ...report, directions }
 
-  const admin = createAdminClient()
   const verifiedAt = new Date().toISOString()
   // Categorías que hubo que corregir. Se informan al cliente en vez de arreglarlas
   // en silencio, para que el modelo aprenda a mandar la taxonomía correcta.
   const remappedCategories: { title: string; from: string | null; to: string }[] = []
-  const rows = kept.map((item) => {
+  const evidencias = kept.map((item) => {
     const direction = toSignalDirection(item.direction)
     directions[direction] += 1
     const cat = normalizeNewsCategory(item.category)
@@ -228,70 +228,30 @@ export async function persistClientNews(params: {
       remappedCategories.push({ title: item.title.slice(0, 80), from: cat.original, to: cat.category })
     }
     return {
-      company_id: params.companyId,
-      user_id: params.userId,
+      kind: "news" as const,
+      companyId: params.companyId,
+      userId: params.userId,
       title: item.title.slice(0, 500),
       summary: item.summary?.slice(0, 2000) ?? null,
       category: cat.category,
-      // La columna de v2 se llama source_url, no url.
-      source_url: item.sourceUrl,
-      source_name: item.sourceName?.slice(0, 120) ?? null,
-      published_at: item.publishedAt,
+      sourceUrl: item.sourceUrl,
+      sourceName: item.sourceName?.slice(0, 120) ?? null,
+      occurredAt: item.publishedAt,
       direction,
-      source: "client_mcp",
-      sourced_by_workspace: params.workspaceId,
+      producedBy: "mcp_client" as const,
+      sourcedByWorkspace: params.workspaceId,
       // Marca de que las URLs pasaron por checkUrlsAlive en este momento.
-      verified_at: verifiedAt,
+      verifiedAt,
     }
   })
 
-  // Reencontrar una noticia ya conocida es lo NORMAL cuando se re-investiga una cuenta, no
-  // un error del cliente: un `insert` plano fallaba entero por el 23505 de UNA sola nota
-  // repetida y se perdían también las nuevas del mismo lote.
-  //
-  // El `.upsert({ onConflict })` que había acá para resolverlo NO funcionaba:
-  // `idx_company_news_unique_source` es un índice PARCIAL (`WHERE source_url IS NOT NULL`) y
-  // Postgres solo lo infiere si el ON CONFLICT repite ese predicado, algo que supabase-js no
-  // tiene forma de expresar. Verificado en runtime: tiraba "there is no unique or exclusion
-  // constraint matching the ON CONFLICT specification", así que NINGUNA noticia del drilldown
-  // llegaba a guardarse (0 filas con `source='client_mcp'`).
-  //
-  // El índice vive en una tabla que v2 usa en producción, así que se arregla del lado de v3:
-  // se descartan las conocidas con un SELECT previo y se insertan solo las nuevas.
-  const urls = rows.map((r) => r.source_url).filter((u): u is string => Boolean(u))
-  const { data: existing, error: existingError } = await admin
-    .from("company_news")
-    .select("source_url")
-    .eq("company_id", params.companyId)
-    .in("source_url", urls)
-  if (existingError) {
-    throw new Error(`No se pudieron revisar las noticias existentes: ${existingError.message}`)
-  }
-  const conocidas = new Set((existing ?? []).map((r) => r.source_url as string))
-  const nuevas = rows.filter((r) => !conocidas.has(r.source_url))
-
-  const inserted: { id: string }[] = []
-  if (nuevas.length > 0) {
-    const res = await admin.from("company_news").insert(nuevas).select("id")
-    if (res.error?.code === "23505") {
-      // Otra corrida guardó la misma nota entre el SELECT y el INSERT. Es la carrera que el
-      // índice justamente previene; se reintenta fila por fila para no perder las nuevas.
-      for (const row of nuevas) {
-        const one = await admin.from("company_news").insert(row).select("id")
-        if (!one.error) inserted.push(...((one.data ?? []) as { id: string }[]))
-        else if (one.error.code !== "23505") {
-          throw new Error(`No se pudieron guardar las noticias: ${one.error.message}`)
-        }
-      }
-    } else if (res.error) {
-      throw new Error(`No se pudieron guardar las noticias: ${res.error.message}`)
-    } else {
-      inserted.push(...((res.data ?? []) as { id: string }[]))
-    }
-  }
-
-  const saved = inserted.length
-  const duplicates = rows.length - saved
+  // Reencontrar una noticia ya conocida es lo NORMAL cuando se re-investiga una
+  // cuenta, no un error del cliente. Antes esto se resolvía con un SELECT previo
+  // de las URLs conocidas, que dejaba abierta la carrera entre el SELECT y el
+  // INSERT; ahora el árbitro es el índice único y `recordEvidenceBatch` reintenta
+  // fila por fila ante un 23505, así que una repetida no se lleva puestas a las
+  // nuevas del mismo lote.
+  const { inserted: saved, duplicates } = await recordEvidenceBatch(evidencias)
   // Si una nota no se insertó, su `direction` no debe contarse como novedad.
   if (duplicates > 0 && saved === 0) {
     for (const key of Object.keys(directions) as SignalDirection[]) directions[key] = 0

@@ -2,6 +2,12 @@ import "server-only"
 
 import crypto from "crypto"
 import { createAdminClient } from "@/lib/supabase/admin"
+import {
+  toEvidenceLevel,
+  toRadarEvidenceLevel,
+  toV2EvidenceLevel,
+  type EvidenceLevel,
+} from "./evidence-level"
 
 /**
  * Escritor único de evidencia de compañía.
@@ -19,7 +25,7 @@ import { createAdminClient } from "@/lib/supabase/admin"
  * atribución) y resuelve el mapeo a la tabla física, que es lo único que cambia
  * entre los tres tipos.
  *
- * Contrato SQL: scripts/505_evidence_contract.sql
+ * Contrato SQL: supabase/migrations/20260818045619_evidence_contract.sql
  * Diseño:       docs/plan-unificacion-evidencia-v2-v3.md
  */
 
@@ -46,7 +52,33 @@ export function isProducedBy(value: unknown): value is ProducedBy {
 }
 
 export type EvidenceKind = "news" | "implementation" | "radar"
-export type EvidenceLevel = "explicit" | "inferred"
+
+/**
+ * El nivel de evidencia se declara SIEMPRE en el vocabulario canónico
+ * (`Confirmado` | `Probable` | `Inferido`) y este módulo lo traduce al dialecto
+ * de cada tabla al escribir. Son tres dialectos distintos en producción:
+ *   - company_implementations → directa | convergente | inferencia  (los rotula la UI de v2)
+ *   - radar_findings          → explicit | inferred                 (lo exige su CHECK)
+ *   - company_news            → canónico                            (columna nueva, sin lectores legacy)
+ * La vista `company_evidence` los normaliza de vuelta al canónico al leer.
+ */
+export type { EvidenceLevel }
+
+/**
+ * `company_news.source` es la columna legacy de procedencia: NOT NULL con
+ * DEFAULT 'parallel'. `produced_by` la reemplaza, pero v2 y los guardrails de
+ * v3 siguen leyendo `source`, así que se mantiene en sincronía al escribir.
+ * Omitirla dejaría toda la evidencia del MCP marcada como 'parallel'.
+ */
+const LEGACY_NEWS_SOURCE: Record<ProducedBy, string> = {
+  v2_research: "parallel",
+  v2_manual: "parallel",
+  v3_radar: "parallel",
+  v3_drilldown: "client_mcp",
+  mcp_client: "client_mcp",
+  etl_apify: "parallel",
+  cron_refresh: "parallel",
+}
 
 /** Tabla física donde aterriza cada tipo. */
 const TABLE_BY_KIND: Record<EvidenceKind, string> = {
@@ -66,7 +98,8 @@ type BaseEvidence = {
   /** Cuándo pasó el hecho (no cuándo lo detectamos). */
   occurredAt?: string | Date | null
   category?: string | null
-  evidenceLevel?: EvidenceLevel | null
+  /** Canónico. Se aceptan valores legacy: `toEvidenceLevel` los normaliza. */
+  evidenceLevel?: EvidenceLevel | string | null
   confidence?: number | null
   producedBy: ProducedBy
   /** Workspace de v3 que disparó la búsqueda. El dato es compartido; esto es atribución. */
@@ -201,7 +234,6 @@ export function buildEvidenceRow(input: EvidenceInput): EvidenceRow {
     title: input.title,
     summary: input.summary ?? null,
     source_name: input.sourceName ?? null,
-    evidence_level: input.evidenceLevel ?? null,
     confidence: input.confidence ?? null,
     produced_by: input.producedBy,
     sourced_by_workspace: input.sourcedByWorkspace ?? null,
@@ -223,9 +255,12 @@ export function buildEvidenceRow(input: EvidenceInput): EvidenceRow {
           source_url: input.sourceUrl?.trim() || null,
           published_at: toIso(input.occurredAt),
           category: input.category ?? null,
+          // Columna nueva sin lectores legacy: se guarda el canónico tal cual.
+          evidence_level: input.evidenceLevel ? toEvidenceLevel(input.evidenceLevel) : null,
           ai_provider: input.aiProvider ?? null,
           supporting_sources: input.supportingSources ?? null,
           direction: input.direction ?? null,
+          source: LEGACY_NEWS_SOURCE[input.producedBy],
           user_id: input.userId ?? null,
           bookmark_id: input.bookmarkId ?? null,
         },
@@ -241,6 +276,9 @@ export function buildEvidenceRow(input: EvidenceInput): EvidenceRow {
           published_at: toIso(input.occurredAt),
           // En esta tabla la clasificación se llama `area`.
           area: input.category ?? null,
+          // La UI de v2 rotula directa|convergente|inferencia: escribir el
+          // canónico acá dejaría filas que v2 no sabe mostrar.
+          evidence_level: input.evidenceLevel ? toV2EvidenceLevel(toEvidenceLevel(input.evidenceLevel)) : null,
           ai_provider: input.aiProvider ?? null,
           supporting_source_urls: input.supportingSources ?? null,
           technology: input.technology ?? null,
@@ -262,6 +300,8 @@ export function buildEvidenceRow(input: EvidenceInput): EvidenceRow {
           url: input.sourceUrl?.trim() || null,
           source_date: toDateOnly(input.occurredAt),
           category: input.category ?? "general",
+          // El CHECK de la tabla es binario, así que "Probable" colapsa a explicit.
+          evidence_level: input.evidenceLevel ? toRadarEvidenceLevel(toEvidenceLevel(input.evidenceLevel)) : null,
           radar_type: input.radarType,
           run_id: input.runId ?? null,
           dictionary_product_ids: input.dictionaryProductIds ?? [],

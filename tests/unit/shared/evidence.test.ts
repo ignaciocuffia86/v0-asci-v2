@@ -142,6 +142,66 @@ describe("buildEvidenceRow", () => {
   })
 })
 
+describe("dialectos de evidence_level", () => {
+  it("traduce al vocabulario que lee la UI de v2 en implementations", () => {
+    const nivel = (v: string) =>
+      buildEvidenceRow({
+        kind: "implementation",
+        companyId: COMPANY,
+        title: "t",
+        producedBy: "mcp_client",
+        evidenceLevel: v,
+      }).row.evidence_level
+
+    expect(nivel("Confirmado")).toBe("directa")
+    expect(nivel("Probable")).toBe("convergente")
+    expect(nivel("Inferido")).toBe("inferencia")
+  })
+
+  it("colapsa al binario que exige el CHECK de radar_findings", () => {
+    const nivel = (v: string) =>
+      buildEvidenceRow({
+        kind: "radar",
+        radarType: "tech",
+        companyId: COMPANY,
+        title: "t",
+        producedBy: "v3_radar",
+        evidenceLevel: v,
+      }).row.evidence_level
+
+    expect(nivel("Confirmado")).toBe("explicit")
+    // "Probable" es evidencia real, sólo que indirecta: no puede caer a inferred.
+    expect(nivel("Probable")).toBe("explicit")
+    expect(nivel("Inferido")).toBe("inferred")
+  })
+
+  it("normaliza dialectos legacy de entrada", () => {
+    const row = buildEvidenceRow({
+      kind: "implementation",
+      companyId: COMPANY,
+      title: "t",
+      producedBy: "v2_research",
+      evidenceLevel: "explicit", // vocabulario de radar entrando a implementations
+    }).row
+    expect(row.evidence_level).toBe("directa")
+  })
+
+  it("sin nivel declarado no inventa uno", () => {
+    expect(buildEvidenceRow(news()).row.evidence_level).toBeNull()
+  })
+})
+
+describe("columna legacy `source` de company_news", () => {
+  it("marca el origen del MCP para no perder la atribución existente", () => {
+    expect(buildEvidenceRow(news({ producedBy: "mcp_client" })).row.source).toBe("client_mcp")
+    expect(buildEvidenceRow(news({ producedBy: "v3_drilldown" })).row.source).toBe("client_mcp")
+  })
+
+  it("mantiene el valor histórico para el research de v2", () => {
+    expect(buildEvidenceRow(news({ producedBy: "v2_research" })).row.source).toBe("parallel")
+  })
+})
+
 describe("isProducedBy", () => {
   it("acepta el vocabulario y rechaza el resto", () => {
     expect(isProducedBy("mcp_client")).toBe(true)

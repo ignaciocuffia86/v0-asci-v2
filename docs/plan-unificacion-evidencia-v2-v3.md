@@ -13,13 +13,17 @@ de *"evidence store compartido"* de `asci-v3-architecture-audit.md` (§11, días
 
 | Fase | Qué | Estado |
 |---|---|---|
-| **A** | Columnas del contrato + backfill de `produced_by` + índices | ✅ **Escrito** — `scripts/505_evidence_contract.sql` |
+| **A** | Columnas del contrato + backfill de `produced_by` + índices | ✅ **Escrito** — `supabase/migrations/20260818045619_evidence_contract.sql` |
 | **B** | Vista canónica `public.company_evidence` | ✅ **Escrito** — mismo script |
 | **C** | Escritor único `recordEvidence` | 🟡 **Módulo listo** — `lib/shared/evidence.ts` + 15 tests. Falta migrar los 6 productores |
 | **D** | Consolidación física | ⛔ No empezada, y no debe empezarse todavía |
 
-> ⚠️ **El script 505 NO fue aplicado a la base de producción.** Sí fue validado
-> de punta a punta contra una réplica local del esquema (ver §0.1).
+> ✅ **Aplicado en producción el 2026-08-18**, después de validarlo contra una
+> réplica local del esquema (§0.1). Backfill verificado: `company_news`=1.133
+> `v2_research`, `company_implementations`=727 `v2_research`, `radar_findings`=706
+> `v3_radar`, `job_postings`=41.224 `etl_apify`. La vista devuelve 2.566 filas y
+> quedó con `security_invoker = true`. Los grants de `authenticated` sobre las
+> tablas base están, así que el riesgo de "permission denied" no se materializó.
 
 ### 0.1 Validación (2026-08-17)
 
@@ -68,13 +72,34 @@ saltear RLS, y el camino sancionado de lectura son las RPC.
 **Productores pendientes de migrar a `recordEvidence` (fase C), en el orden
 recomendado** — de menos a más riesgoso, un PR cada uno:
 
-1. `lib/v3/services/external-drilldown.ts` → `persistClientNews` / `persistClientSuccessCases`
-   *(el que menos filas tiene: hoy 0 en producción. Además elimina el SELECT-previo con race condition.)*
+1. ~~`lib/v3/services/external-drilldown.ts`~~ ✅ **migrado**
 2. `lib/v3/services/radar.ts` → escritura de `radar_findings`
 3. `lib/v3/services/jobs-interpreter.ts`
 4. `app/actions/workspace.ts` (dos call sites)
 5. `app/api/research/implementations/route.ts`
 6. `app/api/research/news/route.ts` *(el último: es el que más tráfico tiene)*
+
+### 0.2 Hallazgo durante la migración: un tercer dialecto
+
+`evidence_level` usa **dos vocabularios distintos** en producción, verificado:
+
+| Tabla | Valores | Filas |
+|---|---|---|
+| `company_implementations` | `directa` / `convergente` / `inferencia` / null | 309 / 260 / 104 / 54 |
+| `radar_findings` | `explicit` / `inferred` | 405 / 301 |
+
+La vista los exponía crudos, así que `evidence_level` era justamente la columna
+que **no** quedaba unificada. Se corrigió con
+`20260818050000_evidence_level_canonical`: la vista los normaliza al canónico de
+`lib/shared/evidence-level.ts` (`Confirmado` | `Probable` | `Inferido`) vía la
+función `public.canonical_evidence_level()`, y conserva el original en
+`evidence_level_raw`.
+
+Del lado del código, `recordEvidence` recibe **siempre** el canónico y traduce al
+dialecto de cada tabla al escribir, reusando los traductores que ya existían
+(`toV2EvidenceLevel`, `toRadarEvidenceLevel`). Por eso `evidence-level.ts` se mudó
+de `lib/v3/services/` a `lib/shared/`: `lib/shared` no puede depender de `lib/v3`
+sin invertir la dependencia que pide P1.3. Queda un reexport en la ruta vieja.
 
 Cerrada la migración, se agrega la regla de lint que prohíbe `.from("company_news")`,
 `.from("company_implementations")` y `.from("radar_findings")` fuera de
@@ -177,7 +202,7 @@ Se completa en cada tabla lo que le falta del núcleo. Todo nullable, sin `DEFAU
 que reescriba filas.
 
 ```sql
--- scripts/505_evidence_contract.sql
+-- supabase/migrations/20260818045619_evidence_contract.sql
 
 -- ── Núcleo de procedencia: quién produjo la fila y para qué workspace ──
 alter table public.company_news
@@ -369,7 +394,7 @@ anteriores ya entregan el 90% del beneficio.
 
 | Fase | Qué | Esfuerzo | Riesgo v2 |
 |---|---|---|---|
-| **A** | `505_evidence_contract.sql` + backfill de `produced_by` | 0,5 día | Nulo |
+| **A** | `20260818045619_evidence_contract.sql` + backfill de `produced_by` | 0,5 día | Nulo |
 | **B** | Vista `company_evidence` + RPC de lectura | 1 día | Nulo |
 | **C** | `lib/shared/evidence.ts` + migrar los 6 productores + regla de lint | 3–4 días | Bajo |
 | **D** | Consolidación física | — | **No hacer todavía** |

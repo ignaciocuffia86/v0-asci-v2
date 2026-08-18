@@ -10,7 +10,7 @@
 # esquema) y encima la migración que se quiera probar.
 #
 # Uso:
-#   scripts/validate-migration-local.sh scripts/505_evidence_contract.sql
+#   scripts/validate-migration-local.sh supabase/migrations/20260818045619_evidence_contract.sql
 #
 # Requisitos: postgresql-16 instalado (initdb, pg_ctl, psql).
 # =============================================================================
