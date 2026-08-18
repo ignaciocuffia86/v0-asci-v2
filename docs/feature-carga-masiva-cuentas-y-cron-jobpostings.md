@@ -238,13 +238,36 @@ los usuarios v2 con bookmarks de las mismas compañías ven las vacantes y seña
 automáticamente (hoy: 67 usuarios y 2.323 bookmarks en v2, 48 de ellos ya apuntan a
 compañías seguidas en v3).
 
-**Puente opcional (decisión de producto pendiente, ver Preguntas abiertas):** checkbox
-en el paso de confirmación del wizard — "crear también bookmarks v2 para [usuarios]" —
-implementado con `bookmarkCompanyBatch()` (ya existe en `app/actions/bookmarks.ts`).
-Sería un alta única en el momento del import, **no** una sincronización bidireccional:
+**Puente a v2 (confirmado por producto — parte de la Fase 1):** en el paso de
+confirmación del wizard, checkbox **"Crear también bookmarks v2 para…"** con un
+multi-select de usuarios destino:
+
+- **Superadmin**: buscador sobre todos los usuarios (`public.profiles`), con los
+  miembros activos del workspace destino preseleccionables como atajo. Necesario
+  porque la base activa de v2 (67 usuarios) mayormente NO es miembro de ningún
+  workspace v3 todavía.
+- **Admin de workspace**: el multi-select se limita a los miembros activos de su
+  propio workspace (no puede escribir en el kanban de usuarios ajenos al tenant).
+
+Mecánica: por cada usuario seleccionado se invoca la RPC **`create_bookmarks`** (la
+que usa `bookmarkCompanyBatch()`) con los `company_id` confirmados del import.
+
+- **Vía service role**: `bookmarkCompanyBatch()` tal como está usa el cliente de
+  sesión, y la RLS de `bookmarks` solo permite tocar los propios. Como acá el actor
+  crea bookmarks a nombre de terceros, se agrega un wrapper server-side
+  (`createBookmarksForUsers`) que llama la RPC con `createAdminClient()` tras pasar
+  el guard correspondiente (`requireSuperadmin` / `requireWorkspaceAdmin` + membresía
+  del usuario destino).
+- **Idempotente por diseño de la RPC**: inserta de a una, saltea las que el usuario
+  ya tenía y reporta `created` vs `alreadyExisted` — el resumen del Paso 4 muestra
+  "bookmarks v2: X creados, Y ya existían" por usuario.
+- **Provenance**: `search_context = { source: "account_import", import_id,
+  workspace_id }`, para poder auditar o revertir en bloque los bookmarks nacidos de
+  un import.
+
+Es un alta única en el momento del import, **no** una sincronización bidireccional:
 unfollow v3 no borra bookmarks, y el status/prioridad del kanban v2 no tiene
-equivalente en v3, así que mantener espejo permanente es un problema de semántica que
-no vale su costo.
+equivalente en v3, así que no se mantiene espejo permanente.
 
 ---
 
@@ -441,7 +464,9 @@ termine TIMED-OUT: el cliente ya lee datasets parciales), cumpliendo la regla de
 
 **Fase 1 — Import core (superadmin):** migración 1 · parseo CSV/XLSX + blob upload ·
 cascada de matching · UI wizard en `/v3/admin/account-imports` + acción desde Workspaces ·
-preflight de cuota · alta vía `followAccount()` · borrar `app/actions/v3/csv-import.ts`.
+preflight de cuota · alta vía `followAccount()` · **checkbox de bookmarks v2 con
+selector de usuarios (4.7)** vía `createBookmarksForUsers` · borrar
+`app/actions/v3/csv-import.ts`.
 
 **Fase 2 — Self-service (workspace admin):** mismo wizard en `/v3/accounts` con
 `requireWorkspaceAdmin()`; CTA de upgrade cuando el archivo excede el cupo.
@@ -477,6 +502,3 @@ Fases 3 y 4 son independientes de la 2; el cron mejora su puntería solo con des
    propia? (Hoy las señales derivadas ya entran; es cuestión de presentación.)
 4. Límite de 500 filas por import: validar contra el tamaño real de listas ABM de los
    clientes actuales.
-5. Puente a v2 (ver 4.7): ¿se ofrece el checkbox de crear bookmarks v2 en el import, y
-   para qué usuarios? Relevante mientras la base activa siga mayormente en v2
-   (67 usuarios v2 vs 3 v3 a ago 2026).
