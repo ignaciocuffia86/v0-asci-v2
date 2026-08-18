@@ -9,6 +9,37 @@ de *"evidence store compartido"* de `asci-v3-architecture-audit.md` (§11, días
 
 ---
 
+## 0. Estado de construcción
+
+| Fase | Qué | Estado |
+|---|---|---|
+| **A** | Columnas del contrato + backfill de `produced_by` + índices | ✅ **Escrito** — `scripts/505_evidence_contract.sql` |
+| **B** | Vista canónica `public.company_evidence` | ✅ **Escrito** — mismo script |
+| **C** | Escritor único `recordEvidence` | 🟡 **Módulo listo** — `lib/shared/evidence.ts` + 15 tests. Falta migrar los 6 productores |
+| **D** | Consolidación física | ⛔ No empezada, y no debe empezarse todavía |
+
+> ⚠️ **El script 505 NO fue aplicado a la base.** Es DDL sobre producción: se
+> aplica con el runner del proyecto cuando se decida, y conviene correrlo primero
+> en una branch de Supabase. Es estrictamente aditivo, pero sigue siendo
+> producción.
+
+**Productores pendientes de migrar a `recordEvidence` (fase C), en el orden
+recomendado** — de menos a más riesgoso, un PR cada uno:
+
+1. `lib/v3/services/external-drilldown.ts` → `persistClientNews` / `persistClientSuccessCases`
+   *(el que menos filas tiene: hoy 0 en producción. Además elimina el SELECT-previo con race condition.)*
+2. `lib/v3/services/radar.ts` → escritura de `radar_findings`
+3. `lib/v3/services/jobs-interpreter.ts`
+4. `app/actions/workspace.ts` (dos call sites)
+5. `app/api/research/implementations/route.ts`
+6. `app/api/research/news/route.ts` *(el último: es el que más tráfico tiene)*
+
+Cerrada la migración, se agrega la regla de lint que prohíbe `.from("company_news")`,
+`.from("company_implementations")` y `.from("radar_findings")` fuera de
+`lib/shared/evidence.ts`.
+
+---
+
 ## 1. Dónde escribe el MCP (respuesta directa)
 
 Trazado sobre `app/api/v3/mcp/server/[transport]/route.ts` y los módulos
