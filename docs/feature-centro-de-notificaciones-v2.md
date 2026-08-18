@@ -103,6 +103,10 @@ Con eso, la fase 1 **no toca ningún cron existente** y ya entrega el 70% del va
 
 ## 5. Modelo de datos
 
+> **Nota:** este apartado es el boceto original. El modelo definitivo —sin
+> `seen_by_tab`, con `auth.uid()` adentro de la función y filtrando por
+> `company_id`— está en **§11.3**. Ante cualquier diferencia, manda §11.
+
 ### 5.1 Watermark
 
 ```sql
@@ -366,11 +370,14 @@ create policy "own watermarks" on public.user_account_watermarks
 create index concurrently if not exists idx_job_postings_company_created
   on public.job_postings (company_id, created_at desc);
 
-create index concurrently if not exists idx_company_news_bookmark_created
-  on public.company_news (bookmark_id, created_at desc);
+-- OJO: se filtra por company_id, NO por bookmark_id. Ver §12.3:
+-- el 100% de company_news y el 99% de company_implementations tienen
+-- bookmark_id NULL, porque el research los escribe como cache por compañía.
+create index concurrently if not exists idx_company_news_company_created
+  on public.company_news (company_id, created_at desc);
 
-create index concurrently if not exists idx_company_impl_bookmark_created
-  on public.company_implementations (bookmark_id, created_at desc);
+create index concurrently if not exists idx_company_impl_company_created
+  on public.company_implementations (company_id, created_at desc);
 
 -- radar_findings ya tiene (company_id, detected_at desc) — script 400
 ```
@@ -411,18 +418,18 @@ as $$
     select
       m.*,
       (select count(*) from public.company_news n
-         where n.bookmark_id = m.bookmark_id and n.created_at > m.since) as news_count,
+         where n.company_id = m.company_id and n.created_at > m.since) as news_count,
       (select count(*) from public.company_implementations i
-         where i.bookmark_id = m.bookmark_id and i.created_at > m.since) as impl_count,
+         where i.company_id = m.company_id and i.created_at > m.since) as impl_count,
       (select count(*) from public.job_postings j
          where j.company_id = m.company_id and j.created_at > m.since) as jobs_count,
       (select count(*) from public.radar_findings r
          where r.company_id = m.company_id and r.detected_at > m.since) as radar_count,
       greatest(
         coalesce((select max(n.created_at) from public.company_news n
-                   where n.bookmark_id = m.bookmark_id and n.created_at > m.since), m.since),
+                   where n.company_id = m.company_id and n.created_at > m.since), m.since),
         coalesce((select max(i.created_at) from public.company_implementations i
-                   where i.bookmark_id = m.bookmark_id and i.created_at > m.since), m.since),
+                   where i.company_id = m.company_id and i.created_at > m.since), m.since),
         coalesce((select max(j.created_at) from public.job_postings j
                    where j.company_id = m.company_id and j.created_at > m.since), m.since),
         coalesce((select max(r.detected_at) from public.radar_findings r
@@ -511,7 +518,7 @@ resaltado por `previousSeenAt`, que sobrevive a la visita.
 | Archivo | Qué |
 |---|---|
 | `scripts/503_notifications_watermarks.sql` | Tabla + RPCs + grants |
-| `scripts/504_notifications_indexes.sql` | Los 3 `CREATE INDEX CONCURRENTLY` (fuera de transacción) |
+| `scripts/504_notifications_indexes.sql` | Los 3 `CREATE INDEX CONCURRENTLY` por `company_id` (fuera de transacción) |
 | `app/actions/notifications.ts` | `getAccountUpdates()`, `markAccountSeen(bookmarkId)` |
 | `components/notifications/notification-bell.tsx` | Campanita + badge + `Popover` |
 | `components/notifications/notification-card.tsx` | Card de cuenta con deep-link |
@@ -586,6 +593,7 @@ Badge de la campanita = **cantidad de cuentas con novedades**, no la suma de hec
 | `created_at` nulo en news/implementations | La comparación `> since` lo descarta. Aceptable: son filas viejas anteriores al default |
 | Bookmark borrado | `on delete cascade` limpia el watermark |
 | Dato creado por el propio usuario (`requested_by = él`) | **Cuenta igual**: pidió un research asincrónico y el aviso de que terminó es justamente el valor |
+| Noticia traída por **otro** usuario sobre una compañía que vos seguís | **Cuenta**: `company_news` es cache global por compañía. Es el valor del cache compartido — ver §12.3 |
 | Dos pestañas abiertas | El upsert es idempotente; gana el `now()` más reciente |
 
 ### 11.9 Plan de prueba
@@ -611,3 +619,100 @@ Badge de la campanita = **cantidad de cuentas con novedades**, no la suma de hec
 - [ ] `pnpm typecheck` y `pnpm test` en verde
 
 **Estimación: 3–4 días.** No toca ningún cron y no agrega filas por evento.
+
+---
+
+## 12. Quién produce qué: `company_news` vs `company_implementations` vs `radar_findings`
+
+Las tres guardan "cosas que pasaron en una empresa" y **se solapan parcialmente**,
+pero no son lo mismo. Esta sección documenta el mapa real, verificado en código y
+en producción el 2026-08-17.
+
+### 12.1 Las tres tablas
+
+| Tabla | Qué guarda | Unidad | Quién escribe | Formato |
+|---|---|---|---|---|
+| `company_news` | Noticias de la empresa | Un artículo (título, URL, medio, fecha) | **v2**: `app/api/research/news/route.ts`, `app/actions/workspace.ts` · **v3**: `lib/v3/services/external-drilldown.ts` | Legado: texto plano + `category` |
+| `company_implementations` | Casos de implementación tecnológica | Un proyecto (tecnología, proveedor, resultados) | **v2**: `app/api/research/implementations/route.ts`, `app/actions/workspace.ts` · **v3**: `external-drilldown.ts` | Legado |
+| `radar_findings` | Hallazgos tipados del Tech Radar | Un hallazgo con `radar_type` + `category` | **sólo v3**: `lib/v3/services/radar.ts`, `jobs-interpreter.ts`, `app/actions/v3/accounts.ts` | Moderno: `evidence_level`, `confidence`, `dictionary_product_ids[]`, `supporting_job_posting_ids[]` |
+
+Las tres son **cache global por compañía**: se pagan una vez y las lee cualquiera.
+
+### 12.2 El solapamiento es real
+
+`radar_findings.radar_type` admite `'news'`, y hay filas: 14 de `partnership`,
+10 de `expansion`, 7 de `financial-performance`, 7 de `digital-transformation`.
+
+O sea: **una noticia puede terminar en `company_news` o en `radar_findings`, según
+qué motor la haya traído.** No hay duplicación de la misma fila, pero sí dos
+formatos conviviendo para el mismo tipo de hecho.
+
+Eso es exactamente la deuda que la auditoría llama **"evidence store compartido"**
+(§11, días 31–60: *normalizar fuentes y claims, separar evidencia de
+interpretación*). `radar_findings` es el formato nuevo —con nivel de evidencia,
+confianza y vínculo al diccionario—; `company_news` y `company_implementations` son
+el legado de v2 que quedó en producción.
+
+**Para el centro de notificaciones esto no molesta**: se cuentan las tres por
+separado y la card las agrupa. Pero conviene saber que a futuro `radar_findings`
+debería absorberlas.
+
+### 12.3 Corrección importante a §11.3: `bookmark_id` está muerto
+
+El schema original (script 079) creó `company_news` y `company_implementations` con
+`user_id` y `bookmark_id` **NOT NULL**. Hoy ambas columnas son **NULLABLE**, y los
+datos muestran por qué:
+
+| Tabla | Filas | Con `bookmark_id` NULL |
+|---|---:|---:|
+| `company_news` | 1.133 | **1.133 (100%)** |
+| `company_implementations` | 727 | **720 (99%)** |
+
+La causa está en el código: el insert de `/api/research/news/route.ts:466-490` sólo
+escribe `company_id`, título, resumen, URL, fuente, fecha, categoría y proveedor de
+IA. **Nunca setea `bookmark_id` ni `user_id`.** La atribución al usuario se hace
+aparte, en `user_news_interactions` (`user_id`, `news_id`, `company_id`,
+`viewed_at`), vía `registerUserInteractions()`.
+
+**Consecuencia:** la RPC como estaba escrita en §11.3 —filtrando
+`n.bookmark_id = m.bookmark_id`— **habría devuelto cero novedades siempre**.
+Ya está corregida para filtrar por `company_id`, y los índices también.
+
+**Decisión de producto que esto trae:** al contar por compañía, si *otro* usuario
+dispara research sobre una cuenta que vos seguís, **te enterás**. Es coherente con
+el modelo de cache global (se paga una vez, la aprovechan todos) y agrega valor,
+pero es una decisión explícita, no un efecto colateral. Si algún día se quisiera
+notificar sólo lo que uno pidió, `user_news_interactions` es el gancho.
+
+### 12.4 Actividad real (2026-08-17)
+
+| Tabla | Total | 30 días | 90 días | Última fila |
+|---|---:|---:|---:|---|
+| `company_news` | 1.133 | 49 | 135 | 2026-08-12 |
+| `company_implementations` | 727 | 77 | 89 | 2026-08-13 |
+| `radar_findings` | 706 | 310 | **706** | 2026-08-07 |
+
+Las tres están activas. `radar_findings` tiene el 100% de sus filas dentro de los
+últimos 90 días porque **la tabla es nueva**: nació el 2026-07-03 con la
+centralización del research.
+
+### 12.5 Detalle de observabilidad: `v3.tech_radar_runs` mezcla dos pipelines
+
+Las últimas 8 corridas registradas en `v3.tech_radar_runs` son todas
+`caller = 'drilldown'`, `status = 'completed'`, con `findings_count` de 5 a 21 — e
+incluyen corridas del 10, 11, 12 y 13 de agosto. Pero `radar_findings` no tiene
+ninguna fila posterior al **2026-08-07**.
+
+No es pérdida de datos: son **dos pipelines distintos bajo el mismo índice de
+corridas**.
+
+- `lib/v3/services/radar.ts` → escribe `radar_research_runs` + `radar_findings`
+- `lib/v3/services/external-drilldown.ts` → escribe **`company_news`**
+
+Ambos registran la corrida en `v3.tech_radar_runs`. Como en los últimos 10 días
+sólo corrió el drilldown, `company_news` siguió creciendo y `radar_findings` no.
+
+**Lo que conviene revisar** (no es parte de esta feature): el nombre de la tabla y
+su `findings_count` sugieren que todo lo que hay ahí es Tech Radar, y no lo es. Un
+`caller` visible en el admin de corridas evitaría diagnósticos equivocados —
+exactamente el tipo de confusión que disparó esta sección.
