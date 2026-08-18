@@ -242,7 +242,44 @@ CREATE UNIQUE INDEX companies_linkedin_company_id_key
   ON public.companies (linkedin_company_id) WHERE linkedin_company_id IS NOT NULL;
 ```
 
-### 5.2 Cómo se puebla (tres fuentes, sin trabajo manual)
+### 5.2 Cómo se puebla (cuatro fuentes, sin trabajo manual)
+
+0. **Backfill desde las vacantes ya cargadas** (verificado contra producción, ago 2026):
+   las 41.224 vacantes existentes entraron por CSV (no hay aún ningún batch `apify://`),
+   pero el CSV era un export del mismo scraper y `job_postings.source_data->'_original'`
+   conserva la fila cruda **incluyendo `companyId`**. Números reales:
+   - 6.619 compañías tienen vacantes; **4.058 tienen ID recuperable**, y 4.051 de ellas
+     con un único ID consistente en todas sus vacantes.
+   - 7 compañías tienen IDs mezclados (atribución imperfecta del CSV): se toma el ID
+     dominante solo si cubre ≥80% de sus vacantes (6 de las 7); la restante se deja NULL.
+   - 22 LinkedIn IDs apuntan a más de un `company_id` nuestro — duplicados probables del
+     catálogo. Esas colisiones **no se backfillean** (romperían el índice único); se
+     exportan como reporte para la pantalla de duplicados de `/admin/companies`.
+   - De las 12 cuentas seguidas activas en v3 hoy, 8 quedan cubiertas de entrada.
+
+   El backfill es un script SQL one-shot (mismo criterio write-once), que corre junto
+   con la migración de la columna:
+
+   ```sql
+   WITH dominante AS (
+     SELECT DISTINCT ON (company_id) company_id,
+            (source_data->'_original'->>'companyId')::bigint AS lid,
+            count(*) AS jobs,
+            sum(count(*)) OVER (PARTITION BY company_id) AS total
+     FROM public.job_postings
+     WHERE source_data->'_original'->>'companyId' ~ '^[0-9]+$'
+     GROUP BY company_id, lid
+     ORDER BY company_id, count(*) DESC
+   ), elegibles AS (
+     SELECT company_id, lid FROM dominante
+     WHERE jobs::numeric / total >= 0.8
+       AND lid IN (SELECT lid FROM dominante GROUP BY lid HAVING count(*) = 1)
+   )
+   UPDATE public.companies c
+   SET linkedin_company_id = e.lid
+   FROM elegibles e
+   WHERE c.id = e.company_id AND c.linkedin_company_id IS NULL;
+   ```
 
 1. **Resultados del propio scraper**: verificado en `apify-client.ts` (header, ago 2026)
    que **cada vacante devuelta trae el `companyId`**. `ingestApifyJobPostings()` se
@@ -361,9 +398,11 @@ preflight de cuota · alta vía `followAccount()` · borrar `app/actions/v3/csv-
 **Fase 2 — Self-service (workspace admin):** mismo wizard en `/v3/accounts` con
 `requireWorkspaceAdmin()`; CTA de upgrade cuando el archivo excede el cupo.
 
-**Fase 3 — LinkedIn company ID:** migración 2 · captura write-once desde ingesta de jobs
-y (si aplica) desde harvestapi · columna opcional en el template · `companyIds` en
-`runLinkedinJobsActor()`.
+**Fase 3 — LinkedIn company ID:** migración 2 **+ backfill histórico de 5.2.0**
+(recupera ~4.050 compañías de entrada, 8 de las 12 cuentas seguidas actuales) · captura
+write-once desde ingesta de jobs y (si aplica) desde harvestapi · columna opcional en el
+template · `companyIds` en `runLinkedinJobsActor()` · reporte de los 22 IDs en colisión
+hacia la pantalla de duplicados de `/admin/companies`.
 
 **Fase 4 — Cron mensual:** `v3-scrape-job-postings` + entrada en `vercel.json` ·
 selección deduplicada por compañía + cooldown 25 días por prefijo `apify://` ·
