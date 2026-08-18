@@ -299,6 +299,33 @@ CREATE UNIQUE INDEX companies_linkedin_company_id_key
 variantes). Sin ID, se mantiene el flujo actual `companyNameVariants()`. El guardrail
 `belongsToCompany()` **no se relaja en ningún caso**: costo cero y cubre el modo nombre.
 
+### 5.4 Ciclo de vida de un alta manual (seguir cuenta desde la UI)
+
+Requisito explícito de producto: una cuenta seguida a mano desde la UI entra al barrido
+mensual **sin ningún paso adicional**, y el sistema aprende su ID solo. El ciclo:
+
+```
+1. Usuario sigue la cuenta en /v3/accounts (o /search → seguir)
+   → followAccount() crea la fila en followed_accounts con refresh_day 1–28.
+     No hace falta registrar nada más: refresh_day ES la inscripción al cron.
+2. Primera corrida del cron para esa compañía (el día que le toca):
+   - companies.linkedin_company_id poblado (por backfill 5.2.0, enrichment o
+     archivo) → scrapea por companyId (exacto).
+   - NULL → scrapea por companyNameVariants() (Apify soporta ambos modos), y la
+     ingesta guarda write-once el companyId que viene en las vacantes ACEPTADAS
+     (las que pasaron belongsToCompany — nunca se aprende de una vacante dudosa).
+3. Corridas siguientes → ya hay ID → siempre por companyId.
+```
+
+El aprendizaje vive en `ingestApifyJobPostings()`, no en el cron: por eso también
+aprenden el ID el botón on-demand de la UI y la tool MCP `scrape_company_job_postings`,
+que comparten esa ingesta. Un scraping manual "enseña" el ID igual que el cron.
+
+Caso borde: si las vacantes aceptadas de un run traen **más de un** `companyId`
+distinto (no debería pasar el guardrail, pero es la señal de un falso positivo), no se
+aprende ninguno y se deja warning en el resultado — mejor seguir por nombre un mes más
+que fijar un ID equivocado, porque el ID pasa a ser el filtro exacto de ahí en adelante.
+
 ---
 
 ## 6. Parte 3 — Cron mensual de job postings de cuentas seguidas
