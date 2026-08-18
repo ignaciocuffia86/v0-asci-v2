@@ -1,348 +1,113 @@
 # Feature: Centro de notificaciones por usuario (v2)
 
-Fecha: 2026-08-17
-Zona: **v2** (schema `public`, sidebar + `/bookmarks`, deploy `v0-asci-v2`)
-Relación: **reemplaza** el feed `/movements` propuesto en
-`docs/feature-movimientos-de-contactos-v2.md` §7.3 — ver §8.
+**Estado:** diseño cerrado, listo para construir
+**Fecha:** 2026-08-17
+**Zona:** v2 — schema `public`, sidebar + `/bookmarks`, deploy `v0-asci-v2`
+**Depende de:** `docs/plan-unificacion-evidencia-v2-v3.md` (fases A–B)
+
+> **Orden de construcción acordado:** primero el contrato de evidencia, después
+> esta feature. La spec de §6 ya está escrita contra `public.company_evidence`,
+> así que no hay retrabajo.
 
 ---
 
-## 1. Veredicto
+## 1. Qué es
 
-**Sí, vale la pena, y probablemente más que la feature de movimientos sola.**
+Una campanita en el sidebar con un panel de cards que avisan **qué cambió en las
+cuentas que el usuario tiene bookmarkeadas**, y llevan de un click al tab exacto
+donde está el dato nuevo.
 
-El razonamiento no es "una campanita queda bien". Es que v2 tiene un problema
-estructural: **el dato llega de forma asincrónica y el usuario no tiene forma de
-enterarse**. Hoy la única manera de descubrir que algo cambió en una cuenta es
-abrir el bookmark y recorrer los 7 tabs a mano, uno por uno, sin saber cuál tiene
-algo nuevo.
+## 2. El problema que resuelve
 
-Y hay una segunda razón, más práctica: **media infraestructura ya está construida**
-y sin usar.
+v2 tiene un problema estructural: **el dato llega de forma asincrónica y el usuario
+no tiene forma de enterarse**. Hoy la única manera de descubrir que algo cambió es
+abrir el bookmark y recorrer los 7 tabs a mano, sin saber cuál tiene novedades.
 
----
-
-## 2. La evidencia de que el problema es real
-
-| Hallazgo | Dónde |
+| Evidencia | Dónde |
 |---|---|
-| **10 crons** escriben datos de cuenta de forma asincrónica, algunos cada minuto | `vercel.json` |
-| El research de una cuenta tarda **549s promedio, 795s p95** | auditoría §2.1 |
-| La UI **ya poletea a mano** para saber si un job async terminó: `setInterval` cada 5s con timeout de 5 min | `app/bookmarks/[id]/_components/prospects-tab.tsx:291-344` |
-| El detalle de cuenta tiene **7 tabs**; nada indica cuál tiene novedades | `app/bookmarks/[id]/page.tsx:462-501` |
-| El cron marca contactos con `needs_review` desde hace meses y **no se renderiza en ninguna parte** | verificado: 0 ocurrencias en `app/**/*.tsx` |
-| La auditoría ya lo pide como recomendación: *"novedades no vistas"* | auditoría §11, días 31–60 |
+| 10 crons escriben datos de cuenta de forma asincrónica, algunos cada minuto | `vercel.json` |
+| El research de una cuenta tarda 549s promedio, 795s p95 | auditoría §2.1 |
+| La UI **ya poletea a mano**: `setInterval` cada 5s con timeout de 5 min | `app/bookmarks/[id]/_components/prospects-tab.tsx:291-344` |
+| El detalle tiene 7 tabs y nada indica cuál tiene novedades | `app/bookmarks/[id]/page.tsx:462-501` |
+| El cron marca contactos con `needs_review` y **no se renderiza en ninguna parte** | 0 ocurrencias en `app/**/*.tsx` |
+| La auditoría ya lo pide: *"novedades no vistas"* | auditoría §11, días 31–60 |
 
 El polling manual de `prospects-tab` es el síntoma más claro: se escribió un
-mecanismo de espera ad-hoc, dentro de un tab, porque no existe un canal por donde
+mecanismo de espera ad-hoc dentro de un tab porque no existe un canal por donde
 avisar que algo terminó.
 
----
+## 3. Lo que ya está construido y no se usa
 
-## 3. Lo que ya está construido (script 102) y no se usa
+El sistema de digest se removió pero **las tablas quedaron** (script 102):
 
-El sistema de digest se removió, pero **las tablas quedaron**:
-
-```sql
-user_notification_preferences (
-  user_id PRIMARY KEY,
-  digest_enabled boolean DEFAULT true,
-  digest_frequency text CHECK (IN ('weekly','monthly','never')),
-  last_digest_sent_at timestamptz
-)
-
-user_digest_sent_items (user_id, item_type, item_id, sent_at)   -- ledger anti-duplicado
-digest_send_log (user_id, items_count, companies_count, status) -- auditoría de envío
-```
-
-Es decir: **la capa de preferencias y el ledger de "ya te avisé" ya existen**.
-`user_digest_sent_items` es exactamente el anti-duplicado que hace falta.
-
-Además, `company_news` y `company_implementations` ya tienen `requested_at`,
-`requested_by` y `published_at` (mismo script), así que hay marca de tiempo y de
-procedencia para calcular novedades sin agregar nada.
+- `user_notification_preferences` — `digest_enabled`, `digest_frequency`, `last_digest_sent_at`
+- `user_digest_sent_items` — ledger anti-duplicado de "ya te avisé"
+- `digest_send_log` — auditoría de envíos
 
 Y el deep-link ya funciona: `app/bookmarks/[id]/page.tsx:58` lee `?tab=`, así que
-una card puede llevar **al tab exacto** donde está el dato nuevo.
+una card puede llevar al tab exacto sin tocar nada.
 
----
+## 4. Decisiones tomadas
 
-## 4. La decisión de arquitectura: watermark vs. tabla de eventos
-
-Es la decisión que define el costo de la feature. Las dos opciones puras tienen
-problemas:
-
-| | Tabla de eventos (fan-out) | Watermark (marca de lectura) |
+| Decisión | Elegido | Descartado |
 |---|---|---|
-| Cómo funciona | Cada productor inserta una fila por usuario afectado | Se guarda "hasta acá vi" y se cuentan filas nuevas al leer |
-| Hay que tocar los productores | **Sí, los 10 crons + el pipeline** | **No, ninguno** |
-| Crecimiento de filas | N usuarios × M eventos | Una fila por usuario × cuenta |
-| Descartar una notificación puntual | Sí | No |
-| Sirve para email/push | Sí | Difícil |
-| Granularidad | Una card por hecho | "3 noticias nuevas" |
+| Granularidad del watermark | **Por cuenta** | Por tab (`seen_by_tab`) |
+| Superficie | **Panel en la campanita** | Página `/notifications` |
+| Email | **No, en fase 1** | Digest semanal |
+| Feed de movimientos | **Absorbido acá** como un tipo de notificación | Feed `/movements` propio |
 
-El riesgo de la tabla de eventos no es teórico: `public.cron_executions` ya tiene
-**~1,3M de filas** por un log mucho más simple. Un fan-out por usuario sin política
-de retención repite ese problema, y además obliga a modificar 10 productores que
-hoy funcionan.
-
-### Recomendación: híbrido, y la línea divisoria es clara
+## 5. Arquitectura: híbrido watermark + eventos
 
 > **Watermark** para datos de volumen. **Evento** para hechos puntuales y accionables.
 
-- **Watermark** → noticias, señales, vacantes, findings del radar. Nadie quiere una
-  card por cada vacante: quiere *"Cencosud: 4 vacantes nuevas"*. Se calcula al leer,
-  no toca ningún productor, no crece.
-- **Evento** → movimiento de contacto detectado, research terminado, enrichment
-  completo, cuenta refrescada. Son hechos únicos, accionables, que se descartan de a
-  uno y que valen un email.
+| | Tabla de eventos (fan-out) | Watermark |
+|---|---|---|
+| Hay que tocar los productores | Sí, los 10 crons | **No, ninguno** |
+| Crecimiento de filas | N usuarios × M eventos | Una fila por usuario × cuenta |
+| Descartar de a uno | Sí | No |
+| Granularidad | Una card por hecho | "3 noticias nuevas" |
 
-Con eso, la fase 1 **no toca ningún cron existente** y ya entrega el 70% del valor.
+El riesgo del fan-out no es teórico: `public.cron_executions` ya tiene ~1,3M de
+filas por un log más simple.
 
----
+- **Watermark** → noticias, implementaciones, radar, vacantes. Nadie quiere una card
+  por vacante: quiere *"Cencosud · 4 vacantes nuevas"*.
+- **Evento** → movimiento de contacto, research terminado, enrichment completo.
+  Hechos únicos, accionables, que se descartan de a uno.
 
-## 5. Modelo de datos
-
-> **Nota:** este apartado es el boceto original. El modelo definitivo —sin
-> `seen_by_tab`, con `auth.uid()` adentro de la función y filtrando por
-> `company_id`— está en **§11.3**. Ante cualquier diferencia, manda §11.
-
-### 5.1 Watermark
-
-```sql
-CREATE TABLE IF NOT EXISTS public.user_account_watermarks (
-  user_id     uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  bookmark_id uuid NOT NULL REFERENCES public.bookmarks(id) ON DELETE CASCADE,
-  last_seen_at timestamptz NOT NULL DEFAULT now(),
-  -- opcional: por tab, para marcar sólo lo que realmente miró
-  seen_by_tab jsonb NOT NULL DEFAULT '{}'::jsonb,
-  PRIMARY KEY (user_id, bookmark_id)
-);
-
-ALTER TABLE public.user_account_watermarks ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "own watermarks" ON public.user_account_watermarks
-  USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
-```
-
-Y una RPC que devuelve el resumen de novedades por cuenta:
-
-```sql
-CREATE OR REPLACE FUNCTION public.get_account_updates(p_user_id uuid)
-RETURNS TABLE (
-  bookmark_id uuid, company_id uuid, company_name text,
-  news_count int, signals_count int, jobs_count int, radar_count int,
-  last_update_at timestamptz
-) LANGUAGE sql SECURITY DEFINER AS $$
-  -- cuenta filas creadas después de last_seen_at en cada productor,
-  -- para los bookmarks del usuario
-$$;
-```
-
-`SECURITY DEFINER` con filtro explícito por `p_user_id`, siguiendo el patrón de
-`get_prospects_for_icebreakers` (script 098).
-
-### 5.2 Eventos
-
-```sql
-CREATE TABLE IF NOT EXISTS public.user_notifications (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id     uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  bookmark_id uuid REFERENCES public.bookmarks(id) ON DELETE CASCADE,
-  company_id  uuid REFERENCES public.companies(id) ON DELETE CASCADE,
-
-  kind text NOT NULL CHECK (kind IN (
-    'contact_movement',     -- de la feature de Movimientos
-    'research_completed',   -- terminó un job async que el usuario disparó
-    'enrichment_completed', -- Apollo devolvió teléfono/contactos
-    'account_refreshed',    -- se refrescó el dato de la cuenta
-    'contact_needs_review'  -- el contacto quedó marcado para revisar
-  )),
-
-  title text NOT NULL,
-  body  text,
-  deep_link text NOT NULL,       -- ej: /bookmarks/{id}?tab=prospects
-  payload jsonb,                 -- ids de las entidades involucradas
-
-  status text NOT NULL DEFAULT 'unread'
-    CHECK (status IN ('unread','read','dismissed')),
-  emailed_at timestamptz,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  dedupe_key text NOT NULL,
-  UNIQUE (user_id, dedupe_key)
-);
-
-CREATE INDEX IF NOT EXISTS idx_user_notifications_inbox
-  ON public.user_notifications (user_id, status, created_at DESC)
-  WHERE status <> 'dismissed';
-
-ALTER TABLE public.user_notifications ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "own notifications" ON public.user_notifications
-  USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
-```
-
-**Retención desde el día uno** (la lección de `cron_executions`): el cron semanal
-`/api/cron/cleanup` borra `dismissed` con más de 30 días y cualquier notificación
-con más de 90. Se agrega en el mismo handler que ya existe.
-
-Archivo: **`scripts/503_notifications.sql`** (después del `502` de Movimientos).
+**La fase 1 es sólo watermark y no toca ningún cron.**
 
 ---
 
-## 6. Catálogo de notificaciones
+## 6. Especificación de construcción — Fase 1
 
-| Tipo | Mecanismo | Granularidad | Card |
-|---|---|---|---|
-| Noticias nuevas | watermark | agregada por cuenta | "Cencosud · 3 noticias nuevas" → `?tab=news` |
-| Vacantes nuevas | watermark | agregada | "Falabella · 4 vacantes nuevas" → `?tab=jobpostings` |
-| Señales / radar | watermark | agregada | "Arcor · 2 implementaciones detectadas" → `?tab=intelligence` |
-| **Movimiento de contacto** | evento | individual | "Juan Pérez pasó de Falabella a Cencosud" → `?tab=prospects` |
-| Research terminado | evento | individual | "Listo el análisis de Despegar" → `?tab=summary` |
-| Enrichment completo | evento | individual | "3 contactos nuevos en Arcor" → `?tab=prospects` |
-| Contacto a revisar | evento | individual | "El email de M. Gómez dejó de estar verificado" |
+### 6.1 Alcance de los productores
 
-Los tres de evento cubren justo lo que hoy se resuelve con polling manual o no se
-resuelve.
+Se cuentan **cuatro**: noticias, implementaciones, radar y vacantes. Los tres
+primeros salen de la vista `public.company_evidence` del contrato; las vacantes
+se cuentan aparte porque no son evidencia narrativa.
 
----
+**`signals` queda afuera**, y la razón es un número: **1.694.025 filas totales,
+189.914 en los últimos 30 días**. Es un firehose del ETL —se generan al ingestar
+contactos y vacantes, no cuando pasa algo en la cuenta— y produciría cards del tipo
+*"Arcor · 4.812 señales nuevas"*. Además es la única tabla sin índice compuesto por
+fecha. Si algún día entra, lo hace agregada por diccionario, no por fila.
 
-## 7. UI
+Volumen real de los que sí entran (medido 2026-08-17):
 
-### 7.1 Campanita en el sidebar
-
-`components/main-sidebar.tsx` tiene los ítems de nav (`/search`, `/bookmarks`,
-`/docs`, `/profile`). La campanita va en el header del sidebar con un badge de no
-leídas, y abre un panel (`Popover` o `Sheet` en mobile — ambos ya están en
-`components/ui/`).
-
-No hace falta una página nueva: **el panel es la feature**. Si más adelante crece,
-`/notifications` con historial completo.
-
-### 7.2 Anatomía de la card
-
-```
-┌──────────────────────────────────────────────┐
-│ [avatar/logo]  Cencosud                      │
-│ 3 noticias nuevas · 1 vacante                │
-│ "Cencosud anuncia inversión en su plataforma"│
-│ hace 2 horas          [Ver novedades →]      │
-└──────────────────────────────────────────────┘
-```
-
-El botón lleva a `/bookmarks/{id}?tab=news`, que **ya funciona** sin tocar nada
-(`page.tsx:58`). Al abrir, se actualiza el watermark de ese tab y la card
-desaparece sola.
-
-### 7.3 Indicador por tab
-
-El mismo cálculo del watermark alimenta un puntito en los `TabsTrigger` que tienen
-novedades. Es el que resuelve el problema de fondo —"¿en qué tab está lo nuevo?"—
-y sale gratis una vez que existe la RPC.
-
-### 7.4 Anti-fatiga
-
-- **Agrupar por cuenta**, nunca una card por hecho de volumen.
-- **Preferencias por tipo**, extendiendo `user_notification_preferences` (que ya
-  existe) con un `jsonb` de tipos habilitados en vez de una tabla nueva.
-- **Tope** de cards en el panel; el resto en "ver todas".
-- El email semanal se arma con las mismas notificaciones, usando
-  `user_digest_sent_items` como ledger para no repetir lo ya avisado.
-
----
-
-## 8. Cómo se integra con la feature de Movimientos
-
-**Recomendación: no construir las dos bandejas.** El feed `/movements` que propuse
-en el doc anterior (§7.3) es un caso particular de esto. La versión corregida:
-
-| Antes | Ahora |
-|---|---|
-| Feed `/movements` en el sidebar | **Se descarta.** Los movimientos son `kind = 'contact_movement'` en el centro de notificaciones |
-| `user_contact_movements.status` | Se mantiene: es el estado *comercial* del movimiento (`actioned`, `dismissed`), distinto del estado de *lectura* de la notificación |
-| Tab "Movimientos" en el bookmark | **Se mantiene.** Es la vista histórica por cuenta; el panel es la bandeja transversal |
-
-O sea: la feature de Movimientos aporta el **detector y el hecho**; el centro de
-notificaciones aporta el **canal**. `fanOutMovement()` pasa a insertar en
-`user_notifications` además de en `user_contact_movements`.
-
-Eso simplifica el plan anterior: **la fase 2 de Movimientos deja de existir** y se
-absorbe acá.
-
----
-
-## 9. Fases
-
-| # | Alcance | Toca productores | Esfuerzo |
-|---|---|---|---|
-| **1** | Watermark + RPC `get_account_updates` + campanita + cards agregadas + puntito por tab | **Ninguno** | **3–4 días** |
-| **2** | `user_notifications` + eventos de research/enrichment + retención en `cleanup` | Sólo los puntos donde termina un job | 3 días |
-| **3** | `contact_movement` conectado (depende de la fase 1 de Movimientos) | — | 1 día |
-| **4** | Email semanal reusando `user_notification_preferences` + `user_digest_sent_items` + `app/actions/resend.ts` | — | 2–3 días |
-| **5** | Realtime opcional (Supabase Realtime) para que la campanita se actualice sin refresh, y **borrar el polling de `prospects-tab`** | — | 2 días |
-
-La fase 1 es la que más rinde: no toca ningún cron, no agrega filas, y ya resuelve
-"¿qué cambió en mis cuentas?".
-
----
-
-## 10. Riesgos y decisiones abiertas
-
-| Riesgo | Mitigación |
-|---|---|
-| **Costo de la RPC de watermark.** Contar filas en 4–5 tablas por bookmark en cada render. | Índices por `(company_id, created_at)` — ya existen para news e implementations (script 102). Si con volumen real no alcanza, contador materializado. **Medir antes de optimizar.** |
-| **Fatiga de notificaciones.** | Agrupación por cuenta + preferencias por tipo + tope en el panel. |
-| **Crecimiento de `user_notifications`.** | Retención desde el día uno en `/api/cron/cleanup`, que ya corre semanal. |
-| **Ruido en usuarios con muchos bookmarks.** | Ordenar por `priority` del bookmark (`alta` primero): el campo ya existe en `public.bookmarks`. |
-
-### Decisiones tomadas (2026-08-17)
-
-1. **Watermark por cuenta**, no por tab. Se descarta `seen_by_tab` en fase 1.
-2. **Panel en la campanita.** Sin página `/notifications`.
-3. **Sin email.** Primero medir si el panel se usa.
-
-La spec de construcción con estas decisiones está en §11.
-
----
-
-## 11. Especificación de construcción — Fase 1
-
-Decisiones cerradas: **watermark por cuenta, panel en la campanita, sin email.**
-
-### 11.1 Volumen real (medido en producción, 2026-08-17)
-
-| Tabla | Filas totales | Últimos 30 días |
+| Tabla | Total | Últimos 30 días |
 |---|---:|---:|
-| `signals` | **1.694.025** | **189.914** |
 | `job_postings` | 41.224 | 7.767 |
-| `company_news` | 1.133 | — |
-| `company_implementations` | 727 | — |
+| `company_news` | 1.133 | 49 |
+| `company_implementations` | 727 | 77 |
 | `radar_findings` | 706 | 310 |
-| `bookmarks` | 2.322 (67 usuarios) | — |
 
-Bookmarks por usuario: **promedio 35, p90 108, máximo 411**.
+Bookmarks por usuario: promedio 35, p90 108, **máximo 411**. Con esos volúmenes y
+los índices de la fase A del contrato, no hace falta contador materializado.
 
-### 11.2 Consecuencia: `signals` queda afuera
-
-190 mil filas en 30 días es un **firehose del ETL**, no una novedad comercial: las
-señales se generan cuando se ingestan contactos y vacantes, no cuando pasa algo en
-la cuenta. Contarlas produciría cards del tipo *"Arcor · 4.812 señales nuevas"*, que
-es ruido puro.
-
-Además `signals` no tiene índice compuesto `(company_id, created_at)` — sólo
-`idx_signals_company_id` (script 001) — así que contar por fecha sobre 1,7M de
-filas sería el único riesgo de performance de toda la feature.
-
-**Fase 1 cuenta cuatro productores: noticias, implementaciones, vacantes y radar.**
-Las señales, si alguna vez entran, lo hacen agregadas por diccionario
-(*"3 tecnologías nuevas detectadas"*), no por fila.
-
-Con esos cuatro, el peor caso —un usuario con 411 bookmarks— cuenta sobre tablas de
-41k, 1,1k, 727 y 706 filas, todas indexadas por la clave de acceso. No hace falta
-contador materializado.
-
-### 11.3 Migración: `scripts/503_notifications_watermarks.sql`
+### 6.2 Migración: `scripts/506_notification_watermarks.sql`
 
 ```sql
--- 1. Tabla de watermarks (una fila por usuario × cuenta)
 create table if not exists public.user_account_watermarks (
   user_id      uuid not null references auth.users(id) on delete cascade,
   bookmark_id  uuid not null references public.bookmarks(id) on delete cascade,
@@ -363,27 +128,11 @@ create policy "own watermarks" on public.user_account_watermarks
   with check (auth.uid() = user_id);   -- WITH CHECK explícito (auditoría P0.4)
 ```
 
-```sql
--- 2. Índices que faltan en los productores.
---    CONCURRENTLY no corre dentro de una transacción: este bloque va en un
---    archivo aparte o se ejecuta suelto (precedente: script 165).
-create index concurrently if not exists idx_job_postings_company_created
-  on public.job_postings (company_id, created_at desc);
+### 6.3 RPC de novedades
 
--- OJO: se filtra por company_id, NO por bookmark_id. Ver §12.3:
--- el 100% de company_news y el 99% de company_implementations tienen
--- bookmark_id NULL, porque el research los escribe como cache por compañía.
-create index concurrently if not exists idx_company_news_company_created
-  on public.company_news (company_id, created_at desc);
-
-create index concurrently if not exists idx_company_impl_company_created
-  on public.company_implementations (company_id, created_at desc);
-
--- radar_findings ya tiene (company_id, detected_at desc) — script 400
-```
+Lee la vista canónica, así que no repite la lógica de las tres tablas.
 
 ```sql
--- 3. RPC de novedades
 create or replace function public.get_account_updates(p_limit int default 100)
 returns table (
   bookmark_id    uuid,
@@ -393,61 +142,62 @@ returns table (
   since          timestamptz,
   news_count     int,
   impl_count     int,
-  jobs_count     int,
   radar_count    int,
+  jobs_count     int,
   total_count    int,
   last_update_at timestamptz
 )
 language sql
 stable
-security definer          -- obligatorio: radar_findings sólo es legible por service_role
+security definer          -- radar_findings sólo es legible por service_role
 set search_path = public  -- evita search_path hijacking
 as $$
   with mine as (
-    select
-      b.id as bookmark_id,
-      b.company_id,
-      b.priority,
-      coalesce(w.last_seen_at, b.created_at) as since
+    select b.id as bookmark_id, b.company_id, b.priority,
+           coalesce(w.last_seen_at, b.created_at) as since
     from public.bookmarks b
     left join public.user_account_watermarks w
       on w.bookmark_id = b.id and w.user_id = b.user_id
-    where b.user_id = auth.uid()          -- nunca un parámetro: no se puede suplantar
+    where b.user_id = auth.uid()   -- nunca un parámetro: no se puede suplantar
   ),
-  counted as (
-    select
-      m.*,
-      (select count(*) from public.company_news n
-         where n.company_id = m.company_id and n.created_at > m.since) as news_count,
-      (select count(*) from public.company_implementations i
-         where i.company_id = m.company_id and i.created_at > m.since) as impl_count,
-      (select count(*) from public.job_postings j
-         where j.company_id = m.company_id and j.created_at > m.since) as jobs_count,
-      (select count(*) from public.radar_findings r
-         where r.company_id = m.company_id and r.detected_at > m.since) as radar_count,
-      greatest(
-        coalesce((select max(n.created_at) from public.company_news n
-                   where n.company_id = m.company_id and n.created_at > m.since), m.since),
-        coalesce((select max(i.created_at) from public.company_implementations i
-                   where i.company_id = m.company_id and i.created_at > m.since), m.since),
-        coalesce((select max(j.created_at) from public.job_postings j
-                   where j.company_id = m.company_id and j.created_at > m.since), m.since),
-        coalesce((select max(r.detected_at) from public.radar_findings r
-                   where r.company_id = m.company_id and r.detected_at > m.since), m.since)
-      ) as last_update_at
+  ev as (
+    select m.bookmark_id,
+           count(*) filter (where e.evidence_kind = 'news')           as news_count,
+           count(*) filter (where e.evidence_kind = 'implementation') as impl_count,
+           count(*) filter (where e.evidence_kind = 'radar')          as radar_count,
+           max(e.detected_at)                                         as last_at
     from mine m
+    join public.company_evidence e
+      on e.company_id = m.company_id
+     and e.detected_at > m.since
+    group by m.bookmark_id
+  ),
+  jb as (
+    select m.bookmark_id, count(*) as jobs_count, max(j.created_at) as last_at
+    from mine m
+    join public.job_postings j
+      on j.company_id = m.company_id
+     and j.created_at > m.since
+    group by m.bookmark_id
   )
   select
-    c.bookmark_id, c.company_id, co.name, c.priority, c.since,
-    c.news_count::int, c.impl_count::int, c.jobs_count::int, c.radar_count::int,
-    (c.news_count + c.impl_count + c.jobs_count + c.radar_count)::int as total_count,
-    c.last_update_at
-  from counted c
-  join public.companies co on co.id = c.company_id
-  where (c.news_count + c.impl_count + c.jobs_count + c.radar_count) > 0
+    m.bookmark_id, m.company_id, co.name, m.priority, m.since,
+    coalesce(ev.news_count, 0)::int,
+    coalesce(ev.impl_count, 0)::int,
+    coalesce(ev.radar_count, 0)::int,
+    coalesce(jb.jobs_count, 0)::int,
+    (coalesce(ev.news_count,0) + coalesce(ev.impl_count,0)
+      + coalesce(ev.radar_count,0) + coalesce(jb.jobs_count,0))::int as total_count,
+    greatest(coalesce(ev.last_at, m.since), coalesce(jb.last_at, m.since)) as last_update_at
+  from mine m
+  join public.companies co on co.id = m.company_id
+  left join ev on ev.bookmark_id = m.bookmark_id
+  left join jb on jb.bookmark_id = m.bookmark_id
+  where coalesce(ev.news_count,0) + coalesce(ev.impl_count,0)
+      + coalesce(ev.radar_count,0) + coalesce(jb.jobs_count,0) > 0
   order by
-    case c.priority when 'alta' then 0 when 'transaccional' then 1 else 2 end,
-    c.last_update_at desc
+    case m.priority when 'alta' then 0 when 'transaccional' then 1 else 2 end,
+    last_update_at desc
   limit p_limit;
 $$;
 
@@ -455,12 +205,13 @@ revoke all on function public.get_account_updates(int) from public;
 grant execute on function public.get_account_updates(int) to authenticated;
 ```
 
-> **Nota de seguridad:** el `auth.uid()` va *dentro* de la función, no como
-> parámetro. Es más estricto que `get_prospects_for_icebreakers(p_bookmark_id,
-> p_user_id)` (script 098), que confía en un `user_id` que manda el cliente.
+> **Nota de seguridad:** `auth.uid()` va *dentro* de la función, no como parámetro.
+> Es más estricto que `get_prospects_for_icebreakers(p_bookmark_id, p_user_id)`
+> (script 098), que confía en un `user_id` que manda el cliente.
+
+### 6.4 RPC de marcado
 
 ```sql
--- 4. Marcar cuenta como vista (upsert idempotente)
 create or replace function public.mark_account_seen(p_bookmark_id uuid)
 returns timestamptz            -- devuelve el watermark ANTERIOR
 language plpgsql
@@ -493,7 +244,7 @@ revoke all on function public.mark_account_seen(uuid) from public;
 grant execute on function public.mark_account_seen(uuid) to authenticated;
 ```
 
-### 11.4 La regla del watermark (lo más importante del diseño)
+### 6.5 La regla del watermark (lo más importante del diseño)
 
 **Se lee primero, se actualiza después.** `mark_account_seen` devuelve el watermark
 *anterior* justamente para eso:
@@ -507,19 +258,18 @@ grant execute on function public.mark_account_seen(uuid) to authenticated;
 Sin esto, abrir la cuenta borraría la novedad antes de que el usuario la vea, que es
 el error clásico de esta feature.
 
-**El trade-off aceptado de "watermark por cuenta":** abrir la cuenta marca como
-vista *toda* la cuenta, incluidos los tabs que no se abrieron. Se compensa con el
-resaltado por `previousSeenAt`, que sobrevive a la visita.
+**Trade-off aceptado del watermark por cuenta:** abrir la cuenta la marca vista
+entera, incluidos los tabs que no se abrieron. Se compensa con el resaltado por
+`previousSeenAt`, que sobrevive a la visita.
 
-### 11.5 Archivos
+### 6.6 Archivos
 
 **Nuevos**
 
 | Archivo | Qué |
 |---|---|
-| `scripts/503_notifications_watermarks.sql` | Tabla + RPCs + grants |
-| `scripts/504_notifications_indexes.sql` | Los 3 `CREATE INDEX CONCURRENTLY` por `company_id` (fuera de transacción) |
-| `app/actions/notifications.ts` | `getAccountUpdates()`, `markAccountSeen(bookmarkId)` |
+| `scripts/506_notification_watermarks.sql` | Tabla + las dos RPC + grants |
+| `app/actions/notifications.ts` | `getAccountUpdates()`, `markAccountSeen()` |
 | `components/notifications/notification-bell.tsx` | Campanita + badge + `Popover` |
 | `components/notifications/notification-card.tsx` | Card de cuenta con deep-link |
 | `hooks/use-account-updates.ts` | SWR con `refreshInterval: 60_000` |
@@ -528,12 +278,11 @@ resaltado por `previousSeenAt`, que sobrevive a la visita.
 
 | Archivo | Cambio |
 |---|---|
-| `components/main-sidebar.tsx` | Montar `<NotificationBell />` en el header del sidebar y en la barra mobile |
-| `app/bookmarks/[id]/page.tsx` | Llamar `markAccountSeen` al montar; pasar `previousSeenAt` a los tabs |
-| `app/bookmarks/[id]/_components/{news,job-postings,intelligence}-tab.tsx` | Badge "nuevo" en las filas posteriores a `previousSeenAt` |
-| `app/api/cron/cleanup/route.ts` | Borrar watermarks huérfanos (defensivo; el cascade ya cubre el caso normal) |
+| `components/main-sidebar.tsx` | Montar `<NotificationBell />` en desktop y en la barra mobile |
+| `app/bookmarks/[id]/page.tsx` | `markAccountSeen` al montar; pasar `previousSeenAt` a los tabs |
+| `.../_components/{news,job-postings,intelligence}-tab.tsx` | Badge "nuevo" en filas posteriores a `previousSeenAt` |
 
-### 11.6 Contratos
+### 6.7 Contratos
 
 ```ts
 // app/actions/notifications.ts
@@ -545,17 +294,17 @@ export type AccountUpdate = {
   since: string
   newsCount: number
   implCount: number
-  jobsCount: number
   radarCount: number
+  jobsCount: number
   totalCount: number
   lastUpdateAt: string
 }
 
-export async function getAccountUpdates(limit = 100): Promise<AccountUpdate[]>
+export async function getAccountUpdates(limit?: number): Promise<AccountUpdate[]>
 export async function markAccountSeen(bookmarkId: string): Promise<string> // previousSeenAt
 ```
 
-**Deep-link por productor dominante** (el de mayor conteo define el tab destino):
+**Deep-link por productor dominante** (el de mayor conteo define el tab):
 
 | Productor | Destino |
 |---|---|
@@ -563,9 +312,7 @@ export async function markAccountSeen(bookmarkId: string): Promise<string> // pr
 | `implCount` / `radarCount` | `/bookmarks/{id}?tab=intelligence` |
 | `jobsCount` | `/bookmarks/{id}?tab=jobpostings` |
 
-`?tab=` ya funciona sin tocar nada (`app/bookmarks/[id]/page.tsx:58`).
-
-### 11.7 Copy de las cards
+### 6.8 Copy
 
 ```
 Cencosud                                    hace 2 h
@@ -573,146 +320,117 @@ Cencosud                                    hace 2 h
 
 Falabella                                   ayer
 4 vacantes nuevas                        [Ver novedades →]
-
-Arcor                                       hace 3 días
-2 implementaciones detectadas            [Ver novedades →]
 ```
 
-Sin cuentas con novedades: *"Estás al día. Te avisamos cuando haya algo nuevo en
-tus cuentas guardadas."*
+Vacío: *"Estás al día. Te avisamos cuando haya algo nuevo en tus cuentas guardadas."*
 
-Badge de la campanita = **cantidad de cuentas con novedades**, no la suma de hechos
-(un badge en "47" por 47 vacantes de una sola cuenta es ansiedad, no información).
+Badge de la campanita = **cantidad de cuentas con novedades**, no la suma de hechos.
+Un badge en "47" por 47 vacantes de una sola cuenta es ansiedad, no información.
 
-### 11.8 Casos borde
+### 6.9 Casos borde
 
 | Caso | Comportamiento |
 |---|---|
-| Bookmark sin watermark (nunca abierto) | `since = bookmarks.created_at`: lo anterior a guardarlo no cuenta como novedad |
-| Usuario con 411 bookmarks | `p_limit` + orden por `priority` y recencia; el panel muestra top 10 con "ver todas" |
-| `created_at` nulo en news/implementations | La comparación `> since` lo descarta. Aceptable: son filas viejas anteriores al default |
+| Bookmark nunca abierto | `since = bookmarks.created_at`: lo anterior a guardarlo no es novedad |
+| Usuario con 411 bookmarks | `p_limit` + orden por `priority`; el panel muestra top 10 con "ver todas" |
+| `created_at` nulo en news/impl | La comparación `> since` lo descarta. Son filas viejas previas al default |
 | Bookmark borrado | `on delete cascade` limpia el watermark |
-| Dato creado por el propio usuario (`requested_by = él`) | **Cuenta igual**: pidió un research asincrónico y el aviso de que terminó es justamente el valor |
-| Noticia traída por **otro** usuario sobre una compañía que vos seguís | **Cuenta**: `company_news` es cache global por compañía. Es el valor del cache compartido — ver §12.3 |
+| Dato pedido por el propio usuario | **Cuenta igual**: pidió un research async y el aviso de que terminó es el valor |
+| Dato traído por **otro** usuario | **Cuenta**: el cache es global por compañía. Es el valor del modelo colaborativo |
 | Dos pestañas abiertas | El upsert es idempotente; gana el `now()` más reciente |
 
-### 11.9 Plan de prueba
+### 6.10 Plan de prueba
 
-- **SQL**: correr `get_account_updates()` como un usuario real con `EXPLAIN ANALYZE`
-  antes y después de los índices. Objetivo: **< 200 ms** para el usuario de 411 bookmarks.
-- **Unit (vitest)**: la lógica de derivación de la card — tab destino según el
-  productor dominante, armado del copy, pluralización. Es lo único puro que hay.
-- **Manual**: bookmarkear una cuenta, insertar una noticia con fecha posterior,
-  verificar que la card aparece, abrir la cuenta, verificar que las filas nuevas
-  quedan resaltadas y que la card desaparece al recargar.
+- **SQL**: `EXPLAIN ANALYZE` de `get_account_updates()` con el usuario de 411
+  bookmarks. Objetivo **< 200 ms**. Atención especial al plan sobre la vista
+  `company_evidence` (UNION ALL): verificar que empuja el filtro por `company_id` a
+  cada rama.
+- **Unit (vitest)**: derivación de la card — tab destino según productor dominante,
+  copy y pluralización. Es lo único puro.
+- **Manual**: bookmarkear, insertar una noticia posterior, ver la card, abrir la
+  cuenta, verificar el resaltado y que la card desaparece al recargar.
 - **RLS**: con dos usuarios, confirmar que `get_account_updates()` nunca devuelve
   bookmarks ajenos y que `mark_account_seen` de un bookmark ajeno tira excepción.
 
-### 11.10 Definition of done
+### 6.11 Definition of done
 
-- [ ] `503` y `504` aplicados; `EXPLAIN ANALYZE` bajo 200 ms en el peor caso
-- [ ] Campanita visible en desktop y mobile, con badge por cantidad de cuentas
-- [ ] Card lleva al tab correcto y la cuenta se marca como vista
-- [ ] Las filas nuevas quedan resaltadas usando `previousSeenAt` en esa misma visita
+- [ ] Contrato de evidencia (fases A–B) aplicado
+- [ ] `506` aplicado; `EXPLAIN ANALYZE` bajo 200 ms en el peor caso
+- [ ] Campanita en desktop y mobile, badge por cantidad de cuentas
+- [ ] Card lleva al tab correcto y marca la cuenta como vista
+- [ ] Filas nuevas resaltadas con `previousSeenAt` en esa misma visita
 - [ ] Estado vacío implementado
 - [ ] Test de RLS con dos usuarios en verde
 - [ ] `pnpm typecheck` y `pnpm test` en verde
 
-**Estimación: 3–4 días.** No toca ningún cron y no agrega filas por evento.
+**Estimación: 3–4 días** después del contrato. No toca ningún cron.
 
 ---
 
-## 12. Quién produce qué: `company_news` vs `company_implementations` vs `radar_findings`
+## 7. Fases siguientes
 
-Las tres guardan "cosas que pasaron en una empresa" y **se solapan parcialmente**,
-pero no son lo mismo. Esta sección documenta el mapa real, verificado en código y
-en producción el 2026-08-17.
+| # | Alcance | Esfuerzo |
+|---|---|---|
+| 2 | `user_notifications` (eventos) + research/enrichment terminado + retención en `cleanup` | 3 días |
+| 3 | `contact_movement` conectado (ver `feature-movimientos-de-contactos-v2.md`) | 1 día |
+| 4 | Email semanal reusando `user_notification_preferences` + `user_digest_sent_items` | 2–3 días |
+| 5 | Realtime para actualizar la campanita sin refresh, y **borrar el polling de `prospects-tab`** | 2 días |
 
-### 12.1 Las tres tablas
+Modelo de la tabla de eventos para la fase 2:
 
-| Tabla | Qué guarda | Unidad | Quién escribe | Formato |
-|---|---|---|---|---|
-| `company_news` | Noticias de la empresa | Un artículo (título, URL, medio, fecha) | **v2**: `app/api/research/news/route.ts`, `app/actions/workspace.ts` · **v3**: `lib/v3/services/external-drilldown.ts` | Legado: texto plano + `category` |
-| `company_implementations` | Casos de implementación tecnológica | Un proyecto (tecnología, proveedor, resultados) | **v2**: `app/api/research/implementations/route.ts`, `app/actions/workspace.ts` · **v3**: `external-drilldown.ts` | Legado |
-| `radar_findings` | Hallazgos tipados del Tech Radar | Un hallazgo con `radar_type` + `category` | **sólo v3**: `lib/v3/services/radar.ts`, `jobs-interpreter.ts`, `app/actions/v3/accounts.ts` | Moderno: `evidence_level`, `confidence`, `dictionary_product_ids[]`, `supporting_job_posting_ids[]` |
+```sql
+create table if not exists public.user_notifications (
+  id uuid primary key default gen_random_uuid(),
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  bookmark_id uuid references public.bookmarks(id) on delete cascade,
+  company_id  uuid references public.companies(id) on delete cascade,
+  kind text not null check (kind in (
+    'contact_movement','research_completed','enrichment_completed',
+    'account_refreshed','contact_needs_review'
+  )),
+  title text not null,
+  body  text,
+  deep_link text not null,
+  payload jsonb,
+  status text not null default 'unread' check (status in ('unread','read','dismissed')),
+  emailed_at timestamptz,
+  created_at timestamptz not null default now(),
+  dedupe_key text not null,
+  unique (user_id, dedupe_key)
+);
+```
 
-Las tres son **cache global por compañía**: se pagan una vez y las lee cualquiera.
+**Retención desde el día uno** (la lección de `cron_executions`): el cron semanal
+`/api/cron/cleanup` borra `dismissed` de más de 30 días y todo lo de más de 90.
 
-### 12.2 El solapamiento es real
+---
 
-`radar_findings.radar_type` admite `'news'`, y hay filas: 14 de `partnership`,
-10 de `expansion`, 7 de `financial-performance`, 7 de `digital-transformation`.
+## 8. Riesgos
 
-O sea: **una noticia puede terminar en `company_news` o en `radar_findings`, según
-qué motor la haya traído.** No hay duplicación de la misma fila, pero sí dos
-formatos conviviendo para el mismo tipo de hecho.
+| Riesgo | Mitigación |
+|---|---|
+| Costo de la RPC sobre la vista `UNION ALL` | Índices de la fase A del contrato. **Medir con `EXPLAIN ANALYZE` antes de optimizar** |
+| Fatiga de notificaciones | Agrupación por cuenta + tope en el panel + preferencias por tipo (fase 2) |
+| Crecimiento de `user_notifications` (fase 2) | Retención desde el día uno en `/api/cron/cleanup` |
+| Ruido en usuarios con muchos bookmarks | Orden por `priority` del bookmark, que ya existe |
 
-Eso es exactamente la deuda que la auditoría llama **"evidence store compartido"**
-(§11, días 31–60: *normalizar fuentes y claims, separar evidencia de
-interpretación*). `radar_findings` es el formato nuevo —con nivel de evidencia,
-confianza y vínculo al diccionario—; `company_news` y `company_implementations` son
-el legado de v2 que quedó en producción.
+---
 
-**Para el centro de notificaciones esto no molesta**: se cuentan las tres por
-separado y la card las agrupa. Pero conviene saber que a futuro `radar_findings`
-debería absorberlas.
+## 9. Anexo: relación entre las tablas de evidencia
 
-### 12.3 Corrección importante a §11.3: `bookmark_id` está muerto
+Las tres tablas que alimentan esta feature **no son lo mismo pero se solapan**:
 
-El schema original (script 079) creó `company_news` y `company_implementations` con
-`user_id` y `bookmark_id` **NOT NULL**. Hoy ambas columnas son **NULLABLE**, y los
-datos muestran por qué:
+| Tabla | Unidad | Quién escribe |
+|---|---|---|
+| `company_news` | Un artículo (título, URL, medio, fecha) | v2 `/api/research/news` · v3 `external-drilldown` · MCP `submit_company_news` |
+| `company_implementations` | Un proyecto (tecnología, proveedor, resultados) | v2 `/api/research/implementations` · v3 · MCP `submit_company_success_cases` |
+| `radar_findings` | Un hallazgo tipado con `radar_type` + `category` | sólo v3: `radar.ts`, `jobs-interpreter.ts` |
 
-| Tabla | Filas | Con `bookmark_id` NULL |
-|---|---:|---:|
-| `company_news` | 1.133 | **1.133 (100%)** |
-| `company_implementations` | 727 | **720 (99%)** |
+`radar_findings.radar_type` admite `'news'` y tiene filas, así que **una noticia
+puede terminar en dos tablas distintas según qué motor la trajo**. Ese solapamiento,
+sus consecuencias y el plan para resolverlo están en
+**`docs/plan-unificacion-evidencia-v2-v3.md`**, que es la dependencia de esta feature.
 
-La causa está en el código: el insert de `/api/research/news/route.ts:466-490` sólo
-escribe `company_id`, título, resumen, URL, fuente, fecha, categoría y proveedor de
-IA. **Nunca setea `bookmark_id` ni `user_id`.** La atribución al usuario se hace
-aparte, en `user_news_interactions` (`user_id`, `news_id`, `company_id`,
-`viewed_at`), vía `registerUserInteractions()`.
-
-**Consecuencia:** la RPC como estaba escrita en §11.3 —filtrando
-`n.bookmark_id = m.bookmark_id`— **habría devuelto cero novedades siempre**.
-Ya está corregida para filtrar por `company_id`, y los índices también.
-
-**Decisión de producto que esto trae:** al contar por compañía, si *otro* usuario
-dispara research sobre una cuenta que vos seguís, **te enterás**. Es coherente con
-el modelo de cache global (se paga una vez, la aprovechan todos) y agrega valor,
-pero es una decisión explícita, no un efecto colateral. Si algún día se quisiera
-notificar sólo lo que uno pidió, `user_news_interactions` es el gancho.
-
-### 12.4 Actividad real (2026-08-17)
-
-| Tabla | Total | 30 días | 90 días | Última fila |
-|---|---:|---:|---:|---|
-| `company_news` | 1.133 | 49 | 135 | 2026-08-12 |
-| `company_implementations` | 727 | 77 | 89 | 2026-08-13 |
-| `radar_findings` | 706 | 310 | **706** | 2026-08-07 |
-
-Las tres están activas. `radar_findings` tiene el 100% de sus filas dentro de los
-últimos 90 días porque **la tabla es nueva**: nació el 2026-07-03 con la
-centralización del research.
-
-### 12.5 Detalle de observabilidad: `v3.tech_radar_runs` mezcla dos pipelines
-
-Las últimas 8 corridas registradas en `v3.tech_radar_runs` son todas
-`caller = 'drilldown'`, `status = 'completed'`, con `findings_count` de 5 a 21 — e
-incluyen corridas del 10, 11, 12 y 13 de agosto. Pero `radar_findings` no tiene
-ninguna fila posterior al **2026-08-07**.
-
-No es pérdida de datos: son **dos pipelines distintos bajo el mismo índice de
-corridas**.
-
-- `lib/v3/services/radar.ts` → escribe `radar_research_runs` + `radar_findings`
-- `lib/v3/services/external-drilldown.ts` → escribe **`company_news`**
-
-Ambos registran la corrida en `v3.tech_radar_runs`. Como en los últimos 10 días
-sólo corrió el drilldown, `company_news` siguió creciendo y `radar_findings` no.
-
-**Lo que conviene revisar** (no es parte de esta feature): el nombre de la tabla y
-su `findings_count` sugieren que todo lo que hay ahí es Tech Radar, y no lo es. Un
-`caller` visible en el admin de corridas evitaría diagnósticos equivocados —
-exactamente el tipo de confusión que disparó esta sección.
+Dato útil para `feature-movimientos-de-contactos-v2.md`: `radar_findings` ya tiene
+14 filas con `category = 'executive-change'`. El radar **ya detecta cambios de
+ejecutivos**.
