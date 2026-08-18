@@ -26,6 +26,12 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": resolve(__dirname, "./"),
+      // `server-only` es un marcador: su entrada por defecto tira si no la
+      // resuelve la condicion "react-server", que vitest no aplica. El paquete
+      // trae `empty.js` justo para eso, asi que se apunta ahi. Sin este alias
+      // cualquier modulo de servidor (lib/shared/evidence.ts, lib/tech-radar.ts)
+      // es intesteable.
+      "server-only": resolve(__dirname, "./node_modules/server-only/empty.js"),
     },
   },
 })
