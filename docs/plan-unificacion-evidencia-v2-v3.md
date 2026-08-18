@@ -18,10 +18,52 @@ de *"evidence store compartido"* de `asci-v3-architecture-audit.md` (§11, días
 | **C** | Escritor único `recordEvidence` | 🟡 **Módulo listo** — `lib/shared/evidence.ts` + 15 tests. Falta migrar los 6 productores |
 | **D** | Consolidación física | ⛔ No empezada, y no debe empezarse todavía |
 
-> ⚠️ **El script 505 NO fue aplicado a la base.** Es DDL sobre producción: se
-> aplica con el runner del proyecto cuando se decida, y conviene correrlo primero
-> en una branch de Supabase. Es estrictamente aditivo, pero sigue siendo
-> producción.
+> ⚠️ **El script 505 NO fue aplicado a la base de producción.** Sí fue validado
+> de punta a punta contra una réplica local del esquema (ver §0.1).
+
+### 0.1 Validación (2026-08-17)
+
+Se validó con `scripts/validate-migration-local.sh`, que levanta un Postgres
+efímero, le aplica el baseline del esquema de producción
+(`supabase/migrations/20250101000000_baseline.sql`, dump real del 2026-08-12) y
+encima la migración. **No se usó una branch de Supabase**: cuesta plata y no trae
+los datos, y para validar DDL la réplica local alcanza.
+
+| Chequeo | Resultado |
+|---|---|
+| Réplica del esquema | **54 tablas** en `public` — igual que producción |
+| Aplicación del 505 | Limpia, sin errores |
+| Idempotencia | Reaplicable: segunda corrida sólo emite `NOTICE ... skipping` |
+| Vista `company_evidence` | Unifica los tres formatos: `area`→`category`, `url`→`source_url`, `source_date`→`occurred_at` |
+| `security_invoker = true` | Confirmado en `pg_class.reloptions` |
+| Índice de dedupe | Rechaza la repetida con `23505` y **no molesta a las filas viejas** con `dedupe_hash` nulo |
+| RPC `get_account_updates` sobre la vista | Devuelve los conteos correctos por `evidence_kind` |
+| Aislamiento entre usuarios | Otro `auth.uid()` → 0 filas |
+
+**Performance (el riesgo abierto de la spec de notificaciones):** con volumen
+equivalente a producción —412 bookmarks para un usuario, 1.136 noticias, 728
+implementaciones, 707 findings y 41.224 vacantes— la RPC corre en **~9 ms**
+(tres corridas: 9,4 / 8,2 / 8,8 ms). El objetivo era < 200 ms, así que sobra un
+orden de magnitud y **no hace falta contador materializado**.
+
+Detalle honesto del plan: a este volumen el planner **no usa** los índices
+`(company_id, created_at)` de las tablas de evidencia — hace un `Seq Scan` de las
+tres (2.571 filas en total) y las hashea, que es lo correcto para tablas chicas.
+Los índices empiezan a pagar cuando crezcan. `job_postings` sí entra por índice.
+
+**Seguridad, verificada con roles reales:** consultando la vista como
+`authenticated`, `radar_findings` devuelve **0 filas** (su RLS es sólo
+`service_role`), mientras la RPC `security definer` sí ve todo. O sea que
+`security_invoker = true` hace lo que se buscaba: la vista no es un agujero para
+saltear RLS, y el camino sancionado de lectura son las RPC.
+
+> **Un hallazgo para el deploy:** con `security_invoker = true`, las policies de
+> `company_news` se evalúan como el usuario que consulta, y una de ellas
+> referencia otras tablas. Si el rol `authenticated` no tuviera `SELECT` sobre
+> ellas, la query **falla con "permission denied"** en vez de devolver menos
+> filas. En producción v2 funciona, así que los grants están; conviene igual
+> correr un `select from company_evidence` como usuario real justo después de
+> aplicar el script.
 
 **Productores pendientes de migrar a `recordEvidence` (fase C), en el orden
 recomendado** — de menos a más riesgoso, un PR cada uno:
