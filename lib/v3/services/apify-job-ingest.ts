@@ -1,6 +1,7 @@
 import "server-only"
 
 import { createAdminClient } from "@/lib/supabase/admin"
+import { normalizePostedDates } from "./apify-posted-dates"
 
 /**
  * Ingesta de vacantes scrapeadas (Apify) reutilizando el ETL de v2.
@@ -295,7 +296,11 @@ export async function ingestApifyJobPostings(params: {
   const rows: { batch_id: string; row_data: Record<string, unknown> }[] = []
   const preview: ApifyJobPreviewItem[] = []
 
-  for (const item of params.items) {
+  for (const rawItem of params.items) {
+    // Las fechas del actor pueden venir RELATIVAS ("4 weeks ago") y el RPC las
+    // castea a TIMESTAMPTZ: sin esta normalización la fila muere en el ETL.
+    const item = normalizePostedDates(rawItem)
+
     // Primero el filtro de pertenencia: el actor busca por título de puesto y
     // devuelve vacantes de muchas empresas. Lo que no es de la cuenta destino no
     // entra, porque más abajo se le impone el nombre de la cuenta a cada fila.
