@@ -1,10 +1,14 @@
 "use client"
 
-import { useState, useTransition } from "react"
+import { useMemo, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
+import { formatDistanceToNow } from "date-fns"
+import { es } from "date-fns/locale"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -15,12 +19,27 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { Briefcase, Linkedin, Loader2, Mail, RefreshCw, Search, Sparkles, Target, Users } from "lucide-react"
+import {
+  ArrowDownWideNarrow,
+  ArrowUpNarrowWide,
+  Briefcase,
+  ChevronDown,
+  ExternalLink,
+  Linkedin,
+  Loader2,
+  Mail,
+  RefreshCw,
+  Search,
+  Sparkles,
+  Target,
+  Users,
+} from "lucide-react"
 import {
   searchAccountDecisionMakers,
   refreshAccountJobPostings,
   type AccountSignalsData,
 } from "@/app/actions/v3/accounts"
+import type { UiJobPosting } from "@/lib/v3/services/job-posting-provider"
 
 /** Resalta los términos matcheados dentro de un título. */
 function HighlightedText({ text, terms }: { text: string; terms: string[] }) {
@@ -184,43 +203,49 @@ export function SignalsTab({
         </CardContent>
       </Card>
 
-      {/* Vacantes de LinkedIn: alimentan las señales fit de arriba */}
+      {/* Vacantes de LinkedIn: el cache global de la cuenta + refresh on-demand.
+          Se listan las vacantes CRUDAS a propósito: es el feedback inmediato de
+          que el scraping funcionó, independiente de que el research (que llena
+          las señales fit de arriba) haya corrido. */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <Briefcase className="size-4" />
             Vacantes de LinkedIn
+            <Badge variant="secondary">{signals.jobPostingsTotal}</Badge>
           </CardTitle>
         </CardHeader>
-        <CardContent className="flex flex-wrap items-center justify-between gap-3">
-          <p className="max-w-prose text-xs text-muted-foreground text-pretty">
-            Trae las vacantes publicadas por esta empresa y las procesa por el importador, que
-            genera las señales de arriba. Consume créditos de scraping, así que se puede refrescar
-            una vez cada 12 horas. Tarda hasta un minuto y las señales nuevas aparecen cuando el
-            importador termina el lote.
-          </p>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={isRefreshingJobs}
-            onClick={() => setConfirmJobs(true)}
-            className="shrink-0"
-          >
-            {isRefreshingJobs ? (
-              <Loader2 className="size-4 animate-spin" data-icon="inline-start" />
-            ) : (
-              <RefreshCw data-icon="inline-start" />
-            )}
-            {isRefreshingJobs ? "Buscando vacantes…" : "Refrescar vacantes"}
-          </Button>
+        <CardContent className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="max-w-prose text-xs text-muted-foreground text-pretty">
+              Vacantes publicadas por esta empresa, según el último scraping. Refrescar consume
+              créditos, así que se permite una vez cada 12 horas; tarda hasta un minuto y las
+              señales fit de arriba se recalculan cuando corre el research de la cuenta.
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={isRefreshingJobs}
+              onClick={() => setConfirmJobs(true)}
+              className="shrink-0"
+            >
+              {isRefreshingJobs ? (
+                <Loader2 className="size-4 animate-spin" data-icon="inline-start" />
+              ) : (
+                <RefreshCw data-icon="inline-start" />
+              )}
+              {isRefreshingJobs ? "Buscando vacantes…" : "Refrescar vacantes"}
+            </Button>
+          </div>
           {jobsFeedback && (
             <p
-              className={`w-full text-xs ${jobsFeedback.ok ? "text-green-600" : "text-red-600"} text-pretty`}
+              className={`text-xs ${jobsFeedback.ok ? "text-green-600" : "text-red-600"} text-pretty`}
               role="status"
             >
               {jobsFeedback.message}
             </p>
           )}
+          <JobPostingsList postings={signals.jobPostings} total={signals.jobPostingsTotal} />
         </CardContent>
       </Card>
 
@@ -375,6 +400,196 @@ export function SignalsTab({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════
+// Listado de vacantes: búsqueda + orden cronológico + filas expandibles.
+//
+// Decisiones de diseño (con el archivo real de YPF: 100 vacantes, descripciones
+// de 3-6k chars):
+//  - La fila compacta muestra TODO lo accionable (título, ubicación, seniority,
+//    contrato, área, postulantes, fecha relativa) y la descripción queda detrás
+//    de un expand: es lo único que satura.
+//  - Búsqueda y orden son client-side sobre lo ya cargado (hasta 100): no hay
+//    round-trip por tecla y el server manda un solo payload con extractos.
+//  - La lista scrollea dentro de la card para no empujar las secciones de abajo.
+// ═══════════════════════════════════════════════════════════
+
+/** Normaliza para búsqueda: minúsculas y sin acentos. */
+function searchable(value: string | null): string {
+  return (value ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+}
+
+/** "hace 12 días", o null si la vacante no trae fecha. */
+function relativeDate(iso: string | null): string | null {
+  if (!iso) return null
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return null
+  return formatDistanceToNow(date, { addSuffix: true, locale: es })
+}
+
+const NEW_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
+
+function JobPostingsList({ postings, total }: { postings: UiJobPosting[]; total: number }) {
+  const [query, setQuery] = useState("")
+  const [newestFirst, setNewestFirst] = useState(true)
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+
+  const filtered = useMemo(() => {
+    const q = searchable(query).trim()
+    const base = q
+      ? postings.filter((p) =>
+          [p.title, p.location, p.area, p.contractType, p.experienceLevel]
+            .some((field) => searchable(field).includes(q)),
+        )
+      : [...postings]
+    // Sin fecha van siempre al final: una vacante sin posted_at no puede
+    // competir en un orden cronológico.
+    return base.sort((a, b) => {
+      const ta = a.postedAt ? new Date(a.postedAt).getTime() : Number.NEGATIVE_INFINITY
+      const tb = b.postedAt ? new Date(b.postedAt).getTime() : Number.NEGATIVE_INFINITY
+      if (ta === tb) return 0
+      if (ta === Number.NEGATIVE_INFINITY) return 1
+      if (tb === Number.NEGATIVE_INFINITY) return -1
+      return newestFirst ? tb - ta : ta - tb
+    })
+  }, [postings, query, newestFirst])
+
+  if (postings.length === 0) {
+    return (
+      <p className="rounded-md border border-dashed py-6 text-center text-sm text-muted-foreground text-pretty">
+        Todavía no hay vacantes cargadas de esta cuenta. Usá «Refrescar vacantes» para traerlas de
+        LinkedIn.
+      </p>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-52 flex-1">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Buscar por puesto, ubicación o área…"
+            className="h-8 pl-8 text-sm"
+            aria-label="Buscar vacantes"
+          />
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="shrink-0 text-muted-foreground"
+          onClick={() => setNewestFirst((v) => !v)}
+          aria-label={`Ordenar por fecha, ${newestFirst ? "más antiguas primero" : "más recientes primero"}`}
+        >
+          {newestFirst ? (
+            <ArrowDownWideNarrow className="size-4" data-icon="inline-start" />
+          ) : (
+            <ArrowUpNarrowWide className="size-4" data-icon="inline-start" />
+          )}
+          {newestFirst ? "Más recientes" : "Más antiguas"}
+        </Button>
+      </div>
+
+      <p className="text-xs text-muted-foreground">
+        {query.trim()
+          ? `${filtered.length} de ${postings.length} vacantes matchean la búsqueda`
+          : total > postings.length
+            ? `Mostrando las ${postings.length} más recientes de ${total}`
+            : `${postings.length} vacante${postings.length === 1 ? "" : "s"}`}
+      </p>
+
+      <ScrollArea className="max-h-96 rounded-md border">
+        <ul className="divide-y">
+          {filtered.map((job) => {
+            const expanded = expandedId === job.id
+            const isNew =
+              job.postedAt && Date.now() - new Date(job.postedAt).getTime() <= NEW_WINDOW_MS
+            const meta = [job.location, job.experienceLevel, job.contractType, job.area, job.applicants]
+              .filter(Boolean)
+              .join(" · ")
+            return (
+              <li key={job.id} className="px-3 py-2.5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 flex-col gap-0.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {job.url ? (
+                        <a
+                          href={job.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-sm font-medium hover:underline"
+                        >
+                          <span className="min-w-0 break-words">{job.title}</span>
+                          <ExternalLink className="size-3 shrink-0 text-muted-foreground" />
+                        </a>
+                      ) : (
+                        <span className="text-sm font-medium">{job.title}</span>
+                      )}
+                      {isNew && (
+                        <Badge variant="secondary" className="text-[10px] uppercase">
+                          nueva
+                        </Badge>
+                      )}
+                    </div>
+                    {meta && <span className="text-xs text-muted-foreground text-pretty">{meta}</span>}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    {relativeDate(job.postedAt) && (
+                      <span className="whitespace-nowrap text-xs text-muted-foreground">
+                        {relativeDate(job.postedAt)}
+                      </span>
+                    )}
+                    {job.descriptionExcerpt && (
+                      <button
+                        type="button"
+                        onClick={() => setExpandedId(expanded ? null : job.id)}
+                        className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                        aria-expanded={expanded}
+                        aria-label={`${expanded ? "Ocultar" : "Ver"} descripción de ${job.title}`}
+                      >
+                        <ChevronDown
+                          className={`size-4 transition-transform ${expanded ? "rotate-180" : ""}`}
+                        />
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {expanded && job.descriptionExcerpt && (
+                  <div className="mt-2 flex flex-col gap-2 rounded-md bg-muted/40 p-3">
+                    <p className="whitespace-pre-line text-xs leading-relaxed text-muted-foreground">
+                      {job.descriptionExcerpt}
+                    </p>
+                    {job.url && (
+                      <a
+                        href={job.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                      >
+                        Ver completa en LinkedIn
+                        <ExternalLink className="size-3" />
+                      </a>
+                    )}
+                  </div>
+                )}
+              </li>
+            )
+          })}
+          {filtered.length === 0 && (
+            <li className="px-3 py-6 text-center text-sm text-muted-foreground">
+              Ninguna vacante matchea «{query.trim()}».
+            </li>
+          )}
+        </ul>
+      </ScrollArea>
     </div>
   )
 }

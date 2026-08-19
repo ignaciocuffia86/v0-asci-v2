@@ -14,6 +14,7 @@ import {
 import { getMicroAgentLabels } from "@/lib/v3/services/radar-agents"
 import { runLinkedinJobsActor, companyNameVariants } from "@/lib/v3/services/apify-client"
 import { ingestApifyJobPostings, apifyBatchFilenamePrefix } from "@/lib/v3/services/apify-job-ingest"
+import type { UiJobPosting } from "@/lib/v3/services/job-posting-provider"
 
 // ═══════════════════════════════════════════════════════════
 // Server actions de cuentas seguidas (vistas /v3/accounts).
@@ -231,6 +232,10 @@ export interface AccountDetail {
 
 export interface AccountSignalsData {
   hasVendorProfile: boolean
+  /** Vacantes crudas de la cuenta (cache global): feedback inmediato del
+   * scraping, independiente de que el research haya corrido. */
+  jobPostings: UiJobPosting[]
+  jobPostingsTotal: number
   fitSignals: Array<{
     id: string
     title: string
@@ -306,10 +311,12 @@ export async function getAccountSignals(companyId: string): Promise<AccountSigna
 
   const { summarizeCachedSignals } = await import("@/lib/v3/services/fit")
   const { getCompanyCachedContacts } = await import("@/lib/v3/services/contacts")
+  const { listAccountJobPostings } = await import("@/lib/v3/services/job-posting-provider")
 
-  const [summary, contacts] = await Promise.all([
+  const [summary, contacts, jobs] = await Promise.all([
     summarizeCachedSignals(companyId, workspaceId),
     getCompanyCachedContacts(companyId, 25),
+    listAccountJobPostings(companyId, 100),
   ])
 
   // Roles/departamentos implicados por las señales fit
@@ -400,6 +407,8 @@ export async function getAccountSignals(companyId: string): Promise<AccountSigna
     topMatches: summary.topMatches,
     relatedContacts: relatedContacts.slice(0, 10),
     recommendedRoles: recommendedRoles.slice(0, 6),
+    jobPostings: jobs.postings,
+    jobPostingsTotal: jobs.total,
   }
 }
 
