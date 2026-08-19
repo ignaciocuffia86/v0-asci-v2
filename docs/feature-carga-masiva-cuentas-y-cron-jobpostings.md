@@ -474,10 +474,33 @@ prefijo en los últimos 28 días.
    companyIds, runIds, jobs traídos/insertados/skipped)
 ```
 
-Nota deliberada: **no** se marca "intento" en `followed_accounts` — el registro de intento
-vive en el batch `apify://…` creado al lanzar el run (paso 5.b ocurre aunque el run
-termine TIMED-OUT: el cliente ya lee datasets parciales), cumpliendo la regla de
-"registrar antes/junto al gasto".
+### 6.3.b Regla anti-re-ejecución: el intento se marca ANTES de gastar
+
+Qué evita que el corredor (cada 10 min) re-corra la misma compañía y pague runs cuyo
+resultado la base descartaría como duplicado — una capa por camino:
+
+1. **Refresh mensual**: `refresh_day = hoy` es verdadero todo el día; el freno real es
+   el **cooldown de 25 días** contra el último batch `apify://` no fallido. Tras el
+   primer run del día, la compañía queda fuera por 25 días: un run/mes por dato
+   persistido, no por horario.
+2. **Primera pasada**: la condición "sin ningún batch `apify://`" solo funciona si TODO
+   run deja batch. La ingesta actual NO crea batch cuando el run vuelve con 0 vacantes
+   utilizables — ese hueco re-correría cada 10 min a una cuenta sin vacantes. Por eso el
+   corredor (y el kick del follow) **crean el batch `apify://<companyId>/<runId>` AL
+   LANZAR el run**, en `uploading` con 0 filas; la ingesta lo finaliza (con filas →
+   `pending` para el ETL; sin filas → `completed` vacío como marcador; run muerto →
+   `failed`). Misma lección medida que v3-refresh-accounts: registrar el intento solo al
+   éxito desperdició el 48% de sus corridas pagas.
+3. **Carreras**: corredor-vs-corredor lo cubre `acquire_cron_lock` (invocaciones nunca
+   solapadas). Kick-del-follow-vs-corredor lo cubre el punto 2: el batch en `uploading`
+   existe desde antes de que el run termine, así que el corredor ve la marca y saltea.
+4. **Reintentos**: los batches `failed` no cuentan para el cooldown (no bloquean 25 días
+   por un run caído) pero sí limitan: máx. 3 intentos fallidos por 28 días.
+
+La UNIQUE de `job_url` + `ON CONFLICT` de la base es la ÚLTIMA red, no el mecanismo: su
+rol es que lo repetido no ensucie, no evitar el gasto. El gasto lo evitan las marcas de
+arriba. En Apify no se acumula nada: cada run tiene su dataset efímero (la retención de
+storage los borra en días) y ASCI lo lee una sola vez.
 
 ### 6.4 Costos y guardrails
 
