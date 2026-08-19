@@ -374,24 +374,50 @@ que fijar un ID equivocado, porque el ID pasa a ser el filtro exacto de ahí en 
 
 ## 6. Parte 3 — Cron mensual de job postings de cuentas seguidas
 
-### 6.1 Diseño general
+### 6.1 Diseño general: UN cron scheduler-worker, un run POR compañía
 
-Nuevo endpoint `app/api/cron/v3-scrape-job-postings/route.ts` + entrada en `vercel.json`.
-Es un **Vercel Cron que invoca Apify** (decisión cerrada): Apify queda solo como motor de
-scraping; scheduling, presupuesto, reintentos y auditoría siguen el patrón casero.
+Revisión de producto (ago 2026): el scraping deja de ser una acción del usuario y pasa a
+ser automático — se dispara al seguir la cuenta, se mantiene solo, y el CTA "Refrescar
+vacantes" se retira de la UI.
 
-- **Cadencia mensual repartida**: reutiliza el `refresh_day` (1–28) que ya tiene cada
-  `followed_accounts`. Cada cuenta se scrapea una vez al mes, el día que le toca.
-- **Ventana de novedades**: `publishedAt: "r2592000"` (30 días — la ventana más amplia
-  que el actor soporta de forma cerrada; encaja exacto con la cadencia mensual, con leve
-  solapamiento en meses de 31 días que la ingesta idempotente absorbe).
-- **Horario**: `0 3-5 * * *` cada 20 min (`*/20 3-5 * * *`), es decir **antes** de
-  `v3-refresh-accounts` (`*/15 6-11 * * *`): el research mensual de la cuenta corre con
-  las vacantes ya frescas en `job_postings` y las señales ya generadas.
+Aclaración de arquitectura (las dos preguntas que definen la escala):
+
+- **NO hay un cron por bookmark** ni schedules en Apify. Hay **UN solo Vercel Cron**
+  (`app/api/cron/v3-scrape-job-postings/route.ts`, una entrada en `vercel.json`, para
+  siempre) que actúa como *scheduler-worker*: en cada invocación lee de la BASE qué
+  compañías le tocan y las procesa. La "membresía" al cron es la fila en
+  `v3.followed_accounts` — alta = entra sola a la selección, y cuando una compañía queda
+  sin NINGÚN follow activo en ningún workspace, sale sola. Cero configuración, cero
+  limpieza, cero administración por cuenta.
+- **NO se suman IDs a un mismo run de Apify**: cada compañía seleccionada lanza SU
+  propio run con `companyId: [su id]` (o variantes de nombre si aún no lo aprendió).
+  El techo de resultados del actor es POR RUN — nuestro cap verificado es 200 rows
+  (con 1000 el run expira) — así que las cuentas nunca compiten por el mismo techo:
+  200 vacantes de ventana para CADA empresa, se sigan 10 o 500 cuentas.
+
+Parámetros:
+
+- **Corredor continuo con dos prioridades** (reemplaza la franja horaria): el cron corre
+  `*/10 * * * *` (cada 10 min, todo el día) y en cada invocación selecciona, en orden:
+  1. **Primera pasada**: compañías seguidas activas SIN ningún batch `apify://` previo —
+     las altas nuevas (follow manual o import). Un follow individual ve vacantes en
+     ~10–30 min; un import de 100 cuentas se completa en horas, sin picos de 100 runs
+     simultáneos contra Apify.
+  2. **Refresh mensual**: compañías cuyo `refresh_day` (1–28) es hoy, con la ventana de
+     novedades `publishedAt: "r2592000"` (30 días; el leve solapamiento de meses de 31
+     días lo absorbe la ingesta idempotente).
+- **Kick inmediato en el follow individual**: además del corredor, `followAccountAction`
+  dispara el primer scraping con `after()` de Next (post-respuesta, no bloquea el alta).
+  El import masivo NO dispara inline: deja que el corredor reparta.
 - **Presupuesto por invocación**: `maxDuration = 300`, `BUDGET_MS = 270_000`,
-  `MAX_COMPANIES_PER_RUN = 2` (un run del actor tarda 1–3 min con proxy residencial;
-  2 por invocación × 9 invocaciones/día ≈ 18 compañías/día ≫ necesario para repartir
-  ~cientos de cuentas en 28 días; se ajusta con datos reales de `cron_executions`).
+  `MAX_COMPANIES_PER_RUN = 2` (un run tarda 1–3 min con proxy residencial; los runs son
+  SECUENCIALES dentro de la invocación, nunca en paralelo masivo). 2 × 144
+  invocaciones/día ≈ 288 slots/día — de sobra para primeras pasadas + refresh mensual.
+- **UI**: la card "Vacantes de LinkedIn" pierde el botón y muestra estado del sistema:
+  "Última actualización: hace N días · se actualiza automáticamente" (dato ya disponible
+  vía el batch `apify://` más reciente). El refresh forzado queda como acción de
+  superadmin (`?force=1` del cron), no de usuario — desaparece también el gasto de cuota
+  por refresh manual ansioso cada 12 h.
 
 ### 6.2 Selección de trabajo: por compañía, no por cuenta seguida
 
@@ -399,12 +425,22 @@ scraping; scheduling, presupuesto, reintentos y auditoría siguen el patrón cas
 veces el mismo mes duplica gasto de Apify sin valor. La selección:
 
 ```sql
--- Conceptual: compañías con al menos una cuenta seguida activa cuyo día es hoy,
--- deduplicadas por company_id
+-- Conceptual, en orden de prioridad y deduplicado por company_id:
+-- (1) primera pasada: seguidas activas sin ningún batch apify:// previo
+-- (2) refresh mensual: seguidas activas cuyo refresh_day es hoy
 SELECT DISTINCT fa.company_id
 FROM v3.followed_accounts fa
-WHERE fa.is_active = true AND fa.refresh_day = extract(day from now())
+WHERE fa.is_active = true
+  AND (
+    NOT EXISTS (SELECT 1 FROM public.import_batches b
+                WHERE b.filename LIKE 'apify://' || fa.company_id || '/%')
+    OR fa.refresh_day = extract(day from now())
+  )
 ```
+
+La baja es la misma consulta: una compañía sin follows activos (el último workspace la
+dejó de seguir) simplemente no aparece más. No hay registro de "inscripción al cron" que
+mantener ni desincronizar.
 
 y sobre cada `company_id` un **cooldown de 25 días** verificado con el mecanismo ya
 existente: último `import_batches` no-`failed` con `filename LIKE 'apify://<companyId>/%'`
@@ -438,10 +474,33 @@ prefijo en los últimos 28 días.
    companyIds, runIds, jobs traídos/insertados/skipped)
 ```
 
-Nota deliberada: **no** se marca "intento" en `followed_accounts` — el registro de intento
-vive en el batch `apify://…` creado al lanzar el run (paso 5.b ocurre aunque el run
-termine TIMED-OUT: el cliente ya lee datasets parciales), cumpliendo la regla de
-"registrar antes/junto al gasto".
+### 6.3.b Regla anti-re-ejecución: el intento se marca ANTES de gastar
+
+Qué evita que el corredor (cada 10 min) re-corra la misma compañía y pague runs cuyo
+resultado la base descartaría como duplicado — una capa por camino:
+
+1. **Refresh mensual**: `refresh_day = hoy` es verdadero todo el día; el freno real es
+   el **cooldown de 25 días** contra el último batch `apify://` no fallido. Tras el
+   primer run del día, la compañía queda fuera por 25 días: un run/mes por dato
+   persistido, no por horario.
+2. **Primera pasada**: la condición "sin ningún batch `apify://`" solo funciona si TODO
+   run deja batch. La ingesta actual NO crea batch cuando el run vuelve con 0 vacantes
+   utilizables — ese hueco re-correría cada 10 min a una cuenta sin vacantes. Por eso el
+   corredor (y el kick del follow) **crean el batch `apify://<companyId>/<runId>` AL
+   LANZAR el run**, en `uploading` con 0 filas; la ingesta lo finaliza (con filas →
+   `pending` para el ETL; sin filas → `completed` vacío como marcador; run muerto →
+   `failed`). Misma lección medida que v3-refresh-accounts: registrar el intento solo al
+   éxito desperdició el 48% de sus corridas pagas.
+3. **Carreras**: corredor-vs-corredor lo cubre `acquire_cron_lock` (invocaciones nunca
+   solapadas). Kick-del-follow-vs-corredor lo cubre el punto 2: el batch en `uploading`
+   existe desde antes de que el run termine, así que el corredor ve la marca y saltea.
+4. **Reintentos**: los batches `failed` no cuentan para el cooldown (no bloquean 25 días
+   por un run caído) pero sí limitan: máx. 3 intentos fallidos por 28 días.
+
+La UNIQUE de `job_url` + `ON CONFLICT` de la base es la ÚLTIMA red, no el mecanismo: su
+rol es que lo repetido no ensucie, no evitar el gasto. El gasto lo evitan las marcas de
+arriba. En Apify no se acumula nada: cada run tiene su dataset efímero (la retención de
+storage los borra en días) y ASCI lo lee una sola vez.
 
 ### 6.4 Costos y guardrails
 
@@ -477,9 +536,13 @@ write-once desde ingesta de jobs y (si aplica) desde harvestapi · columna opcio
 template · `companyIds` en `runLinkedinJobsActor()` · reporte de los 22 IDs en colisión
 hacia la pantalla de duplicados de `/admin/companies`.
 
-**Fase 4 — Cron mensual:** `v3-scrape-job-postings` + entrada en `vercel.json` ·
-selección deduplicada por compañía + cooldown 25 días por prefijo `apify://` ·
-observabilidad en `cron_executions` y en el panel de uso de `/v3/admin`.
+**Fase 4 — Corredor de scraping automático:** `v3-scrape-job-postings` cada 10 min +
+entrada en `vercel.json` · selección con dos prioridades (primera pasada de altas nuevas
+→ refresh mensual por `refresh_day`), deduplicada por compañía, con cooldown 25 días por
+prefijo `apify://` · kick con `after()` en el follow individual · retiro del CTA
+"Refrescar vacantes" (la card pasa a mostrar "última actualización + automático"; el
+force queda para superadmin) · observabilidad en `cron_executions` y en el panel de uso
+de `/v3/admin`.
 
 Fases 3 y 4 son independientes de la 2; el cron mejora su puntería solo con desplegar la 3.
 
