@@ -42,13 +42,16 @@ import {
   setWorkspacePlan,
   type WorkspaceSummary,
 } from "@/app/actions/v3/admin"
+import { PLAN_CONFIG, PLAN_ORDER } from "@/lib/v3/plan-config"
 
-const PLAN_LABELS: Record<string, { label: string; cap: number }> = {
-  trial: { label: "Trial", cap: 2 },
-  silver: { label: "Silver", cap: 30 },
-  gold: { label: "Gold", cap: 60 },
-  platinum: { label: "Platinum", cap: 120 },
-}
+// Derivado de la config real de planes (plan-config es un módulo puro, sin
+// imports de servidor): un cambio de cupos se refleja acá automáticamente.
+const PLAN_LABELS: Record<string, { label: string; cap: number }> = Object.fromEntries(
+  PLAN_ORDER.map((plan) => [
+    plan,
+    { label: PLAN_CONFIG[plan].label, cap: PLAN_CONFIG[plan].followedCap },
+  ]),
+)
 
 interface AdminWorkspacesViewProps {
   initialWorkspaces: WorkspaceSummary[]
