@@ -127,7 +127,17 @@ function translateApplicants(value: unknown): string | null {
 
 function excerpt(text: string | null): string | null {
   if (!text?.trim()) return null
-  const clean = text.replace(/\r/g, "").trim()
+  // Las descripciones de LinkedIn vienen con líneas en blanco de sobra (y
+  // líneas de solo espacios): como la UI respeta los saltos (pre-line), sin
+  // esta normalización el expand era casi todo aire. Se recorta cada línea y
+  // se colapsa cualquier corrida de líneas vacías a UNA separación de párrafo.
+  const clean = text
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .join("\n")
+    .replace(/\n{2,}/g, "\n\n")
+    .trim()
   if (clean.length <= DESCRIPTION_EXCERPT_CHARS) return clean
   // Corta en el último espacio antes del tope para no partir una palabra.
   const cut = clean.slice(0, DESCRIPTION_EXCERPT_CHARS)
