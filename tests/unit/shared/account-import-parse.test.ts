@@ -96,10 +96,25 @@ describe("mapAndDedupeRows", () => {
     expect(rows[0]).toEqual({
       company_name: "Banco Galicia",
       linkedin_url: "https://www.linkedin.com/company/banco-galicia",
+      linkedin_company_id: null,
       website: "bancogalicia.com",
       country: "Argentina",
       notes: null,
     })
+  })
+
+  it("acepta el linkedin_company_id numérico opcional y descarta typos sin invalidar la fila", () => {
+    const withId = detectHeaderMapping(["nombre", "linkedin_id"]).mapping
+    const { rows } = mapAndDedupeRows(
+      [
+        { nombre: "YPF Sociedad Anónima", linkedin_id: "321888" },
+        { nombre: "Empresa Typo", linkedin_id: "no-numérico" },
+      ],
+      withId,
+    )
+    expect(rows[0].linkedin_company_id).toBe("321888")
+    expect(rows[1].linkedin_company_id).toBeNull()
+    expect(rows).toHaveLength(2)
   })
 
   it("descarta filas sin nombre o con nombre corto, con número de fila humano", () => {

@@ -8,11 +8,19 @@
 
 export const ACCOUNT_IMPORT_MAX_ROWS = 500
 
-export type CanonicalField = "company_name" | "linkedin_url" | "website" | "country" | "notes"
+export type CanonicalField =
+  | "company_name"
+  | "linkedin_url"
+  | "linkedin_company_id"
+  | "website"
+  | "country"
+  | "notes"
 
 export interface CanonicalRow {
   company_name: string
   linkedin_url: string | null
+  /** LinkedIn company ID numérico, si el cliente ABM ya lo tiene (Fase 3). */
+  linkedin_company_id: string | null
   website: string | null
   country: string | null
   notes: string | null
@@ -35,6 +43,7 @@ const FIELD_SYNONYMS: Record<CanonicalField, string[]> = {
     "linkedin_url", "linkedin", "url_linkedin", "linkedin_company_url",
     "company_linkedin_url", "perfil_linkedin", "linkedin_empresa",
   ],
+  linkedin_company_id: ["linkedin_company_id", "linkedin_id", "id_linkedin", "company_id_linkedin"],
   website: ["website", "web", "sitio", "sitio_web", "dominio", "domain", "site", "url", "pagina", "pagina_web"],
   country: ["country", "pais"],
   notes: ["notes", "notas", "nota", "comentarios", "comments", "observaciones"],
@@ -195,10 +204,16 @@ export function mapAndDedupeRows(
       return
     }
 
+    // ID numérico opcional: un valor con typo no invalida la fila, solo se
+    // descarta el ID (el aprendizaje de la ingesta lo consigue igual después).
+    const rawLid = readField(record, "linkedin_company_id")
+    const lid = rawLid && /^[0-9]{1,15}$/.test(rawLid) ? rawLid : null
+
     seen.add(dedupKey)
     rows.push({
       company_name: name,
       linkedin_url: linkedin,
+      linkedin_company_id: lid,
       website: readField(record, "website"),
       country: readField(record, "country"),
       notes: readField(record, "notes"),
@@ -210,7 +225,7 @@ export function mapAndDedupeRows(
 
 /** Contenido del template descargable, alineado con FIELD_SYNONYMS. */
 export const ACCOUNT_IMPORT_TEMPLATE_CSV = [
-  "company_name,linkedin_url,website,country,notes",
-  '"Banco Galicia","https://www.linkedin.com/company/banco-galicia","bancogalicia.com","Argentina","Target Q2"',
-  '"YPF S.A.","https://www.linkedin.com/company/ypf","ypf.com","Argentina",""',
+  "company_name,linkedin_url,linkedin_company_id,website,country,notes",
+  '"Banco Galicia","https://www.linkedin.com/company/banco-galicia","","bancogalicia.com","Argentina","Target Q2"',
+  '"YPF S.A.","https://www.linkedin.com/company/ypf","321888","ypf.com","Argentina",""',
 ].join("\n")

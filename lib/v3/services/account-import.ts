@@ -12,6 +12,7 @@ import {
   linkedinCompanySlug,
   mapAndDedupeRows,
 } from "./account-import-parse"
+import { parseLinkedinCompanyId } from "./linkedin-company-id"
 
 // ═══════════════════════════════════════════════════════════
 // Carga masiva de cuentas por archivo (v3).
@@ -433,6 +434,27 @@ function toSummary(imp: Record<string, unknown>): AccountImportSummary {
   }
 }
 
+/**
+ * Aplica a la empresa el LinkedIn company ID que trajo el archivo (columna
+ * opcional de la Fase 3), write-once: solo si la empresa no lo tiene ya. El
+ * índice único parcial rechaza un ID que pertenezca a otra fila (duplicados
+ * del catálogo); en ese caso se loguea y se sigue — el aprendizaje de la
+ * ingesta lo resuelve por otra vía.
+ */
+async function applyFileLinkedinCompanyId(companyId: string, rowData: CanonicalRow): Promise<void> {
+  const lid = parseLinkedinCompanyId(rowData.linkedin_company_id)
+  if (lid === null) return
+  const admin = createAdminClient()
+  const { error } = await admin
+    .from("companies")
+    .update({ linkedin_company_id: lid })
+    .eq("id", companyId)
+    .is("linkedin_company_id", null)
+  if (error) {
+    console.warn(`[v3] No se pudo aplicar linkedin_company_id ${lid} del archivo a ${companyId}: ${error.message}`)
+  }
+}
+
 // ── Resolución de filas en la review ───────────────────────
 
 export async function resolveImportRow(params: {
@@ -478,6 +500,7 @@ export async function resolveImportRow(params: {
         resolved_by: params.resolvedBy,
       })
       .eq("id", params.rowId)
+    await applyFileLinkedinCompanyId(params.companyId, row.row_data as CanonicalRow)
     return { success: true, companyId: params.companyId }
   }
 
@@ -506,6 +529,7 @@ export async function resolveImportRow(params: {
       resolved_by: params.resolvedBy,
     })
     .eq("id", params.rowId)
+  await applyFileLinkedinCompanyId(companyId as string, data)
   // La empresa nueva con linkedin_url entra sola al cron de enriquecimiento
   // (v3-enrich-companies-linkedin selecciona companies nuevas con LinkedIn).
   return { success: true, companyId: companyId as string }
@@ -633,17 +657,21 @@ export async function confirmAccountImport(params: {
   const { data: rows } = await admin
     .schema("v3")
     .from("account_import_rows")
-    .select("id, match_status, resolution, matched_company_id")
+    .select("id, match_status, resolution, matched_company_id, row_data")
     .eq("import_id", params.importId)
   const all = rows ?? []
   const eligible = all.filter(isEligible).filter((r) => r.matched_company_id)
 
   // followAccount es idempotente y por empresa; se agrupan filas por company
   const rowsByCompany = new Map<string, string[]>()
+  const rowDataByCompany = new Map<string, CanonicalRow>()
   for (const row of eligible) {
     const list = rowsByCompany.get(row.matched_company_id as string) ?? []
     list.push(row.id)
     rowsByCompany.set(row.matched_company_id as string, list)
+    if (!rowDataByCompany.has(row.matched_company_id as string)) {
+      rowDataByCompany.set(row.matched_company_id as string, row.row_data as CanonicalRow)
+    }
   }
 
   let followed = 0
@@ -670,6 +698,9 @@ export async function confirmAccountImport(params: {
         .update({ resolution: "confirmed", resolved_by: params.userId })
         .in("id", rowIds)
         .is("resolution", null)
+      // Columna opcional del archivo (Fase 3): write-once del ID numérico
+      const rowData = rowDataByCompany.get(companyId)
+      if (rowData) await applyFileLinkedinCompanyId(companyId, rowData)
     }
   }
 
