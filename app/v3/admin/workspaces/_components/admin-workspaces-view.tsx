@@ -26,7 +26,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { Plus, Building2, Users, AlertCircle, Trash2 } from "lucide-react"
+import Link from "next/link"
+import { Plus, Building2, Users, AlertCircle, Trash2, FileUp } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import {
   Select,
@@ -354,18 +355,31 @@ export function AdminWorkspacesView({ initialWorkspaces, loadError }: AdminWorks
                         {format(new Date(ws.created_at), "d MMM yyyy", { locale: es })}
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="text-muted-foreground hover:text-destructive"
-                          onClick={() => {
-                            setDeleteTarget(ws)
-                            setDeleteConfirmName("")
-                          }}
-                          aria-label={`Eliminar ${ws.name}`}
-                        >
-                          <Trash2 className="size-4" />
-                        </Button>
+                        <div className="flex items-center justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="text-muted-foreground"
+                            asChild
+                            aria-label={`Importar cuentas a ${ws.name}`}
+                          >
+                            <Link href={`/v3/admin/account-imports?workspace=${ws.id}`}>
+                              <FileUp className="size-4" />
+                            </Link>
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="text-muted-foreground hover:text-destructive"
+                            onClick={() => {
+                              setDeleteTarget(ws)
+                              setDeleteConfirmName("")
+                            }}
+                            aria-label={`Eliminar ${ws.name}`}
+                          >
+                            <Trash2 className="size-4" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}

@@ -428,7 +428,7 @@ export async function requireWorkspaceMember(userId?: string): Promise<Workspace
 
 /**
  * @deprecated Usar requireWorkspaceMember. Se mantiene como alias para
- * compatibilidad con callers existentes (campaigns, documents, csv-import).
+ * compatibilidad con callers existentes (campaigns, documents).
  */
 export async function requireWorkspaceEditor(userId?: string): Promise<WorkspaceWithMember> {
   return requireWorkspaceMember(userId)
