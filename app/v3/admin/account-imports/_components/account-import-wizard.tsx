@@ -23,7 +23,6 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Dialog,
   DialogContent,
@@ -735,7 +734,7 @@ export function AccountImportWizard({
                       <Loader2 className="size-4 animate-spin" /> Cargando usuarios…
                     </div>
                   ) : (
-                    <ScrollArea className="h-48 rounded-md border">
+                    <div className="h-48 overflow-y-auto rounded-md border">
                       <div className="flex flex-col gap-1 p-2">
                         {filteredV2Users.map((user) => (
                           <label
@@ -764,7 +763,7 @@ export function AccountImportWizard({
                           <p className="p-2 text-sm text-muted-foreground">Sin resultados.</p>
                         )}
                       </div>
-                    </ScrollArea>
+                    </div>
                   )}
                   <p className="text-xs text-muted-foreground">
                     {v2Selected.size} usuarios seleccionados. Es un alta única al confirmar: no sincroniza con

@@ -8,7 +8,6 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -437,7 +436,11 @@ function JobPostingsList({ postings, total }: { postings: UiJobPosting[]; total:
             : `${postings.length} vacante${postings.length === 1 ? "" : "s"}`}
       </p>
 
-      <ScrollArea className="max-h-96 rounded-md border">
+      {/* Scroll nativo a propósito: el ScrollArea de Radix de este repo no
+          recorta overflow vertical (root sin overflow-hidden + viewport
+          size-full), y con max-h la lista se derramaba sobre las secciones
+          de abajo. Incidente real del primer deploy de esta card. */}
+      <div className="max-h-96 overflow-y-auto rounded-md border">
         <ul className="divide-y">
           {filtered.map((job) => {
             const expanded = expandedId === job.id
@@ -520,7 +523,7 @@ function JobPostingsList({ postings, total }: { postings: UiJobPosting[]; total:
             </li>
           )}
         </ul>
-      </ScrollArea>
+      </div>
     </div>
   )
 }
