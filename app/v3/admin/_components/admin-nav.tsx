@@ -3,11 +3,12 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { BarChart3, Bot, Building2, FileTerminal, Users } from "lucide-react"
+import { BarChart3, Bot, Building2, FileTerminal, FileUp, Users } from "lucide-react"
 
 const SECTIONS = [
   { href: "/v3/admin/usage", label: "Uso y costos", icon: BarChart3 },
   { href: "/v3/admin/workspaces", label: "Workspaces", icon: Building2 },
+  { href: "/v3/admin/account-imports", label: "Importar cuentas", icon: FileUp },
   { href: "/v3/admin/users", label: "Usuarios", icon: Users },
   { href: "/v3/admin/prompts", label: "Prompts", icon: FileTerminal },
   { href: "/v3/admin/agents", label: "Micro-agentes", icon: Bot },
