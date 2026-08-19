@@ -28,17 +28,12 @@ import {
   Linkedin,
   Loader2,
   Mail,
-  RefreshCw,
   Search,
   Sparkles,
   Target,
   Users,
 } from "lucide-react"
-import {
-  searchAccountDecisionMakers,
-  refreshAccountJobPostings,
-  type AccountSignalsData,
-} from "@/app/actions/v3/accounts"
+import { searchAccountDecisionMakers, type AccountSignalsData } from "@/app/actions/v3/accounts"
 import type { UiJobPosting } from "@/lib/v3/services/job-posting-provider"
 
 /** Resalta los términos matcheados dentro de un título. */
@@ -89,11 +84,6 @@ export function SignalsTab({
   const [confirmRole, setConfirmRole] = useState<string | null>(null)
   const [searchingRole, setSearchingRole] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<{ role: string; message: string; ok: boolean } | null>(null)
-  // Transición propia para el refresco de vacantes: si compartiera `isPending`
-  // con Apollo, buscar vacantes deshabilitaría también los botones de decisores.
-  const [isRefreshingJobs, startJobsTransition] = useTransition()
-  const [confirmJobs, setConfirmJobs] = useState(false)
-  const [jobsFeedback, setJobsFeedback] = useState<{ message: string; ok: boolean } | null>(null)
 
   if (!signals) {
     return (
@@ -125,28 +115,6 @@ export function SignalsTab({
       } else {
         setFeedback({ role, ok: false, message: result.error ?? "Error en la búsqueda" })
       }
-    })
-  }
-
-  const handleRefreshJobs = () => {
-    setConfirmJobs(false)
-    setJobsFeedback(null)
-    startJobsTransition(async () => {
-      const result = await refreshAccountJobPostings(companyId)
-      if (!result.success) {
-        setJobsFeedback({ ok: false, message: result.error ?? "No se pudieron traer las vacantes." })
-        return
-      }
-      // El descarte por pertenencia se informa siempre que ocurra: es normal que
-      // sea alto y sin explicarlo el número de vacantes cargadas parece un error.
-      const partes = [
-        result.queued
-          ? `${result.queued} vacante${result.queued === 1 ? "" : "s"} en cola de importación.`
-          : "No se encontraron vacantes nuevas de esta empresa.",
-        ...(result.warnings ?? []),
-      ]
-      setJobsFeedback({ ok: true, message: partes.join(" ") })
-      router.refresh()
     })
   }
 
@@ -216,35 +184,15 @@ export function SignalsTab({
           </CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="max-w-prose text-xs text-muted-foreground text-pretty">
-              Vacantes publicadas por esta empresa, según el último scraping. Refrescar consume
-              créditos, así que se permite una vez cada 12 horas; tarda hasta un minuto y las
-              señales fit de arriba se recalculan cuando corre el research de la cuenta.
-            </p>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={isRefreshingJobs}
-              onClick={() => setConfirmJobs(true)}
-              className="shrink-0"
-            >
-              {isRefreshingJobs ? (
-                <Loader2 className="size-4 animate-spin" data-icon="inline-start" />
-              ) : (
-                <RefreshCw data-icon="inline-start" />
-              )}
-              {isRefreshingJobs ? "Buscando vacantes…" : "Refrescar vacantes"}
-            </Button>
-          </div>
-          {jobsFeedback && (
-            <p
-              className={`text-xs ${jobsFeedback.ok ? "text-green-600" : "text-red-600"} text-pretty`}
-              role="status"
-            >
-              {jobsFeedback.message}
-            </p>
-          )}
+          {/* El scraping es automático desde la Fase 4: se dispara al seguir la
+              cuenta y el corredor lo refresca cada mes. El refresh forzado es
+              acción de superadmin (?force=1 del cron), no de usuario. */}
+          <p className="text-xs text-muted-foreground text-pretty">
+            {signals.jobsLastScrapedAt
+              ? `Última actualización: ${formatDistanceToNow(new Date(signals.jobsLastScrapedAt), { addSuffix: true, locale: es })} · se actualiza automáticamente.`
+              : "Todavía sin scraping: se actualizará automáticamente en los próximos minutos."}{" "}
+            Las señales fit de arriba se recalculan cuando corre el research de la cuenta.
+          </p>
           <JobPostingsList postings={signals.jobPostings} total={signals.jobPostingsTotal} />
         </CardContent>
       </Card>
@@ -365,23 +313,6 @@ export function SignalsTab({
           </CardContent>
         </Card>
       )}
-
-      <AlertDialog open={confirmJobs} onOpenChange={setConfirmJobs}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Refrescar vacantes de LinkedIn</AlertDialogTitle>
-            <AlertDialogDescription>
-              Esta acción scrapea las vacantes publicadas por la empresa y consume créditos. Las
-              vacantes entran por el importador de ASCI, así que quedan visibles también en la app
-              principal. ¿Continuar?
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancelar</AlertDialogCancel>
-            <AlertDialogAction onClick={handleRefreshJobs}>Refrescar</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
 
       <AlertDialog open={confirmRole !== null} onOpenChange={(open) => !open && setConfirmRole(null)}>
         <AlertDialogContent>
