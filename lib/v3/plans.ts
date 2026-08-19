@@ -53,7 +53,7 @@ export interface PlanConfig {
 export const PLAN_CONFIG: Record<WorkspacePlan, PlanConfig> = {
   trial: {
     label: "Trial",
-    followedCap: 2,
+    followedCap: 10,
     monthlyResearchCap: 2,
     lifetimeResearchCap: 2,
     maxUsers: 1,
@@ -69,7 +69,7 @@ export const PLAN_CONFIG: Record<WorkspacePlan, PlanConfig> = {
   },
   silver: {
     label: "Silver",
-    followedCap: 30,
+    followedCap: 60,
     monthlyResearchCap: 30,
     lifetimeResearchCap: null,
     maxUsers: 3,
@@ -85,7 +85,7 @@ export const PLAN_CONFIG: Record<WorkspacePlan, PlanConfig> = {
   },
   gold: {
     label: "Gold",
-    followedCap: 60,
+    followedCap: 120,
     monthlyResearchCap: 60,
     lifetimeResearchCap: null,
     maxUsers: 10,
@@ -101,7 +101,7 @@ export const PLAN_CONFIG: Record<WorkspacePlan, PlanConfig> = {
   },
   platinum: {
     label: "Platinum",
-    followedCap: 120,
+    followedCap: 240,
     monthlyResearchCap: 120,
     lifetimeResearchCap: null,
     maxUsers: null,

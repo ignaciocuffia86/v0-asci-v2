@@ -43,11 +43,13 @@ import {
   type WorkspaceSummary,
 } from "@/app/actions/v3/admin"
 
+// Mantener alineado con PLAN_CONFIG (lib/v3/plans.ts): este componente es
+// cliente y no puede importar ese módulo (arrastra el admin client de Supabase).
 const PLAN_LABELS: Record<string, { label: string; cap: number }> = {
-  trial: { label: "Trial", cap: 2 },
-  silver: { label: "Silver", cap: 30 },
-  gold: { label: "Gold", cap: 60 },
-  platinum: { label: "Platinum", cap: 120 },
+  trial: { label: "Trial", cap: 10 },
+  silver: { label: "Silver", cap: 60 },
+  gold: { label: "Gold", cap: 120 },
+  platinum: { label: "Platinum", cap: 240 },
 }
 
 interface AdminWorkspacesViewProps {
