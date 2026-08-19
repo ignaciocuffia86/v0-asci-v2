@@ -543,7 +543,7 @@ export async function refreshAccountJobPostings(companyId: string): Promise<{
 
   const { data: company } = await admin
     .from("companies")
-    .select("name, linkedin_url, country")
+    .select("name, linkedin_url, country, linkedin_company_id")
     .eq("id", companyId)
     .maybeSingle()
 
@@ -574,6 +574,9 @@ export async function refreshAccountJobPostings(companyId: string): Promise<{
   try {
     const run = await runLinkedinJobsActor({
       companyNames: companyNameVariants(company.name, company.linkedin_url),
+      // Con ID guardado el filtro es exacto y las variantes de nombre se
+      // ignoran; sin ID, el primer run por nombre lo aprende en la ingesta.
+      linkedinCompanyId: company.linkedin_company_id ?? null,
       // `||` y no `??`: hay filas con country = "" (string vacío).
       location: company.country?.trim() || undefined,
     })

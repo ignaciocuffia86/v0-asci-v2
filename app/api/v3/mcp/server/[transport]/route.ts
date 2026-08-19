@@ -319,10 +319,13 @@ const handler = createMcpHandler((rawServer) => {
       // y son los que ya tenemos confirmados. Así el filtrado no depende de que
       // quien llama escriba bien el nombre de la empresa.
       const admin = createAdminClient()
-      const { data: company } = await admin.from("companies").select("name,linkedin_url,country").eq("id", companyId).maybeSingle()
+      const { data: company } = await admin.from("companies").select("name,linkedin_url,country,linkedin_company_id").eq("id", companyId).maybeSingle()
       if (!company) throw new Error("COMPANY_NOT_FOUND")
       const run = await runLinkedinJobsActor({
         companyNames: companyNameVariants(company.name, company.linkedin_url),
+        // Con ID guardado (Fase 3) el filtro es exacto; sin ID, el run por
+        // nombre lo aprende en la ingesta y el próximo ya entra por acá.
+        linkedinCompanyId: company.linkedin_company_id ?? null,
         // `||` y no `??`: hay filas con country = "" (string vacío), que `??` deja pasar.
         location: location?.trim() || company.country?.trim() || undefined,
         titleQuery: titleQuery ?? null,

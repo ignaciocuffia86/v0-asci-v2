@@ -163,8 +163,18 @@ export async function runLinkedinJobsActor(params: {
   /**
    * Nombres de la empresa objetivo. Filtra en origen: es lo que evita traer
    * vacantes de otras empresas. Sale de `companies.name`, no de input libre.
+   * Se ignora cuando hay `linkedinCompanyId` (el filtro exacto no necesita
+   * variantes de nombre).
    */
   companyNames: string[]
+  /**
+   * LinkedIn company ID numérico (`companies.linkedin_company_id`). Cuando
+   * está, el run filtra por `companyId` — EXACTO, sin homónimos — y omite
+   * `companyName`. Es el switch de la Fase 3: la primera corrida por nombre
+   * aprende el ID desde los resultados (ver apify-job-ingest) y las
+   * siguientes entran por acá.
+   */
+  linkedinCompanyId?: number | null
   /** País o región de la empresa, de `companies.country`. */
   location?: string
   /**
@@ -185,8 +195,13 @@ export async function runLinkedinJobsActor(params: {
   const requestedWindow = toPublishedWindow(params.windowDays)
   const timeoutSecs = params.timeoutSecs ?? 180
 
+  const linkedinCompanyId =
+    typeof params.linkedinCompanyId === "number" && params.linkedinCompanyId > 0
+      ? params.linkedinCompanyId
+      : null
+
   const companyNames = params.companyNames.map((n) => n.trim()).filter((n) => n.length >= 3)
-  if (companyNames.length === 0) throw new Error("APIFY_COMPANY_NAMES_REQUIRED")
+  if (!linkedinCompanyId && companyNames.length === 0) throw new Error("APIFY_COMPANY_NAMES_REQUIRED")
 
   // `companies.country` viene como STRING VACÍO en filas reales (la cuenta
   // "ARCOR" tiene country: ""), y `??` no captura "" porque no es null. Sin este
@@ -194,7 +209,10 @@ export async function runLinkedinJobsActor(params: {
   const location = params.location?.trim() || "Argentina"
 
   const input: Record<string, unknown> = {
-    companyName: companyNames,
+    // ID exacto cuando lo tenemos; variantes de nombre como único fallback.
+    // No se mandan los dos juntos: el actor los intersecta y un nombre que
+    // LinkedIn indexa distinto anularía los resultados del ID.
+    ...(linkedinCompanyId ? { companyId: [String(linkedinCompanyId)] } : { companyName: companyNames }),
     location,
     publishedAt: PUBLISHED_AT_VALUES[requestedWindow],
     // Techo deliberadamente bajo: con rows=1000 el run expira sin devolver nada

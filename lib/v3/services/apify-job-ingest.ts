@@ -2,6 +2,7 @@ import "server-only"
 
 import { createAdminClient } from "@/lib/supabase/admin"
 import { normalizePostedDates } from "./apify-posted-dates"
+import { extractConsistentLinkedinCompanyId, parseLinkedinCompanyId } from "./linkedin-company-id"
 
 /**
  * Ingesta de vacantes scrapeadas (Apify) reutilizando el ETL de v2.
@@ -219,14 +220,16 @@ function linkedinCompanySlug(url: string | null | undefined): string | null {
  * el nombre corto sea una PALABRA completa del largo, no un prefijo cualquiera.
  *
  * El actor además devuelve `companyId` (el ID numérico de LinkedIn, ej. 382280 para
- * Grupo Arcor), que sería el filtro exacto y sin homónimos. Todavía no se usa porque
- * `companies` no guarda ese ID: solo hay `linkedin_slug`/`linkedin_url`. Se puede ir
- * poblando desde estos mismos resultados y en ese momento pasa a ser el punto 1.
+ * Grupo Arcor): desde la Fase 3 se guarda en `companies.linkedin_company_id` y es el
+ * punto 0 — cuando ambos lados lo tienen, decide solo, por encima del slug.
  */
 function belongsToCompany(
   item: ApifyJobItem,
-  company: { name: string; linkedin_url: string | null }
+  company: { name: string; linkedin_url: string | null; linkedin_company_id?: number | null }
 ): boolean {
+  const itemLid = parseLinkedinCompanyId(item.companyId)
+  if (itemLid !== null && company.linkedin_company_id) return itemLid === company.linkedin_company_id
+
   const itemSlug = linkedinCompanySlug(typeof item.companyUrl === "string" ? item.companyUrl : null)
   const companySlug = linkedinCompanySlug(company.linkedin_url)
   if (itemSlug && companySlug) return itemSlug === companySlug
@@ -279,7 +282,7 @@ export async function ingestApifyJobPostings(params: {
   // guardados, `upsert_company` matchea la fila existente en vez de insertar otra.
   const { data: company, error: companyError } = await admin
     .from("companies")
-    .select("id, name, linkedin_url, website, industry, country")
+    .select("id, name, linkedin_url, website, industry, country, linkedin_company_id")
     .eq("id", params.companyId)
     .maybeSingle()
 
@@ -295,6 +298,9 @@ export async function ingestApifyJobPostings(params: {
   let skippedOtherCompany = 0
   const rows: { batch_id: string; row_data: Record<string, unknown> }[] = []
   const preview: ApifyJobPreviewItem[] = []
+  // Vacantes que pasaron el guardrail de pertenencia: la única fuente admisible
+  // para aprender el LinkedIn company ID (nunca se aprende de una dudosa).
+  const acceptedItems: ApifyJobItem[] = []
 
   for (const rawItem of params.items) {
     // Las fechas del actor pueden venir RELATIVAS ("4 weeks ago") y el RPC las
@@ -308,6 +314,7 @@ export async function ingestApifyJobPostings(params: {
       skippedOtherCompany++
       continue
     }
+    acceptedItems.push(item)
 
     const jobUrl = extractJobUrl(item)
     if (!jobUrl) {
@@ -345,6 +352,36 @@ export async function ingestApifyJobPostings(params: {
         _v3_run_id: params.runId,
       },
     })
+  }
+
+  // ── Aprendizaje write-once del LinkedIn company ID (Fase 3, diseño 5.4) ──
+  //
+  // Si la empresa todavía no tiene el ID y las vacantes aceptadas coinciden en
+  // UNO solo, se fija acá: el próximo scraping (botón, MCP o cron) ya filtra
+  // por companyId exacto en vez de por variantes de nombre. El UPDATE exige
+  // linkedin_company_id IS NULL (write-once) y el índice único parcial impide
+  // fijar un ID que ya pertenece a otra empresa (duplicados del catálogo).
+  if (!company.linkedin_company_id && acceptedItems.length > 0) {
+    const learned = extractConsistentLinkedinCompanyId(acceptedItems)
+    if (learned.id !== null) {
+      const { error: learnError } = await admin
+        .from("companies")
+        .update({ linkedin_company_id: learned.id })
+        .eq("id", company.id)
+        .is("linkedin_company_id", null)
+      if (learnError) {
+        // Típicamente 23505: el ID ya está fijado en otra fila (duplicado).
+        console.warn(`[v3] No se pudo aprender linkedin_company_id ${learned.id} para ${company.id}: ${learnError.message}`)
+      } else {
+        warnings.push(
+          `Se aprendió el LinkedIn company ID (${learned.id}): los próximos scrapings de esta cuenta filtran por ID exacto.`
+        )
+      }
+    } else if (learned.mixed) {
+      warnings.push(
+        "Las vacantes aceptadas traen más de un LinkedIn company ID: no se aprendió ninguno (revisar posible falso positivo de atribución)."
+      )
+    }
   }
 
   if (skippedOtherCompany > 0) {
