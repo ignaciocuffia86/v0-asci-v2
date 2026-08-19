@@ -42,15 +42,16 @@ import {
   setWorkspacePlan,
   type WorkspaceSummary,
 } from "@/app/actions/v3/admin"
+import { PLAN_CONFIG, PLAN_ORDER } from "@/lib/v3/plan-config"
 
-// Mantener alineado con PLAN_CONFIG (lib/v3/plans.ts): este componente es
-// cliente y no puede importar ese módulo (arrastra el admin client de Supabase).
-const PLAN_LABELS: Record<string, { label: string; cap: number }> = {
-  trial: { label: "Trial", cap: 10 },
-  silver: { label: "Silver", cap: 60 },
-  gold: { label: "Gold", cap: 120 },
-  platinum: { label: "Platinum", cap: 240 },
-}
+// Derivado de la config real de planes (plan-config es un módulo puro, sin
+// imports de servidor): un cambio de cupos se refleja acá automáticamente.
+const PLAN_LABELS: Record<string, { label: string; cap: number }> = Object.fromEntries(
+  PLAN_ORDER.map((plan) => [
+    plan,
+    { label: PLAN_CONFIG[plan].label, cap: PLAN_CONFIG[plan].followedCap },
+  ]),
+)
 
 interface AdminWorkspacesViewProps {
   initialWorkspaces: WorkspaceSummary[]
