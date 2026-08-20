@@ -1,6 +1,7 @@
 import "server-only"
 
 import { createAdminClient } from "@/lib/supabase/admin"
+import { loadDictionary } from "./dictionary"
 
 export interface CanonicalCompanyIdentity {
   id: string
@@ -96,6 +97,11 @@ export const cacheV2JobPostingProvider: JobPostingProvider = {
 // Listado para la UI (card "Vacantes de LinkedIn" de la cuenta)
 // ═══════════════════════════════════════════════════════════
 
+export interface UiJobTag {
+  type: "technology" | "process"
+  name: string
+}
+
 export interface UiJobPosting {
   id: string
   title: string
@@ -112,6 +118,13 @@ export interface UiJobPosting {
   applicants: string | null
   /** Extracto de la descripción; el texto completo vive en LinkedIn (url). */
   descriptionExcerpt: string | null
+  /**
+   * Tags del diccionario detectados en la vacante por process_job_signals
+   * (una fila de signals por (job_posting_id, signal_type, signal_id), así que
+   * ya vienen deduplicados). Una vacante recién scrapeada puede aparecer sin
+   * tags hasta que el ETL corre process_job_signals (≤1-2 min).
+   */
+  tags: UiJobTag[]
 }
 
 /** Tope de descripción que viaja a la UI: las reales miden 3-6k chars. */
@@ -178,6 +191,40 @@ export async function listAccountJobPostings(
     return { postings: [], total: 0 }
   }
 
+  // Tags del diccionario por vacante. signals.signal_id no tiene FK hacia los
+  // diccionarios (apunta a products O processes según signal_type), así que el
+  // embedding de PostgREST no aplica: 1 query a signals + resolución de nombres
+  // en memoria con loadDictionary (cache in-process de 5 min), el mismo patrón
+  // que usa fit.ts.
+  const tagsByPosting = new Map<string, UiJobTag[]>()
+  const postingIds = (data ?? []).map((row) => row.id)
+  if (postingIds.length > 0) {
+    const [{ data: signalRows }, dictionary] = await Promise.all([
+      admin
+        .from("signals")
+        .select("job_posting_id, signal_type, signal_id, keyword_matched")
+        .in("job_posting_id", postingIds),
+      loadDictionary(),
+    ])
+    const productNameById = new Map(dictionary.products.map((p) => [p.id, p.name]))
+    const processNameById = new Map(dictionary.processes.map((p) => [p.id, p.name]))
+    for (const s of signalRows ?? []) {
+      if (s.signal_type !== "technology" && s.signal_type !== "process") continue
+      const name =
+        (s.signal_type === "technology"
+          ? productNameById.get(s.signal_id)
+          : processNameById.get(s.signal_id)) ?? s.keyword_matched
+      if (!name) continue
+      const list = tagsByPosting.get(s.job_posting_id) ?? []
+      list.push({ type: s.signal_type, name })
+      tagsByPosting.set(s.job_posting_id, list)
+    }
+    // Tecnologías primero (son lo más accionable), después procesos, alfabético
+    for (const list of tagsByPosting.values()) {
+      list.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "technology" ? -1 : 1))
+    }
+  }
+
   const postings: UiJobPosting[] = (data ?? []).map((row) => {
     const source = (row.source_data ?? {}) as Record<string, unknown>
     const str = (key: string): string | null => {
@@ -195,6 +242,7 @@ export async function listAccountJobPostings(
       experienceLevel: str("experienceLevel") ?? str("experience_level"),
       applicants: translateApplicants(source["applicationsCount"] ?? source["applications_count"]),
       descriptionExcerpt: excerpt(row.description),
+      tags: tagsByPosting.get(row.id) ?? [],
     }
   })
 

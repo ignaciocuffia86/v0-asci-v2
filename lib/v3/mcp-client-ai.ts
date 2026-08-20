@@ -46,8 +46,12 @@ export function packageTtlMinutes(batchSize: number) {
 const schemas = {
   internal_analysis: z.object({ summary: z.string().min(20).max(3000), technologies: z.array(z.string()).max(50), processes: z.array(z.string()).max(50), evidenceIds: z.array(z.string()).max(100) }),
   signal_classification: z.object({ signals: z.array(z.object({ evidenceId: z.string(), category: z.string().max(100), relevance: z.number().min(0).max(1), rationale: z.string().max(500) })).max(100) }),
-  fit_scoring: z.object({ score: z.number().int().min(0).max(100), fitScore: z.number().int().min(0).max(100), buyingSignalsScore: z.number().int().min(0).max(100), accessibilityScore: z.number().int().min(0).max(100), timingScore: z.number().int().min(0).max(100), rationale: z.string().min(20).max(3000), evidenceIds: z.array(z.string()).max(100) }),
-  account_brief: z.object({ headline: z.string().min(10).max(300), whyNow: z.string().max(3000), fitSummary: z.string().max(3000), nextActions: z.array(z.string().max(500)).max(10), evidenceIds: z.array(z.string()).max(100) }),
+  // rationale/whyNow/fitSummary bajaron de 3000 a 600 chars (rediseño de
+  // legibilidad, feature-v3-experiencia-cuentas-y-chat.md B.2.4): la vista de
+  // cuenta muestra 2 líneas + "Ver más"; 3000 chars eran párrafos que nadie
+  // leía y que duplicaban los números del scorecard.
+  fit_scoring: z.object({ score: z.number().int().min(0).max(100), fitScore: z.number().int().min(0).max(100), buyingSignalsScore: z.number().int().min(0).max(100), accessibilityScore: z.number().int().min(0).max(100), timingScore: z.number().int().min(0).max(100), rationale: z.string().min(20).max(600), evidenceIds: z.array(z.string()).max(100) }),
+  account_brief: z.object({ headline: z.string().min(10).max(300), whyNow: z.string().max(600), fitSummary: z.string().max(600), nextActions: z.array(z.string().max(500)).max(10), evidenceIds: z.array(z.string()).max(100) }),
   icebreaker: z.object({ content: z.string().min(20).max(1200), evidenceIds: z.array(z.string()).min(1).max(10) }),
   // Casos de éxito y noticias NO llevan evidenceIds: no describen la evidencia
   // interna, la traen de afuera. Su control no es el set de ids autorizados sino
