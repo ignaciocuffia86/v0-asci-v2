@@ -17,8 +17,9 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   ArrowLeft,
-  ArrowUpRight,
+  ArrowRight,
   Briefcase,
+  ChevronDown,
   Cpu,
   ExternalLink,
   Info,
@@ -60,6 +61,9 @@ export function AccountDetailView({
 }) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
+  // Tabs controlados: los CTAs de "Próximos pasos" del resumen ejecutivo saltan
+  // directo a la pestaña correspondiente (el mismo funnel que guía el MCP).
+  const [activeTab, setActiveTab] = useState("findings")
   const { company, followedAccount, scorecard, brief, previousScore, findings, agentLabels, icebreakers, digests } = detail
 
   const isFollowed = !!followedAccount
@@ -195,53 +199,44 @@ export function AccountDetailView({
         </div>
       </div>
 
-      {!isFollowed && (
-        <div className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
-          <Star className="size-4 shrink-0 text-primary" />
-          <p className="text-pretty">Cuenta no seguida: sin refresh automático ni digest mensual.</p>
+      {/* Resumen ejecutivo: brief + scorecard consolidados en UNA card corta.
+          La prosa completa vive en el collapse "Ver análisis completo". */}
+      <ExecutiveSummary
+        brief={brief}
+        scorecard={scorecard}
+        findingsCount={findings.length}
+        fitSignalsCount={signals?.fitSignals.length ?? 0}
+        contactsCount={signals?.relatedContacts.length ?? 0}
+        icebreakersCount={icebreakers.length}
+        isFollowed={isFollowed}
+        isPending={isPending}
+        onFollow={handleFollowToggle}
+        onGoToTab={setActiveTab}
+      />
+
+      {/* Tabs: Radiografía | Señales | Contexto | Icebreakers | Historial.
+          La TabsList es sticky: la navegación de la cuenta queda siempre a la
+          vista aunque se scrollee un tab largo (prioridad de orden, doc B.2). */}
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <div className="sticky top-0 z-10 -my-2 bg-background py-2">
+          <TabsList>
+            <TabsTrigger value="findings">
+              Radiografía {explicitCount > 0 && `(${explicitCount})`}
+            </TabsTrigger>
+            <TabsTrigger value="signals">
+              Señales {signals && signals.fitSignals.length > 0 && `(${signals.fitSignals.length})`}
+            </TabsTrigger>
+            <TabsTrigger value="context">
+              Contexto {inferredFindings.length > 0 && `(${inferredFindings.length})`}
+            </TabsTrigger>
+            <TabsTrigger value="icebreakers">
+              Icebreakers {icebreakers.length > 0 && `(${icebreakers.length})`}
+            </TabsTrigger>
+            <TabsTrigger value="history">
+              Historial {digests.length > 0 && `(${digests.length})`}
+            </TabsTrigger>
+          </TabsList>
         </div>
-      )}
-
-      {/* Account Brief: quick win preliminar o resultado final */}
-      {brief && <AccountBriefCard brief={brief} scorecardRationale={scorecard?.rationale ?? null} />}
-
-      {/* Scorecard */}
-      {scorecard?.fit_status === "evaluated" && <ScorecardCard scorecard={scorecard} findingsCount={findings.length} />}
-      {scorecard?.fit_status === "fit_not_evaluated" && (
-        <Card className="border-dashed">
-          <CardContent className="flex flex-col gap-3 pt-6 md:flex-row md:items-center md:justify-between">
-            <div className="flex flex-col gap-1">
-              <p className="font-medium">Fit no evaluado</p>
-              <p className="text-sm text-muted-foreground text-pretty">
-                La evidencia de la cuenta está disponible, pero necesitamos tu propuesta de valor para calcular el encaje.
-              </p>
-            </div>
-            <Button asChild>
-              <Link href="/v3/documents">Completá tu propuesta de valor</Link>
-            </Button>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Tabs: Hallazgos | Señales | Contexto | Icebreakers | Historial */}
-      <Tabs defaultValue="findings">
-        <TabsList>
-          <TabsTrigger value="findings">
-            Radiografía {explicitCount > 0 && `(${explicitCount})`}
-          </TabsTrigger>
-          <TabsTrigger value="signals">
-            Señales {signals && signals.fitSignals.length > 0 && `(${signals.fitSignals.length})`}
-          </TabsTrigger>
-          <TabsTrigger value="context">
-            Contexto {inferredFindings.length > 0 && `(${inferredFindings.length})`}
-          </TabsTrigger>
-          <TabsTrigger value="icebreakers">
-            Icebreakers {icebreakers.length > 0 && `(${icebreakers.length})`}
-          </TabsTrigger>
-          <TabsTrigger value="history">
-            Historial {digests.length > 0 && `(${digests.length})`}
-          </TabsTrigger>
-        </TabsList>
 
         {/* Radiografía: hallazgos verificados agrupados por área, con fuentes visibles */}
         <TabsContent value="findings" className="flex flex-col gap-4">
@@ -383,76 +378,6 @@ export function AccountDetailView({
   )
 }
 
-/**
- * Rediseño de legibilidad (feature-v3-experiencia-cuentas-y-chat.md, B):
- * - brief.headline NO se renderiza: narrativa que duplica lo que el score y los
- *   chips ya dicen (el título de la página identifica la cuenta).
- * - En modo server-managed, fit_summary ES scorecard.rationale
- *   (final-account-brief.ts): si son el mismo texto, el Encaje no se repite acá.
- * - La prosa larga queda detrás de "Ver más" (ClampText), datos por delante.
- */
-function AccountBriefCard({
-  brief,
-  scorecardRationale,
-}: {
-  brief: NonNullable<AccountDetail["brief"]>
-  scorecardRationale: string | null
-}) {
-  const coverage = brief.coverage ?? {}
-  const contacts = brief.recommended_contacts ?? []
-  const fitDuplicatesRationale =
-    !!brief.fit_summary && !!scorecardRationale && brief.fit_summary.trim() === scorecardRationale.trim()
-  const showFit = !!brief.fit_summary && !fitDuplicatesRationale
-  return (
-    <Card className="overflow-hidden">
-      <CardHeader className="border-b bg-muted/30">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <CardTitle className="text-base">Análisis de la cuenta</CardTitle>
-          <Badge variant={brief.stage === "final" ? "default" : "secondary"}>
-            {brief.stage === "final" ? "Final" : "Preliminar"}
-          </Badge>
-        </div>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-5 pt-5">
-        <div className={`grid gap-4 ${showFit ? "md:grid-cols-2" : ""}`}>
-          <div className="flex flex-col gap-1">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Por qué ahora</p>
-            <ClampText
-              text={brief.why_now || "No hay señales recientes suficientes para evaluar el timing."}
-              className="text-sm text-foreground"
-            />
-          </div>
-          {showFit && (
-            <div className="flex flex-col gap-1">
-              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Encaje</p>
-              <ClampText text={brief.fit_summary!} className="text-sm text-foreground" />
-            </div>
-          )}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Badge variant="outline">{coverage.signals ?? 0} señales</Badge>
-          <Badge variant="outline">{coverage.jobPostings ?? 0} vacantes</Badge>
-          <Badge variant="outline">{coverage.technologies ?? 0} tecnologías</Badge>
-          <Badge variant="outline">{contacts.length} contactos</Badge>
-        </div>
-        {brief.next_actions.length > 0 && (
-          <div className="flex flex-col gap-2">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Próximos pasos</p>
-            <ul className="flex flex-col gap-1 text-sm">
-              {brief.next_actions.slice(0, 3).map((action) => <li key={action}>· {action}</li>)}
-            </ul>
-          </div>
-        )}
-        {brief.stage === "preliminary" && (
-          <p className="rounded-md bg-primary/5 px-3 py-2 text-xs text-muted-foreground text-pretty">
-            Este resultado usa los datos que ASCI ya tenía. La investigación web continúa automáticamente y puede sumar evidencia.
-          </p>
-        )}
-      </CardContent>
-    </Card>
-  )
-}
-
 /** Hallazgo verificado con todas sus fuentes reales visibles y trazables. */
 function FindingCard({ finding: f }: { finding: Finding }) {
   // Fuentes verificadas: usar el array supporting_sources; caer a la URL primaria.
@@ -556,17 +481,283 @@ interface SnapshotBreakdown {
   timing?: { events?: TimingEventEntry[]; total_events?: number }
 }
 
-function ScorecardCard({
+/**
+ * Resumen ejecutivo (doc B.2): brief + scorecard fusionados en UNA card corta,
+ * con layout de "infografía": tiles de sub-scores arriba, dos bloques en grilla
+ * (Por qué ahora + evidencia | Próximos pasos del funnel con CTA directo) y la
+ * prosa completa detrás del collapse "Ver análisis completo", cerrado por
+ * defecto. Los próximos pasos son deterministas y siguen el mismo funnel que el
+ * MCP: seguir → investigar → decisores → icebreaker → contactar.
+ */
+function ExecutiveSummary({
+  brief,
   scorecard,
   findingsCount,
+  fitSignalsCount,
+  contactsCount,
+  icebreakersCount,
+  isFollowed,
+  isPending,
+  onFollow,
+  onGoToTab,
 }: {
-  scorecard: NonNullable<AccountDetail["scorecard"]>
+  brief: AccountDetail["brief"]
+  scorecard: AccountDetail["scorecard"]
   findingsCount: number
+  fitSignalsCount: number
+  contactsCount: number
+  icebreakersCount: number
+  isFollowed: boolean
+  isPending: boolean
+  onFollow: () => void
+  onGoToTab: (tab: string) => void
 }) {
-  const snapshot = (scorecard.signals_snapshot ?? {}) as { breakdown?: SnapshotBreakdown }
-  const breakdown = snapshot.breakdown
+  const [expanded, setExpanded] = useState(false)
 
-  const fitTooltip = breakdown?.fit ? (
+  const snapshot = (scorecard?.signals_snapshot ?? {}) as { breakdown?: SnapshotBreakdown }
+  const breakdown = snapshot.breakdown
+  const evaluated = scorecard?.fit_status === "evaluated"
+  const matches = breakdown?.fit?.matches ?? []
+  const coverage = brief?.coverage ?? {}
+
+  // UNA línea de contexto. Si no hay brief, el rationale del score cubre el rol.
+  const whyNow = brief?.why_now?.trim() || scorecard?.rationale?.trim() || null
+
+  // En modo server-managed fit_summary ES scorecard.rationale: no se repite.
+  const fitDuplicatesRationale =
+    !!brief?.fit_summary && !!scorecard?.rationale && brief.fit_summary.trim() === scorecard.rationale.trim()
+  const showFitInProse = !!brief?.fit_summary && !fitDuplicatesRationale
+
+  // ── Próximos pasos del funnel: deterministas según el estado de la cuenta ──
+  const steps: { key: string; label: string; cta: React.ReactNode }[] = []
+  if (!isFollowed) {
+    steps.push({
+      key: "follow",
+      label: "Seguí la cuenta: activa el scraping de vacantes y el digest mensual.",
+      cta: (
+        <Button size="sm" onClick={onFollow} disabled={isPending}>
+          <Star data-icon="inline-start" />
+          Seguir
+        </Button>
+      ),
+    })
+  }
+  if (findingsCount === 0) {
+    steps.push({
+      key: "research",
+      label: "Sin research todavía: investigala para generar el radar y el score.",
+      cta: (
+        <Button size="sm" variant="outline" asChild>
+          <Link href="/v3/chat">
+            Investigar
+            <ArrowRight data-icon="inline-end" />
+          </Link>
+        </Button>
+      ),
+    })
+  } else if (contactsCount === 0) {
+    steps.push({
+      key: "contacts",
+      label:
+        fitSignalsCount > 0
+          ? `${fitSignalsCount} señal${fitSignalsCount === 1 ? "" : "es"} fit sin decisores identificados: buscá contactos.`
+          : "Evidencia lista y sin decisores identificados: buscá contactos.",
+      cta: (
+        <Button size="sm" variant="outline" onClick={() => onGoToTab("signals")}>
+          Buscar decisores
+          <ArrowRight data-icon="inline-end" />
+        </Button>
+      ),
+    })
+  } else if (icebreakersCount === 0) {
+    steps.push({
+      key: "icebreaker",
+      label: `${contactsCount} contacto${contactsCount === 1 ? "" : "s"} disponible${contactsCount === 1 ? "" : "s"} sin icebreaker: generá el primer mensaje desde el chat.`,
+      cta: (
+        <Button size="sm" variant="outline" asChild>
+          <Link href="/v3/chat">
+            Generar icebreaker
+            <ArrowRight data-icon="inline-end" />
+          </Link>
+        </Button>
+      ),
+    })
+  } else {
+    steps.push({
+      key: "outreach",
+      label: "Icebreakers listos: revisalos y salí a contactar.",
+      cta: (
+        <Button size="sm" variant="outline" onClick={() => onGoToTab("icebreakers")}>
+          Ver icebreakers
+          <ArrowRight data-icon="inline-end" />
+        </Button>
+      ),
+    })
+  }
+  const nextSteps = steps.slice(0, 3)
+
+  // Sin ningún análisis: card corta con el arranque del funnel, nada de prosa.
+  if (!brief && !scorecard) {
+    return (
+      <Card className="border-dashed">
+        <CardContent className="flex flex-col gap-3 pt-5">
+          <SectionLabel>Próximos pasos</SectionLabel>
+          {nextSteps.map((s) => (
+            <FunnelStepRow key={s.key} label={s.label} cta={s.cta} />
+          ))}
+        </CardContent>
+      </Card>
+    )
+  }
+
+  return renderSummary()
+
+  function renderSummary() {
+    return (
+      <Card className="overflow-hidden">
+        <CardHeader className="border-b bg-muted/30 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <CardTitle className="text-base">Resumen ejecutivo</CardTitle>
+              {brief && (
+                <Badge variant={brief.stage === "final" ? "default" : "secondary"}>
+                  {brief.stage === "final" ? "Final" : "Preliminar"}
+                </Badge>
+              )}
+            </div>
+            {scorecard && (
+              <span className="text-xs text-muted-foreground">
+                Actualizado el{" "}
+                {new Date(scorecard.created_at).toLocaleDateString("es", { day: "numeric", month: "short", year: "numeric" })}
+              </span>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4 pt-4">
+          {evaluated && scorecard && (
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <ScorePillar label="Fit con tu oferta" value={scorecard.fit_score ?? 0} tooltip={fitTooltip()} />
+              <ScorePillar label="Señales de compra" value={scorecard.buying_signals_score ?? 0} tooltip={signalsTooltip()} />
+              <ScorePillar label="Accesibilidad" value={scorecard.accessibility_score ?? 0} tooltip={accessTooltip()} />
+              <ScorePillar label="Timing" value={scorecard.timing_score ?? 0} tooltip={timingTooltip()} />
+            </div>
+          )}
+          {scorecard?.fit_status === "fit_not_evaluated" && (
+            <div className="flex flex-col gap-2 rounded-lg border border-dashed p-3 md:flex-row md:items-center md:justify-between">
+              <p className="text-sm text-muted-foreground text-pretty">
+                Fit no evaluado: necesitamos tu propuesta de valor para calcular el encaje.
+              </p>
+              <Button size="sm" asChild>
+                <Link href="/v3/documents">Completar propuesta</Link>
+              </Button>
+            </div>
+          )}
+
+          <div className="grid gap-3 md:grid-cols-2">
+            {/* Bloque izquierdo: contexto + evidencia (el dato antes que la prosa) */}
+            <div className="flex flex-col gap-2.5 rounded-lg border bg-muted/30 p-3">
+              <SectionLabel>Por qué ahora</SectionLabel>
+              <p className="line-clamp-2 text-sm text-pretty">
+                {whyNow ?? "Sin señales recientes suficientes para evaluar el timing."}
+              </p>
+              {(matches.length > 0 || Object.keys(coverage).length > 0) && (
+                <>
+                  <SectionLabel>Evidencia</SectionLabel>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {matches.slice(0, 6).map((m) => (
+                      <Badge key={m} className="gap-1 text-xs">
+                        <ShieldCheck className="size-3" />
+                        {m}
+                      </Badge>
+                    ))}
+                    {matches.length > 6 && (
+                      <span className="text-xs text-muted-foreground" title={matches.slice(6).join(", ")}>
+                        +{matches.length - 6}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {[
+                      `${coverage.signals ?? findingsCount} señales`,
+                      `${coverage.jobPostings ?? 0} vacantes`,
+                      `${coverage.technologies ?? matches.length} tecnologías`,
+                      `${contactsCount} contactos`,
+                    ].join(" · ")}
+                  </p>
+                </>
+              )}
+            </div>
+
+            {/* Bloque derecho: el camino a seguir, accionable */}
+            <div className="flex flex-col gap-2.5 rounded-lg border bg-muted/30 p-3">
+              <SectionLabel>Próximos pasos</SectionLabel>
+              {nextSteps.map((s) => (
+                <FunnelStepRow key={s.key} label={s.label} cta={s.cta} />
+              ))}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="inline-flex w-fit items-center gap-1 text-xs font-medium text-primary hover:underline"
+            aria-expanded={expanded}
+          >
+            <ChevronDown className={`size-3.5 transition-transform ${expanded ? "rotate-180" : ""}`} />
+            {expanded ? "Ocultar análisis completo" : "Ver análisis completo"}
+          </button>
+
+          {expanded && (
+            <div className="flex flex-col gap-4 rounded-lg border bg-muted/20 p-4">
+              {brief?.why_now && (
+                <div className="flex flex-col gap-1">
+                  <SectionLabel>Por qué ahora (completo)</SectionLabel>
+                  <p className="whitespace-pre-line text-sm text-muted-foreground text-pretty">{brief.why_now}</p>
+                </div>
+              )}
+              {showFitInProse && (
+                <div className="flex flex-col gap-1">
+                  <SectionLabel>Encaje con tu propuesta</SectionLabel>
+                  <p className="whitespace-pre-line text-sm text-muted-foreground text-pretty">{brief!.fit_summary}</p>
+                </div>
+              )}
+              {scorecard?.rationale && (
+                <div className="flex flex-col gap-1">
+                  <SectionLabel>Explicación del score</SectionLabel>
+                  <p className="whitespace-pre-line text-sm text-muted-foreground text-pretty">{scorecard.rationale}</p>
+                </div>
+              )}
+              {(brief?.next_actions.length ?? 0) > 0 && (
+                <div className="flex flex-col gap-1">
+                  <SectionLabel>Sugerencias del análisis</SectionLabel>
+                  <ul className="flex flex-col gap-1 text-sm text-muted-foreground">
+                    {brief!.next_actions.slice(0, 3).map((action) => (
+                      <li key={action}>· {action}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {brief?.stage === "preliminary" && (
+                <p className="rounded-md bg-primary/5 px-3 py-2 text-xs text-muted-foreground text-pretty">
+                  Este resultado usa los datos que ASCI ya tenía. La investigación web continúa automáticamente y puede sumar evidencia.
+                </p>
+              )}
+              {scorecard && (
+                <p className="text-xs text-muted-foreground">
+                  Calculado el{" "}
+                  {new Date(scorecard.created_at).toLocaleDateString("es", { day: "numeric", month: "long", year: "numeric" })}{" "}
+                  · {findingsCount} hallazgos considerados · score = 35% fit + 35% señales + 15% accesibilidad + 15% timing
+                </p>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    )
+  }
+
+  function fitTooltip() {
+    return breakdown?.fit ? (
     breakdown.fit.no_profile ? (
       <p>
         Sin perfil de propuesta de valor definido: el fit es neutro basado en el stack detectado (
@@ -586,14 +777,18 @@ function ScorecardCard({
   ) : (
     <p>Porcentaje de tus tecnologías y procesos objetivo detectados en la cuenta.</p>
   )
+  }
 
-  const signalsTooltip = breakdown?.signals ? (
+  function signalsTooltip() {
+    return breakdown?.signals ? (
     <p>{breakdown.signals.formula}</p>
   ) : (
     <p>Hallazgos explícitos ×12 + inferidos ×5. Los hechos verificables pesan más.</p>
   )
+  }
 
-  const accessTooltip = breakdown?.accessibility ? (
+  function accessTooltip() {
+    return breakdown?.accessibility ? (
     <p>
       {breakdown.accessibility.contacts ?? 0} contactos en cache, {breakdown.accessibility.senior ?? 0}{" "}
       senior (C-level/VP/Director). Fórmula: {breakdown.accessibility.formula}
@@ -601,10 +796,11 @@ function ScorecardCard({
   ) : (
     <p>Contactos disponibles en el cache de Apollo, ponderando los perfiles senior.</p>
   )
+  }
 
-  const timingEvents = breakdown?.timing?.events ?? []
-  const timingTooltip =
-    timingEvents.length > 0 ? (
+  function timingTooltip() {
+    const timingEvents = breakdown?.timing?.events ?? []
+    return timingEvents.length > 0 ? (
       <div className="flex flex-col gap-1">
         <p className="font-medium">Eventos que suman al timing (peso × recencia):</p>
         <ul className="flex flex-col gap-0.5">
@@ -629,32 +825,23 @@ function ScorecardCard({
         implementación tech ×15, noticia ×8; decae con la antigüedad (30/60/90 días).
       </p>
     )
+  }
+}
 
+/** Etiqueta de sección estilo infografía: corta, uppercase y en color de acento. */
+function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Scorecard</CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-          <ScorePillar label="Fit con tu oferta" value={scorecard.fit_score ?? 0} tooltip={fitTooltip} />
-          <ScorePillar label="Señales de compra" value={scorecard.buying_signals_score ?? 0} tooltip={signalsTooltip} />
-          <ScorePillar label="Accesibilidad" value={scorecard.accessibility_score ?? 0} tooltip={accessTooltip} />
-          <ScorePillar label="Timing" value={scorecard.timing_score ?? 0} tooltip={timingTooltip} />
-        </div>
-        {scorecard.rationale && <ClampText text={scorecard.rationale} />}
-        <p className="text-xs text-muted-foreground">
-          Calculado el{" "}
-          {new Date(scorecard.created_at).toLocaleDateString("es", {
-            day: "numeric",
-            month: "long",
-            year: "numeric",
-          })}{" "}
-          · {findingsCount} hallazgos considerados · score = 35% fit + 35% señales + 15%
-          accesibilidad + 15% timing
-        </p>
-      </CardContent>
-    </Card>
+    <p className="text-xs font-semibold uppercase tracking-wide text-primary">{children}</p>
+  )
+}
+
+/** Un paso del funnel: qué hacer (una línea) + el CTA que lo ejecuta. */
+function FunnelStepRow({ label, cta }: { label: string; cta: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-md border bg-background p-2.5">
+      <p className="text-sm text-pretty">{label}</p>
+      <div className="shrink-0">{cta}</div>
+    </div>
   )
 }
 
