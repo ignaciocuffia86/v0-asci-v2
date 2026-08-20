@@ -252,9 +252,15 @@ UI**, y las contabilidades están separadas.
 
 ### D.2 Diseño: el mismo funnel del MCP, en 4 pasos visibles
 
-Vive como sección "Decisores" al final del tab Señales (o pestaña propia "Personas" si
-producto prefiere — recomendación: pestaña propia cuando exista enrichment, porque el
-funnel necesita espacio; hasta entonces, sección). Las 4 zonas espejan las 4 tools:
+**Decisión de producto (19-ago-2026): sección dentro del tab Señales, NO pestaña
+propia.** El framing importa: las personas son ante todo **fuente de señales** — sus
+puestos y experiencia son la evidencia de qué tecnologías usa la compañía (así funciona
+ya el motor: `signals` con `contact_id`, `source_field` current/past_position y el flag
+`is_current_employee` que distingue empleado actual de ex-empleado). El dato de contacto
+es el remate del funnel, no el centro de la experiencia. Por eso la sección vive donde
+viven las señales, y su primera mitad (①-②) se lee como evidencia, no como agenda.
+
+Las 4 zonas espejan las 4 tools:
 
 ```
 ① CARGOS RECOMENDADOS (gratis)          ← recommend_contact_roles
@@ -325,14 +331,18 @@ Las fases 1-2 son chicas y de impacto inmediato; 3 es mediana; 4-6 son el grueso
 - Créditos Apollo por email verificado obtenido (la cobertura previa debe bajarlo).
 - Chars promedio de prosa IA renderizada por pantalla (baseline actual: ~6-9k; target <1.5k visibles).
 
+## Decisiones tomadas
+
+- **Personas es sección del tab Señales, no pestaña** (19-ago-2026): las personas son
+  primariamente fuente de evidencia tecnológica de la compañía; el contacto es el paso
+  final del funnel, no el organizador de la vista.
+
 ## Preguntas abiertas
 
-1. ¿"Personas" como pestaña propia desde el día uno o sección en Señales hasta tener
-   enrichment? (Recomendación: sección en fase 5, pestaña cuando se sume teléfono.)
-2. El follow desde la SearchResultsCard del chat, ¿pide confirmación siempre o solo
+1. El follow desde la SearchResultsCard del chat, ¿pide confirmación siempre o solo
    cuando el cupo restante es bajo (<20%)?
-3. ¿El chat mantiene las conversaciones persistentes (sidebar actual) o la búsqueda NL
+2. ¿El chat mantiene las conversaciones persistentes (sidebar actual) o la búsqueda NL
    amerita un modo "búsqueda" efímero + un modo "conversación"? (Recomendación: mantener
    una sola superficie; la persistencia no molesta.)
-4. Límite de 600 chars para `why_now`/`rationale` client-assisted: validar con los
+3. Límite de 600 chars para `why_now`/`rationale` client-assisted: validar con los
    prompts reales de los tests MCP (Falabella/Arcor) que no pierda información citada.
