@@ -172,6 +172,14 @@ Reglas del bloque superior:
    sin repetir números que ya están en el scorecard". Lo mismo para
    `scoring.rationale` (ya pide 2-4 oraciones; se refuerza el "sin relleno").
 
+**Prioridad de orden (feedback 20-ago-2026):** los tabs hoy quedan escondidos debajo de
+dos cards de prosa — para llegar a Señales o Icebreakers hay que scrollear pantalla y
+media. La fusión de arriba no alcanza si el resumen sigue siendo alto: el "Resumen
+ejecutivo" arranca **colapsado a ~3 líneas** (score + barras + por qué ahora en 1 línea)
+y la `TabsList` queda **inmediatamente debajo del header, sticky** al scrollear, de modo
+que la navegación de la cuenta sea lo primero que se ve y nunca se pierda. La prosa
+(análisis completo) vive dentro del collapse del resumen, no entre el header y los tabs.
+
 ### B.3 Pestañas, una por una
 
 - **Radiografía** (hallazgos explícitos): se mantiene el accordion por área con lo bueno
@@ -310,13 +318,73 @@ duplicarían contabilidad — es la primera tarea técnica del paquete.
 
 ---
 
+## E. Scorecard: revisión del cálculo de fit (feedback 20-ago-2026)
+
+### E.1 Cómo se calcula hoy (verificado en `scoring.ts` y `fit.ts`)
+
+`score = 35% fit + 35% señales + 15% accesibilidad + 15% timing`, determinístico
+(la IA solo redacta el rationale). Por pilar:
+
+- **Fit** (`scoring.ts:145`): intersección entre los targets del workspace
+  (`workspace_value_profiles.target_technologies/processes`) y las tecnologías
+  detectadas **solo en `radar_findings`** (research). Fórmula:
+  `matches / min(totalTargets, 6) × 100`. Matching por substring bidireccional
+  (`detectado.includes(target) || target.includes(detectado)`), sin longitud mínima.
+- **Señales de compra** (`scoring.ts:177`): conteo ponderado de findings por nivel de
+  evidencia (Confirmado ×12, Probable ×8, Inferido ×5) + `public.signals` capadas a
+  10 filas ×2 (máx +20).
+- **Accesibilidad** (`scoring.ts:198`): `contactos_en_cache ×10 + seniors ×10`.
+- **Timing** (`scoring.ts:205`): eventos clasificados por regex sobre título+resumen
+  (expansión +25, contracción −22, ejecutivo 20, implementación 15), con decaimiento
+  1.0/0.7/0.4/**0** a los 30/60/90 días.
+
+### E.2 Por qué "no tiene sentido" (diagnóstico)
+
+1. **El fit ignora las vacantes.** Las señales de `public.signals` (los tags del
+   diccionario que el ETL detecta en cada vacante — iniciativa C) **no entran al pilar
+   fit**: solo alimentan +20 máx del pilar señales, capadas a 10 filas. Una cuenta con
+   700 señales de vacantes matcheando los targets del workspace pero sin research
+   puntúa **fit 0** ("Señales fit: 0"). Es la mayor fuente de resultados contraintuitivos
+   (patrón YPF/Arauco/Molinos).
+2. **La card "Señales fit con tu propuesta" y el fit del scorecard miden cosas
+   distintas.** La card (`fit.ts`) marca fit cualquier señal que matchee el diccionario
+   **global** aunque no tenga relación con la propuesta del workspace (etiqueta
+   "matchea el diccionario"); el scorecard solo cuenta targets del workspace. Dos
+   números con el mismo nombre que no coinciden.
+3. **Substring sin mínimo** en scoring.ts: un target corto ("BI") matchea cualquier
+   cadena que lo contenga. `fit.ts` sí filtra <3 chars; scoring.ts no.
+4. **Denominador `min(targets, 6)`**: con 20 targets, matchear 6 = fit 100. El tope es
+   arbitrario e invisible para el usuario.
+5. **Accesibilidad mide el cache, no la accesibilidad**: crece con cuántas búsquedas de
+   Apollo se hicieron, y satura rápido (5 contactos senior = 100).
+6. **Timing muere a los 90 días** (decay 0) y depende de regex en español sobre titulares:
+   una cuenta sin noticias recientes puntúa igual que una sin noticias jamás.
+
+### E.3 Propuesta (a discutir antes de implementar)
+
+1. **Fit por capas**: `targets del workspace ∩ (radar_findings ∪ señales de vacantes)`,
+   con peso menor para la evidencia de vacantes (es indirecta) y recencia de la vacante
+   como factor. Elimina el "fit 0 con 700 señales".
+2. **Unificar la semántica de "fit"**: la card de Señales separa visualmente
+   "matchea tu propuesta" (cuenta para el scorecard) de "matchea el diccionario"
+   (contexto, no fit), con el mismo criterio de matching que scoring.ts.
+3. **Matching robusto compartido**: extraer una función única (mín. 3 chars,
+   word-boundary en términos cortos) usada por `fit.ts` y `scoring.ts`.
+4. **Denominador honesto**: `matches / totalTargets` sin cap, o cap explícito en el
+   tooltip del breakdown ("6 de tus 20 targets alcanzan para 100").
+5. **Señales de vacantes sin cap de 10**: escala logarítmica
+   (p.ej. `min(20, 8×log10(1+n))`) para que 700 señales > 10 señales sin romper el clamp.
+
+---
+
 ## Fases de implementación propuestas
 
 | Fase | Contenido | Dependencias |
 |---|---|---|
 | **1. Quick wins de legibilidad** | B.4 (eliminar headline y fit_summary duplicado, line-clamp en findings, collapse de prosa) + límites de redacción en prompts/schemas (B.2.4) | Ninguna — solo UI + prompts |
 | **2. Vacantes con tags** | C completa (query + facetas + chips) | Ninguna |
-| **3. Resumen ejecutivo** | Fusión brief+scorecard con chips de evidencia y próximos pasos accionables (B.2) | Fase 1 |
+| **3. Resumen ejecutivo + orden** | Fusión brief+scorecard con chips de evidencia y próximos pasos accionables (B.2), resumen colapsado por defecto y tabs sticky bajo el header (prioridad de orden) | Fase 1 |
+| **3b. Scorecard v2** | E.3: fit alimentado también por señales de vacantes, matching unificado, card de señales con semántica separada | Decisión sobre E.3 |
 | **4. Contabilidad unificada** | D.4 (pools compartidos UI/MCP) | Ninguna; prerequisito de 5 y 6 |
 | **5. Personas en la cuenta** | D.2 + D.3 (funnel de 4 pasos, retiro de ROLE_RULES y de searchAccountDecisionMakers) | Fase 4 |
 | **6. Chat de búsqueda** | A completa (refactor de tools a lib compartida, searchByCapability, SearchResultsCard con follow directo, resto de paridad) | Fase 4 (para tools que gastan) |
