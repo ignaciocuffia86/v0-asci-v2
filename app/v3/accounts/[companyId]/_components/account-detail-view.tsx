@@ -196,17 +196,14 @@ export function AccountDetailView({
       </div>
 
       {!isFollowed && (
-        <div className="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 px-4 py-3 text-sm">
+        <div className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
           <Star className="size-4 shrink-0 text-primary" />
-          <p className="text-pretty">
-            No seguís esta cuenta: la información no se refresca automáticamente ni recibís su
-            digest mensual. Seguila para mantenerla al día.
-          </p>
+          <p className="text-pretty">Cuenta no seguida: sin refresh automático ni digest mensual.</p>
         </div>
       )}
 
       {/* Account Brief: quick win preliminar o resultado final */}
-      {brief && <AccountBriefCard brief={brief} />}
+      {brief && <AccountBriefCard brief={brief} scorecardRationale={scorecard?.rationale ?? null} />}
 
       {/* Scorecard */}
       {scorecard?.fit_status === "evaluated" && <ScorecardCard scorecard={scorecard} findingsCount={findings.length} />}
@@ -328,9 +325,7 @@ export function AccountDetailView({
                         </Badge>
                       )}
                     </div>
-                    {f.summary && (
-                      <p className="text-sm text-muted-foreground text-pretty">{f.summary}</p>
-                    )}
+                    {f.summary && <ClampText text={f.summary} />}
                     <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                       <span className="capitalize">{f.category.replaceAll("-", " ")}</span>
                       <span>
@@ -388,29 +383,51 @@ export function AccountDetailView({
   )
 }
 
-function AccountBriefCard({ brief }: { brief: NonNullable<AccountDetail["brief"]> }) {
+/**
+ * Rediseño de legibilidad (feature-v3-experiencia-cuentas-y-chat.md, B):
+ * - brief.headline NO se renderiza: narrativa que duplica lo que el score y los
+ *   chips ya dicen (el título de la página identifica la cuenta).
+ * - En modo server-managed, fit_summary ES scorecard.rationale
+ *   (final-account-brief.ts): si son el mismo texto, el Encaje no se repite acá.
+ * - La prosa larga queda detrás de "Ver más" (ClampText), datos por delante.
+ */
+function AccountBriefCard({
+  brief,
+  scorecardRationale,
+}: {
+  brief: NonNullable<AccountDetail["brief"]>
+  scorecardRationale: string | null
+}) {
   const coverage = brief.coverage ?? {}
   const contacts = brief.recommended_contacts ?? []
+  const fitDuplicatesRationale =
+    !!brief.fit_summary && !!scorecardRationale && brief.fit_summary.trim() === scorecardRationale.trim()
+  const showFit = !!brief.fit_summary && !fitDuplicatesRationale
   return (
     <Card className="overflow-hidden">
       <CardHeader className="border-b bg-muted/30">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <CardTitle className="text-base text-balance">{brief.headline}</CardTitle>
+          <CardTitle className="text-base">Análisis de la cuenta</CardTitle>
           <Badge variant={brief.stage === "final" ? "default" : "secondary"}>
             {brief.stage === "final" ? "Final" : "Preliminar"}
           </Badge>
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-5 pt-5">
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className={`grid gap-4 ${showFit ? "md:grid-cols-2" : ""}`}>
           <div className="flex flex-col gap-1">
             <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Por qué ahora</p>
-            <p className="text-sm text-pretty">{brief.why_now || "No hay señales recientes suficientes para evaluar el timing."}</p>
+            <ClampText
+              text={brief.why_now || "No hay señales recientes suficientes para evaluar el timing."}
+              className="text-sm text-foreground"
+            />
           </div>
-          <div className="flex flex-col gap-1">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Encaje</p>
-            <p className="text-sm text-pretty">{brief.fit_summary || "Fit no evaluado."}</p>
-          </div>
+          {showFit && (
+            <div className="flex flex-col gap-1">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Encaje</p>
+              <ClampText text={brief.fit_summary!} className="text-sm text-foreground" />
+            </div>
+          )}
         </div>
         <div className="flex flex-wrap gap-2">
           <Badge variant="outline">{coverage.signals ?? 0} señales</Badge>
@@ -464,8 +481,7 @@ function FindingCard({ finding: f }: { finding: Finding }) {
           </Badge>
         )}
       </div>
-      {f.summary && <p className="text-sm text-muted-foreground text-pretty">{f.summary}</p>}
-
+      {/* El dato antes que la prosa: chips de tecnologías arriba del summary */}
       {techs.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {techs.slice(0, 6).map((t) => (
@@ -475,6 +491,8 @@ function FindingCard({ finding: f }: { finding: Finding }) {
           ))}
         </div>
       )}
+
+      {f.summary && <ClampText text={f.summary} />}
 
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
         <span className="capitalize">{f.category.replaceAll("-", " ")}</span>
@@ -624,9 +642,7 @@ function ScorecardCard({
           <ScorePillar label="Accesibilidad" value={scorecard.accessibility_score ?? 0} tooltip={accessTooltip} />
           <ScorePillar label="Timing" value={scorecard.timing_score ?? 0} tooltip={timingTooltip} />
         </div>
-        {scorecard.rationale && (
-          <p className="text-sm text-muted-foreground text-pretty">{scorecard.rationale}</p>
-        )}
+        {scorecard.rationale && <ClampText text={scorecard.rationale} />}
         <p className="text-xs text-muted-foreground">
           Calculado el{" "}
           {new Date(scorecard.created_at).toLocaleDateString("es", {
@@ -744,5 +760,31 @@ function EmptyState({ text }: { text: string }) {
         {text}
       </CardContent>
     </Card>
+  )
+}
+
+/**
+ * Prosa de IA acotada: 2 líneas visibles + "Ver más" (principio "datos > prosa"
+ * del rediseño de la cuenta). El umbral evita mostrar el toggle en textos que
+ * ya entran completos en dos líneas.
+ */
+function ClampText({ text, className }: { text: string; className?: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const collapsible = text.length > 170
+  return (
+    <div>
+      <p className={`${className ?? "text-sm text-muted-foreground"} text-pretty ${!expanded && collapsible ? "line-clamp-2" : ""}`}>
+        {text}
+      </p>
+      {collapsible && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-0.5 text-xs font-medium text-primary hover:underline"
+        >
+          {expanded ? "Ver menos" : "Ver más"}
+        </button>
+      )}
+    </div>
   )
 }

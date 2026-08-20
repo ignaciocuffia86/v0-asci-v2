@@ -173,7 +173,7 @@ Sub-scores: {{subScores}}
 Hallazgos principales:
 {{topFindings}}
 
-Sé concreto y accionable, sin relleno. Solo el texto del rationale.`,
+Sé concreto y accionable, sin relleno. NO repitas los números de los sub-scores: ya se muestran en el scorecard; explicá el PORQUÉ (qué evidencia empuja o frena el score). Máximo 600 caracteres. Solo el texto del rationale.`,
   },
 ]
 

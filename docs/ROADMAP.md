@@ -1,8 +1,34 @@
 # ASCI - Roadmap de Features
 
-> **Ultima actualizacion**: 25 de febrero 2026
+> **Ultima actualizacion**: 19 de agosto 2026
 
 Este documento consolida todas las features de ASCI, separando lo ya implementado de lo planificado, con planes de implementacion detallados para cada feature nueva.
+
+---
+
+## Roadmap v3 (bot.bigua.lat)
+
+Seccion propia para v3; el resto del documento es historico de v2/ASCI general.
+
+### Implementadas (ago 2026)
+
+| Feature | Documento | Fecha |
+|---------|-----------|-------|
+| Carga masiva de cuentas por archivo (superadmin, con puente a bookmarks v2) | [Diseño](./feature-carga-masiva-cuentas-y-cron-jobpostings.md) | Ago 2026 |
+| LinkedIn company ID: backfill (~4.000 companias) + scraping por ID exacto con aprendizaje write-once | [Diseño, Parte 2](./feature-carga-masiva-cuentas-y-cron-jobpostings.md) | Ago 2026 |
+| Corredor de scraping automatico de vacantes (cron cada 10 min, kick al seguir, sin CTA manual) | [Diseño, Parte 3](./feature-carga-masiva-cuentas-y-cron-jobpostings.md) | Ago 2026 |
+| Listado de vacantes en la cuenta (busqueda, orden cronologico, filas expandibles) | — | Ago 2026 |
+| Cupos por plan 10/60/120/240 con research alineado al follow y config unificada (`plan-config.ts`) | — | Ago 2026 |
+
+### Planificadas
+
+| # | Iniciativa | Prioridad | Documento |
+|---|-----------|-----------|-----------|
+| V3-A | Chat de ingreso: busqueda en lenguaje natural + listado accionable con follow, paridad de tools con el MCP | Alta | [Diseño](./feature-v3-experiencia-cuentas-y-chat.md) |
+| V3-B | Rediseño de la vista de cuenta: datos accionables arriba, prosa IA acotada y colapsada | Alta | [Diseño](./feature-v3-experiencia-cuentas-y-chat.md) |
+| V3-C | Vacantes pre-digeridas con tags del diccionario (facetas + chips por vacante) | Alta (quick win) | [Diseño](./feature-v3-experiencia-cuentas-y-chat.md) |
+| V3-D | Personas (Apollo) integrada al funnel de la cuenta, mismo viaje que el MCP + contabilidad unificada | Alta | [Diseño](./feature-v3-experiencia-cuentas-y-chat.md) |
+| V3-E | Fase 2 del import masivo: wizard self-service para admins de workspace | Media | [Diseño](./feature-carga-masiva-cuentas-y-cron-jobpostings.md) |
 
 ---
 
@@ -1007,6 +1033,7 @@ Al ser semanal (no diario), el plan free de Resend cubre ampliamente hasta 500+ 
 
 | Fecha | Cambio |
 |-------|--------|
+| 19/08/2026 | Seccion Roadmap v3: implementadas de ago-2026 (import masivo, LinkedIn IDs, corredor de scraping, vacantes en cuenta, cupos nuevos) + iniciativas V3-A..E (chat de busqueda NL, rediseño de cuenta, tags en vacantes, Personas/Apollo) |
 | 25/02/2026 | Feature 8: Notificaciones por Email (plan detallado con Resend + pg_cron) |
 | 25/02/2026 | Feature 6: Recomendaciones ASCI (plan detallado) |
 | 25/02/2026 | Feature 7: Integracion con CRM HubSpot (plan detallado con investigacion tecnica) |

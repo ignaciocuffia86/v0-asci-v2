@@ -33,7 +33,7 @@ import {
   Users,
 } from "lucide-react"
 import { searchAccountDecisionMakers, type AccountSignalsData } from "@/app/actions/v3/accounts"
-import type { UiJobPosting } from "@/lib/v3/services/job-posting-provider"
+import type { UiJobPosting, UiJobTag } from "@/lib/v3/services/job-posting-provider"
 
 /** Resalta los términos matcheados dentro de un título. */
 function HighlightedText({ text, terms }: { text: string; terms: string[] }) {
@@ -365,19 +365,40 @@ function relativeDate(iso: string | null): string | null {
 
 const NEW_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
 
+const tagKey = (t: UiJobTag) => `${t.type}:${t.name}`
+
 function JobPostingsList({ postings, total }: { postings: UiJobPosting[]; total: number }) {
   const [query, setQuery] = useState("")
   const [newestFirst, setNewestFirst] = useState(true)
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [activeTag, setActiveTag] = useState<string | null>(null)
+
+  // Facetas: los tags del diccionario con cuántas vacantes los tienen (los
+  // signals ya vienen deduplicados por vacante, así que contar filas = contar
+  // vacantes). Se calculan sobre TODO lo cargado, no sobre lo filtrado: la
+  // faceta responde "qué está contratando esta empresa" de un vistazo.
+  const facets = useMemo(() => {
+    const counts = new Map<string, { tag: UiJobTag; count: number }>()
+    for (const p of postings) {
+      for (const t of p.tags) {
+        const key = tagKey(t)
+        const entry = counts.get(key) ?? { tag: t, count: 0 }
+        entry.count++
+        counts.set(key, entry)
+      }
+    }
+    return [...counts.values()].sort((a, b) => b.count - a.count).slice(0, 8)
+  }, [postings])
 
   const filtered = useMemo(() => {
     const q = searchable(query).trim()
+    const byTag = activeTag ? postings.filter((p) => p.tags.some((t) => tagKey(t) === activeTag)) : postings
     const base = q
-      ? postings.filter((p) =>
-          [p.title, p.location, p.area, p.contractType, p.experienceLevel]
+      ? byTag.filter((p) =>
+          [p.title, p.location, p.area, p.contractType, p.experienceLevel, ...p.tags.map((t) => t.name)]
             .some((field) => searchable(field).includes(q)),
         )
-      : [...postings]
+      : [...byTag]
     // Sin fecha van siempre al final: una vacante sin posted_at no puede
     // competir en un orden cronológico.
     return base.sort((a, b) => {
@@ -428,9 +449,43 @@ function JobPostingsList({ postings, total }: { postings: UiJobPosting[]; total:
         </Button>
       </div>
 
+      {facets.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {facets.map(({ tag, count }) => {
+            const key = tagKey(tag)
+            const active = activeTag === key
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setActiveTag(active ? null : key)}
+                className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
+                  active
+                    ? "border-primary bg-primary/10 font-medium text-foreground"
+                    : "text-muted-foreground hover:border-primary/50 hover:text-foreground"
+                }`}
+                aria-pressed={active}
+              >
+                {tag.name}
+                <span className="tabular-nums opacity-70">{count}</span>
+              </button>
+            )
+          })}
+          {activeTag && (
+            <button
+              type="button"
+              onClick={() => setActiveTag(null)}
+              className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+            >
+              limpiar
+            </button>
+          )}
+        </div>
+      )}
+
       <p className="text-xs text-muted-foreground">
-        {query.trim()
-          ? `${filtered.length} de ${postings.length} vacantes matchean la búsqueda`
+        {query.trim() || activeTag
+          ? `${filtered.length} de ${postings.length} vacantes matchean el filtro`
           : total > postings.length
             ? `Mostrando las ${postings.length} más recientes de ${total}`
             : `${postings.length} vacante${postings.length === 1 ? "" : "s"}`}
@@ -474,6 +529,27 @@ function JobPostingsList({ postings, total }: { postings: UiJobPosting[]; total:
                       )}
                     </div>
                     {meta && <span className="text-xs text-muted-foreground text-pretty">{meta}</span>}
+                    {job.tags.length > 0 && (
+                      <div className="mt-0.5 flex flex-wrap gap-1">
+                        {job.tags.slice(0, 4).map((t) => (
+                          <Badge
+                            key={tagKey(t)}
+                            variant={t.type === "technology" ? "secondary" : "outline"}
+                            className="text-[10px] font-normal"
+                          >
+                            {t.name}
+                          </Badge>
+                        ))}
+                        {job.tags.length > 4 && (
+                          <span
+                            className="text-[10px] text-muted-foreground"
+                            title={job.tags.slice(4).map((t) => t.name).join(", ")}
+                          >
+                            +{job.tags.length - 4}
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
                     {relativeDate(job.postedAt) && (
