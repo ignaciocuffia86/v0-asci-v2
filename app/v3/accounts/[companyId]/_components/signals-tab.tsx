@@ -409,7 +409,9 @@ function JobPostingsList({ postings, total }: { postings: UiJobPosting[]; total:
       if (tb === Number.NEGATIVE_INFINITY) return -1
       return newestFirst ? tb - ta : ta - tb
     })
-  }, [postings, query, newestFirst])
+    // activeTag TIENE que estar en las deps: sin él, clickear una faceta no
+    // recomputaba el filtro y todas las vacantes "matcheaban" cualquier tag.
+  }, [postings, query, newestFirst, activeTag])
 
   if (postings.length === 0) {
     return (
@@ -595,7 +597,9 @@ function JobPostingsList({ postings, total }: { postings: UiJobPosting[]; total:
           })}
           {filtered.length === 0 && (
             <li className="px-3 py-6 text-center text-sm text-muted-foreground">
-              Ninguna vacante matchea «{query.trim()}».
+              {query.trim()
+                ? `Ninguna vacante matchea «${query.trim()}».`
+                : "Ninguna vacante tiene el tag seleccionado."}
             </li>
           )}
         </ul>
