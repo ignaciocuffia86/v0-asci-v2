@@ -637,6 +637,51 @@ wrapper sobre el lote para que haya una sola implementación del matching. Lo us
 también el chat, que llamaba una vez por empresa dentro de un `map`. De paso,
 `select("*")` sobre `radar_findings` pasó a una lista explícita de columnas.
 
+### I. Decisores en el bookmark (Apollo) — 21-ago-2026
+
+Cierra el pendiente que quedó de la revisión: la sección entre "Riesgos a
+mitigar" y "Método y limitaciones" para alimentar la base de tomadores de
+decisión. Es la **única acción** del bookmark; todo lo demás se busca solo.
+
+**El flujo es el de v2, no uno nuevo.** `searchApolloProspects` estaba bien
+resuelto —resuelve la organización antes de buscar (mucho más preciso que el
+dominio), cachea por `query_hash` determinístico para no repagar la misma
+búsqueda, enriquece en lotes de 4, deduplica por `apollo_person_id` →
+`linkedin_url` → `full_name`— así que se **extrajo a
+`lib/shared/apollo-decision-makers.ts`** y las dos puntas lo llaman. v2 quedó
+como wrapper que resuelve su bookmark y su `search_context`. Copiarlo habría
+sido la tercera vez que este repo paga tener dos implementaciones del mismo
+pipeline (pasó con las noticias y con el research).
+
+**Dónde aterrizan los decisores**, igual que en v2:
+
+| Tabla | Qué guarda | Por qué importa |
+|---|---|---|
+| `user_company_contacts` | La fila del decisor, con `source: "apollo"` e `is_decision_maker: true` | Es el modelo de v2 y la instrucción fue mantenerlo |
+| `apollo_contacts_cache` | El contacto indexado por dominio de la empresa | **Es la tabla que v3 ya leía** (`getCompanyCachedContacts`), así que un decisor encontrado desde cualquiera de los dos mundos aparece en el bookmark del otro |
+
+`bookmark_id` va en `null`: es una columna de v2 y en v3 no hay fila
+equivalente. La tabla la acepta nullable.
+
+**Los cargos vienen sugeridos.** `getAccountSignals` ya calculaba
+`recommendedRoles` cruzando las señales fit con `ROLE_RULES`, y hasta marcaba
+cuáles ya están cubiertos por el cache. La sección arranca con esos cargos
+preseleccionados —salvo los que ya están cubiertos, porque volver a buscarlos es
+gastar una llamada— y ofrece además los grupos por área y un campo libre.
+
+Las opciones son las mismas que v2: país (con `mapToApolloCountry`, que sabe que
+`companies.country` guarda direcciones enteras), y detrás de "avanzadas" los dos
+toggles que existían — cargos similares (apagado por defecto: trae más gente
+pero con más falsos positivos) y filtrar por la sede de la empresa en vez de por
+dónde vive la persona.
+
+Los grupos de cargos y el catálogo de países se movieron a
+`lib/shared/apollo-title-groups.ts` para que no deriven entre las dos pantallas.
+
+**Sigue pendiente:** el reveal de teléfono está deprecado desde v2 (Apollo
+cobraba 5 créditos y el webhook de entrega nunca llegaba), así que sólo se
+enriquece email y datos básicos.
+
 ### G.1ter Un solo motor de búsqueda: Parallel y Perplexity retirados (21-ago-2026)
 
 Antes de este cambio convivían tres motores de búsqueda web. Ahora queda **uno**:

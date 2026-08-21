@@ -41,6 +41,8 @@ import { ScoreBadge } from "@/components/v3/score-badge"
 import { SignalsTab } from "./signals-tab"
 import { AccountReportView, DataFreshness, StatusBadge } from "./account-report-view"
 import { ReportSkeleton } from "./report-skeleton"
+import { DecisionMakersSection } from "./decision-makers-section"
+import type { DecisionMaker } from "@/app/actions/v3/apollo"
 import type { AccountReport } from "@/lib/v3/services/account-report"
 
 const RADAR_CONFIG: Record<string, { label: string; icon: typeof Cpu }> = {
@@ -55,9 +57,12 @@ export function AccountDetailView({
   detail,
   signals,
   reportPromise,
+  decisionMakers,
 }: {
   detail: AccountDetail
   signals: AccountSignalsData | null
+  /** Decisores ya guardados de la cuenta (Apollo). */
+  decisionMakers: DecisionMaker[]
   /**
    * La radiografía, sin resolver. Se consume con `use()` dentro de los
    * `Suspense` de abajo, así el encabezado y el resto de la cuenta se pintan
@@ -221,7 +226,17 @@ export function AccountDetailView({
       {/* LA RADIOGRAFÍA (Fase 9): el informe se lee de arriba a abajo, en el
           mismo orden que el documento que se entrega al cliente. */}
       <Suspense fallback={<ReportSkeleton />}>
-        <ReportSlot promise={reportPromise} />
+        <ReportSlot
+          promise={reportPromise}
+          decisionMakersSlot={
+            <DecisionMakersSection
+              companyId={company.id}
+              companyCountry={company.country}
+              recommendedRoles={signals?.recommendedRoles ?? []}
+              initialContacts={decisionMakers}
+            />
+          }
+        />
       </Suspense>
 
       {/* El respaldo del informe, en la MISMA vista. Antes eran pestañas al pie
@@ -471,9 +486,15 @@ function FreshnessSlot({ promise }: { promise: Promise<AccountReport | null> }) 
   return report ? <DataFreshness method={report.method} /> : null
 }
 
-function ReportSlot({ promise }: { promise: Promise<AccountReport | null> }) {
+function ReportSlot({
+  promise,
+  decisionMakersSlot,
+}: {
+  promise: Promise<AccountReport | null>
+  decisionMakersSlot: React.ReactNode
+}) {
   const report = use(promise)
-  return report ? <AccountReportView report={report} /> : null
+  return report ? <AccountReportView report={report} decisionMakersSlot={decisionMakersSlot} /> : null
 }
 
 /**

@@ -26,6 +26,7 @@ export const REPORT_SECTIONS = [
   { id: "noticias", label: "Radar de noticias" },
   { id: "angulos", label: "Ángulos de entrada" },
   { id: "riesgos", label: "Riesgos" },
+  { id: "decisores", label: "Decisores" },
   { id: "metodo", label: "Método y limitaciones" },
 ] as const
 
@@ -186,7 +187,19 @@ const MAX_POLLS = 60
  */
 const MAX_SIGNAL_JOBS = 5
 
-export function AccountReportView({ report }: { report: AccountReport }) {
+export function AccountReportView({
+  report,
+  decisionMakersSlot,
+}: {
+  report: AccountReport
+  /**
+   * La sección de decisores. Viaja como slot porque necesita datos que NO son
+   * del informe (los cargos sugeridos salen de las señales fit y los contactos
+   * de Apollo), y meterlos en `AccountReport` mezclaría dos cosas que se
+   * refrescan distinto.
+   */
+  decisionMakersSlot?: React.ReactNode
+}) {
   const router = useRouter()
   const [showOtherJobs, setShowOtherJobs] = useState(false)
   const [showAllSignalJobs, setShowAllSignalJobs] = useState(false)
@@ -625,6 +638,9 @@ export function AccountReportView({ report }: { report: AccountReport }) {
             </ul>
           )}
         </Section>
+
+        {/* La única acción del informe: a quién llamarle. */}
+        {decisionMakersSlot}
 
         {/* 8. Método y limitaciones — sin IA, todo metadatos reales */}
         <Section id="metodo" title="Método y limitaciones">
