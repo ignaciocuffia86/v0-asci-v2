@@ -100,6 +100,12 @@ export const cacheV2JobPostingProvider: JobPostingProvider = {
 export interface UiJobTag {
   type: "technology" | "process"
   name: string
+  /**
+   * Fragmento del aviso donde apareció el término (`signals.snippet`, que el
+   * ETL ya guarda con ±contexto alrededor del match). Es lo que convierte
+   * "esta vacante tiene señal" en "mirá dónde lo dice" (Fase 9, H.4).
+   */
+  snippet?: string | null
 }
 
 export interface UiJobPosting {
@@ -136,6 +142,16 @@ function translateApplicants(value: unknown): string | null {
   if (over) return `+${over[1]} postulantes`
   const plain = value.match(/(\d+)/)
   return plain ? `${plain[1]} postulantes` : null
+}
+
+/**
+ * Los snippets del ETL vienen del texto crudo del aviso, con saltos y espacios
+ * de sobra ("...objetivos.\n\n\n\n\nOperación y Calidad\n\n Asegurar..."). Para
+ * citarlos como fragmento se colapsa todo el espacio en blanco a uno solo.
+ */
+function cleanSnippet(raw: string | null | undefined): string | null {
+  const clean = raw?.replace(/\s+/g, " ").trim()
+  return clean ? clean : null
 }
 
 function excerpt(text: string | null): string | null {
@@ -202,7 +218,7 @@ export async function listAccountJobPostings(
     const [{ data: signalRows }, dictionary] = await Promise.all([
       admin
         .from("signals")
-        .select("job_posting_id, signal_type, signal_id, keyword_matched")
+        .select("job_posting_id, signal_type, signal_id, keyword_matched, snippet")
         .in("job_posting_id", postingIds),
       loadDictionary(),
     ])
@@ -216,7 +232,7 @@ export async function listAccountJobPostings(
           : processNameById.get(s.signal_id)) ?? s.keyword_matched
       if (!name) continue
       const list = tagsByPosting.get(s.job_posting_id) ?? []
-      list.push({ type: s.signal_type, name })
+      list.push({ type: s.signal_type, name, snippet: cleanSnippet(s.snippet) })
       tagsByPosting.set(s.job_posting_id, list)
     }
     // Tecnologías primero (son lo más accionable), después procesos, alfabético

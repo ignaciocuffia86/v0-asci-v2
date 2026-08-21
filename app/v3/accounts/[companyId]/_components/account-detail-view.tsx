@@ -14,7 +14,6 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   ArrowLeft,
   ArrowRight,
@@ -22,7 +21,6 @@ import {
   ChevronDown,
   Cpu,
   ExternalLink,
-  Info,
   Lightbulb,
   Link2,
   MessageSquare,
@@ -43,6 +41,8 @@ import {
 import { setIcebreakerFeedback } from "@/app/actions/v3/icebreakers"
 import { ScoreBadge } from "@/components/v3/score-badge"
 import { SignalsTab } from "./signals-tab"
+import { AccountReportView, StatusBadge } from "./account-report-view"
+import type { AccountReport } from "@/lib/v3/services/account-report"
 
 const RADAR_CONFIG: Record<string, { label: string; icon: typeof Cpu }> = {
   tech: { label: "Tecnología", icon: Cpu },
@@ -55,9 +55,11 @@ type Finding = AccountDetail["findings"][number]
 export function AccountDetailView({
   detail,
   signals,
+  report,
 }: {
   detail: AccountDetail
   signals: AccountSignalsData | null
+  report: AccountReport | null
 }) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
@@ -136,11 +138,11 @@ export function AccountDetailView({
           <div className="flex flex-col gap-1">
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-semibold tracking-tight">{company.name}</h1>
-              {typeof scorecard?.score === "number" ? (
-                <ScoreBadge score={scorecard.score} />
-              ) : scorecard?.fit_status === "fit_not_evaluated" ? (
-                <Badge variant="secondary">Fit no evaluado</Badge>
-              ) : null}
+              {/* El semáforo reemplaza al score 0-100 en la vista (Fase 9, H.2):
+                  "abordar / seguir de cerca / sin señal" es accionable; un 78
+                  sobre 100 no dice qué hacer. El score sigue existiendo para
+                  ordenar listados. */}
+              {report ? <StatusBadge status={report.status.status} /> : null}
               {scoreDelta !== null && scoreDelta !== 0 && (
                 <Badge variant={scoreDelta > 0 ? "default" : "secondary"} className="tabular-nums">
                   {scoreDelta > 0 ? `+${scoreDelta}` : scoreDelta} vs. anterior
@@ -199,13 +201,9 @@ export function AccountDetailView({
         </div>
       </div>
 
-      {/* Resumen ejecutivo: brief + scorecard consolidados en UNA card corta.
-          La prosa completa vive en el collapse "Ver análisis completo". */}
-      <ExecutiveSummary
-        brief={brief}
-        scorecard={scorecard}
-        findingsCount={findings.length}
-        fitSignalsCount={signals?.fitSignals.length ?? 0}
+      {/* Lo accionable arriba: el próximo paso del funnel, en una línea. */}
+      <NextSteps
+        hasResearch={findings.length > 0}
         contactsCount={signals?.relatedContacts.length ?? 0}
         icebreakersCount={icebreakers.length}
         isFollowed={isFollowed}
@@ -214,17 +212,21 @@ export function AccountDetailView({
         onGoToTab={setActiveTab}
       />
 
-      {/* Tabs: Radiografía | Señales | Contexto | Icebreakers | Historial.
-          La TabsList es sticky: la navegación de la cuenta queda siempre a la
-          vista aunque se scrollee un tab largo (prioridad de orden, doc B.2). */}
+      {/* LA RADIOGRAFÍA (Fase 9): el informe se lee de arriba a abajo, en el
+          mismo orden que el documento que se entrega al cliente. */}
+      {report && <AccountReportView report={report} />}
+
+      {/* Detalle del research y herramientas. El informe es la vista principal;
+          acá queda lo que lo respalda (hallazgos, contexto) y lo que es
+          herramienta (icebreakers) o registro (historial). */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <div className="sticky top-0 z-10 -my-2 bg-background py-2">
           <TabsList>
             <TabsTrigger value="findings">
-              Radiografía {explicitCount > 0 && `(${explicitCount})`}
+              Hallazgos {explicitCount > 0 && `(${explicitCount})`}
             </TabsTrigger>
             <TabsTrigger value="signals">
-              Señales {signals && signals.fitSignals.length > 0 && `(${signals.fitSignals.length})`}
+              Señales fit {signals && signals.fitSignals.length > 0 && `(${signals.fitSignals.length})`}
             </TabsTrigger>
             <TabsTrigger value="context">
               Contexto {inferredFindings.length > 0 && `(${inferredFindings.length})`}
@@ -461,26 +463,6 @@ function hostnameOf(url: string): string | null {
   }
 }
 
-// ─── Scorecard con tooltips explicativos por pilar ───────────
-
-interface TimingEventEntry {
-  title: string
-  eventType: string
-  points: number
-}
-
-interface SnapshotBreakdown {
-  fit?: {
-    target_total?: number
-    matches?: string[]
-    detected_technologies?: string[]
-    no_profile?: boolean
-  }
-  signals?: { explicit?: number; inferred?: number; legacy?: number; formula?: string }
-  accessibility?: { contacts?: number; senior?: number; formula?: string }
-  timing?: { events?: TimingEventEntry[]; total_events?: number }
-}
-
 /**
  * Resumen ejecutivo (doc B.2): brief + scorecard fusionados en UNA card corta,
  * con layout de "infografía": tiles de sub-scores arriba, dos bloques en grilla
@@ -489,11 +471,15 @@ interface SnapshotBreakdown {
  * defecto. Los próximos pasos son deterministas y siguen el mismo funnel que el
  * MCP: seguir → investigar → decisores → icebreaker → contactar.
  */
-function ExecutiveSummary({
-  brief,
-  scorecard,
-  findingsCount,
-  fitSignalsCount,
+/**
+ * El próximo paso del funnel del MCP, en una línea (Fase 9).
+ *
+ * Antes esto era la card "Resumen ejecutivo" con los 4 tiles de score y la
+ * prosa del brief; la radiografía completa la reemplaza y deja acá solo lo
+ * accionable: seguir → investigar → decisores → icebreaker → contactar.
+ */
+function NextSteps({
+  hasResearch,
   contactsCount,
   icebreakersCount,
   isFollowed,
@@ -501,10 +487,7 @@ function ExecutiveSummary({
   onFollow,
   onGoToTab,
 }: {
-  brief: AccountDetail["brief"]
-  scorecard: AccountDetail["scorecard"]
-  findingsCount: number
-  fitSignalsCount: number
+  hasResearch: boolean
   contactsCount: number
   icebreakersCount: number
   isFollowed: boolean
@@ -512,369 +495,70 @@ function ExecutiveSummary({
   onFollow: () => void
   onGoToTab: (tab: string) => void
 }) {
-  const [expanded, setExpanded] = useState(false)
+  let label: string
+  let cta: React.ReactNode
 
-  const snapshot = (scorecard?.signals_snapshot ?? {}) as { breakdown?: SnapshotBreakdown }
-  const breakdown = snapshot.breakdown
-  const evaluated = scorecard?.fit_status === "evaluated"
-  const matches = breakdown?.fit?.matches ?? []
-  const coverage = brief?.coverage ?? {}
-
-  // UNA línea de contexto. Si no hay brief, el rationale del score cubre el rol.
-  const whyNow = brief?.why_now?.trim() || scorecard?.rationale?.trim() || null
-
-  // En modo server-managed fit_summary ES scorecard.rationale: no se repite.
-  const fitDuplicatesRationale =
-    !!brief?.fit_summary && !!scorecard?.rationale && brief.fit_summary.trim() === scorecard.rationale.trim()
-  const showFitInProse = !!brief?.fit_summary && !fitDuplicatesRationale
-
-  // ── Próximos pasos del funnel: deterministas según el estado de la cuenta ──
-  const steps: { key: string; label: string; cta: React.ReactNode }[] = []
   if (!isFollowed) {
-    steps.push({
-      key: "follow",
-      label: "Seguí la cuenta: activa el scraping de vacantes y el digest mensual.",
-      cta: (
-        <Button size="sm" onClick={onFollow} disabled={isPending}>
-          <Star data-icon="inline-start" />
-          Seguir
-        </Button>
-      ),
-    })
-  }
-  if (findingsCount === 0) {
-    steps.push({
-      key: "research",
-      label: "Sin research todavía: investigala para generar el radar y el score.",
-      cta: (
-        <Button size="sm" variant="outline" asChild>
-          <Link href="/v3/chat">
-            Investigar
-            <ArrowRight data-icon="inline-end" />
-          </Link>
-        </Button>
-      ),
-    })
+    label = "Seguí la cuenta: activa el scraping de vacantes, la búsqueda de noticias y el digest mensual."
+    cta = (
+      <Button size="sm" onClick={onFollow} disabled={isPending}>
+        <Star data-icon="inline-start" />
+        Seguir
+      </Button>
+    )
+  } else if (!hasResearch) {
+    label = "Sin research todavía: investigala para sumar hallazgos verificables al informe."
+    cta = (
+      <Button size="sm" variant="outline" asChild>
+        <Link href="/v3/chat">
+          Investigar
+          <ArrowRight data-icon="inline-end" />
+        </Link>
+      </Button>
+    )
   } else if (contactsCount === 0) {
-    steps.push({
-      key: "contacts",
-      label:
-        fitSignalsCount > 0
-          ? `${fitSignalsCount} señal${fitSignalsCount === 1 ? "" : "es"} fit sin decisores identificados: buscá contactos.`
-          : "Evidencia lista y sin decisores identificados: buscá contactos.",
-      cta: (
-        <Button size="sm" variant="outline" onClick={() => onGoToTab("signals")}>
-          Buscar decisores
-          <ArrowRight data-icon="inline-end" />
-        </Button>
-      ),
-    })
+    label = "Evidencia lista y sin decisores identificados: buscá contactos."
+    cta = (
+      <Button size="sm" variant="outline" onClick={() => onGoToTab("signals")}>
+        Buscar decisores
+        <ArrowRight data-icon="inline-end" />
+      </Button>
+    )
   } else if (icebreakersCount === 0) {
-    steps.push({
-      key: "icebreaker",
-      label: `${contactsCount} contacto${contactsCount === 1 ? "" : "s"} disponible${contactsCount === 1 ? "" : "s"} sin icebreaker: generá el primer mensaje desde el chat.`,
-      cta: (
-        <Button size="sm" variant="outline" asChild>
-          <Link href="/v3/chat">
-            Generar icebreaker
-            <ArrowRight data-icon="inline-end" />
-          </Link>
-        </Button>
-      ),
-    })
-  } else {
-    steps.push({
-      key: "outreach",
-      label: "Icebreakers listos: revisalos y salí a contactar.",
-      cta: (
-        <Button size="sm" variant="outline" onClick={() => onGoToTab("icebreakers")}>
-          Ver icebreakers
+    label = `${contactsCount} contacto${contactsCount === 1 ? "" : "s"} disponible${contactsCount === 1 ? "" : "s"} sin icebreaker: generá el primer mensaje.`
+    cta = (
+      <Button size="sm" variant="outline" asChild>
+        <Link href="/v3/chat">
+          Generar icebreaker
           <ArrowRight data-icon="inline-end" />
-        </Button>
-      ),
-    })
-  }
-  const nextSteps = steps.slice(0, 3)
-
-  // Sin ningún análisis: card corta con el arranque del funnel, nada de prosa.
-  if (!brief && !scorecard) {
-    return (
-      <Card className="border-dashed">
-        <CardContent className="flex flex-col gap-3 pt-5">
-          <SectionLabel>Próximos pasos</SectionLabel>
-          {nextSteps.map((s) => (
-            <FunnelStepRow key={s.key} label={s.label} cta={s.cta} />
-          ))}
-        </CardContent>
-      </Card>
+        </Link>
+      </Button>
+    )
+  } else {
+    label = "Icebreakers listos: revisalos y salí a contactar."
+    cta = (
+      <Button size="sm" variant="outline" onClick={() => onGoToTab("icebreakers")}>
+        Ver icebreakers
+        <ArrowRight data-icon="inline-end" />
+      </Button>
     )
   }
 
-  return renderSummary()
-
-  function renderSummary() {
-    return (
-      <Card className="overflow-hidden">
-        <CardHeader className="border-b bg-muted/30 py-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <CardTitle className="text-base">Resumen ejecutivo</CardTitle>
-              {brief && (
-                <Badge variant={brief.stage === "final" ? "default" : "secondary"}>
-                  {brief.stage === "final" ? "Final" : "Preliminar"}
-                </Badge>
-              )}
-            </div>
-            {scorecard && (
-              <span className="text-xs text-muted-foreground">
-                Actualizado el{" "}
-                {new Date(scorecard.created_at).toLocaleDateString("es", { day: "numeric", month: "short", year: "numeric" })}
-              </span>
-            )}
-          </div>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4 pt-4">
-          {evaluated && scorecard && (
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-              <ScorePillar label="Fit con tu oferta" value={scorecard.fit_score ?? 0} tooltip={fitTooltip()} />
-              <ScorePillar label="Señales de compra" value={scorecard.buying_signals_score ?? 0} tooltip={signalsTooltip()} />
-              <ScorePillar label="Accesibilidad" value={scorecard.accessibility_score ?? 0} tooltip={accessTooltip()} />
-              <ScorePillar label="Timing" value={scorecard.timing_score ?? 0} tooltip={timingTooltip()} />
-            </div>
-          )}
-          {scorecard?.fit_status === "fit_not_evaluated" && (
-            <div className="flex flex-col gap-2 rounded-lg border border-dashed p-3 md:flex-row md:items-center md:justify-between">
-              <p className="text-sm text-muted-foreground text-pretty">
-                Fit no evaluado: necesitamos tu propuesta de valor para calcular el encaje.
-              </p>
-              <Button size="sm" asChild>
-                <Link href="/v3/documents">Completar propuesta</Link>
-              </Button>
-            </div>
-          )}
-
-          <div className="grid gap-3 md:grid-cols-2">
-            {/* Bloque izquierdo: contexto + evidencia (el dato antes que la prosa) */}
-            <div className="flex flex-col gap-2.5 rounded-lg border bg-muted/30 p-3">
-              <SectionLabel>Por qué ahora</SectionLabel>
-              <p className="line-clamp-2 text-sm text-pretty">
-                {whyNow ?? "Sin señales recientes suficientes para evaluar el timing."}
-              </p>
-              {(matches.length > 0 || Object.keys(coverage).length > 0) && (
-                <>
-                  <SectionLabel>Evidencia</SectionLabel>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {matches.slice(0, 6).map((m) => (
-                      <Badge key={m} className="gap-1 text-xs">
-                        <ShieldCheck className="size-3" />
-                        {m}
-                      </Badge>
-                    ))}
-                    {matches.length > 6 && (
-                      <span className="text-xs text-muted-foreground" title={matches.slice(6).join(", ")}>
-                        +{matches.length - 6}
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {[
-                      `${coverage.signals ?? findingsCount} señales`,
-                      `${coverage.jobPostings ?? 0} vacantes`,
-                      `${coverage.technologies ?? matches.length} tecnologías`,
-                      `${contactsCount} contactos`,
-                    ].join(" · ")}
-                  </p>
-                </>
-              )}
-            </div>
-
-            {/* Bloque derecho: el camino a seguir, accionable */}
-            <div className="flex flex-col gap-2.5 rounded-lg border bg-muted/30 p-3">
-              <SectionLabel>Próximos pasos</SectionLabel>
-              {nextSteps.map((s) => (
-                <FunnelStepRow key={s.key} label={s.label} cta={s.cta} />
-              ))}
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            className="inline-flex w-fit items-center gap-1 text-xs font-medium text-primary hover:underline"
-            aria-expanded={expanded}
-          >
-            <ChevronDown className={`size-3.5 transition-transform ${expanded ? "rotate-180" : ""}`} />
-            {expanded ? "Ocultar análisis completo" : "Ver análisis completo"}
-          </button>
-
-          {expanded && (
-            <div className="flex flex-col gap-4 rounded-lg border bg-muted/20 p-4">
-              {brief?.why_now && (
-                <div className="flex flex-col gap-1">
-                  <SectionLabel>Por qué ahora (completo)</SectionLabel>
-                  <p className="whitespace-pre-line text-sm text-muted-foreground text-pretty">{brief.why_now}</p>
-                </div>
-              )}
-              {showFitInProse && (
-                <div className="flex flex-col gap-1">
-                  <SectionLabel>Encaje con tu propuesta</SectionLabel>
-                  <p className="whitespace-pre-line text-sm text-muted-foreground text-pretty">{brief!.fit_summary}</p>
-                </div>
-              )}
-              {scorecard?.rationale && (
-                <div className="flex flex-col gap-1">
-                  <SectionLabel>Explicación del score</SectionLabel>
-                  <p className="whitespace-pre-line text-sm text-muted-foreground text-pretty">{scorecard.rationale}</p>
-                </div>
-              )}
-              {(brief?.next_actions.length ?? 0) > 0 && (
-                <div className="flex flex-col gap-1">
-                  <SectionLabel>Sugerencias del análisis</SectionLabel>
-                  <ul className="flex flex-col gap-1 text-sm text-muted-foreground">
-                    {brief!.next_actions.slice(0, 3).map((action) => (
-                      <li key={action}>· {action}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {brief?.stage === "preliminary" && (
-                <p className="rounded-md bg-primary/5 px-3 py-2 text-xs text-muted-foreground text-pretty">
-                  Este resultado usa los datos que ASCI ya tenía. La investigación web continúa automáticamente y puede sumar evidencia.
-                </p>
-              )}
-              {scorecard && (
-                <p className="text-xs text-muted-foreground">
-                  Calculado el{" "}
-                  {new Date(scorecard.created_at).toLocaleDateString("es", { day: "numeric", month: "long", year: "numeric" })}{" "}
-                  · {findingsCount} hallazgos considerados · score = 35% fit + 35% señales + 15% accesibilidad + 15% timing
-                </p>
-              )}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-    )
-  }
-
-  function fitTooltip() {
-    return breakdown?.fit ? (
-    breakdown.fit.no_profile ? (
-      <p>
-        Sin perfil de propuesta de valor definido: el fit es neutro basado en el stack detectado (
-        {(breakdown.fit.detected_technologies ?? []).slice(0, 5).join(", ") || "sin tecnologías"}).
-      </p>
-    ) : (
-      <div className="flex flex-col gap-1">
-        <p>
-          {breakdown.fit.matches?.length ?? 0} de {breakdown.fit.target_total ?? 0} objetivos de tu
-          propuesta detectados en la cuenta.
-        </p>
-        {(breakdown.fit.matches?.length ?? 0) > 0 && (
-          <p className="text-muted-foreground">Coincidencias: {breakdown.fit.matches!.join(", ")}</p>
-        )}
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted/30 px-4 py-3">
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <SectionLabel>Próximo paso</SectionLabel>
+        <p className="text-sm text-pretty">{label}</p>
       </div>
-    )
-  ) : (
-    <p>Porcentaje de tus tecnologías y procesos objetivo detectados en la cuenta.</p>
+      <div className="shrink-0">{cta}</div>
+    </div>
   )
-  }
-
-  function signalsTooltip() {
-    return breakdown?.signals ? (
-    <p>{breakdown.signals.formula}</p>
-  ) : (
-    <p>Hallazgos explícitos ×12 + inferidos ×5. Los hechos verificables pesan más.</p>
-  )
-  }
-
-  function accessTooltip() {
-    return breakdown?.accessibility ? (
-    <p>
-      {breakdown.accessibility.contacts ?? 0} contactos en cache, {breakdown.accessibility.senior ?? 0}{" "}
-      senior (C-level/VP/Director). Fórmula: {breakdown.accessibility.formula}
-    </p>
-  ) : (
-    <p>Contactos disponibles en el cache de Apollo, ponderando los perfiles senior.</p>
-  )
-  }
-
-  function timingTooltip() {
-    const timingEvents = breakdown?.timing?.events ?? []
-    return timingEvents.length > 0 ? (
-      <div className="flex flex-col gap-1">
-        <p className="font-medium">Eventos que suman al timing (peso × recencia):</p>
-        <ul className="flex flex-col gap-0.5">
-          {timingEvents.slice(0, 5).map((e, i) => (
-            <li key={i} className="flex justify-between gap-3">
-              <span className="truncate">
-                {e.eventType}: {e.title}
-              </span>
-              <span className="shrink-0 tabular-nums">+{e.points}</span>
-            </li>
-          ))}
-        </ul>
-        {(breakdown?.timing?.total_events ?? 0) > 5 && (
-          <p className="text-muted-foreground">
-            y {breakdown!.timing!.total_events! - 5} eventos más…
-          </p>
-        )}
-      </div>
-    ) : (
-      <p>
-        Suma ponderada de eventos recientes: expansión/inversión ×25, cambio ejecutivo ×20,
-        implementación tech ×15, noticia ×8; decae con la antigüedad (30/60/90 días).
-      </p>
-    )
-  }
 }
 
 /** Etiqueta de sección estilo infografía: corta, uppercase y en color de acento. */
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     <p className="text-xs font-semibold uppercase tracking-wide text-primary">{children}</p>
-  )
-}
-
-/** Un paso del funnel: qué hacer (una línea) + el CTA que lo ejecuta. */
-function FunnelStepRow({ label, cta }: { label: string; cta: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-3 rounded-md border bg-background p-2.5">
-      <p className="text-sm text-pretty">{label}</p>
-      <div className="shrink-0">{cta}</div>
-    </div>
-  )
-}
-
-function ScorePillar({
-  label,
-  value,
-  tooltip,
-}: {
-  label: string
-  value: number
-  tooltip: React.ReactNode
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <div className="flex cursor-help flex-col gap-1 rounded-md border p-3">
-          <span className="flex items-center gap-1 text-xs text-muted-foreground">
-            {label}
-            <Info className="size-3" />
-          </span>
-          <div className="flex items-center gap-2">
-            <span className="text-xl font-semibold tabular-nums">{value}</span>
-            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-              <div
-                className="h-full rounded-full bg-primary"
-                style={{ width: `${Math.min(100, Math.max(0, value))}%` }}
-              />
-            </div>
-          </div>
-        </div>
-      </TooltipTrigger>
-      <TooltipContent className="max-w-xs text-xs">{tooltip}</TooltipContent>
-    </Tooltip>
   )
 }
 
