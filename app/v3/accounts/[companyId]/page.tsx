@@ -1,4 +1,3 @@
-import { after } from "next/server"
 import { notFound, redirect } from "next/navigation"
 import { getOnboardingStatus } from "@/app/actions/v3/workspace"
 import { getAccountDetail, getAccountReportData, getAccountSignals } from "@/app/actions/v3/accounts"
@@ -31,16 +30,10 @@ export default async function V3AccountDetailPage({
   ])
   if (!detail.company) notFound()
 
-  // Informe incremental (Fase 8): al abrir el bookmark se busca lo que falta.
-  // Corre DESPUÉS de responder la página, así que no agrega latencia; la guarda
-  // de frescura (30 días) y la marca previa al gasto viven en el runner, así
-  // que abrir la cuenta diez veces en un día cuesta diez consultas baratas.
-  after(async () => {
-    const { scrapeCompanyNews } = await import("@/lib/v3/services/news-scrape-runner")
-    await scrapeCompanyNews(companyId).catch((error) => {
-      console.warn("[v3] Kick de noticias al abrir la cuenta falló:", error instanceof Error ? error.message : error)
-    })
-  })
-
+  // Abrir el bookmark NO dispara búsquedas: la cara (los dos bundles de
+  // noticias, ~US$0,20) sale una sola vez, al marcar la cuenta —
+  // `followAccountAction`. Antes había un kick acá también, pensado como
+  // auto-reparación, pero con el bundle caro convierte cada visita a una cuenta
+  // vieja en un gasto potencial, y el refresco mensual ya lo cubre.
   return <AccountDetailView detail={detail} signals={signals} report={report} />
 }

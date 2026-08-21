@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Accordion,
   AccordionContent,
@@ -16,7 +15,6 @@ import {
 } from "@/components/ui/accordion"
 import {
   ArrowLeft,
-  ArrowRight,
   Briefcase,
   ChevronDown,
   Cpu,
@@ -41,7 +39,7 @@ import {
 import { setIcebreakerFeedback } from "@/app/actions/v3/icebreakers"
 import { ScoreBadge } from "@/components/v3/score-badge"
 import { SignalsTab } from "./signals-tab"
-import { AccountReportView, StatusBadge } from "./account-report-view"
+import { AccountReportView, DataFreshness, StatusBadge } from "./account-report-view"
 import type { AccountReport } from "@/lib/v3/services/account-report"
 
 const RADAR_CONFIG: Record<string, { label: string; icon: typeof Cpu }> = {
@@ -63,9 +61,6 @@ export function AccountDetailView({
 }) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
-  // Tabs controlados: los CTAs de "Próximos pasos" del resumen ejecutivo saltan
-  // directo a la pestaña correspondiente (el mismo funnel que guía el MCP).
-  const [activeTab, setActiveTab] = useState("findings")
   const { company, followedAccount, scorecard, brief, previousScore, findings, agentLabels, icebreakers, digests } = detail
 
   const isFollowed = !!followedAccount
@@ -164,6 +159,10 @@ export function AccountDetailView({
               {company.country && <span>· {company.country}</span>}
               {company.industry && <Badge variant="secondary">{company.industry}</Badge>}
             </div>
+            {/* Reemplaza al CTA "Investigar": los datos se buscan solos al
+                seguir la cuenta y el cron los refresca al mes, así que lo único
+                que hace falta decir es cuán fresco es esto. */}
+            {report && isFollowed ? <DataFreshness method={report.method} /> : null}
           </div>
 
           <div className="flex items-center gap-2">
@@ -201,104 +200,71 @@ export function AccountDetailView({
         </div>
       </div>
 
-      {/* Lo accionable arriba: el próximo paso del funnel, en una línea. */}
-      <NextSteps
-        hasResearch={findings.length > 0}
-        contactsCount={signals?.relatedContacts.length ?? 0}
-        icebreakersCount={icebreakers.length}
-        isFollowed={isFollowed}
-        isPending={isPending}
-        onFollow={handleFollowToggle}
-        onGoToTab={setActiveTab}
-      />
 
       {/* LA RADIOGRAFÍA (Fase 9): el informe se lee de arriba a abajo, en el
           mismo orden que el documento que se entrega al cliente. */}
       {report && <AccountReportView report={report} />}
 
-      {/* Detalle del research y herramientas. El informe es la vista principal;
-          acá queda lo que lo respalda (hallazgos, contexto) y lo que es
-          herramienta (icebreakers) o registro (historial). */}
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <div className="sticky top-0 z-10 -my-2 bg-background py-2">
-          <TabsList>
-            <TabsTrigger value="findings">
-              Hallazgos {explicitCount > 0 && `(${explicitCount})`}
-            </TabsTrigger>
-            <TabsTrigger value="signals">
-              Señales fit {signals && signals.fitSignals.length > 0 && `(${signals.fitSignals.length})`}
-            </TabsTrigger>
-            <TabsTrigger value="context">
-              Contexto {inferredFindings.length > 0 && `(${inferredFindings.length})`}
-            </TabsTrigger>
-            <TabsTrigger value="icebreakers">
-              Icebreakers {icebreakers.length > 0 && `(${icebreakers.length})`}
-            </TabsTrigger>
-            <TabsTrigger value="history">
-              Historial {digests.length > 0 && `(${digests.length})`}
-            </TabsTrigger>
-          </TabsList>
-        </div>
+      {/* El respaldo del informe, en la MISMA vista. Antes eran pestañas al pie
+          del bookmark, y ahí se perdían: quedaban debajo de todo el informe y
+          nadie bajaba. Ahora son secciones colapsadas —el detalle está a un
+          clic— y las que no tienen contenido NO se renderizan, así el informe no
+          arrastra empty states pidiendo acciones al usuario. */}
+      {explicitCount > 0 && (
+        <DetailSection title="Hallazgos verificables" count={explicitCount}>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border bg-muted/40 px-4 py-3 text-xs text-muted-foreground">
+            <span className="flex items-center gap-1.5">
+              <ShieldCheck className="size-3.5 text-primary" />
+              <span className="font-medium text-foreground">Convergente</span>: confirmado por 2+ fuentes
+            </span>
+            <span className="flex items-center gap-1.5">
+              <Link2 className="size-3.5" />
+              <span className="font-medium text-foreground">Directa</span>: 1 fuente verificable
+            </span>
+            <span className="text-pretty">Cada hallazgo enlaza a la fuente web real donde se detectó.</span>
+          </div>
+          <Accordion
+            type="multiple"
+            defaultValue={[Array.from(explicitByArea.keys())[0] ?? ""]}
+            className="mt-3 flex flex-col gap-3"
+          >
+            {Array.from(explicitByArea.entries()).map(([areaKey, items]) => {
+              const convergent = items.filter((f) => (f.convergent_sources ?? 1) >= 2).length
+              return (
+                <AccordionItem key={areaKey} value={areaKey} className="rounded-lg border px-4 last:border-b">
+                  <AccordionTrigger className="hover:no-underline">
+                    <span className="flex flex-1 items-center gap-2 text-sm font-medium">
+                      <Cpu className="size-4 shrink-0 text-muted-foreground" />
+                      <span className="capitalize">{areaLabel(areaKey)}</span>
+                      <Badge variant="secondary">{items.length}</Badge>
+                      {convergent > 0 && (
+                        <Badge className="gap-1">
+                          <ShieldCheck className="size-3" />
+                          {convergent} convergente{convergent > 1 ? "s" : ""}
+                        </Badge>
+                      )}
+                    </span>
+                  </AccordionTrigger>
+                  <AccordionContent className="flex flex-col gap-3">
+                    {items.map((f) => (
+                      <FindingCard key={f.id} finding={f} />
+                    ))}
+                  </AccordionContent>
+                </AccordionItem>
+              )
+            })}
+          </Accordion>
+        </DetailSection>
+      )}
 
-        {/* Radiografía: hallazgos verificados agrupados por área, con fuentes visibles */}
-        <TabsContent value="findings" className="flex flex-col gap-4">
-          {explicitCount === 0 ? (
-            <EmptyState text="Sin hallazgos verificables todavía. Investigá esta cuenta desde el chat para generar el radar." />
-          ) : (
-            <>
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border bg-muted/40 px-4 py-3 text-xs text-muted-foreground">
-                <span className="flex items-center gap-1.5">
-                  <ShieldCheck className="size-3.5 text-primary" />
-                  <span className="font-medium text-foreground">Convergente</span>: confirmado por 2+ fuentes
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <Link2 className="size-3.5" />
-                  <span className="font-medium text-foreground">Directa</span>: 1 fuente verificable
-                </span>
-                <span className="text-pretty">Cada hallazgo enlaza a la fuente web real donde se detectó.</span>
-              </div>
-              <Accordion
-                type="multiple"
-                defaultValue={[Array.from(explicitByArea.keys())[0] ?? ""]}
-                className="flex flex-col gap-3"
-              >
-                {Array.from(explicitByArea.entries()).map(([areaKey, items]) => {
-                  const convergent = items.filter((f) => (f.convergent_sources ?? 1) >= 2).length
-                  return (
-                    <AccordionItem key={areaKey} value={areaKey} className="rounded-lg border px-4 last:border-b">
-                      <AccordionTrigger className="hover:no-underline">
-                        <span className="flex flex-1 items-center gap-2 text-sm font-medium">
-                          <Cpu className="size-4 shrink-0 text-muted-foreground" />
-                          <span className="capitalize">{areaLabel(areaKey)}</span>
-                          <Badge variant="secondary">{items.length}</Badge>
-                          {convergent > 0 && (
-                            <Badge className="gap-1">
-                              <ShieldCheck className="size-3" />
-                              {convergent} convergente{convergent > 1 ? "s" : ""}
-                            </Badge>
-                          )}
-                        </span>
-                      </AccordionTrigger>
-                      <AccordionContent className="flex flex-col gap-3">
-                        {items.map((f) => (
-                          <FindingCard key={f.id} finding={f} />
-                        ))}
-                      </AccordionContent>
-                    </AccordionItem>
-                  )
-                })}
-              </Accordion>
-            </>
-          )}
-        </TabsContent>
-
-        {/* Señales fit + personas + decisores recomendados */}
-        <TabsContent value="signals">
+      {signals && signals.fitSignals.length > 0 && (
+        <DetailSection title="Señales fit" count={signals.fitSignals.length}>
           <SignalsTab companyId={company.id} signals={signals} />
-        </TabsContent>
+        </DetailSection>
+      )}
 
-        {/* Contexto: inferidos por la IA */}
-        <TabsContent value="context" className="flex flex-col gap-4">
+      {inferredFindings.length > 0 && (
+        <DetailSection title="Contexto inferido" count={inferredFindings.length}>
           <div className="flex items-start gap-3 rounded-lg border bg-muted/40 px-4 py-3 text-sm">
             <Lightbulb className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
             <p className="text-muted-foreground text-pretty">
@@ -307,75 +273,71 @@ export function AccountDetailView({
               conversación, no como afirmaciones.
             </p>
           </div>
-          {inferredFindings.length === 0 ? (
-            <EmptyState text="Sin contexto inferido para esta cuenta." />
-          ) : (
-            <div className="flex flex-col gap-3">
-              {inferredFindings.map((f) => (
-                <Card key={f.id}>
-                  <CardContent className="flex flex-col gap-2 pt-4">
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="text-sm font-medium text-pretty">{f.title}</p>
-                      {typeof f.confidence === "number" && (
-                        <Badge variant="outline" className="shrink-0 tabular-nums">
-                          Confianza {Math.round(f.confidence * 100)}%
-                        </Badge>
-                      )}
-                    </div>
-                    {f.summary && <ClampText text={f.summary} />}
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                      <span className="capitalize">{f.category.replaceAll("-", " ")}</span>
-                      <span>
-                        · Inferido de{" "}
-                        {f.radar_type === "jobs-interpretation" ? "vacantes publicadas" : "señales indirectas"}
-                      </span>
-                      <span>
-                        · {new Date(f.detected_at).toLocaleDateString("es", { month: "short", year: "numeric" })}
-                      </span>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )}
-        </TabsContent>
-
-        <TabsContent value="icebreakers" className="flex flex-col gap-3">
-          {icebreakers.length === 0 ? (
-            <EmptyState text="Sin icebreakers generados. Pedile al chat que genere icebreakers para los contactos de esta cuenta." />
-          ) : (
-            icebreakers.map((ib) => <IcebreakerCard key={ib.id} icebreaker={ib} />)
-          )}
-        </TabsContent>
-
-        <TabsContent value="history" className="flex flex-col gap-3">
-          {digests.length === 0 ? (
-            <EmptyState text="Sin digests enviados todavía. El primer refresh mensual generará el primer digest." />
-          ) : (
-            <Card>
-              <CardContent className="flex flex-col divide-y p-0">
-                {digests.map((d) => (
-                  <div key={d.id} className="flex items-center justify-between gap-4 p-4">
-                    <div className="flex flex-col">
-                      <span className="text-sm font-medium">
-                        {new Date(d.sent_at).toLocaleDateString("es", { day: "numeric", month: "long", year: "numeric" })}
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        {Array.isArray(d.recipients) ? `${d.recipients.length} destinatarios` : "Digest enviado"}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2 text-sm tabular-nums">
-                      <ScoreBadge score={d.score_before} />
-                      <span className="text-muted-foreground">→</span>
-                      <ScoreBadge score={d.score_after} />
-                    </div>
+          <div className="mt-3 flex flex-col gap-3">
+            {inferredFindings.map((f) => (
+              <Card key={f.id}>
+                <CardContent className="flex flex-col gap-2 pt-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-sm font-medium text-pretty">{f.title}</p>
+                    {typeof f.confidence === "number" && (
+                      <Badge variant="outline" className="shrink-0 tabular-nums">
+                        Confianza {Math.round(f.confidence * 100)}%
+                      </Badge>
+                    )}
                   </div>
-                ))}
-              </CardContent>
-            </Card>
-          )}
-        </TabsContent>
-      </Tabs>
+                  {f.summary && <ClampText text={f.summary} />}
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <span className="capitalize">{f.category.replaceAll("-", " ")}</span>
+                    <span>
+                      · Inferido de{" "}
+                      {f.radar_type === "jobs-interpretation" ? "vacantes publicadas" : "señales indirectas"}
+                    </span>
+                    <span>
+                      · {new Date(f.detected_at).toLocaleDateString("es", { month: "short", year: "numeric" })}
+                    </span>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </DetailSection>
+      )}
+
+      {icebreakers.length > 0 && (
+        <DetailSection title="Icebreakers" count={icebreakers.length}>
+          <div className="flex flex-col gap-3">
+            {icebreakers.map((ib) => (
+              <IcebreakerCard key={ib.id} icebreaker={ib} />
+            ))}
+          </div>
+        </DetailSection>
+      )}
+
+      {digests.length > 0 && (
+        <DetailSection title="Historial de digests" count={digests.length}>
+          <Card>
+            <CardContent className="flex flex-col divide-y p-0">
+              {digests.map((d) => (
+                <div key={d.id} className="flex items-center justify-between gap-4 p-4">
+                  <div className="flex flex-col">
+                    <span className="text-sm font-medium">
+                      {new Date(d.sent_at).toLocaleDateString("es", { day: "numeric", month: "long", year: "numeric" })}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {Array.isArray(d.recipients) ? `${d.recipients.length} destinatarios` : "Digest enviado"}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 text-sm tabular-nums">
+                    <ScoreBadge score={d.score_before} />
+                    <span className="text-muted-foreground">→</span>
+                    <ScoreBadge score={d.score_after} />
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </DetailSection>
+      )}
     </div>
   )
 }
@@ -472,86 +434,36 @@ function hostnameOf(url: string): string | null {
  * MCP: seguir → investigar → decisores → icebreaker → contactar.
  */
 /**
- * El próximo paso del funnel del MCP, en una línea (Fase 9).
+ * Bloque de respaldo del informe: colapsado por defecto, se abre a un clic.
  *
- * Antes esto era la card "Resumen ejecutivo" con los 4 tiles de score y la
- * prosa del brief; la radiografía completa la reemplaza y deja acá solo lo
- * accionable: seguir → investigar → decisores → icebreaker → contactar.
+ * Reemplaza a las pestañas que vivían al pie del bookmark. El problema no era
+ * el contenido sino el lugar: quedaban debajo de todo el informe, así que nadie
+ * las veía. Colapsadas ocupan una línea y siguen estando.
  */
-function NextSteps({
-  hasResearch,
-  contactsCount,
-  icebreakersCount,
-  isFollowed,
-  isPending,
-  onFollow,
-  onGoToTab,
+function DetailSection({
+  title,
+  count,
+  children,
 }: {
-  hasResearch: boolean
-  contactsCount: number
-  icebreakersCount: number
-  isFollowed: boolean
-  isPending: boolean
-  onFollow: () => void
-  onGoToTab: (tab: string) => void
+  title: string
+  count?: number
+  children: React.ReactNode
 }) {
-  let label: string
-  let cta: React.ReactNode
-
-  if (!isFollowed) {
-    label = "Seguí la cuenta: activa el scraping de vacantes, la búsqueda de noticias y el digest mensual."
-    cta = (
-      <Button size="sm" onClick={onFollow} disabled={isPending}>
-        <Star data-icon="inline-start" />
-        Seguir
-      </Button>
-    )
-  } else if (!hasResearch) {
-    label = "Sin research todavía: investigala para sumar hallazgos verificables al informe."
-    cta = (
-      <Button size="sm" variant="outline" asChild>
-        <Link href="/v3/chat">
-          Investigar
-          <ArrowRight data-icon="inline-end" />
-        </Link>
-      </Button>
-    )
-  } else if (contactsCount === 0) {
-    label = "Evidencia lista y sin decisores identificados: buscá contactos."
-    cta = (
-      <Button size="sm" variant="outline" onClick={() => onGoToTab("signals")}>
-        Buscar decisores
-        <ArrowRight data-icon="inline-end" />
-      </Button>
-    )
-  } else if (icebreakersCount === 0) {
-    label = `${contactsCount} contacto${contactsCount === 1 ? "" : "s"} disponible${contactsCount === 1 ? "" : "s"} sin icebreaker: generá el primer mensaje.`
-    cta = (
-      <Button size="sm" variant="outline" asChild>
-        <Link href="/v3/chat">
-          Generar icebreaker
-          <ArrowRight data-icon="inline-end" />
-        </Link>
-      </Button>
-    )
-  } else {
-    label = "Icebreakers listos: revisalos y salí a contactar."
-    cta = (
-      <Button size="sm" variant="outline" onClick={() => onGoToTab("icebreakers")}>
-        Ver icebreakers
-        <ArrowRight data-icon="inline-end" />
-      </Button>
-    )
-  }
-
+  const [open, setOpen] = useState(false)
   return (
-    <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted/30 px-4 py-3">
-      <div className="flex min-w-0 flex-col gap-0.5">
-        <SectionLabel>Próximo paso</SectionLabel>
-        <p className="text-sm text-pretty">{label}</p>
-      </div>
-      <div className="shrink-0">{cta}</div>
-    </div>
+    <section className="rounded-lg border">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-medium hover:bg-muted/40"
+      >
+        <ChevronDown className={`size-4 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} />
+        {title}
+        {typeof count === "number" && <Badge variant="secondary">{count}</Badge>}
+      </button>
+      {open && <div className="border-t px-4 py-4">{children}</div>}
+    </section>
   )
 }
 
@@ -619,16 +531,6 @@ function IcebreakerCard({
         <p className="text-xs text-muted-foreground">
           {new Date(icebreaker.created_at).toLocaleDateString("es", { day: "numeric", month: "short", year: "numeric" })}
         </p>
-      </CardContent>
-    </Card>
-  )
-}
-
-function EmptyState({ text }: { text: string }) {
-  return (
-    <Card>
-      <CardContent className="py-10 text-center text-sm text-muted-foreground text-pretty">
-        {text}
       </CardContent>
     </Card>
   )

@@ -176,6 +176,61 @@ Hallazgos principales:
 Sé concreto y accionable, sin relleno. NO repitas los números de los sub-scores: ya se muestran en el scorecard; explicá el PORQUÉ (qué evidencia empuja o frena el score). Máximo 600 caracteres. Solo el texto del rationale.`,
   },
   {
+    key: "news.bundle.negocio",
+    name: "Noticias · Bundle 1: situación del negocio",
+    description:
+      "Foco de búsqueda del primer bundle: cómo le va a la cuenta. Responde '¿tiene con qué comprar?'. Se corre con búsqueda web server-side (haiku) y su salida la estructura el mismo schema de noticias.",
+    placeholders: [
+      { name: "companyName", description: "Nombre de la empresa" },
+      { name: "windowMonths", description: "Antigüedad máxima de las noticias, en meses" },
+      { name: "industry", description: "Industria de la empresa (puede venir vacío)" },
+      { name: "country", description: "País de la empresa (puede venir vacío)" },
+    ],
+    requiredPlaceholders: ["companyName", "windowMonths"],
+    content: `Busca noticias de los ULTIMOS {{windowMonths}} MESES sobre la SITUACION DE NEGOCIO de la empresa "{{companyName}}" ({{country}}, {{industry}}).
+
+QUE BUSCAR (este bundle responde: ¿como le va y con que recursos cuenta?):
+- Resultados financieros, facturacion, rentabilidad, endeudamiento.
+- Rondas de inversion, financiamiento, emision de deuda, entrada de fondos.
+- Adquisiciones, fusiones, venta de unidades, joint ventures.
+- Alianzas y contratos relevantes con otras empresas.
+- Cambios en la conduccion: CEO, CFO, CIO/CTO, directorio, gerencias clave.
+- Hechos regulatorios, judiciales o sindicales que afecten la operacion.
+
+REGLAS:
+- Para CADA noticia indica su FECHA DE PUBLICACION exacta en formato YYYY-MM-DD y cita la fuente.
+- Priorizar prensa economica y de negocios; ignorar redes sociales y contenido promocional.
+- La empresa tiene que ser el sujeto de la noticia, no una mencion al pasar.
+- NO busques proyectos de expansion ni de tecnologia: eso lo cubre otra busqueda.`,
+  },
+  {
+    key: "news.bundle.expansion",
+    name: "Noticias · Bundle 2: expansión, contracción y proyectos",
+    description:
+      "Foco de búsqueda del segundo bundle: hacia dónde va la cuenta. Responde '¿se expande o se retrae, y en qué está invirtiendo?'. Es el que alimenta la dirección (expansion/contraccion) que usa el scorecard.",
+    placeholders: [
+      { name: "companyName", description: "Nombre de la empresa" },
+      { name: "windowMonths", description: "Antigüedad máxima de las noticias, en meses" },
+      { name: "industry", description: "Industria de la empresa (puede venir vacío)" },
+      { name: "country", description: "País de la empresa (puede venir vacío)" },
+    ],
+    requiredPlaceholders: ["companyName", "windowMonths"],
+    content: `Busca noticias de los ULTIMOS {{windowMonths}} MESES sobre la DIRECCION Y LOS PROYECTOS de la empresa "{{companyName}}" ({{country}}, {{industry}}).
+
+QUE BUSCAR (este bundle responde: ¿se esta expandiendo o retrayendo, y en que invierte?):
+- Expansion: nuevas plantas, sedes, sucursales, centros de distribucion, entrada a nuevos mercados o paises.
+- Inversiones anunciadas (capex), ampliacion de capacidad, nuevas lineas de negocio.
+- Proyectos de tecnologia e innovacion: transformacion digital, ERP, cloud, datacenter, automatizacion, IA, ciberseguridad.
+- Contratacion masiva, apertura de equipos nuevos.
+- Contraccion: cierres de planta o sucursal, despidos, desinversiones, salida de mercados, suspension de proyectos.
+
+REGLAS:
+- Para CADA noticia indica su FECHA DE PUBLICACION exacta en formato YYYY-MM-DD y cita la fuente.
+- Priorizar prensa economica, de negocios y especializada; ignorar redes sociales y contenido promocional.
+- La empresa tiene que ser el sujeto de la noticia, no una mencion al pasar.
+- Las malas noticias importan tanto como las buenas: un cierre de planta es una señal, no algo a descartar.`,
+  },
+  {
     key: "news.reading",
     name: "Noticias · Por qué le importa al vendor",
     description:

@@ -6,8 +6,9 @@ import {
   MOVEMENTS_WINDOW_MONTHS,
   classifyMovementFocus,
   classifyMovementType,
+  pickEmail,
   pickPhone,
-  pickValidEmail,
+  type ChannelKind,
   type MovementFocus,
   type MovementType,
   type PreviousPositionEntry,
@@ -34,9 +35,12 @@ export interface PersonnelMovement {
   /** Términos de la propuesta que matchearon (el porqué del foco). */
   matchedTerms: string[]
   linkedinUrl: string | null
-  /** Solo emails con estado "valid" en la base; null si no hay. */
+  /** Solo emails con estado "valid"; el corporativo tiene prioridad. */
   email: string | null
+  emailKind: ChannelKind | null
   phone: string | null
+  phoneKind: ChannelKind | null
+  /** Tipo crudo del origen ("mobile", "company"…). No es confiable. */
   phoneType: string | null
   country: string | null
 }
@@ -116,6 +120,7 @@ export async function listPersonnelMovements(
       focusProfile,
     )
     const phone = pickPhone(row)
+    const email = pickEmail(row)
     return {
       contactId: row.id,
       fullName: row.full_name ?? "(sin nombre)",
@@ -125,9 +130,11 @@ export async function listPersonnelMovements(
       focus,
       matchedTerms,
       linkedinUrl: row.linkedin_url?.startsWith("placeholder:") ? null : (row.linkedin_url ?? null),
-      email: pickValidEmail(row),
-      phone: phone?.phone ?? null,
-      phoneType: phone?.type ?? null,
+      email: email?.value ?? null,
+      emailKind: email?.kind ?? null,
+      phone: phone?.value ?? null,
+      phoneKind: phone?.kind ?? null,
+      phoneType: phone?.rawType ?? null,
       country: row.country ?? null,
     }
   })

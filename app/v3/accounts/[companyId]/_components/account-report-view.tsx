@@ -1,13 +1,15 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { ExternalLink, Linkedin, Mail, Star, TrendingDown } from "lucide-react"
+import { ExternalLink, Linkedin, Loader2, Mail, Phone, Star, TrendingDown } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 import { es } from "date-fns/locale"
 import type { AccountReport } from "@/lib/v3/services/account-report"
 import { STATUS_EMOJI, STATUS_LABEL, type AccountStatus } from "@/lib/v3/services/account-report-rules"
+import type { ChannelKind } from "@/lib/v3/services/personnel-movements-rules"
 
 // ═══════════════════════════════════════════════════════════
 // Fase 9 · La radiografía comercial en pantalla (diseño H).
@@ -47,6 +49,89 @@ function relativo(iso: string | null): string {
   return formatDistanceToNow(d, { addSuffix: true, locale: es })
 }
 
+/**
+ * Fechas de refresco de la cuenta.
+ *
+ * Reemplaza al CTA "Investigar", que le pedía al usuario una acción para algo
+ * que el sistema ya hace solo: al marcar el bookmark se buscan vacantes y
+ * noticias, y el cron las refresca al mes. Lo único que el usuario necesita
+ * saber es cuán fresco es lo que está leyendo y cuándo se renueva.
+ */
+export function DataFreshness({ method }: { method: AccountReport["method"] }) {
+  const corridas = [
+    { at: method.jobsLastScrapedAt, cada: method.jobsRefreshDays },
+    { at: method.newsLastScrapedAt, cada: method.newsRefreshDays },
+  ].filter((c): c is { at: string; cada: number } => !!c.at && !Number.isNaN(new Date(c.at).getTime()))
+
+  // Todavía no corrió ninguna fuente: el kick del alta o el cron la levantan.
+  if (corridas.length === 0) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Datos en preparación: se buscan solos al seguir la cuenta.
+      </p>
+    )
+  }
+
+  // La más reciente manda para "actualizado"; para "próxima" manda la que
+  // vence ANTES, que es cuando el informe efectivamente cambia.
+  const ultima = Math.max(...corridas.map((c) => new Date(c.at).getTime()))
+  const proxima = Math.min(
+    ...corridas.map((c) => new Date(c.at).getTime() + c.cada * 24 * 60 * 60 * 1000),
+  )
+  // Si alguna fuente nunca corrió, su refresco está pendiente ya mismo.
+  const faltaAlguna = corridas.length < 2
+  const proximaIso = new Date(proxima).toISOString()
+
+  return (
+    <p className="text-xs text-muted-foreground">
+      Actualizado {relativo(new Date(ultima).toISOString())} ({fecha(new Date(ultima).toISOString())})
+      {" · "}
+      {faltaAlguna || proxima <= Date.now()
+        ? "próxima actualización: en las próximas horas"
+        : `próxima actualización: ${fecha(proximaIso)}`}
+    </p>
+  )
+}
+
+const CHANNEL_STYLE: Record<ChannelKind, string> = {
+  // El corporativo es el canal legítimo de una primera aproximación comercial:
+  // se resalta. El personal es el respaldo y se muestra apagado, para que la
+  // diferencia se vea antes de hacer clic.
+  corporativo: "border-primary/40 bg-primary/10 text-foreground",
+  personal: "border-muted-foreground/25 bg-muted text-muted-foreground",
+}
+
+/** Canal de contacto de una persona, rotulado como corporativo o personal. */
+function ContactChip({
+  href,
+  icon,
+  label,
+  kind,
+  ariaLabel,
+}: {
+  href: string
+  icon: React.ReactNode
+  label: string
+  kind: ChannelKind | null
+  ariaLabel: string
+}) {
+  const estilo = CHANNEL_STYLE[kind ?? "personal"]
+  return (
+    <a
+      href={href}
+      aria-label={ariaLabel}
+      title={label}
+      className={`inline-flex max-w-[16rem] items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] hover:brightness-110 ${estilo}`}
+    >
+      {icon}
+      <span className="truncate">{label}</span>
+      <span className="shrink-0 font-semibold uppercase tracking-wide opacity-70">
+        {kind === "corporativo" ? "corp" : "pers"}
+      </span>
+    </a>
+  )
+}
+
 /** Chip de estado para el encabezado de la cuenta. */
 export function StatusBadge({ status }: { status: AccountStatus }) {
   return (
@@ -84,9 +169,65 @@ function Section({
   )
 }
 
+/** Cada cuánto se re-consulta mientras hay una búsqueda de noticias en vuelo. */
+const POLL_MS = 8000
+/**
+ * Techo de espera: ~8 minutos. Son dos bundles en paralelo (~1-2 min) más el
+ * chequeo de links vivos; el margen cubre una corrida lenta sin llegar a los 15
+ * minutos que el runner usa para dar un scrape por colgado. Pasado esto, el
+ * cartel lo dice en vez de girar para siempre.
+ */
+const MAX_POLLS = 60
+
+/**
+ * Vacantes con señal que se muestran sin desplegar. Con más que esto la sección
+ * se come el informe y lo que viene abajo (noticias, ángulos, riesgos) queda
+ * fuera de pantalla.
+ */
+const MAX_SIGNAL_JOBS = 5
+
 export function AccountReportView({ report }: { report: AccountReport }) {
+  const router = useRouter()
   const [showOtherJobs, setShowOtherJobs] = useState(false)
+  const [showAllSignalJobs, setShowAllSignalJobs] = useState(false)
   const [showNoise, setShowNoise] = useState(false)
+  const [polls, setPolls] = useState(0)
+  const [prevBuscando, setPrevBuscando] = useState(false)
+
+  const vacantesVisibles = showAllSignalJobs
+    ? report.jobs.withSignal
+    : report.jobs.withSignal.slice(0, MAX_SIGNAL_JOBS)
+  const vacantesOcultas = report.jobs.withSignal.length - MAX_SIGNAL_JOBS
+
+  // Buscando AHORA: se muestra spinner y se refresca solo.
+  const buscandoNoticias = report.newsScrapeStatus === "pending" || report.newsScrapeStatus === "running"
+  // En cola: la levanta el cron, que corre cada 30 min. Acá NO se poletea —
+  // 8 minutos de polling terminarían mostrando "está demorando" para algo que
+  // simplemente todavía no le tocó el turno.
+  const enColaNoticias = report.newsScrapeStatus === "queued"
+
+  // Las noticias entran por un scrape que corre en background (~30-60 s), así
+  // que el informe se refresca solo: sin esto el usuario veía "sin noticias" y
+  // tenía que recargar a mano para enterarse de que sí había.
+  useEffect(() => {
+    if (!buscandoNoticias || polls >= MAX_POLLS) return
+    const timer = setTimeout(() => {
+      setPolls((n) => n + 1)
+      router.refresh()
+    }, POLL_MS)
+    return () => clearTimeout(timer)
+  }, [buscandoNoticias, polls, router])
+
+  // Al llegar las noticias el estado pasa a "idle": se reinicia el contador
+  // para que un refresh posterior (otra cuenta, otro ciclo) vuelva a esperar.
+  //
+  // Se ajusta DURANTE el render comparando con el valor anterior, que es el
+  // patrón que React documenta para "estado derivado de props". Hacerlo en un
+  // efecto provoca un render extra con el contador viejo.
+  if (prevBuscando !== buscandoNoticias) {
+    setPrevBuscando(buscandoNoticias)
+    if (!buscandoNoticias) setPolls(0)
+  }
 
   const noticiasRelevantes = report.news.items.filter((n) => n.relevanceType !== "ruido")
   const noticiasRuido = report.news.items.filter((n) => n.relevanceType === "ruido")
@@ -185,15 +326,28 @@ export function AccountReportView({ report }: { report: AccountReport }) {
                       {m.matchedTerms.length > 0 && ` · ${m.matchedTerms.join(", ")}`}
                     </span>
                   </div>
-                  <div className="flex shrink-0 items-center gap-1">
+                  {/* Canales de contacto. El corporativo va primero (lo decide
+                      pickEmail/pickPhone) y cada uno dice CUÁL es: escribirle al
+                      mail particular sin saberlo es un problema distinto que
+                      escribirle al de la empresa. */}
+                  <div className="flex shrink-0 flex-wrap items-center gap-1.5">
                     {m.email && (
-                      <a
+                      <ContactChip
                         href={`mailto:${m.email}`}
-                        className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label={`Enviar email a ${m.fullName}`}
-                      >
-                        <Mail className="size-4" />
-                      </a>
+                        icon={<Mail className="size-3.5" />}
+                        label={m.email}
+                        kind={m.emailKind}
+                        ariaLabel={`Enviar email a ${m.fullName}`}
+                      />
+                    )}
+                    {m.phone && (
+                      <ContactChip
+                        href={`tel:${m.phone.replace(/[^\d+]/g, "")}`}
+                        icon={<Phone className="size-3.5" />}
+                        label={m.phone}
+                        kind={m.phoneKind}
+                        ariaLabel={`Llamar a ${m.fullName}`}
+                      />
                     )}
                     {m.linkedinUrl && (
                       <a
@@ -228,7 +382,7 @@ export function AccountReportView({ report }: { report: AccountReport }) {
             </p>
           ) : (
             <ul className="flex flex-col gap-3">
-              {report.jobs.withSignal.map(({ posting, matchedTerms, snippet }) => (
+              {vacantesVisibles.map(({ posting, matchedTerms, snippet }) => (
                 <li key={posting.id} className="rounded-md border p-3">
                   <div className="flex flex-wrap items-center gap-2">
                     {posting.url ? (
@@ -261,6 +415,22 @@ export function AccountReportView({ report }: { report: AccountReport }) {
                 </li>
               ))}
             </ul>
+          )}
+
+          {/* Con muchas vacantes con señal el informe se vuelve un listado y se
+              pierde todo lo que viene después. Se muestran las primeras y el
+              resto queda a un clic. */}
+          {vacantesOcultas > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowAllSignalJobs((v) => !v)}
+              className="mt-3 text-xs font-medium text-primary hover:underline"
+              aria-expanded={showAllSignalJobs}
+            >
+              {showAllSignalJobs
+                ? `Ver solo las primeras ${MAX_SIGNAL_JOBS}`
+                : `Ver ${vacantesOcultas} vacante${vacantesOcultas === 1 ? "" : "s"} más con señal`}
+            </button>
           )}
 
           {report.jobs.others.length > 0 && (
@@ -303,10 +473,39 @@ export function AccountReportView({ report }: { report: AccountReport }) {
           title={`Radar de noticias (${report.method.newsWindowMonths} meses)`}
           count={noticiasRelevantes.length}
         >
+          {/* Búsqueda en vuelo: se avisa en vez de mostrar un vacío que parece
+              un error. El informe se actualiza solo cuando llegan. */}
+          {buscandoNoticias && polls < MAX_POLLS && (
+            <div className="mb-3 flex items-center gap-2.5 rounded-md border border-primary/30 bg-primary/5 px-3 py-2.5 text-sm">
+              <Loader2 className="size-4 shrink-0 animate-spin text-primary" />
+              <p className="text-pretty">
+                Buscando noticias de los últimos {report.method.newsWindowMonths} meses… suele tardar entre 1 y 2
+                minutos. Aparecen acá solas, no hace falta recargar.
+              </p>
+            </div>
+          )}
+          {buscandoNoticias && polls >= MAX_POLLS && (
+            <div className="mb-3 rounded-md border px-3 py-2.5 text-sm text-muted-foreground text-pretty">
+              La búsqueda está demorando más de lo normal. Recargá la página en unos minutos; si sigue igual, la
+              corrida quedó registrada y se reintenta sola.
+            </div>
+          )}
+          {/* Turno pendiente, no búsqueda en vuelo: no gira nada porque no hay
+              nada corriendo todavía. */}
+          {enColaNoticias && (
+            <div className="mb-3 rounded-md border px-3 py-2.5 text-sm text-muted-foreground text-pretty">
+              Esta cuenta todavía no tiene una búsqueda de noticias hecha. Está en cola: el refresco la levanta en su
+              próxima corrida, dentro de la hora, y aparecen acá solas.
+            </div>
+          )}
+
           {noticiasRelevantes.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-pretty">
-              Sin noticias con relevancia en la ventana.
-            </p>
+            !buscandoNoticias &&
+            !enColaNoticias && (
+              <p className="text-sm text-muted-foreground text-pretty">
+                Sin noticias con relevancia en la ventana.
+              </p>
+            )
           ) : (
             <ul className="flex flex-col gap-3">
               {noticiasRelevantes.map((n) => (

@@ -1,146 +1,25 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextResponse } from "next/server"
-import { filterRelevantToCompany, checkUrlsAlive, STRUCTURER_DEFAULT_MODEL } from "@/lib/ai-structurer"
-import { collect, structure } from "@/lib/research/engine"
-// Prompt Y schema salen del mismo modulo: con `generateObject` tienen que
-// coincidir, asi que tenerlos juntos evita que deriven.
-import { GEMINI_SYSTEM, NewsSchema, type NewsItem } from "@/lib/news-prompt"
+import { STRUCTURER_DEFAULT_MODEL } from "@/lib/ai-structurer"
+import { recordEvidenceBatch } from "@/lib/shared/evidence"
+// La busqueda es UNA sola en el sistema y vive en el modulo compartido: la
+// misma que corre el bookmark de v3. Antes esta ruta tenia su propia copia del
+// pipeline (recoleccion, estructuracion, mapeo por source_index, liveness), y
+// esa duplicacion es lo que dejo que el incidente del modelo retirado estuviera
+// 2 meses roto de un lado y no del otro.
+import { searchCompanyNews, type FoundNews } from "@/lib/shared/news-search"
 
 const NEWS_CACHE_DAYS = 30 // Refresh at most once per month
 const MAX_NEWS = 15
 
 /**
- * Cuantas busquedas web se le permiten al recolector.
+ * Antiguedad maxima de las noticias que se le piden al buscador.
  *
- * Calibrado, no elegido a dedo: con 4 daba 5,75 items/empresa y con 8 sube a
- * ~9 items crudos, que tras todo el pipeline quedan en ~4 insertables. Subirlo
- * mas no compensa el costo por token.
+ * v2 mira 12 meses y el bookmark de v3 mira 4: v2 es una consulta puntual sobre
+ * una cuenta que quiza nunca se volvio a mirar, mientras que v3 refresca cada
+ * 30 dias y la ventana corta es la que hace que "reciente" signifique algo.
  */
-const NEWS_MAX_SEARCHES = 8
-
-/**
- * Nombre de pais -> ISO-2 para el `userLocation` de la busqueda web.
- *
- * Devuelve `null` cuando no reconoce el valor, y esa es la diferencia importante
- * con la version que vive en `lib/v3/services/radar.ts`: esa cae a `"US"` por
- * defecto. Aca eso seria un bug silencioso, porque `companies.country` de v2 NO
- * es un pais normalizado: guarda direcciones. Entre las empresas que hoy tienen
- * noticias hay "Switzerland", "El Salvador" y "Quito, Pichincha, Ecuador", y con
- * el default a "US" las tres irian a buscar noticias sesgadas a Estados Unidos.
- *
- * `null` hace que `collect` simplemente omita `userLocation`, que es el
- * comportamiento correcto cuando no se sabe: buscar sin sesgo geografico es mejor
- * que buscar con el sesgo equivocado.
- */
-function newsCountryToISO(country: string): string | null {
-  const c = country.trim().toLowerCase()
-  const map: Record<string, string> = {
-    argentina: "AR",
-    chile: "CL",
-    ecuador: "EC",
-    colombia: "CO",
-    "united states": "US",
-    "estados unidos": "US",
-    usa: "US",
-    peru: "PE",
-    perú: "PE",
-    switzerland: "CH",
-    suiza: "CH",
-    "el salvador": "SV",
-    uruguay: "UY",
-    mexico: "MX",
-    méxico: "MX",
-    portugal: "PT",
-    brasil: "BR",
-    brazil: "BR",
-    paraguay: "PY",
-    bolivia: "BO",
-    venezuela: "VE",
-    españa: "ES",
-    spain: "ES",
-    panama: "PA",
-    panamá: "PA",
-    "costa rica": "CR",
-    guatemala: "GT",
-    "republica dominicana": "DO",
-    "república dominicana": "DO",
-  }
-  if (map[c]) return map[c]
-  // Valores como "Quito, Pichincha, Ecuador": el pais suele ser el ultimo campo.
-  const last = c.split(",").pop()?.trim()
-  if (last && map[last]) return map[last]
-  if (/^[a-z]{2}$/.test(c)) return c.toUpperCase()
-  return null
-}
-
-async function structureNewsWithGemini(
-  /** Fuentes CITADAS por el recolector, en orden. El indice 1-based es el `source_index`. */
-  sources: { url: string; title: string | null }[],
-  /** Informe en prosa del recolector: es el material del que se extraen las noticias. */
-  report: string,
-  companyName: string,
-  tracking: { userId: string; companyId: string },
-): Promise<{ news: NewsItem[]; digest: string | null }> {
-  // La lista va NUMERADA para preservar el mapeo determinista `source_index` -> URL.
-  //
-  // Es el detalle que hace que este cambio no sea riesgoso: `collect` devuelve el
-  // texto y las fuentes por separado, asi que la tentacion es pedirle al modelo
-  // que escriba la URL. Eso reintroduciria las URLs inventadas que el
-  // `source_index` justamente elimino. Numerando las fuentes citadas, el modelo
-  // solo puede elegir un indice DE ESTA LISTA, y la whitelist sale gratis: si el
-  // indice no existe, el item se descarta aguas abajo.
-  const sourceList = sources
-    .map((s, i) => `--- Fuente ${i + 1}: ${s.title ?? "(sin titulo)"} (${s.url}) ---`)
-    .join("\n")
-
-  const userPrompt =
-    `Empresa: "${companyName}"\n\nInforme de busqueda web:\n\n${report}\n\n` +
-    `Fuentes disponibles (el source_index se refiere a ESTA lista):\n${sourceList}\n\n` +
-    `Extrae las noticias relevantes en JSON.`
-
-  // Sin `maxOutputTokens`: el tope de 4000 que habia aca fue EL GATILLO del
-  // incidente. El modelo gastaba el presupuesto razonando y el JSON salia
-  // cortado a mitad de string.
-  const parsed = await structure({
-    schema: NewsSchema,
-    systemPrompt: GEMINI_SYSTEM,
-    userPrompt,
-    temperature: 0.2,
-    context: "news",
-    tracking: { userId: tracking.userId, companyId: tracking.companyId, feature: "research-structure" },
-  })
-
-  return { news: parsed.news, digest: parsed.digest }
-}
-
-// ── Date helpers ────────────────────────────────────────────────────────
-function sanitizeDate(dateStr: string | null | undefined): string | null {
-  if (!dateStr) return null
-  if (/XX|TBD|unknown/i.test(dateStr)) return null
-
-  const date = new Date(dateStr)
-  if (isNaN(date.getTime())) return null
-
-  const now = new Date()
-  const twoYearsAgo = new Date()
-  twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2)
-
-  if (date > now || date < twoYearsAgo) return null
-  return date.toISOString().split("T")[0]
-}
-
-function categorizeNews(text: string): string {
-  const lower = text.toLowerCase()
-  if (lower.match(/inversión|capex|presupuesto|financiamiento/)) return "inversion"
-  if (lower.match(/fusión|adquisición|m&a|compra|merger/)) return "ma"
-  if (lower.match(/regulación|normativa|compliance|ley|regulatorio/)) return "regulatorio"
-  if (lower.match(/ceo|cto|cfo|cio|ciso|cdo|ejecutivo|director/)) return "ejecutivos"
-  if (lower.match(/transformación|modernización|innovación|digital|automatización/)) return "transformacion"
-  if (lower.match(/expansión|crecimiento|apertura|nuevo mercado/)) return "crecimiento"
-  if (lower.match(/alianza|partnership|acuerdo|colaboración/)) return "alianzas"
-  if (lower.match(/problema|desafío|multa|sanción/)) return "desafios"
-  return "innovacion"
-}
+const NEWS_WINDOW_MONTHS = 12
 
 // ── Cache helpers (public by company_id) ─────────────────────────────
 interface CacheResult {
@@ -276,172 +155,61 @@ export async function POST(request: Request) {
       .eq("id", companyId)
       .single()
 
-    // ── 3. Recoleccion con el motor unificado ────────────────────────
+    // ── 3. Busqueda con los bundles compartidos ──────────────────────
     //
-    // Antes esto era `parallelSearch`. Se reemplazo por `collect` del motor por
-    // dos razones, las dos medidas:
+    // Antes aca vivia una copia del pipeline de noticias: collect + structure +
+    // mapeo por source_index + liveness. La otra copia estaba en v3. Eran el
+    // mismo codigo con dos dueños, que es exactamente como el incidente del
+    // modelo retirado pudo estar 2 meses roto de un lado y no del otro.
     //
-    //  1. Parallel NO es enrutable por el AI Gateway, asi que mientras siguiera
-    //     aca la centralizacion quedaba a medias: un proveedor con su propia
-    //     clave, su propio manejo de errores y sin la telemetria del motor.
-    //  2. Calidad de las URLs. El camino nativo cita fuentes que el modelo
-    //     realmente leyo: 22/22 URLs vivas (100%) contra el ~79% historico de
-    //     Parallel, que indexaba links ya muertos.
-    //
-    // El prompt pide la FECHA explicitamente porque es el unico dato que se
-    // pierde al soltar Parallel (ver el fallback de `published_at` mas abajo).
-    console.log("[v0] News: Recolectando con el motor unificado para", companyName)
+    // Ahora las dos rutas llaman a `searchCompanyNews`, que corre los DOS
+    // bundles profundos con haiku (~US$0,20 por cuenta). Se paga y se registra:
+    // no hay confirmacion de costo ni cupo (decision de producto, 21-ago-2026).
+    console.log("[v0] News: buscando con los bundles compartidos para", companyName)
 
-    const industryCtx = company?.industry ? ` (industria: ${company.industry})` : ""
-    const countryCtx = company?.country ? ` de ${company.country}` : ""
-    const searchPrompt =
-      `Busca noticias de los ULTIMOS 12 MESES sobre la empresa "${companyName}"${countryCtx}${industryCtx}: ` +
-      `inversiones, tecnologia, cambios de ejecutivos, expansion, adquisiciones, alianzas, resultados financieros. ` +
-      `Para CADA noticia indica su FECHA DE PUBLICACION exacta en formato YYYY-MM-DD y cita la fuente. ` +
-      `Priorizar prensa economica y de negocios. Ignorar redes sociales y contenido promocional.`
-
-    let newsItems: any[] = []
+    let newsItems: FoundNews[] = []
     let geminiDigest: string | null = null
-    // Se deriva del default real del structurer en vez de hardcodearse.
+    // Procedencia REAL de la fila: los dos modelos que la produjeron.
     //
-    // Esta columna es la única evidencia forense de qué produjo cada noticia: gracias a ella se
-    // pudo datar que el modelo retirado murió el 3-jun-2026 (última fila `gemini-2.0-flash`) y que
-    // las 47 filas siguientes salieron en `degraded-fallback`. Estaba hardcodeada en
-    // "gemini-2.0-flash", así que al cambiar el default habría seguido estampando el nombre del
-    // modelo muerto y arruinado justamente la señal que hizo visible el incidente.
-    //
-    // Ahora es `const`: al eliminarse el fallback degradado, NINGÚN camino puede volver a escribir
-    // `degraded-fallback`. Que el compilador lo garantice vale más que un comentario pidiéndolo.
-    const aiProvider: string = STRUCTURER_DEFAULT_MODEL
+    // Esta columna es la unica evidencia forense de que genero cada noticia:
+    // gracias a ella se pudo datar que el modelo retirado murio el 3-jun-2026 y
+    // que las 47 filas siguientes salieron en `degraded-fallback`. Antes
+    // guardaba solo el estructurador, lo que dejaba invisible al buscador — la
+    // etapa que se lleva el 99% del costo.
+    let aiProvider: string = STRUCTURER_DEFAULT_MODEL
 
-    // Paso A: recolectar. Si falla la busqueda, capturamos y caemos a cache vieja.
-    let collected: Awaited<ReturnType<typeof collect>> | null = null
     try {
-      collected = await collect({
-        prompt: searchPrompt,
+      const found = await searchCompanyNews({
+        companyId,
         companyName,
-        countryISO: company?.country ? newsCountryToISO(company.country) : null,
-        maxSearches: NEWS_MAX_SEARCHES,
-        context: "news",
-        tracking: { userId: user.id, companyId, feature: "research-collect" },
+        industry: company?.industry,
+        country: company?.country,
+        windowMonths: NEWS_WINDOW_MONTHS,
+        tracking: { userId: user.id },
       })
-      console.log(
-        `[v0][news][collect] ${collected.sources.length} fuentes citadas | ${collected.searchCount} busquedas | ${collected.text.length} chars de informe`,
-      )
-      collected.sources.forEach((s, i) => {
-        console.log(`[v0][news][collect][fuente ${i + 1}/${collected!.sources.length}] ${s.url}`)
-      })
-    } catch (collectError) {
-      console.error("[v0] News: error de recoleccion:", collectError)
-    }
-
-    // Paso B: estructurar con el motor. Si falla, no se publica nada degradado:
-    // se cae a cache vieja mas abajo.
-    if (collected && collected.sources.length > 0) {
-      const searchResult = collected
-
-      let structured: NewsItem[] = []
-      try {
-        console.log(`[v0] News: Structuring with AI Gateway (${STRUCTURER_DEFAULT_MODEL})...`)
-        const result = await structureNewsWithGemini(searchResult.sources, searchResult.text, companyName, {
-          userId: user.id,
-          companyId,
-        })
-        structured = result.news
-        geminiDigest = result.digest
-        console.log("[v0] News: Gemini structured", structured.length, "items, digest:", geminiDigest ? "generated" : "none")
-      } catch (structureError) {
-        // NO hay fallback degradado, a proposito.
-        //
-        // Antes aca se publicaban los excerpts crudos de Parallel como si fueran
-        // noticias. Eso parecia "mejor que un empty state", pero era peor por
-        // tres razones: (1) escribia basura PERMANENTE en la base (47 filas con
-        // titulos como "Noticias | Infobae" y markdown crudo), (2) el usuario no
-        // podia distinguirla de una noticia real, y (3) al no fallar nunca, el
-        // modelo retirado paso 2 meses roto sin que nadie se enterara.
-        //
-        // Dejando `structured` vacio, el flujo cae al paso 4 (cache vieja), que
-        // muestra noticias REALES de una corrida anterior y no contamina nada.
-        console.error("[v0][news] Structuring FALLO; se cae a cache vieja sin escribir nada:", structureError)
-        structured = []
-      }
-
-      // Guardrail post-LLM: descartar items que NO mencionan el nombre de la empresa
-      // en title+summary. Atrapa los casos donde el modelo (o el fallback degradado)
-      // arrastra una noticia tangencial donde la empresa solo se menciona al pasar.
-      const beforeFilter = structured.length
-      structured = filterRelevantToCompany(structured, companyName, ["title", "summary"])
-      const droppedByGuardrail = beforeFilter - structured.length
-      if (droppedByGuardrail > 0) {
-        console.log(`[v0][news][guardrail] dropped ${droppedByGuardrail} item(s) sin mencion explicita de "${companyName}"`)
-      }
-
-      // Mapeo deterministico item -> URL via source_index (1-based) que el LLM
-      // debe devolver explicitamente. Esto elimina el matching fragil por titulo
-      // que producia mismatches (ej: item "X" terminaba con URL de un articulo
-      // aleman tangencial). Items sin source_index valido se descartan.
-      const itemsWithSource = structured
-        .map((item: any) => {
-          const idx1 = Number(item.source_index)
-          const sourceResult =
-            Number.isFinite(idx1) && idx1 >= 1 && idx1 <= searchResult.sources.length
-              ? searchResult.sources[idx1 - 1]
-              : null
-          return { item, sourceResult }
-        })
-        .filter((x) => x.sourceResult !== null)
-
-      const droppedNoSource = structured.length - itemsWithSource.length
-      if (droppedNoSource > 0) {
-        console.log(`[v0][news][mapping] dropped ${droppedNoSource} item(s) sin source_index valido`)
-      }
-
-      // Liveness check: HEAD a las URLs candidatas en paralelo. Descartamos las
-      // que devuelven 404/410 o tienen errores de DNS (links muertos que Parallel
-      // tenia indexados pero ya no existen).
-      const candidateUrls = itemsWithSource.map((x) => x.sourceResult!.url)
-      const aliveUrls = await checkUrlsAlive(candidateUrls, { context: "news" })
-      const aliveItems = itemsWithSource.filter((x) => aliveUrls.has(x.sourceResult!.url))
-      const droppedDead = itemsWithSource.length - aliveItems.length
-      if (droppedDead > 0) {
-        console.log(`[v0][news][mapping] dropped ${droppedDead} item(s) por links muertos`)
-      }
-
-      newsItems = aliveItems.map(({ item, sourceResult }) => {
-        const r = sourceResult!
-        let hostname: string
-        try {
-          hostname = new URL(r.url).hostname.replace(/^www\./, "")
-        } catch {
-          hostname = "fuente"
-        }
-        return {
-          title: item.title,
-          summary: item.summary,
-          source_url: r.url,
-          source_name: item.source_name || hostname || r.title || "Desconocido",
-          // Unica fuente de fecha: la que el modelo extrae del contenido.
-          //
-          // Antes habia un segundo intento con `r.publish_date`, el metadato que
-          // traia Parallel. `collect` no lo tiene: devuelve las fuentes que el
-          // modelo cito, sin metadatos por URL. Es el UNICO costo real de este
-          // cambio y esta medido: el modelo fecha 20/23 items (87%) y sobreviven
-          // 17/23 (74%) a `sanitizeDate`, contra el 79% que hay hoy en la base.
-          //
-          // Importa porque el insert exige `published_at !== null`, asi que un
-          // item sin fecha se descarta en silencio. Por eso el prompt de
-          // recoleccion pide la fecha de forma explicita: es lo que sostiene ese
-          // 87%. Si esta tasa cae, el sintoma va a ser "faltan noticias", y hay
-          // que mirar aca.
-          published_at: sanitizeDate(item.published_at),
-          category: item.category || categorizeNews((item.title || "") + " " + (item.summary || "")),
-        }
-      })
+      // El insert exige fecha: sin ella no hay recencia y la nota no se puede
+      // ordenar ni ubicar en la ventana.
+      newsItems = found.items.filter((item) => item.publishedAt !== null)
+      geminiDigest = found.digest
+      aiProvider = `${found.searchModel}+${found.structurerModel}`
+    } catch (searchError) {
+      // NO hay fallback degradado, a proposito.
+      //
+      // Antes aca se publicaban los excerpts crudos del buscador como si fueran
+      // noticias. Eso parecia "mejor que un empty state", pero era peor: (1)
+      // escribia basura PERMANENTE en la base (47 filas con titulos como
+      // "Noticias | Infobae" y markdown crudo), (2) el usuario no podia
+      // distinguirla de una noticia real, y (3) al no fallar nunca, el modelo
+      // retirado paso 2 meses roto sin que nadie se enterara.
+      //
+      // Con `newsItems` vacio el flujo cae al paso 4 (cache vieja), que muestra
+      // noticias REALES de una corrida anterior y no contamina nada.
+      console.error("[v0][news] La busqueda FALLO; se cae a cache vieja sin escribir nada:", searchError)
     }
 
     // ── 4. Fallback to old cache if no results ──────────────────────��
     if (newsItems.length === 0) {
-      console.log("[v0][news][empty] No items after Parallel+Gemini. Checking old cache...")
+      console.log("[v0][news][empty] Los bundles no dejaron items. Checking old cache...")
       const oldCache = await getAnyCache(supabase, companyId)
       if (oldCache && oldCache.length > 0) {
         console.log("[v0] News: Using old cache -", oldCache.length, "items")
@@ -453,50 +221,58 @@ export async function POST(request: Request) {
     }
 
     // ── 5. Deduplicate and save to public cache ──────────────────────
-    const seenUrls = new Set<string>()
-    const uniqueItems = newsItems.filter(item => {
-      if (seenUrls.has(item.source_url)) return false
-      seenUrls.add(item.source_url)
-      return true
-    })
-    console.log(`[v0][news][filter] structured=${newsItems.length} | unique=${uniqueItems.length} | dropped_dup=${newsItems.length - uniqueItems.length}`)
-
-    // Check existing URLs in DB for this company
+    // `searchCompanyNews` ya deduplica entre bundles; aca solo falta contrastar
+    // contra lo que la compañia ya tiene guardado.
     const { data: existingNews } = await supabase
       .from("company_news")
       .select("source_url")
       .eq("company_id", companyId)
 
     const existingUrls = new Set(existingNews?.map((n: any) => n.source_url) || [])
-    console.log(`[v0][news][filter] existing_in_db=${existingUrls.size}`)
+    console.log(`[v0][news][filter] encontradas=${newsItems.length} | ya_en_base=${existingUrls.size}`)
 
-    // We'll use the digest to update all items in this batch
-    const newToInsert = uniqueItems
-      .filter(item => !existingUrls.has(item.source_url))
-      .filter(item => item.published_at !== null) // require valid date
-      .map((item, idx) => ({
-        company_id: companyId,
-        title: item.title,
-        summary: item.summary,
-        source_url: item.source_url,
-        source_name: item.source_name,
-        published_at: item.published_at,
-        category: item.category,
-        ai_provider: aiProvider,
-        // Only store digest on the first item as a flag that batch was processed
-        digest: idx === 0 ? geminiDigest : null,
-        digest_generated_at: idx === 0 && geminiDigest ? new Date().toISOString() : null,
-      }))
+    const newToInsert = newsItems.filter((item) => !existingUrls.has(item.sourceUrl))
 
-    console.log(`[v0] News: Inserting ${newToInsert.length} new items (${uniqueItems.length - newToInsert.length} duplicates/invalid skipped)`)
+    console.log(`[v0] News: Inserting ${newToInsert.length} new items (${newsItems.length - newToInsert.length} duplicates skipped)`)
 
     if (newToInsert.length > 0) {
-      const { error: insertError } = await supabase
-        .from("company_news")
-        .insert(newToInsert)
-        .select()
+      // Via el contrato compartido de evidencia y NO con un insert a mano.
+      //
+      // Este insert era el ultimo que escribia `company_news` por fuera del
+      // contrato, y se le notaba: dejaba `produced_by` en null (4 filas asi en
+      // produccion) y `source` en el DEFAULT de la tabla, que hasta ayer decia
+      // 'parallel' aunque Parallel llevara meses retirado.
+      //
+      // `recordEvidenceBatch` llena produced_by, dedupe_hash y la columna legacy
+      // `source`, y trata el duplicado como resultado normal en vez de error.
+      try {
+        const { inserted, duplicates } = await recordEvidenceBatch(
+          newToInsert.map((item) => ({
+            kind: "news" as const,
+            producedBy: "v2_research" as const,
+            companyId,
+            title: item.title,
+            summary: item.summary,
+            sourceUrl: item.sourceUrl,
+            sourceName: item.sourceName,
+            occurredAt: item.publishedAt,
+            category: item.category,
+            aiProvider,
+            requestedBy: user.id,
+          })),
+        )
+        console.log(`[v0] News: ${inserted} insertadas, ${duplicates} ya conocidas`)
 
-      if (insertError) {
+        // El digest describe el LOTE, no una nota suelta: se estampa aparte,
+        // sobre la primera fila de esta corrida, que es como lo lee la UI.
+        if (inserted > 0 && geminiDigest) {
+          await supabase
+            .from("company_news")
+            .update({ digest: geminiDigest, digest_generated_at: new Date().toISOString() })
+            .eq("company_id", companyId)
+            .eq("source_url", newToInsert[0].sourceUrl)
+        }
+      } catch (insertError) {
         console.error("[v0] News: Error inserting:", insertError)
       }
     }
@@ -520,7 +296,9 @@ export async function POST(request: Request) {
     return NextResponse.json({
       success: true,
       news: finalNews,
-      source: "parallel",
+      // De donde salieron estas noticias, para el log del front. Decia
+      // "parallel" desde antes de que Parallel se retirara.
+      source: "search",
       canRefresh: freshCacheResult.canRefresh,
       lastSearchDate: freshCacheResult.lastSearchDate,
       daysUntilRefresh: freshCacheResult.daysUntilRefresh,

@@ -438,13 +438,14 @@ puede enviar/exportar el informe.
    resuelto en G.5; falta calibrar los cortes con cuentas reales).
 3. ~~"Por qué le importa al vendor" por noticia~~ → resuelto en G: lectura por
    workspace, generada al refrescar la radiografía, no al ingerir.
-4. ~~¿bundle del research o flujo liviano?~~ → resuelto en G.1: flujo liviano.
+4. ~~¿bundle del research o flujo liviano?~~ → resuelto en G.1: primero flujo
+   liviano, **revertido el 21-ago-2026 al bundle caro** (ver G.1bis).
 5. Envío por correo del informe en el digest: ¿adjunto (PDF/docx) o el digest
    linkea a la vista?
 
 ---
 
-## G. Noticias: scrape liviano + lectura por workspace (diseño, 21-ago-2026)
+## G. Noticias: búsqueda profunda + lectura por workspace (diseño, 21-ago-2026)
 
 ### G.1 Bundle de research vs. flujo liviano (costos medidos en `v3.ai_usage_log`)
 
@@ -455,11 +456,149 @@ puede enviar/exportar el informe.
 | Efectos | Reescribe `radar_findings`, scorecard y brief | Escribe solo `company_news` |
 | Cupo | Consume research del plan + cooldown de 30 días | No consume cupo de research |
 
-**Decisión: flujo liviano.** Es 3x más barato, no tiene efectos colaterales sobre
-la inteligencia de la cuenta y **ya existe probado en v2**
+**Decisión original (fase 8): flujo liviano.** Es 3x más barato, no tiene efectos
+colaterales sobre la inteligencia de la cuenta y **ya existía probado en v2**
 (`app/api/research/news/route.ts`: búsqueda + estructurador, con verificación de
-URLs vivas, dedup y descarte de items sin fecha). La fase 8 lo porta a v3 como
-servicio compartido en vez de reimplementarlo.
+URLs vivas, dedup y descarte de items sin fecha).
+
+### G.1bis Revertido al bundle caro (21-ago-2026)
+
+**Decisión de producto: se abre el consumo.** Todas las búsquedas de noticias
+—las del bookmark de v3 y las de `/api/research/news` de v2— corren el bundle
+caro. Sin confirmación de costo, sin cupo.
+
+Qué significa "caro" acá, en concreto: **no es el modelo, es la profundidad.** El
+flujo liviano YA usaba haiku (`RESEARCH_MODEL`); lo que cambia es que en vez de
+una pasada con un prompt genérico ahora son **dos bundles con foco propio**:
+
+| Bundle | Pregunta que responde | Prompt |
+|---|---|---|
+| `negocio` | ¿Cómo le va y con qué recursos cuenta? (resultados, inversión, M&A, alianzas, ejecutivos, regulatorio) | `news.bundle.negocio` |
+| `expansion` | ¿Se expande o se retrae, y en qué invierte? (plantas, mercados, capex, proyectos tech, cierres, despidos) | `news.bundle.expansion` |
+
+El corte no es por categoría de noticia sino por pregunta, y es **la misma
+distinción que hace `computeNewsRelevance` al leerlas** (`negocio` vs
+`propuesta`): buscar con la distinción con la que después se lee alinea las dos
+puntas. Antes una sola pasada mezclaba las dos preguntas y repartía un
+presupuesto de búsqueda único entre ambas, así que contestaba las dos por la
+mitad.
+
+Costo medido con haiku: **~$0,10 la recolección por bundle** (`radar-news`,
+n=4) + $0,0004 la estructuración → **~$0,20 por cuenta**, contra los ~$0,05 del
+liviano. Presupuesto de búsqueda: 8 por bundle, 16 en total (antes 8).
+
+**Los dos mundos comparten el módulo.** La búsqueda vive en
+`lib/shared/news-search.ts` y la llaman v2 y v3. Antes eran dos copias del mismo
+pipeline con dos dueños, que es exactamente cómo el incidente del modelo
+retirado pudo estar 2 meses roto de un lado y no del otro.
+
+**Sin acción del usuario: se retiró el CTA "Investigar".** Era un botón que
+prometía research y sólo navegaba a `/v3/chat`, sin siquiera preseleccionar la
+cuenta. Con las vacantes y las noticias buscándose solas al marcar el bookmark y
+refrescándose por cron, no hay nada que el usuario tenga que disparar: lo único
+que necesita saber es cuán fresco es lo que lee. En su lugar el encabezado
+muestra `DataFreshness` — "actualizado hace X (fecha) · próxima actualización:
+fecha" — donde la fecha de próxima es la de la fuente que vence ANTES, que es
+cuando el informe efectivamente cambia. El paso "sin research todavía" salió del
+funnel, que queda: seguir → decisores → icebreaker → contactar.
+
+**Se dispara al marcar el bookmark, no al abrirlo.** Con el flujo liviano había
+un kick también en `page.tsx` como auto-reparación; con el bundle caro eso
+convertiría cada visita a una cuenta vieja en un gasto potencial. Hoy el único
+disparador on-demand es `followAccountAction`: marcar la cuenta es el momento en
+que el usuario declara que le importa, así que es donde se paga.
+
+Ese kick de la vista era además el ÚNICO refresco de las cuentas seguidas de
+antes, así que retirarlo las dejaba sin noticias para siempre. Lo reemplaza
+**`/api/cron/v3-scrape-news`**, gemelo del corredor de vacantes: lee
+`v3.followed_accounts`, pregunta por cada compañía a `shouldScrapeNews` y corre
+hasta 2 por invocación (cada 30 min). Cubre las dos prioridades con la misma
+regla —primera pasada para las que nunca se buscaron, refresco para las que
+pasaron los 30 días— y hereda la marca previa al gasto, así que dos corridas que
+se pisaran no pagan la misma cuenta dos veces.
+
+### G.1quater Ajustes de la vista tras el primer uso real (21-ago-2026)
+
+Revisión sobre una cuenta de producción (Banco Ripley Chile). Cinco cambios:
+
+- **Fuera el "Próximo paso".** El strip del funnel saltaba a pestañas; con todo
+  en una sola vista, sus CTAs no tenían a dónde ir. El único paso que quedaba
+  siendo real —seguir la cuenta— ya está en el encabezado. El paso "buscar
+  decisores" vuelve cuando entre el componente de Apollo (ver abajo).
+- **Estado `queued` para las noticias.** Una cuenta seguida de antes del scrape
+  no tiene fila de intento, así que mostraba "sin noticias" como si no hubiera.
+  Ahora dice que está en cola y que el corredor la levanta. NO poletea: 8
+  minutos de polling terminarían diciendo "está demorando" para algo a lo que
+  simplemente no le tocó el turno. El spinner con auto-refresco queda para
+  `pending`/`running`, que sí son búsquedas en vuelo.
+- **Contacto: el corporativo manda.** `pickEmail`/`pickPhone` priorizan el canal
+  de la empresa y caen al personal solo si no hay otro, declarando cuál es con
+  un chip (`corp` / `pers`). Antes se devolvía el primero válido, así que la
+  elección dependía del orden de las columnas. La lista de dominios personales
+  es la misma que la función SQL `is_personal_email`, portada a TS.
+- **Vacantes con señal, tope de 5.** Con más, la sección se comía el informe y
+  noticias/ángulos/riesgos quedaban fuera de pantalla. El resto, a un clic.
+- **Fuera las pestañas del pie.** Hallazgos, señales fit, contexto, icebreakers
+  e historial eran pestañas debajo de todo el informe: nadie bajaba. Ahora son
+  secciones colapsadas de la misma vista, y **las vacías no se renderizan** — de
+  paso desaparecen sus empty states, que eran justamente los que pedían
+  "investigá esta cuenta desde el chat".
+
+**Pendiente, en su propia fase:** un componente de búsqueda por Apollo contra la
+compañía, sugiriendo cargos, entre "Riesgos a mitigar" y "Método y limitaciones",
+para alimentar la base de decisores. Se saca de esta revisión porque no es UI:
+necesita decidir qué endpoint de Apollo, qué cupo consume, de dónde salen los
+cargos sugeridos, cómo se deduplica contra `contacts` y quién paga el
+enriquecimiento.
+
+### G.1ter Un solo motor de búsqueda: Parallel y Perplexity retirados (21-ago-2026)
+
+Antes de este cambio convivían tres motores de búsqueda web. Ahora queda **uno**:
+`collect` con búsqueda server-side de Anthropic (haiku) por el AI Gateway, que
+alimenta noticias, radar técnico y documentos públicos, en v2 y en v3.
+
+| Motor | Estado |
+|---|---|
+| **haiku vía Gateway** (`collect`) | **El único.** Noticias (los dos bundles), radar, public-docs. Todo su costo entra en `v3.ai_usage_log`. |
+| **Parallel** | Retirado. Detalle abajo. |
+| **Perplexity** | Retirado. `generatePerplexityContent` le pegaba directo a `api.perplexity.ai` con su propia key, así que su gasto **no entraba en la contabilidad**: era el único canal de IA fuera de `ai_usage_log`. Colgaba de `searchWebSignals` → pestaña "Investigación Web Privada" del bookmark de v2, que además escribía en `company_news` y `company_implementations` con un `.insert()` crudo, esquivando el contrato de evidencia. Estaba muerto en los hechos: `user_company_signals`, su tabla propia, tenía **0 filas**, el componente `BookmarkSignals` **no estaba montado en ninguna página**, y `searchWeb` (una casi gemela) no tenía callers. Se borró todo: la función, las dos acciones y el componente. |
+| **SerpAPI** | Ya no existía en el código; sobrevive sólo como valor histórico de `ai_provider` en 48 filas. |
+
+Queda una llamada directa a un proveedor fuera del Gateway, a propósito y
+señalada acá para que no se confunda con un olvido: `lib/documents/extract-text.ts`
+usa Gemini contra `generativelanguage.googleapis.com` para **leer visualmente
+PDFs diseñados** cuando `pdf-parse` no saca texto. No es un motor de búsqueda,
+es OCR, y por eso no entra en esta unificación.
+
+#### Parallel
+
+
+
+Parallel era el buscador del research de v2. Se retiró hace meses, pero seguía
+presente de dos formas:
+
+1. **Como código vivo**: `lib/parallel.ts` → `gateway.tools.parallelSearch`, que
+   `/api/research/public-docs` todavía llamaba. Migrado a `collect`; el
+   anti-contaminación que era `sourcePolicy` (listas de dominios en config) pasó
+   a ser instrucciones del prompt (`lib/public-docs-prompt.ts`), y el test de
+   contrato ahora verifica justamente eso.
+2. **Como procedencia mentirosa**: `company_news.source` tenía `DEFAULT
+   'parallel'` y estampaba ese valor en 1.137 filas cuyo `ai_provider` real era
+   `perplexity` (244), `gemini-2.0-flash` (190), `gemini-2.5-flash-lite` (65),
+   `gemini` (65), `serpapi` (48) y `parallel` (457). Cinco motores distintos con
+   la misma etiqueta: no se podía medir quién generó qué.
+
+Cómo queda la procedencia:
+
+| Columna | Qué declara |
+|---|---|
+| `source` (legacy) | `research` \| `client_mcp` \| `tech_radar`. Grueso: quién lo pidió. |
+| `produced_by` | El motor. Se sumó `v3_news` para los bundles del bookmark. **Autoritativa.** |
+| `ai_provider` | Los modelos REALES, `<búsqueda>+<estructuración>`. Antes guardaba solo el estructurador, que dejaba invisible al buscador — la etapa que se lleva el 99% del costo. |
+| `v3.ai_usage_log` | El costo por modelo, por compañía. La búsqueda de noticias se atribuye a `radar-news` (antes `research-collect`, donde quedaba mezclada con cualquier otra recolección). |
+
+El insert de v2 era el último que escribía `company_news` por fuera del contrato
+de evidencia — dejaba `produced_by` en null; ahora pasa por `recordEvidenceBatch`.
 
 ### G.2 Principio: el hecho es global, la lectura es por workspace
 
@@ -469,7 +608,7 @@ la separación en tres capas:
 
 | Capa | Alcance | Dónde vive | Costo |
 |---|---|---|---|
-| **L0 · Scrape** | Global (compartido entre workspaces) | `public.company_news` | ~$0,17 por cuenta cada 30 días |
+| **L0 · Scrape** | Global (compartido entre workspaces) | `public.company_news` | ~$0,20 por cuenta cada 30 días (2 bundles) |
 | **L1 · Clasificación del hecho** | Global | `company_news.direction` / `category` | ~$0,0004 (estructurador) |
 | **L2 · Lectura para el vendor** | Por workspace | `v3.account_news_readings` (nueva) | ~$0,0004 por cuenta (batch de todas sus noticias) |
 
@@ -581,13 +720,16 @@ nada" y "no buscamos".
 
 ### G.8 Alcance de la fase 8
 
-1. Servicio compartido `lib/v3/services/news-scrape-runner.ts` (port del flujo
-   liviano de v2) + elegibilidad con marca previa al gasto.
+1. Servicio compartido `lib/v3/services/news-scrape-runner.ts` + elegibilidad
+   con marca previa al gasto. (La BÚSQUEDA se movió después a
+   `lib/shared/news-search.ts`, compartida con v2 — ver G.1bis.)
 2. Migración `v3.account_news_readings` + poblado de `company_news.direction`
    para las 1.141 noticias existentes (L1, batch barato).
 3. `lib/v3/services/news-readings.ts`: matcher determinístico + redacción batch
    + regeneración lazy por `profile_version`.
-4. Kick on-demand en la vista de cuenta y en `followAccountAction`.
+4. Kick on-demand en la vista de cuenta y en `followAccountAction`. (El de la
+   vista se retiró en G.1bis: con el bundle caro, abrir una cuenta vieja no
+   puede disparar gasto.)
 5. Reglas puras (score, tipo, recencia) con tests, como en la fase 7.
 
 La UI del radar (G.7) va con la fase 9, cuando el bookmark se convierte en la
@@ -724,7 +866,7 @@ disclaimers fijos (emails solo con estado `valid`, teléfonos sin validar, foto 
 | **5. Personas en la cuenta** | D.2 + D.3 (funnel de 4 pasos, retiro de ROLE_RULES y de searchAccountDecisionMakers) | Fase 4 |
 | **6. Chat de búsqueda** | A completa (refactor de tools a lib compartida, searchByCapability, SearchResultsCard con follow directo, resto de paridad) | Fase 4 (para tools que gastan) |
 | **7. ETL: fechas de puesto + movimientos** | F: tomar `current_position_started_on` y fechas del historial en el ETL de contactos; re-carga de exports para rearmar histórico; derivación ingreso/rotación + clasificación por foco | Ninguna |
-| **8. Noticias on-demand** | G completa: flujo liviano portado de v2, `v3.account_news_readings`, clasificación híbrida, regeneración lazy y kick con marca previa al gasto (alcance en G.8) | Ninguna — diseño cerrado |
+| ~~**8. Noticias on-demand**~~ ✅ | G completa: `v3.account_news_readings`, clasificación híbrida, regeneración lazy y kick con marca previa al gasto (alcance en G.8) — implementada ago-2026. Revisada el 21-ago: búsqueda unificada con v2 en el bundle caro (G.1bis) | — |
 | ~~**9. Bookmark = radiografía**~~ ✅ | H completa: informe vertical con índice, semáforo por evidencia accionable, scorecard operativo, vacantes con snippet, `v3.account_reports` con textos generados al refrescar — implementada ago-2026 | — |
 | **10. Export + digest** | F: export .docx/PDF de la radiografía + envío en el digest mensual al refrescar vacantes/noticias | Fase 9 |
 
@@ -747,11 +889,17 @@ Las fases 1-3 ya están en producción; 4-6 son el funnel completo en la app; 7-
   incremental on-demand, ETL con fechas de puesto, categorías de foco derivadas +
   editables, y el scorecard operativo reemplaza al 0-100 en la vista (detalle en F.3).
   La ex-fase 3b (Scorecard v2 / E.3) queda absorbida por la fase 9.
-- **Noticias: scrape global liviano + lectura por workspace** (21-ago-2026): el hecho se
+- **Noticias: scrape global + lectura por workspace** (21-ago-2026): el hecho se
   paga una vez y se comparte; la interpretación ("por qué le importa") es por workspace y
-  cuesta ~$0,0004. Flujo liviano (3x más barato que el bundle del research), ventana fija
-  de 30 días, regeneración lazy al cambiar la propuesta de valor, y semáforo alimentado
-  por relevancia de propuesta Y de negocio con pesos distintos. Detalle en G.
+  cuesta ~$0,0004. Ventana fija de 30 días, regeneración lazy al cambiar la propuesta de
+  valor, y semáforo alimentado por relevancia de propuesta Y de negocio con pesos
+  distintos. Detalle en G.
+- **La búsqueda de noticias es el bundle caro, y es una sola** (21-ago-2026): se abrió el
+  consumo, así que v2 y v3 comparten `lib/shared/news-search.ts` — dos bundles con foco
+  propio (negocio / expansión) con haiku, ~$0,20 por cuenta, sin cupo ni confirmación de
+  costo. Se dispara al marcar el bookmark, no al abrirlo. En el mismo movimiento se
+  retiró Parallel del código y de la procedencia: `company_news.source` decía 'parallel'
+  para filas de cinco motores distintos. Detalle en G.1bis y G.1ter.
 
 ## Preguntas abiertas
 

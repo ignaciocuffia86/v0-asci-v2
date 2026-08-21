@@ -8,7 +8,7 @@ import { getWorkspaceFitProfile } from "./workspace-fit-profile"
 import { listAccountJobPostings, type UiJobPosting } from "./job-posting-provider"
 import { listPersonnelMovements, type PersonnelMovementsSummary } from "./personnel-movements"
 import { getAccountNewsRadar, type AccountNewsRadar } from "./news-readings"
-import { NEWS_SCRAPE_COOLDOWN_DAYS, NEWS_WINDOW_MONTHS } from "./news-scrape-runner"
+import { NEWS_SCRAPE_COOLDOWN_DAYS, NEWS_SCRAPE_STALE_MS, NEWS_WINDOW_MONTHS } from "./news-scrape-runner"
 import { MOVEMENTS_WINDOW_MONTHS } from "./personnel-movements-rules"
 import {
   buildInputsFingerprint,
@@ -51,7 +51,23 @@ export interface AccountReportMethod {
   newsRefreshDays: number
 }
 
+/**
+ * Estado del scrape de noticias, para que la UI pueda avisar en vez de mostrar
+ * un vacío que parece un error:
+ *  - `pending`: la cuenta se acaba de marcar y el kick está por dispararse (el
+ *    `after()` del alta corre DESPUÉS de responder, así que en el primer render
+ *    todavía no hay ni fila de intento).
+ *  - `running`: hay una búsqueda en vuelo.
+ *  - `queued`: seguida pero sin ningún intento registrado, y el alta ya no es
+ *    reciente. Son las cuentas anteriores a que el scrape existiera: no hay nada
+ *    corriendo AHORA, pero `/api/cron/v3-scrape-news` las levanta en su próxima
+ *    corrida. Decirlo evita que un "sin noticias" se lea como "no hay nada".
+ *  - `idle`: ya se buscó (con o sin resultados) dentro de la ventana.
+ */
+export type NewsScrapeStatus = "pending" | "running" | "queued" | "idle"
+
 export interface AccountReport {
+  newsScrapeStatus: NewsScrapeStatus
   status: AccountStatusResult
   summaryPoints: string[]
   scorecard: ScorecardRow[]
@@ -90,7 +106,7 @@ export async function getAccountReport(
 ): Promise<AccountReport> {
   const admin = createAdminClient()
 
-  const [profile, jobsResult, movements, news, jobScrape] = await Promise.all([
+  const [profile, jobsResult, movements, news, jobScrape, lastNewsScrape, followRow] = await Promise.all([
     getWorkspaceFitProfile(workspaceId),
     listAccountJobPostings(companyId, 100),
     listPersonnelMovements(companyId, workspaceId),
@@ -105,7 +121,47 @@ export async function getAccountReport(
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle(),
+    // Último intento de scrape de noticias, en CUALQUIER estado: es lo que
+    // permite distinguir "todavía buscando" de "ya buscamos y no había nada".
+    admin
+      .from("company_news_scrapes")
+      .select("status, started_at")
+      .eq("company_id", companyId)
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    // Cuándo se marcó el bookmark. El scrape se dispara AHÍ (no al abrir la
+    // cuenta), así que es la única razón legítima para esperar sin fila.
+    admin
+      .schema("v3")
+      .from("followed_accounts")
+      .select("created_at")
+      .eq("company_id", companyId)
+      .eq("workspace_id", workspaceId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ])
+
+  const newsScrapeStatus: NewsScrapeStatus = (() => {
+    const row = lastNewsScrape.data
+    if (row) {
+      if (row.status !== "running") return "idle"
+      // Un 'running' viejo es un scrape colgado, no uno en vuelo: mismo criterio
+      // que usa la elegibilidad del runner.
+      const ageMs = Date.now() - new Date(row.started_at).getTime()
+      return ageMs < NEWS_SCRAPE_STALE_MS ? "running" : "idle"
+    }
+    // Sin intento registrado. El kick sale del alta y corre en `after()`, así
+    // que justo después de marcar el bookmark todavía puede no haber fila.
+    const followedAt = followRow.data?.created_at as string | undefined
+    if (!followedAt) return "idle"
+    if (Date.now() - new Date(followedAt).getTime() < NEWS_SCRAPE_STALE_MS) return "pending"
+    // Alta vieja sin ningún intento: son las cuentas que ya estaban seguidas
+    // antes de que el scrape existiera. No hay nada en vuelo, pero el corredor
+    // las levanta igual, así que no es "idle" — es turno pendiente.
+    return "queued"
+  })()
 
   const targetTerms = [...profile.targetTechnologies, ...profile.targetProcesses]
   const targetTermsLower = targetTerms.map((t) => t.trim().toLowerCase()).filter((t) => t.length >= 3)
@@ -189,6 +245,7 @@ export async function getAccountReport(
   })
 
   return {
+    newsScrapeStatus,
     status,
     summaryPoints: narrative.summaryPoints,
     scorecard,

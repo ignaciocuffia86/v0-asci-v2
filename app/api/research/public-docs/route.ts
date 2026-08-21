@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextResponse } from "next/server"
-import { searchPublicDocsViaGateway, buildPublicDocsSearchParams } from "@/lib/parallel"
+import { collect } from "@/lib/research/engine"
+import { buildPublicDocsPrompt } from "@/lib/public-docs-prompt"
 import {
   getCIKByTicker,
   searchSECByCompanyName,
@@ -10,6 +11,8 @@ import {
 
 const DOCS_CACHE_DAYS = 30 // Refresh at most once per month
 const MAX_DOCS = 10
+/** Busquedas web permitidas: alcanzan para cubrir las 4 familias de documento. */
+const PUBLIC_DOCS_MAX_SEARCHES = 6
 
 // ── Gemini structuring for public documents ─────────────────────────────
 const GEMINI_SYSTEM = `Eres un analista de inversiones B2B especializado en analizar documentos públicos de empresas.
@@ -272,28 +275,36 @@ export async function POST(request: Request) {
     }
 
     // 3b. Search for other public documents (annual reports, sustainability, earnings)
+    //
+    // Era la ULTIMA llamada viva a Parallel del sistema (`parallelSearch` del
+    // Gateway). Se reemplazo por `collect`, el mismo camino que ya usan las
+    // noticias y el radar: busqueda server-side de Anthropic, fuentes REALMENTE
+    // citadas por el modelo y telemetria del motor.
+    //
+    // Lo unico que se pierde es `publish_date` por resultado: `collect` devuelve
+    // las fuentes citadas sin metadatos por URL. `document_date` queda en null
+    // salvo que venga de SEC EDGAR, que es la fuente fechada y confiable.
     console.log("[v0] Public Docs: Searching for additional public documents...")
-    const parallelParams = buildPublicDocsSearchParams({
-      company_name: companyName,
-      ticker: ticker || undefined,
-      country: company.country,
-      is_public: isPublicCompany ?? false,
-      sources: ["annual", "earnings", "sustainability", "financial"],
-    })
-
     try {
-      // Enrutado por el AI Gateway: costo visible + atribuido, sin PARALLEL_API_KEY
-      // en la app. Mismo shape de retorno que la llamada directa anterior.
-      const searchResult = await searchPublicDocsViaGateway(parallelParams, {
-        companyId,
-        userId: user.id,
+      const collected = await collect({
+        prompt: buildPublicDocsPrompt({
+          companyName,
+          ticker: ticker || undefined,
+          country: company.country,
+          isPublic: isPublicCompany ?? false,
+          sources: ["annual", "earnings", "sustainability", "financial"],
+        }),
+        companyName,
+        maxSearches: PUBLIC_DOCS_MAX_SEARCHES,
+        context: "public-docs",
+        tracking: { companyId, userId: user.id, feature: "doc-analysis" },
       })
-      console.log("[v0] Public Docs: Gateway parallelSearch returned", searchResult.results.length, "results")
+      console.log("[v0] Public Docs: collect cito", collected.sources.length, "fuentes")
 
-      for (const result of searchResult.results) {
+      for (const result of collected.sources) {
         // Determine document type from URL/title
         const urlLower = result.url.toLowerCase()
-        const titleLower = result.title.toLowerCase()
+        const titleLower = (result.title ?? "").toLowerCase()
 
         let docType = "financial"
         if (urlLower.includes("sustainability") || titleLower.includes("sustain") || titleLower.includes("esg")) {
@@ -309,13 +320,13 @@ export async function POST(request: Request) {
           documentSources.push({
             url: result.url,
             type: docType,
-            title: result.title,
-            date: result.publish_date ?? undefined,
+            title: result.title ?? result.url,
+            date: undefined,
           })
         }
       }
-    } catch (parallelError) {
-      console.error("[v0] Public Docs: Parallel search error:", parallelError)
+    } catch (searchError) {
+      console.error("[v0] Public Docs: error de busqueda:", searchError)
     }
 
     // ── 4. If no documents found, return empty or old cache ──────

@@ -115,34 +115,100 @@ export interface ContactChannels {
   phone2_type?: string | null
 }
 
+/** Corporativo (dominio de la empresa) o personal (gmail, hotmail…). */
+export type ChannelKind = "corporativo" | "personal"
+
 /**
- * Regla del informe: los emails se listan solo cuando la base los marca con
- * estado "valid". Devuelve el primero válido, o null.
+ * Dominios de correo personal. Es el MISMO listado que la función SQL
+ * `public.is_personal_email` (baseline), portado acá para poder clasificar sin
+ * ir a la base. Si se agrega un dominio, agregarlo en los dos lados.
  */
-export function pickValidEmail(c: ContactChannels): string | null {
+const PERSONAL_EMAIL_DOMAINS = new Set([
+  "gmail.com", "googlemail.com",
+  "hotmail.com", "hotmail.es", "hotmail.com.ar",
+  "outlook.com", "outlook.es",
+  "live.com", "live.com.ar", "msn.com",
+  "yahoo.com", "yahoo.es", "yahoo.com.ar", "ymail.com",
+  "icloud.com", "me.com", "mac.com",
+  "aol.com",
+  "proton.me", "protonmail.com", "pm.me",
+  "gmx.com", "gmx.net",
+  "mail.com",
+  "yandex.com", "yandex.ru",
+  "zoho.com", "fastmail.com", "tutanota.com", "hey.com",
+])
+
+export function emailKind(email: string): ChannelKind {
+  const domain = email.split("@")[1]?.trim().toLowerCase()
+  if (!domain) return "corporativo"
+  return PERSONAL_EMAIL_DOMAINS.has(domain) ? "personal" : "corporativo"
+}
+
+/**
+ * Tipos de teléfono que el origen marca como línea de la empresa. El resto
+ * (mobile, home, other, o sin tipo) se trata como personal.
+ */
+const CORPORATE_PHONE_TYPES = new Set(["company", "work", "corporate", "office", "hq"])
+
+export function phoneKind(type: string | null | undefined): ChannelKind {
+  return type && CORPORATE_PHONE_TYPES.has(type.trim().toLowerCase()) ? "corporativo" : "personal"
+}
+
+export interface PickedChannel {
+  value: string
+  kind: ChannelKind
+  /** Tipo crudo del origen, solo para teléfonos ("mobile", "company"…). */
+  rawType?: string | null
+}
+
+/**
+ * Email de contacto: **el corporativo manda**.
+ *
+ * Para una primera aproximación comercial el mail de la empresa es el canal
+ * legítimo — llega al buzón donde la persona trabaja y no expone que se
+ * consiguió su correo particular. El personal queda como respaldo, marcado como
+ * tal, para cuando no hay otro. Antes se devolvía el primero válido sin mirar el
+ * dominio, así que la elección dependía del orden de las columnas.
+ *
+ * Se listan solo los emails que la base marca con estado "valid".
+ */
+export function pickEmail(c: ContactChannels): PickedChannel | null {
   const pairs: Array<[string | null | undefined, string | null | undefined]> = [
     [c.email1, c.email1_status],
     [c.email2, c.email2_status],
     [c.email3, c.email3_status],
     [c.email4, c.email4_status],
   ]
-  for (const [email, status] of pairs) {
-    if (email?.trim() && status?.trim().toLowerCase() === "valid") return email.trim()
-  }
-  return null
+  const validos = pairs
+    .filter(([email, status]) => email?.trim() && status?.trim().toLowerCase() === "valid")
+    .map(([email]) => email!.trim())
+
+  const corporativo = validos.find((e) => emailKind(e) === "corporativo")
+  if (corporativo) return { value: corporativo, kind: "corporativo" }
+
+  const personal = validos[0]
+  return personal ? { value: personal, kind: "personal" } : null
 }
 
 /**
- * Primer teléfono disponible, con su tipo tal como viene del origen ("company",
- * "mobile"…) para que el render pueda advertir que hay que validarlo.
+ * Teléfono de contacto, con el mismo criterio: la línea de la empresa primero,
+ * el particular como respaldo.
+ *
+ * `rawType` viaja tal como viene del origen porque no es confiable — la base no
+ * distingue celular de fijo de forma consistente, y el informe lo advierte.
  */
-export function pickPhone(c: ContactChannels): { phone: string; type: string | null } | null {
+export function pickPhone(c: ContactChannels): PickedChannel | null {
   const pairs: Array<[string | null | undefined, string | null | undefined]> = [
     [c.phone1, c.phone1_type],
     [c.phone2, c.phone2_type],
   ]
-  for (const [phone, type] of pairs) {
-    if (phone?.trim()) return { phone: phone.trim(), type: type?.trim() || null }
-  }
-  return null
+  const disponibles = pairs
+    .filter(([phone]) => phone?.trim())
+    .map(([phone, type]) => ({
+      value: phone!.trim(),
+      rawType: type?.trim() || null,
+      kind: phoneKind(type),
+    }))
+
+  return disponibles.find((p) => p.kind === "corporativo") ?? disponibles[0] ?? null
 }
