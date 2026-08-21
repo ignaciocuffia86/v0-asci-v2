@@ -18,22 +18,30 @@ export default async function V3AccountDetailPage({
   if (status.status === "no_workspace") redirect("/v3/onboarding")
   if (status.status !== "active_member") redirect("/v3/onboarding")
 
-  const [detail, signals, report] = await Promise.all([
+  // La radiografía se arranca acá pero NO se espera: viaja como promesa hasta
+  // la vista, que la consume dentro de un `Suspense`.
+  //
+  // Armarla son ~6 etapas de queries contra São Paulo y, la primera vez que se
+  // abre una cuenta, además una llamada de IA para la narrativa. Esperarla en
+  // el servidor dejaba al navegador congelado en la página anterior, porque sin
+  // nada que enviar el router no cambia de pantalla.
+  //
+  // El `.catch` es parte del contrato: la promesa NUNCA rechaza. Si el informe
+  // falla, `use()` recibe null y la cuenta se muestra igual — las secciones
+  // determinísticas no dependen de él.
+  const reportPromise = getAccountReportData(companyId).catch((error) => {
+    console.error("[v3] No se pudo armar la radiografía:", error)
+    return null
+  })
+
+  const [detail, signals] = await Promise.all([
     getAccountDetail(companyId),
     getAccountSignals(companyId).catch(() => null),
-    // Si el informe falla (p.ej. la IA de la narrativa), la cuenta igual se
-    // muestra: las secciones determinísticas no dependen de esto.
-    getAccountReportData(companyId).catch((error) => {
-      console.error("[v3] No se pudo armar la radiografía:", error)
-      return null
-    }),
   ])
   if (!detail.company) notFound()
 
   // Abrir el bookmark NO dispara búsquedas: la cara (los dos bundles de
   // noticias, ~US$0,20) sale una sola vez, al marcar la cuenta —
-  // `followAccountAction`. Antes había un kick acá también, pensado como
-  // auto-reparación, pero con el bundle caro convierte cada visita a una cuenta
-  // vieja en un gasto potencial, y el refresco mensual ya lo cubre.
-  return <AccountDetailView detail={detail} signals={signals} report={report} />
+  // `followAccountAction`— y el cron mensual la refresca.
+  return <AccountDetailView detail={detail} signals={signals} reportPromise={reportPromise} />
 }

@@ -551,6 +551,47 @@ necesita decidir qué endpoint de Apollo, qué cupo consume, de dónde salen los
 cargos sugeridos, cómo se deduplica contra `contacts` y quién paga el
 enriquecimiento.
 
+### G.1quinquies Navegación: por qué se sentía congelada (21-ago-2026)
+
+Reporte: entrar a una cuenta —y salir— se queda unos segundos sin responder.
+Diagnóstico con medición, no con intuición. **No era la base**: las queries
+sospechosas dan Index Scan en 0,13 ms (movimientos sobre 538k contactos) y
+0,21 ms (último batch de vacantes). Eran cinco causas apiladas:
+
+| # | Causa | Estado |
+|---|---|---|
+| 1 | **No había ningún `loading.tsx` en `/v3`** (v2 sí los tenía). Sin boundary, el App Router espera la respuesta COMPLETA antes de cambiar de página: el navegador se queda en la pantalla anterior sin feedback. La página no tardaba en pintar — no empezaba a pintar. | ✅ resuelto |
+| 2 | La base está en `sa-east-1` (São Paulo) y `vercel.json` no fijaba `regions`, así que las funciones corrían en el default de Vercel. Cada round-trip pagaba la latencia física. | ✅ resuelto: `"regions": ["gru1"]` |
+| 3 | **Cuatro autenticaciones por carga**: `getOnboardingStatus()` y los tres server actions que la página resuelve en paralelo llamaban cada uno a `auth.getUser()` (round-trip real a la API de Auth) + resolución de workspace. 8 idas y vueltas para contestar "¿quién sos?", y el primer par bloquea antes del `Promise.all`. | ✅ resuelto |
+| 4 | El informe se armaba entero antes de mandar un byte: ~6 etapas de queries y, en la primera visita a una cuenta, una llamada de IA para la narrativa. | ✅ resuelto |
+| 5 | Volver al listado corre `summarizeCachedSignals` para hasta 12 empresas × 4 queries = ~48 round-trips. | ⏳ pendiente |
+
+**Cómo se resolvió 2.** Una línea en `vercel.json`: `"regions": ["gru1"]`
+(São Paulo). Se hace por archivo y no por el dashboard a propósito: `vercel.json`
+**tiene precedencia** sobre la configuración de la UI, queda versionado y
+revisable en el repo, y no depende de que alguien encuentre el setting. Un solo
+valor es válido en cualquier plan (Hobby permite exactamente una región; Pro,
+cinco). Requiere un deploy nuevo para tomar efecto — no se aplica a los
+deployments existentes.
+
+**Cómo se resolvió 3.** `cache()` de React memoiza por request (no entre
+requests: no hay riesgo de servir la identidad de otro). Se envolvieron los tres
+primitivos que hacen red — `getRequestUser` (nuevo, en `lib/v3/request-auth.ts`),
+`getWorkspaceForUser` y `workspaceHasDocuments` — así que todos los callers se
+benefician sin tocar ninguno.
+
+**Cómo se resolvió 4.** La página arranca `getAccountReportData` pero **no la
+espera**: la promesa viaja hasta la vista y se consume con `use()` dentro de tres
+`Suspense` (chip de estado, fechas de refresco, informe). El encabezado y el
+resto de la cuenta se pintan enseguida. Por contrato la promesa NUNCA rechaza —
+el error se convierte en `null` en el server component— así que `use()` no
+necesita error boundary.
+
+Nota de implementación: los slots NO son componentes async usados como JSX.
+`@types/react` 19.0.0 no acepta `Promise<Element>` en `JSX.ElementType`, así que
+el patrón es pasar la promesa a componentes cliente y desenvolverla con `use()`,
+que además es el idiomático de React 19.
+
 ### G.1ter Un solo motor de búsqueda: Parallel y Perplexity retirados (21-ago-2026)
 
 Antes de este cambio convivían tres motores de búsqueda web. Ahora queda **uno**:

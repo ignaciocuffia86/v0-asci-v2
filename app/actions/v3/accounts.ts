@@ -5,6 +5,7 @@ import { after } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { requireWorkspaceMember } from "@/lib/v3/workspace"
+import { requireRequestUser } from "@/lib/v3/request-auth"
 import {
   followAccount,
   unfollowAccount,
@@ -21,12 +22,12 @@ import type { UiJobPosting } from "@/lib/v3/services/job-posting-provider"
 // Autorización: siempre por workspace del usuario autenticado.
 // ═══════════════════════════════════════════════════════════
 
+// Identidad + workspace del request. Las dos piezas están memoizadas por
+// request (`lib/v3/request-auth.ts` y el `cache()` de `getWorkspaceForUser`),
+// así que llamar a esto desde varios actions de la misma carga cuesta un solo
+// viaje a São Paulo en vez de uno por action.
 async function getAuthContext() {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) throw new Error("No autenticado")
+  const user = await requireRequestUser()
   const workspace = await requireWorkspaceMember(user.id)
   return { userId: user.id, workspaceId: workspace.id }
 }
