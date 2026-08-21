@@ -4,11 +4,12 @@ import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { ExternalLink, Linkedin, Loader2, Mail, Star, TrendingDown } from "lucide-react"
+import { ExternalLink, Linkedin, Loader2, Mail, Phone, Star, TrendingDown } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 import { es } from "date-fns/locale"
 import type { AccountReport } from "@/lib/v3/services/account-report"
 import { STATUS_EMOJI, STATUS_LABEL, type AccountStatus } from "@/lib/v3/services/account-report-rules"
+import type { ChannelKind } from "@/lib/v3/services/personnel-movements-rules"
 
 // ═══════════════════════════════════════════════════════════
 // Fase 9 · La radiografía comercial en pantalla (diseño H).
@@ -92,6 +93,45 @@ export function DataFreshness({ method }: { method: AccountReport["method"] }) {
   )
 }
 
+const CHANNEL_STYLE: Record<ChannelKind, string> = {
+  // El corporativo es el canal legítimo de una primera aproximación comercial:
+  // se resalta. El personal es el respaldo y se muestra apagado, para que la
+  // diferencia se vea antes de hacer clic.
+  corporativo: "border-primary/40 bg-primary/10 text-foreground",
+  personal: "border-muted-foreground/25 bg-muted text-muted-foreground",
+}
+
+/** Canal de contacto de una persona, rotulado como corporativo o personal. */
+function ContactChip({
+  href,
+  icon,
+  label,
+  kind,
+  ariaLabel,
+}: {
+  href: string
+  icon: React.ReactNode
+  label: string
+  kind: ChannelKind | null
+  ariaLabel: string
+}) {
+  const estilo = CHANNEL_STYLE[kind ?? "personal"]
+  return (
+    <a
+      href={href}
+      aria-label={ariaLabel}
+      title={label}
+      className={`inline-flex max-w-[16rem] items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] hover:brightness-110 ${estilo}`}
+    >
+      {icon}
+      <span className="truncate">{label}</span>
+      <span className="shrink-0 font-semibold uppercase tracking-wide opacity-70">
+        {kind === "corporativo" ? "corp" : "pers"}
+      </span>
+    </a>
+  )
+}
+
 /** Chip de estado para el encabezado de la cuenta. */
 export function StatusBadge({ status }: { status: AccountStatus }) {
   return (
@@ -139,13 +179,32 @@ const POLL_MS = 8000
  */
 const MAX_POLLS = 60
 
+/**
+ * Vacantes con señal que se muestran sin desplegar. Con más que esto la sección
+ * se come el informe y lo que viene abajo (noticias, ángulos, riesgos) queda
+ * fuera de pantalla.
+ */
+const MAX_SIGNAL_JOBS = 5
+
 export function AccountReportView({ report }: { report: AccountReport }) {
   const router = useRouter()
   const [showOtherJobs, setShowOtherJobs] = useState(false)
+  const [showAllSignalJobs, setShowAllSignalJobs] = useState(false)
   const [showNoise, setShowNoise] = useState(false)
   const [polls, setPolls] = useState(0)
+  const [prevBuscando, setPrevBuscando] = useState(false)
 
+  const vacantesVisibles = showAllSignalJobs
+    ? report.jobs.withSignal
+    : report.jobs.withSignal.slice(0, MAX_SIGNAL_JOBS)
+  const vacantesOcultas = report.jobs.withSignal.length - MAX_SIGNAL_JOBS
+
+  // Buscando AHORA: se muestra spinner y se refresca solo.
   const buscandoNoticias = report.newsScrapeStatus === "pending" || report.newsScrapeStatus === "running"
+  // En cola: la levanta el cron, que corre cada 30 min. Acá NO se poletea —
+  // 8 minutos de polling terminarían mostrando "está demorando" para algo que
+  // simplemente todavía no le tocó el turno.
+  const enColaNoticias = report.newsScrapeStatus === "queued"
 
   // Las noticias entran por un scrape que corre en background (~30-60 s), así
   // que el informe se refresca solo: sin esto el usuario veía "sin noticias" y
@@ -161,9 +220,14 @@ export function AccountReportView({ report }: { report: AccountReport }) {
 
   // Al llegar las noticias el estado pasa a "idle": se reinicia el contador
   // para que un refresh posterior (otra cuenta, otro ciclo) vuelva a esperar.
-  useEffect(() => {
+  //
+  // Se ajusta DURANTE el render comparando con el valor anterior, que es el
+  // patrón que React documenta para "estado derivado de props". Hacerlo en un
+  // efecto provoca un render extra con el contador viejo.
+  if (prevBuscando !== buscandoNoticias) {
+    setPrevBuscando(buscandoNoticias)
     if (!buscandoNoticias) setPolls(0)
-  }, [buscandoNoticias])
+  }
 
   const noticiasRelevantes = report.news.items.filter((n) => n.relevanceType !== "ruido")
   const noticiasRuido = report.news.items.filter((n) => n.relevanceType === "ruido")
@@ -262,15 +326,28 @@ export function AccountReportView({ report }: { report: AccountReport }) {
                       {m.matchedTerms.length > 0 && ` · ${m.matchedTerms.join(", ")}`}
                     </span>
                   </div>
-                  <div className="flex shrink-0 items-center gap-1">
+                  {/* Canales de contacto. El corporativo va primero (lo decide
+                      pickEmail/pickPhone) y cada uno dice CUÁL es: escribirle al
+                      mail particular sin saberlo es un problema distinto que
+                      escribirle al de la empresa. */}
+                  <div className="flex shrink-0 flex-wrap items-center gap-1.5">
                     {m.email && (
-                      <a
+                      <ContactChip
                         href={`mailto:${m.email}`}
-                        className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label={`Enviar email a ${m.fullName}`}
-                      >
-                        <Mail className="size-4" />
-                      </a>
+                        icon={<Mail className="size-3.5" />}
+                        label={m.email}
+                        kind={m.emailKind}
+                        ariaLabel={`Enviar email a ${m.fullName}`}
+                      />
+                    )}
+                    {m.phone && (
+                      <ContactChip
+                        href={`tel:${m.phone.replace(/[^\d+]/g, "")}`}
+                        icon={<Phone className="size-3.5" />}
+                        label={m.phone}
+                        kind={m.phoneKind}
+                        ariaLabel={`Llamar a ${m.fullName}`}
+                      />
                     )}
                     {m.linkedinUrl && (
                       <a
@@ -305,7 +382,7 @@ export function AccountReportView({ report }: { report: AccountReport }) {
             </p>
           ) : (
             <ul className="flex flex-col gap-3">
-              {report.jobs.withSignal.map(({ posting, matchedTerms, snippet }) => (
+              {vacantesVisibles.map(({ posting, matchedTerms, snippet }) => (
                 <li key={posting.id} className="rounded-md border p-3">
                   <div className="flex flex-wrap items-center gap-2">
                     {posting.url ? (
@@ -338,6 +415,22 @@ export function AccountReportView({ report }: { report: AccountReport }) {
                 </li>
               ))}
             </ul>
+          )}
+
+          {/* Con muchas vacantes con señal el informe se vuelve un listado y se
+              pierde todo lo que viene después. Se muestran las primeras y el
+              resto queda a un clic. */}
+          {vacantesOcultas > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowAllSignalJobs((v) => !v)}
+              className="mt-3 text-xs font-medium text-primary hover:underline"
+              aria-expanded={showAllSignalJobs}
+            >
+              {showAllSignalJobs
+                ? `Ver solo las primeras ${MAX_SIGNAL_JOBS}`
+                : `Ver ${vacantesOcultas} vacante${vacantesOcultas === 1 ? "" : "s"} más con señal`}
+            </button>
           )}
 
           {report.jobs.others.length > 0 && (
@@ -397,9 +490,18 @@ export function AccountReportView({ report }: { report: AccountReport }) {
               corrida quedó registrada y se reintenta sola.
             </div>
           )}
+          {/* Turno pendiente, no búsqueda en vuelo: no gira nada porque no hay
+              nada corriendo todavía. */}
+          {enColaNoticias && (
+            <div className="mb-3 rounded-md border px-3 py-2.5 text-sm text-muted-foreground text-pretty">
+              Esta cuenta todavía no tiene una búsqueda de noticias hecha. Está en cola: el refresco la levanta en su
+              próxima corrida, dentro de la hora, y aparecen acá solas.
+            </div>
+          )}
 
           {noticiasRelevantes.length === 0 ? (
-            !buscandoNoticias && (
+            !buscandoNoticias &&
+            !enColaNoticias && (
               <p className="text-sm text-muted-foreground text-pretty">
                 Sin noticias con relevancia en la ventana.
               </p>

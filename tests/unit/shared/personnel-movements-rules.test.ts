@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest"
 import {
   classifyMovementFocus,
   classifyMovementType,
+  emailKind,
+  pickEmail,
   pickPhone,
-  pickValidEmail,
+  phoneKind,
 } from "@/lib/v3/services/personnel-movements-rules"
 
 const COMPANY_ID = "11111111-1111-1111-1111-111111111111"
@@ -95,36 +97,81 @@ describe("classifyMovementFocus", () => {
   })
 })
 
-describe("pickValidEmail", () => {
-  it("devuelve el primer email con estado valid", () => {
-    expect(
-      pickValidEmail({
-        email1: "malo@x.com",
-        email1_status: "invalid",
-        email2: "bueno@x.com",
-        email2_status: "Valid",
-      }),
-    ).toBe("bueno@x.com")
+describe("emailKind", () => {
+  it("reconoce dominios personales conocidos", () => {
+    expect(emailKind("juan@gmail.com")).toBe("personal")
+    expect(emailKind("juan@hotmail.com.ar")).toBe("personal")
+    expect(emailKind("juan@proton.me")).toBe("personal")
   })
 
-  it("sin estado valid devuelve null aunque haya emails", () => {
-    expect(pickValidEmail({ email1: "a@x.com", email1_status: "unknown" })).toBeNull()
-    expect(pickValidEmail({})).toBeNull()
+  it("todo lo demás es corporativo", () => {
+    expect(emailKind("juan@bancoripley.com")).toBe("corporativo")
+    // Un dominio parecido pero distinto NO es personal: la lista es exacta.
+    expect(emailKind("juan@notgmail.com")).toBe("corporativo")
+  })
+})
+
+describe("pickEmail", () => {
+  it("prioriza el corporativo aunque el personal venga primero", () => {
+    expect(
+      pickEmail({
+        email1: "juan@gmail.com",
+        email1_status: "valid",
+        email2: "juan@bancoripley.com",
+        email2_status: "valid",
+      }),
+    ).toEqual({ value: "juan@bancoripley.com", kind: "corporativo" })
+  })
+
+  it("cae al personal cuando no hay corporativo, y lo declara", () => {
+    expect(pickEmail({ email1: "juan@gmail.com", email1_status: "Valid" })).toEqual({
+      value: "juan@gmail.com",
+      kind: "personal",
+    })
+  })
+
+  it("ignora los que no están marcados valid", () => {
+    // El corporativo existe pero no está validado: no se ofrece.
+    expect(
+      pickEmail({
+        email1: "juan@bancoripley.com",
+        email1_status: "invalid",
+        email2: "juan@gmail.com",
+        email2_status: "valid",
+      }),
+    ).toEqual({ value: "juan@gmail.com", kind: "personal" })
+    expect(pickEmail({ email1: "a@x.com", email1_status: "unknown" })).toBeNull()
+    expect(pickEmail({})).toBeNull()
+  })
+})
+
+describe("phoneKind", () => {
+  it("solo los tipos de la empresa son corporativos", () => {
+    expect(phoneKind("company")).toBe("corporativo")
+    expect(phoneKind("Work")).toBe("corporativo")
+    expect(phoneKind("mobile")).toBe("personal")
+    // Sin tipo no se puede afirmar que sea de la empresa.
+    expect(phoneKind(null)).toBe("personal")
   })
 })
 
 describe("pickPhone", () => {
-  it("devuelve el primer teléfono con su tipo", () => {
-    expect(pickPhone({ phone1: " +593 4-371-3035 ", phone1_type: "company" })).toEqual({
-      phone: "+593 4-371-3035",
-      type: "company",
-    })
+  it("prioriza la línea de la empresa aunque venga segunda", () => {
+    expect(
+      pickPhone({
+        phone1: "+54 11 5555",
+        phone1_type: "mobile",
+        phone2: " +593 4-371-3035 ",
+        phone2_type: "company",
+      }),
+    ).toEqual({ value: "+593 4-371-3035", rawType: "company", kind: "corporativo" })
   })
 
-  it("cae al segundo si el primero está vacío y null sin ninguno", () => {
+  it("cae al personal si no hay corporativo, y null sin ninguno", () => {
     expect(pickPhone({ phone1: " ", phone2: "+54 11 5555", phone2_type: null })).toEqual({
-      phone: "+54 11 5555",
-      type: null,
+      value: "+54 11 5555",
+      rawType: null,
+      kind: "personal",
     })
     expect(pickPhone({})).toBeNull()
   })

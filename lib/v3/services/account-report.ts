@@ -58,9 +58,13 @@ export interface AccountReportMethod {
  *    `after()` del alta corre DESPUÉS de responder, así que en el primer render
  *    todavía no hay ni fila de intento).
  *  - `running`: hay una búsqueda en vuelo.
+ *  - `queued`: seguida pero sin ningún intento registrado, y el alta ya no es
+ *    reciente. Son las cuentas anteriores a que el scrape existiera: no hay nada
+ *    corriendo AHORA, pero `/api/cron/v3-scrape-news` las levanta en su próxima
+ *    corrida. Decirlo evita que un "sin noticias" se lea como "no hay nada".
  *  - `idle`: ya se buscó (con o sin resultados) dentro de la ventana.
  */
-export type NewsScrapeStatus = "pending" | "running" | "idle"
+export type NewsScrapeStatus = "pending" | "running" | "queued" | "idle"
 
 export interface AccountReport {
   newsScrapeStatus: NewsScrapeStatus
@@ -150,13 +154,13 @@ export async function getAccountReport(
     }
     // Sin intento registrado. El kick sale del alta y corre en `after()`, así
     // que justo después de marcar el bookmark todavía puede no haber fila.
-    // Pasado ese margen no hay nada en vuelo: dejar el loader girando para
-    // siempre sería mentirle al usuario (le pasaba a toda cuenta seguida antes
-    // de que el scrape existiera).
     const followedAt = followRow.data?.created_at as string | undefined
-    return followedAt && Date.now() - new Date(followedAt).getTime() < NEWS_SCRAPE_STALE_MS
-      ? "pending"
-      : "idle"
+    if (!followedAt) return "idle"
+    if (Date.now() - new Date(followedAt).getTime() < NEWS_SCRAPE_STALE_MS) return "pending"
+    // Alta vieja sin ningún intento: son las cuentas que ya estaban seguidas
+    // antes de que el scrape existiera. No hay nada en vuelo, pero el corredor
+    // las levanta igual, así que no es "idle" — es turno pendiente.
+    return "queued"
   })()
 
   const targetTerms = [...profile.targetTechnologies, ...profile.targetProcesses]

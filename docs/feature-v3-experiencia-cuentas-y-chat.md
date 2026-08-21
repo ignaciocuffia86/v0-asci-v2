@@ -517,6 +517,40 @@ regla —primera pasada para las que nunca se buscaron, refresco para las que
 pasaron los 30 días— y hereda la marca previa al gasto, así que dos corridas que
 se pisaran no pagan la misma cuenta dos veces.
 
+### G.1quater Ajustes de la vista tras el primer uso real (21-ago-2026)
+
+Revisión sobre una cuenta de producción (Banco Ripley Chile). Cinco cambios:
+
+- **Fuera el "Próximo paso".** El strip del funnel saltaba a pestañas; con todo
+  en una sola vista, sus CTAs no tenían a dónde ir. El único paso que quedaba
+  siendo real —seguir la cuenta— ya está en el encabezado. El paso "buscar
+  decisores" vuelve cuando entre el componente de Apollo (ver abajo).
+- **Estado `queued` para las noticias.** Una cuenta seguida de antes del scrape
+  no tiene fila de intento, así que mostraba "sin noticias" como si no hubiera.
+  Ahora dice que está en cola y que el corredor la levanta. NO poletea: 8
+  minutos de polling terminarían diciendo "está demorando" para algo a lo que
+  simplemente no le tocó el turno. El spinner con auto-refresco queda para
+  `pending`/`running`, que sí son búsquedas en vuelo.
+- **Contacto: el corporativo manda.** `pickEmail`/`pickPhone` priorizan el canal
+  de la empresa y caen al personal solo si no hay otro, declarando cuál es con
+  un chip (`corp` / `pers`). Antes se devolvía el primero válido, así que la
+  elección dependía del orden de las columnas. La lista de dominios personales
+  es la misma que la función SQL `is_personal_email`, portada a TS.
+- **Vacantes con señal, tope de 5.** Con más, la sección se comía el informe y
+  noticias/ángulos/riesgos quedaban fuera de pantalla. El resto, a un clic.
+- **Fuera las pestañas del pie.** Hallazgos, señales fit, contexto, icebreakers
+  e historial eran pestañas debajo de todo el informe: nadie bajaba. Ahora son
+  secciones colapsadas de la misma vista, y **las vacías no se renderizan** — de
+  paso desaparecen sus empty states, que eran justamente los que pedían
+  "investigá esta cuenta desde el chat".
+
+**Pendiente, en su propia fase:** un componente de búsqueda por Apollo contra la
+compañía, sugiriendo cargos, entre "Riesgos a mitigar" y "Método y limitaciones",
+para alimentar la base de decisores. Se saca de esta revisión porque no es UI:
+necesita decidir qué endpoint de Apollo, qué cupo consume, de dónde salen los
+cargos sugeridos, cómo se deduplica contra `contacts` y quién paga el
+enriquecimiento.
+
 ### G.1ter Un solo motor de búsqueda: Parallel y Perplexity retirados (21-ago-2026)
 
 Antes de este cambio convivían tres motores de búsqueda web. Ahora queda **uno**:
