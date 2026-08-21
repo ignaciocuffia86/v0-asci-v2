@@ -536,7 +536,16 @@ function buildGuidance(
  * saber dónde está el techo. Se lo decimos con el número concreto de la corrida.
  */
 export function exportAdvice(totalCompanies: number, limit: number): string {
-  const pages = Math.ceil(totalCompanies / limit)
+  // Las paginas se cuentan contra el limite MAXIMO, no contra el que se uso en
+  // esta corrida. Si alguien exploro con limit 3, contra ese limite 59 empresas
+  // dan "20 llamadas" — y el modelo hace 20, cuando la respuesta correcta es
+  // subir el limite a 50 y hacer 2. El numero que se le muestra tiene que ser
+  // el del camino que queremos que tome, no el del que venia tomando.
+  const pages = Math.ceil(totalCompanies / MAX_DETAIL_LIMIT)
+  const raiseLimit =
+    limit < MAX_DETAIL_LIMIT
+      ? ` Para eso subí limit a ${MAX_DETAIL_LIMIT} (venís usando ${limit}).`
+      : ""
 
   if (totalCompanies <= PAGINABLE_CEILING) {
     const cost =
@@ -545,16 +554,16 @@ export function exportAdvice(totalCompanies: number, limit: number): string {
         : `son ${pages} llamadas encadenando cursor y entra: pedí las ${pages}`
     return (
       `Si lo que el usuario quiere es la lista COMPLETA (para exportarla o trabajarla afuera), ` +
-      `${cost} y armá vos el listado. Si tenés herramientas de archivo, escribilo como CSV en vez de ` +
-      `volcarlo en el chat. Si no, mostralo como tabla.`
+      `${cost} y armá vos el listado.${raiseLimit} Si tenés herramientas de archivo, escribilo como ` +
+      `CSV en vez de volcarlo en el chat. Si no, mostralo como tabla.`
     )
   }
 
   return (
-    `NO intentes bajar las ${totalCompanies} paginando: son ${pages} llamadas y no entran en una ` +
-    `conversación. Si el usuario quiere el listado completo para exportar, decíselo con estas palabras: ` +
-    `hoy ASCI no tiene export por MCP, y el camino es acotar la búsqueda (minSignals es lo que más ` +
-    `recorta) hasta un recorte que sí pueda trabajar, o pedir el export por la aplicación web. ` +
-    `No le prometas un archivo ni una descarga.`
+    `NO intentes bajar las ${totalCompanies} paginando: son ${pages} llamadas aun con limit ` +
+    `${MAX_DETAIL_LIMIT} y no entran en una conversación. Si el usuario quiere el listado completo ` +
+    `para exportar, decíselo con estas palabras: hoy ASCI no tiene export por MCP, y el camino es ` +
+    `acotar la búsqueda (minSignals es lo que más recorta) hasta un recorte que sí pueda trabajar, ` +
+    `o pedir el export por la aplicación web. No le prometas un archivo ni una descarga.`
   )
 }
