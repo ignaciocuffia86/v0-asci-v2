@@ -72,15 +72,70 @@ export async function searchCompanies(query: string, limit = 10) {
   }
 }
 
+/**
+ * Dominio a partir del website. `companies` no tiene columna de dominio: guarda
+ * la URL completa, y a veces con path ("https://careers-meli.mercadolibre.com/").
+ */
+export function domainFromWebsite(website: string | null | undefined): string | null {
+  if (!website) return null
+  const stripped = website.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0]
+  return stripped || null
+}
+
+/**
+ * Bloque firmográfico de una fila de `companies`.
+ *
+ * Todas las claves salen SIEMPRE, con null explícito cuando el dato no está.
+ * No es cosmético: `apollo_employees_count` tiene cobertura muy baja (118 de
+ * 11.680 empresas argentinas), y si el campo simplemente faltara, el modelo no
+ * podría distinguir "empresa chica" de "no lo sabemos" — y termina afirmando lo
+ * primero. Ausente y null NO son lo mismo acá.
+ */
+export function firmographicsOf(company: {
+  linkedin_url?: string | null
+  website?: string | null
+  apollo_employees_count?: number | null
+  is_public?: boolean | null
+  ticker?: string | null
+  stock_exchange?: string | null
+}) {
+  return {
+    linkedinUrl: company.linkedin_url ?? null,
+    domain: domainFromWebsite(company.website),
+    employeesApollo: company.apollo_employees_count ?? null,
+    isPublic: company.is_public ?? null,
+    ticker: company.ticker ?? null,
+    stockExchange: company.stock_exchange ?? null,
+  }
+}
+
 export async function getCompanyProfile(companyId: string) {
   const admin = createAdminClient()
   const [{ data: company, error }, signals] = await Promise.all([
-    admin.from("companies").select("id,name,normalized_name,website,country,industry,description").eq("id", companyId).maybeSingle(),
+    admin
+      .from("companies")
+      .select(
+        "id,name,normalized_name,website,country,industry,description,linkedin_url,apollo_employees_count,is_public,ticker,stock_exchange",
+      )
+      .eq("id", companyId)
+      .maybeSingle(),
     getLegacySignals(companyId, 1),
   ])
   if (error) throw new Error(`COMPANY_READ_FAILED:${error.message}`)
   if (!company) throw new Error("COMPANY_NOT_FOUND")
-  return { ...company, signalCoverage: { total: signals.total, latestAt: signals.latestAt, status: signals.status } }
+  const { linkedin_url, apollo_employees_count, is_public, ticker, stock_exchange, ...identity } = company
+  return {
+    ...identity,
+    // A diferencia de search_companies_by_capability, acá va SIEMPRE: es una
+    // sola empresa, así que no hay payload que cuidar, y son los datos que un
+    // vendedor pide inmediatamente después del nombre.
+    firmographics: firmographicsOf(company),
+    signalCoverage: { total: signals.total, latestAt: signals.latestAt, status: signals.status },
+    fieldNotes:
+      apollo_employees_count == null
+        ? "employeesApollo viene en null: NO tenemos la dotación de esta empresa (la cobertura del dato es baja). No la presentes como empresa chica ni la estimes."
+        : null,
+  }
 }
 
 /**
