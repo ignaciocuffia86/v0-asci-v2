@@ -24,6 +24,13 @@ alter table public.contacts
   add column if not exists current_position_started_on date;
 
 -- Para "movimientos de la cuenta en la ventana": filtra por empresa + fecha.
+--
+-- OJO en cargas masivas: al indexar current_position_started_on, un UPDATE de
+-- esa columna deja de ser HOT y obliga a reescribir TODOS los indices de
+-- contacts (incluido el funcional contacts_prevpos_text, caro). Medido en el
+-- backfill: 40 ms/fila con el indice vs 2,9 ms/fila sin el. Si hay que
+-- rellenar la columna en lote, conviene dropear este indice, hacer el update y
+-- recrearlo con CREATE INDEX CONCURRENTLY.
 create index if not exists idx_contacts_company_position_started
   on public.contacts (current_company_id, current_position_started_on desc)
   where current_position_started_on is not null;
