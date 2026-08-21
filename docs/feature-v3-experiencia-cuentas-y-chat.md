@@ -678,6 +678,25 @@ dónde vive la persona.
 Los grupos de cargos y el catálogo de países se movieron a
 `lib/shared/apollo-title-groups.ts` para que no deriven entre las dos pantallas.
 
+**La lista es una grilla, no filas.** Con el nombre a la izquierda y los canales
+pegados al borde derecho, en pantalla ancha quedaban a media pantalla de
+distancia: había que barrer toda la fila para llegar a LinkedIn. Ahora cada
+persona es una tarjeta compacta (foto, nombre, cargo y sus canales al lado), en
+grilla de 1/2/3 columnas. Se muestran 9 —tres filas llenas— y el resto queda a
+un clic, porque una cuenta grande junta decenas.
+
+**La foto sí la trae Apollo**, y no se estaba usando. Medido sobre las 5.074
+guardadas: 3.370 en `media.licdn.com`, 1.696 en `static.licdn.com` y 8 en
+`media-exp1/2.licdn.com`. Los dos primeros hosts ya están en la allowlist de
+`/api/proxy-image` (obligatorio: LinkedIn no permite hotlink, y ese proxy está
+endurecido contra SSRF). Los 8 restantes son de mayo, son URLs firmadas ya
+expiradas, y `contactPhotoUrl` devuelve null para ellos en vez de renderizar un
+hueco roto — caen a las iniciales, igual que un `onError` en runtime.
+
+Dato de contexto para la UI: de esos 5.118 decisores, **73% tiene email y sólo
+2% tiene teléfono**. Por eso la tarjeta lidera con el mail y el chip de teléfono
+aparece sólo cuando existe.
+
 **Sigue pendiente:** el reveal de teléfono está deprecado desde v2 (Apollo
 cobraba 5 créditos y el webhook de entrega nunca llegaba), así que sólo se
 enriquece email y datos básicos.

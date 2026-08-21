@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Linkedin, Loader2, Mail, Phone, Plus, Search, Sparkles, X } from "lucide-react"
+import { contactInitials, contactPhotoUrl } from "@/lib/shared/contact-photo"
 import { toast } from "sonner"
 import {
   APOLLO_COUNTRIES,
@@ -29,31 +30,111 @@ import { searchDecisionMakersAction, type DecisionMaker } from "@/app/actions/v3
 // selección razonable en vez de una lista vacía.
 // ═══════════════════════════════════════════════════════════
 
-/** Chip de canal, con el mismo criterio que los movimientos de personal. */
-function Canal({
-  href,
-  icon,
-  label,
-  destacado,
-}: {
-  href: string
-  icon: React.ReactNode
-  label: string
-  destacado: boolean
-}) {
+/**
+ * Decisores visibles sin desplegar. Son 9 porque la grilla llega a 3 columnas:
+ * tres filas llenas se leen de un vistazo y no empujan "Método y limitaciones"
+ * fuera de pantalla. Una cuenta grande puede juntar decenas.
+ */
+const MAX_VISIBLES = 9
+
+/**
+ * Tarjeta de un decisor.
+ *
+ * Es una grilla y no una lista de ancho completo porque con el nombre a la
+ * izquierda y los canales pegados al borde derecho, en pantalla ancha quedaban
+ * a 20 cm de distancia: había que barrer toda la fila para llegar al botón de
+ * LinkedIn. Acá cada persona es una unidad compacta con sus acciones al lado.
+ *
+ * La foto la trae Apollo desde LinkedIn en el 99% de los casos, pero hay que
+ * pasarla por el proxy; si el host no está permitido o la imagen falla, quedan
+ * las iniciales.
+ */
+function DecisionMakerCard({ c }: { c: DecisionMaker }) {
+  const [fotoRota, setFotoRota] = useState(false)
+  const foto = fotoRota ? null : contactPhotoUrl(c.photoUrl)
+  const linkedin = c.linkedinUrl
+    ? c.linkedinUrl.startsWith("http")
+      ? c.linkedinUrl
+      : `https://${c.linkedinUrl}`
+    : null
+
   return (
-    <a
-      href={href}
-      title={label}
-      className={`inline-flex max-w-[16rem] items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] hover:brightness-110 ${
-        destacado
-          ? "border-primary/40 bg-primary/10 text-foreground"
-          : "border-muted-foreground/25 bg-muted text-muted-foreground"
-      }`}
-    >
-      {icon}
-      <span className="truncate">{label}</span>
-    </a>
+    <li className="flex min-w-0 items-start gap-3 rounded-lg border p-3">
+      <span className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted text-xs font-semibold text-muted-foreground">
+        {foto ? (
+          // Va por /api/proxy-image, que ya acota tamaño y valida el host;
+          // next/image agregaría una segunda capa de optimización sobre una
+          // miniatura de 40px, sin beneficio.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={foto}
+            alt=""
+            className="size-full object-cover"
+            loading="lazy"
+            onError={() => setFotoRota(true)}
+          />
+        ) : (
+          contactInitials(c.fullName)
+        )}
+      </span>
+
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate text-sm font-medium" title={c.fullName}>
+            {c.fullName}
+          </span>
+          {c.seniority && (
+            <Badge variant="outline" className="shrink-0 text-[10px] capitalize">
+              {c.seniority.replaceAll("_", " ")}
+            </Badge>
+          )}
+        </div>
+        <span className="truncate text-xs text-muted-foreground" title={c.title ?? undefined}>
+          {c.title ?? "Sin cargo"}
+        </span>
+
+        <div className="mt-0.5 flex flex-wrap items-center gap-1">
+          {c.email && (
+            <a
+              href={`mailto:${c.email}`}
+              title={c.email}
+              className={`inline-flex min-w-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] hover:brightness-110 ${
+                // Apollo marca el estado del email: uno sin verificar rebota, y
+                // conviene saberlo ANTES de escribir.
+                c.emailStatus === "verified"
+                  ? "border-primary/40 bg-primary/10 text-foreground"
+                  : "border-muted-foreground/25 bg-muted text-muted-foreground"
+              }`}
+            >
+              <Mail className="size-3 shrink-0" />
+              <span className="truncate">{c.email}</span>
+            </a>
+          )}
+          {c.phone && (
+            <a
+              href={`tel:${c.phone.replace(/[^\d+]/g, "")}`}
+              title={c.phone}
+              className="inline-flex items-center gap-1 rounded-full border border-muted-foreground/25 bg-muted px-2 py-0.5 text-[11px] text-muted-foreground hover:brightness-110"
+            >
+              <Phone className="size-3 shrink-0" />
+              <span className="truncate">{c.phone}</span>
+            </a>
+          )}
+          {linkedin && (
+            <a
+              href={linkedin}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`Ver LinkedIn de ${c.fullName}`}
+              className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              <Linkedin className="size-3" />
+              LinkedIn
+            </a>
+          )}
+        </div>
+      </div>
+    </li>
   )
 }
 
@@ -70,6 +151,7 @@ export function DecisionMakersSection({
   initialContacts: DecisionMaker[]
 }) {
   const [contacts, setContacts] = useState(initialContacts)
+  const [verTodos, setVerTodos] = useState(false)
   const [isPending, startTransition] = useTransition()
   const [abierto, setAbierto] = useState(initialContacts.length === 0)
 
@@ -84,6 +166,9 @@ export function DecisionMakersSection({
   const [avanzadas, setAvanzadas] = useState(false)
   const [titulosSimilares, setTitulosSimilares] = useState(false)
   const [ubicacionDeLaEmpresa, setUbicacionDeLaEmpresa] = useState(false)
+
+  const visibles = verTodos ? contacts : contacts.slice(0, MAX_VISIBLES)
+  const ocultos = contacts.length - MAX_VISIBLES
 
   const toggleTitulo = (t: string) =>
     setTitulos((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]))
@@ -142,57 +227,25 @@ export function DecisionMakersSection({
               Todavía no hay decisores cargados para esta cuenta. Buscalos por cargo y quedan guardados.
             </p>
           ) : (
-            <ul className="divide-y">
-              {contacts.map((c) => (
-                <li key={c.id} className="flex flex-wrap items-start justify-between gap-3 py-2.5">
-                  <div className="flex min-w-0 flex-col gap-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-medium">{c.fullName}</span>
-                      {c.seniority && (
-                        <Badge variant="outline" className="text-[10px] capitalize">
-                          {c.seniority.replaceAll("_", " ")}
-                        </Badge>
-                      )}
-                    </div>
-                    <span className="text-xs text-muted-foreground">
-                      {[c.title, [c.city, c.country].filter(Boolean).join(", ")].filter(Boolean).join(" · ") ||
-                        "Sin cargo"}
-                    </span>
-                  </div>
-                  <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-                    {c.email && (
-                      <Canal
-                        href={`mailto:${c.email}`}
-                        icon={<Mail className="size-3.5" />}
-                        label={c.email}
-                        // Apollo marca el estado del email: uno sin verificar
-                        // rebota, y conviene saberlo antes de escribir.
-                        destacado={c.emailStatus === "verified"}
-                      />
-                    )}
-                    {c.phone && (
-                      <Canal
-                        href={`tel:${c.phone.replace(/[^\d+]/g, "")}`}
-                        icon={<Phone className="size-3.5" />}
-                        label={c.phone}
-                        destacado={false}
-                      />
-                    )}
-                    {c.linkedinUrl && (
-                      <a
-                        href={c.linkedinUrl.startsWith("http") ? c.linkedinUrl : `https://${c.linkedinUrl}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        aria-label={`Ver LinkedIn de ${c.fullName}`}
-                        className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-                      >
-                        <Linkedin className="size-4" />
-                      </a>
-                    )}
-                  </div>
-                </li>
-              ))}
-            </ul>
+            <>
+              <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                {visibles.map((c) => (
+                  <DecisionMakerCard key={c.id} c={c} />
+                ))}
+              </ul>
+              {ocultos > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setVerTodos((v) => !v)}
+                  className="self-start text-xs font-medium text-primary hover:underline"
+                  aria-expanded={verTodos}
+                >
+                  {verTodos
+                    ? `Ver solo los primeros ${MAX_VISIBLES}`
+                    : `Ver ${ocultos} decisor${ocultos === 1 ? "" : "es"} más`}
+                </button>
+              )}
+            </>
           )}
 
           {!abierto ? (
