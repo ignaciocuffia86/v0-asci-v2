@@ -725,7 +725,7 @@ disclaimers fijos (emails solo con estado `valid`, teléfonos sin validar, foto 
 | **6. Chat de búsqueda** | A completa (refactor de tools a lib compartida, searchByCapability, SearchResultsCard con follow directo, resto de paridad) | Fase 4 (para tools que gastan) |
 | **7. ETL: fechas de puesto + movimientos** | F: tomar `current_position_started_on` y fechas del historial en el ETL de contactos; re-carga de exports para rearmar histórico; derivación ingreso/rotación + clasificación por foco | Ninguna |
 | **8. Noticias on-demand** | G completa: flujo liviano portado de v2, `v3.account_news_readings`, clasificación híbrida, regeneración lazy y kick con marca previa al gasto (alcance en G.8) | Ninguna — diseño cerrado |
-| **9. Bookmark = radiografía** | H completa: informe vertical con índice, semáforo por evidencia accionable, scorecard operativo, vacantes con snippet, `v3.account_reports` con textos generados al refrescar | Fases 7 y 8 ✅ — diseño cerrado |
+| ~~**9. Bookmark = radiografía**~~ ✅ | H completa: informe vertical con índice, semáforo por evidencia accionable, scorecard operativo, vacantes con snippet, `v3.account_reports` con textos generados al refrescar — implementada ago-2026 | — |
 | **10. Export + digest** | F: export .docx/PDF de la radiografía + envío en el digest mensual al refrescar vacantes/noticias | Fase 9 |
 
 Las fases 1-3 ya están en producción; 4-6 son el funnel completo en la app; 7-10 convierten el bookmark en la radiografía self-service (norte F).

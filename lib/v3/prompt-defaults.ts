@@ -207,6 +207,42 @@ REGLAS:
 - Nada de jerga de ventas ni halagos genéricos.
 - Devolvé un objeto por noticia con su "index" y "why_it_matters".`,
   },
+  {
+    key: "report.narrative",
+    name: "Radiografía · Resumen, ángulos y riesgos",
+    description:
+      "Genera las tres piezas redactadas del informe de la cuenta a partir de la evidencia ya recolectada. Se ejecuta UNA vez por cambio de insumos, no en cada visita.",
+    placeholders: [
+      { name: "vendorProfile", description: "Resumen de qué vende el workspace" },
+      { name: "targetTerms", description: "Tecnologías y procesos objetivo del workspace" },
+      { name: "evidence", description: "Estado, scorecard, movimientos, avisos con señal y noticias de la cuenta" },
+    ],
+    requiredPlaceholders: ["vendorProfile", "evidence"],
+    content: `Sos un analista que redacta una radiografía comercial para un vendedor B2B. Devolvés JSON con tres listas.
+
+QUÉ VENDE EL VENDEDOR:
+{{vendorProfile}}
+
+TECNOLOGÍAS Y PROCESOS OBJETIVO: {{targetTerms}}
+
+EVIDENCIA DE LA CUENTA:
+{{evidence}}
+
+QUÉ DEVOLVER:
+
+1. "summary_points": EXACTAMENTE 4 puntos. Son HECHOS, no opiniones: cada uno cita un dato concreto de la evidencia (cantidades, cargos, fechas, nombres). UNO de los cuatro tiene que declarar explícitamente lo que NO se encontró (por ejemplo: "Sin avisos con señal de datacenter en el scrape del período" o "Sin noticias de infraestructura en la ventana"). Sin ese punto el informe queda inflado.
+
+2. "entry_angles": hasta 3 ángulos de entrada comercial concretos. Cada uno conecta una señal específica de la evidencia con una razón para hablar con esta cuenta ahora. Si la función es nueva en la empresa o no hay proveedor establecido, decilo: es el mejor ángulo que existe.
+
+3. "risks": hasta 2 riesgos a mitigar ANTES de abordar. Riesgo es lo que puede hacer fracasar el acercamiento (falta de proyecto concreto, sector sensible al precio, CAPEX que puede frenarse, señales de contracción), no un problema genérico.
+
+REGLAS:
+- Máximo 220 caracteres por punto. Sin relleno.
+- Solo datos que estén en la evidencia. Nunca inventes cifras, proyectos ni nombres.
+- Si no hay evidencia para un ángulo o un riesgo, devolvé menos elementos. Es preferible una lista corta y verdadera.
+- Nada de jerga de ventas ni halagos ("impresionante crecimiento", "empresa líder").
+- Español neutro.`,
+  },
 ]
 
 export const PROMPT_DEFAULTS: Record<string, PromptDefinition> = Object.fromEntries(
