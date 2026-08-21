@@ -561,10 +561,18 @@ sospechosas dan Index Scan en 0,13 ms (movimientos sobre 538k contactos) y
 | # | Causa | Estado |
 |---|---|---|
 | 1 | **No había ningún `loading.tsx` en `/v3`** (v2 sí los tenía). Sin boundary, el App Router espera la respuesta COMPLETA antes de cambiar de página: el navegador se queda en la pantalla anterior sin feedback. La página no tardaba en pintar — no empezaba a pintar. | ✅ resuelto |
-| 2 | La base está en `sa-east-1` (São Paulo) y `vercel.json` no fija `regions`, así que las funciones corren en el default de Vercel. Cada round-trip paga la latencia física. | ⏳ lo revisa el equipo en el dashboard |
+| 2 | La base está en `sa-east-1` (São Paulo) y `vercel.json` no fijaba `regions`, así que las funciones corrían en el default de Vercel. Cada round-trip pagaba la latencia física. | ✅ resuelto: `"regions": ["gru1"]` |
 | 3 | **Cuatro autenticaciones por carga**: `getOnboardingStatus()` y los tres server actions que la página resuelve en paralelo llamaban cada uno a `auth.getUser()` (round-trip real a la API de Auth) + resolución de workspace. 8 idas y vueltas para contestar "¿quién sos?", y el primer par bloquea antes del `Promise.all`. | ✅ resuelto |
 | 4 | El informe se armaba entero antes de mandar un byte: ~6 etapas de queries y, en la primera visita a una cuenta, una llamada de IA para la narrativa. | ✅ resuelto |
 | 5 | Volver al listado corre `summarizeCachedSignals` para hasta 12 empresas × 4 queries = ~48 round-trips. | ⏳ pendiente |
+
+**Cómo se resolvió 2.** Una línea en `vercel.json`: `"regions": ["gru1"]`
+(São Paulo). Se hace por archivo y no por el dashboard a propósito: `vercel.json`
+**tiene precedencia** sobre la configuración de la UI, queda versionado y
+revisable en el repo, y no depende de que alguien encuentre el setting. Un solo
+valor es válido en cualquier plan (Hobby permite exactamente una región; Pro,
+cinco). Requiere un deploy nuevo para tomar efecto — no se aplica a los
+deployments existentes.
 
 **Cómo se resolvió 3.** `cache()` de React memoiza por request (no entre
 requests: no hay riesgo de servir la identidad de otro). Se envolvieron los tres
