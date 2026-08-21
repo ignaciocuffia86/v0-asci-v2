@@ -175,6 +175,38 @@ Hallazgos principales:
 
 Sé concreto y accionable, sin relleno. NO repitas los números de los sub-scores: ya se muestran en el scorecard; explicá el PORQUÉ (qué evidencia empuja o frena el score). Máximo 600 caracteres. Solo el texto del rationale.`,
   },
+  {
+    key: "news.reading",
+    name: "Noticias · Por qué le importa al vendor",
+    description:
+      "Redacta, para cada noticia ya clasificada, por qué le importa a ESTE workspace. El tipo de relevancia y el score los decide el matcher determinístico: la IA solo redacta.",
+    placeholders: [
+      { name: "vendorProfile", description: "Resumen de qué vende el workspace (propuesta de valor)" },
+      { name: "targetTerms", description: "Tecnologías y procesos objetivo del workspace" },
+      { name: "newsList", description: "Noticias numeradas, con su tipo de relevancia y los términos que matchearon" },
+    ],
+    requiredPlaceholders: ["vendorProfile", "newsList"],
+    content: `Para cada noticia de la lista, escribí en español UNA sola línea (máximo 2 oraciones, 300 caracteres) explicando por qué le importa a este vendor.
+
+QUÉ VENDE EL VENDOR:
+{{vendorProfile}}
+
+TECNOLOGÍAS Y PROCESOS OBJETIVO: {{targetTerms}}
+
+NOTICIAS (el número es el "index" que tenés que devolver):
+{{newsList}}
+
+CÓMO ESCRIBIR CADA UNA, SEGÚN SU TIPO:
+- [propuesta]: la noticia toca directamente lo que vende. Conectá el hecho concreto con la oportunidad ("la expansión por adquisición anticipa infraestructura eléctrica y de red en ubicaciones nuevas").
+- [negocio]: la noticia habla de la SITUACIÓN de la cuenta, no del producto. Explicá qué implica su capacidad o su momento ("supera los US$1.000M de ingresos: tiene recursos, pero todavía sin proyecto concreto que atacar").
+
+REGLAS:
+- Arrancá por el dato de la noticia, no por el vendor.
+- Solo usá hechos que estén en la noticia. Nunca inventes cifras, fechas ni proyectos.
+- Si el hecho no habilita ninguna acción todavía, decilo ("sin proyecto concreto que atacar") en vez de exagerar.
+- Nada de jerga de ventas ni halagos genéricos.
+- Devolvé un objeto por noticia con su "index" y "why_it_matters".`,
+  },
 ]
 
 export const PROMPT_DEFAULTS: Record<string, PromptDefinition> = Object.fromEntries(

@@ -434,15 +434,164 @@ puede enviar/exportar el informe.
 
 1. Ventanas por fuente (personal 6 meses, vacantes 30 días, noticias 4 meses en
    el documento manual): ¿fijas o parametrizables por plan?
-2. Umbrales del semáforo 🟢🟡🔴: ¿reglas determinísticas sobre la tabla de
-   señales (propuesta: 🟢 = avisos con señal O noticia con proyecto concreto;
-   🟡 = movimientos/perfiles sin proyecto; 🔴 = nada en ventana)?
-3. "Por qué le importa al vendor" por noticia: ¿se genera al ingerir la noticia
-   (costo por research) o al armar/refrescar la radiografía (costo por vista)?
-4. La búsqueda de noticias on-demand, ¿reusa el bundle news del research (Opus,
-   caro) o un flujo liviano solo-noticias?
+2. Umbrales exactos del semáforo 🟢🟡🔴 (el criterio de qué pesa ya está
+   resuelto en G.5; falta calibrar los cortes con cuentas reales).
+3. ~~"Por qué le importa al vendor" por noticia~~ → resuelto en G: lectura por
+   workspace, generada al refrescar la radiografía, no al ingerir.
+4. ~~¿bundle del research o flujo liviano?~~ → resuelto en G.1: flujo liviano.
 5. Envío por correo del informe en el digest: ¿adjunto (PDF/docx) o el digest
    linkea a la vista?
+
+---
+
+## G. Noticias: scrape liviano + lectura por workspace (diseño, 21-ago-2026)
+
+### G.1 Bundle de research vs. flujo liviano (costos medidos en `v3.ai_usage_log`)
+
+| | Research completo | Flujo liviano de noticias |
+|---|---|---|
+| Qué hace | 3 bundles (tech-stack, news-business, expansion-timing); cada uno una búsqueda web server-side con prompt abierto (~39k tokens de input) | 1 búsqueda acotada a noticias + 1 estructurador |
+| Costo real medido | $0,178 por bundle × 3 + estructuración + scoring ≈ **$0,52-0,55 por cuenta** | ≈ **$0,17** (la búsqueda; el estructurador cuesta $0,00035) |
+| Efectos | Reescribe `radar_findings`, scorecard y brief | Escribe solo `company_news` |
+| Cupo | Consume research del plan + cooldown de 30 días | No consume cupo de research |
+
+**Decisión: flujo liviano.** Es 3x más barato, no tiene efectos colaterales sobre
+la inteligencia de la cuenta y **ya existe probado en v2**
+(`app/api/research/news/route.ts`: búsqueda + estructurador, con verificación de
+URLs vivas, dedup y descarte de items sin fecha). La fase 8 lo porta a v3 como
+servicio compartido en vez de reimplementarlo.
+
+### G.2 Principio: el hecho es global, la lectura es por workspace
+
+La misma noticia ("proyecto de innovación con nuevo datacenter") vale oro para un
+workspace que vende datacenters y es apenas contexto para uno de staffing. De ahí
+la separación en tres capas:
+
+| Capa | Alcance | Dónde vive | Costo |
+|---|---|---|---|
+| **L0 · Scrape** | Global (compartido entre workspaces) | `public.company_news` | ~$0,17 por cuenta cada 30 días |
+| **L1 · Clasificación del hecho** | Global | `company_news.direction` / `category` | ~$0,0004 (estructurador) |
+| **L2 · Lectura para el vendor** | Por workspace | `v3.account_news_readings` (nueva) | ~$0,0004 por cuenta (batch de todas sus noticias) |
+
+Dos workspaces que siguen YPF pagan **un solo** scrape — el mismo patrón que ya
+usan las vacantes. Lo caro se comparte; lo específico es casi gratis.
+
+Estado hoy: `company_news` tiene 1.141 noticias de 169 empresas, pero **solo 4
+tienen `direction`**: la capa L1 existe en el esquema y está sin usar.
+
+### G.3 Modelo de datos
+
+```sql
+-- L2: una lectura por (workspace, noticia). RLS deshabilitada como el resto de
+-- v3: se accede con service-role + filtro por workspace_id en TS.
+create table v3.account_news_readings (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references v3.workspaces(id) on delete cascade,
+  news_id uuid not null references public.company_news(id) on delete cascade,
+  company_id uuid not null,
+  relevance_type text not null check (relevance_type in ('propuesta','negocio','ruido')),
+  relevance_score int not null default 0,      -- 0-100, determinístico (G.5)
+  why_it_matters text,                          -- 1-2 oraciones, máx 300 chars
+  matched_terms text[] not null default '{}',   -- trazabilidad del match
+  profile_version text,                         -- para la regeneración lazy (G.6)
+  created_at timestamptz not null default now(),
+  unique (workspace_id, news_id)
+);
+```
+
+`profile_version` es el hash que ya devuelve `getWorkspaceFitProfile()`: permite
+detectar que la propuesta de valor cambió sin comparar textos.
+
+### G.4 Clasificación híbrida: determinístico primero, IA después
+
+1. **Match determinístico** (gratis, trazable): el texto de la noticia
+   (título + resumen) pasa por el MISMO matcher que fit y vacantes contra los
+   `target_technologies`/`target_processes` del workspace y el diccionario. Si
+   matchea, la noticia es candidata a `propuesta` y quedan registrados los
+   términos que matchearon.
+2. **Redacción en batch** (IA barata): UNA llamada al estructurador con todas
+   las noticias de la cuenta que aún no tienen lectura, que devuelve por noticia
+   el `why_it_matters` citando el dato concreto y confirma el tipo. Prompt nuevo
+   `news.reading`, editable en `/v3/admin/prompts` como todos los demás.
+
+No se paga IA para clasificar (lo hace el matcher) y el usuario ve **por qué**
+una noticia está destacada, no solo que lo está.
+
+### G.5 Tipos de relevancia, score y semáforo
+
+| Tipo | Definición | Tratamiento en la UI |
+|---|---|---|
+| `propuesta` | Toca directo lo que vende el workspace (proyecto de datacenter ↔ vendedor de datacenters) | **Destacada**, primera en el radar |
+| `negocio` | Habla de la situación/capacidad de la cuenta: expansión → tiene recursos; contracción → CAPEX frenado | Contexto, sin destaque |
+| `ruido` | No aporta a este workspace | Colapsada en "otras noticias" — no se borra |
+
+Score determinístico para ordenar y para alimentar el semáforo:
+
+```
+score = base(direction) × recencia × multiplicador
+  base:      expansión +25 · implementación tech +15 · cambio ejecutivo +10
+             noticia general +8 · contracción −22
+  recencia:  1.0 (≤30 días) · 0.7 (≤60) · 0.4 (≤90) · 0.2 (≤120)
+  multiplicador: ×2 si relevance_type = 'propuesta', ×1 si 'negocio', ×0 si 'ruido'
+```
+
+**Semáforo (decisión 21-ago): propuesta y negocio suman, con peso distinto.** Una
+cuenta en expansión sin proyecto puntual PUEDE llegar a 🟢 — es coherente con el
+caso del workspace de staffing, para el que "se expande" ya es la señal. La
+contracción reciente resta, no fuerza 🔴 por sí sola. Los cortes exactos se
+calibran con cuentas reales (F.4.2).
+
+### G.6 Disparo y frescura
+
+- **On-demand al abrir/guardar el bookmark**, con la regla de las vacantes:
+  si no hay noticias buscadas en los últimos **30 días** para esa cuenta, se
+  dispara el scrape en background (`after()`), alineado con el ciclo del digest
+  mensual. Decisión 21-ago: ventana fija de 30 días, no parametrizable por plan.
+- **Anti-re-ejecución**: se marca el intento ANTES de gastar (misma lección del
+  corredor de vacantes: sin la marca previa, una búsqueda que no encuentra nada
+  se re-dispara en cada visita).
+- **Regeneración lazy de las lecturas** (decisión 21-ago): al abrir el bookmark,
+  si `profile_version` de la lectura ≠ el actual del workspace, se regenera solo
+  esa cuenta (~$0,0004). El scrape NO se repite: el hecho no cambió, cambió la
+  propuesta.
+
+### G.7 Qué ve el usuario
+
+```
+┌─ Radar de noticias (últimos 4 meses) ───────────────────────────────┐
+│ ⭐ CRECIMIENTO · destacada para tu propuesta        [AWS] [datacenter]│
+│    "Omarsa prepara adquisiciones en Centroamérica y Europa"          │
+│    Por qué te importa: la expansión por adquisición anticipa         │
+│    infraestructura eléctrica y de red en ubicaciones nuevas.         │
+│    Undercurrent News · 23-jun-2026 · [ver fuente]                    │
+│                                                                      │
+│    CONTEXTO DE NEGOCIO                                               │
+│    "Supera los US$1.000M de ingresos en 2026" — tiene recursos.      │
+│                                                                      │
+│    ▸ 3 noticias sin relevancia para tu propuesta                     │
+│                                                                      │
+│    Nota de cobertura: sin evidencia pública de datacenter, obra      │
+│    nueva ni CAPEX en TI en la ventana.                               │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+La **nota de cobertura** (qué se buscó y NO apareció) se arma con los términos de
+la propuesta que no matchearon ninguna noticia: es la diferencia entre "no hay
+nada" y "no buscamos".
+
+### G.8 Alcance de la fase 8
+
+1. Servicio compartido `lib/v3/services/news-scrape-runner.ts` (port del flujo
+   liviano de v2) + elegibilidad con marca previa al gasto.
+2. Migración `v3.account_news_readings` + poblado de `company_news.direction`
+   para las 1.141 noticias existentes (L1, batch barato).
+3. `lib/v3/services/news-readings.ts`: matcher determinístico + redacción batch
+   + regeneración lazy por `profile_version`.
+4. Kick on-demand en la vista de cuenta y en `followAccountAction`.
+5. Reglas puras (score, tipo, recencia) con tests, como en la fase 7.
+
+La UI del radar (G.7) va con la fase 9, cuando el bookmark se convierte en la
+radiografía completa.
 
 ---
 
@@ -457,7 +606,7 @@ puede enviar/exportar el informe.
 | **5. Personas en la cuenta** | D.2 + D.3 (funnel de 4 pasos, retiro de ROLE_RULES y de searchAccountDecisionMakers) | Fase 4 |
 | **6. Chat de búsqueda** | A completa (refactor de tools a lib compartida, searchByCapability, SearchResultsCard con follow directo, resto de paridad) | Fase 4 (para tools que gastan) |
 | **7. ETL: fechas de puesto + movimientos** | F: tomar `current_position_started_on` y fechas del historial en el ETL de contactos; re-carga de exports para rearmar histórico; derivación ingreso/rotación + clasificación por foco | Ninguna |
-| **8. Noticias on-demand** | F: kick de búsqueda de noticias al guardar/abrir bookmark (como el de vacantes), "por qué le importa al vendor" por noticia, nota de cobertura | Decidir F.4.3-4 |
+| **8. Noticias on-demand** | G completa: flujo liviano portado de v2, `v3.account_news_readings`, clasificación híbrida, regeneración lazy y kick con marca previa al gasto (alcance en G.8) | Ninguna — diseño cerrado |
 | **9. Bookmark = radiografía** | F: scorecard operativo (fuente × volumen × lectura) + semáforo reemplazan al 0-100 (absorbe la ex-fase 3b/E.3); vacantes filtradas por propuesta con snippet; categorías de foco editables; ángulos/riesgos; método autogenerado | Fases 7 y 8 |
 | **10. Export + digest** | F: export .docx/PDF de la radiografía + envío en el digest mensual al refrescar vacantes/noticias | Fase 9 |
 
@@ -480,6 +629,11 @@ Las fases 1-3 ya están en producción; 4-6 son el funnel completo en la app; 7-
   incremental on-demand, ETL con fechas de puesto, categorías de foco derivadas +
   editables, y el scorecard operativo reemplaza al 0-100 en la vista (detalle en F.3).
   La ex-fase 3b (Scorecard v2 / E.3) queda absorbida por la fase 9.
+- **Noticias: scrape global liviano + lectura por workspace** (21-ago-2026): el hecho se
+  paga una vez y se comparte; la interpretación ("por qué le importa") es por workspace y
+  cuesta ~$0,0004. Flujo liviano (3x más barato que el bundle del research), ventana fija
+  de 30 días, regeneración lazy al cambiar la propuesta de valor, y semáforo alimentado
+  por relevancia de propuesta Y de negocio con pesos distintos. Detalle en G.
 
 ## Preguntas abiertas
 

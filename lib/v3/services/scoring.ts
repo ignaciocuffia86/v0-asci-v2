@@ -8,6 +8,7 @@ import { renderPrompt } from "@/lib/v3/prompts"
 import { getCanonicalContacts } from "./contact-provider"
 import { getWorkspaceFitProfile } from "./workspace-fit-profile"
 import { toEvidenceLevel, EVIDENCE_WEIGHTS, toSignalDirection, type SignalDirection } from "./evidence-level"
+import { NEWS_EVENT_RULES } from "./news-rules"
 
 // ═══════════════════════════════════════════════════════════
 // Scorecard de cuenta (0-100) por workspace:
@@ -38,45 +39,11 @@ export interface TimingEvent {
   direction: SignalDirection
 }
 
-const TIMING_RULES: { type: string; weight: number; direction: SignalDirection; patterns: RegExp }[] = [
-  // ── Contracción: va PRIMERO porque comparte vocabulario con expansión ──
-  // "venta de la unidad de negocio" o "cierre de planta" matchean los patrones de
-  // expansión ("planta", "unidad"). Al evaluarse antes, la contracción gana el
-  // desempate y no se cuenta como una buena noticia.
-  {
-    type: "Contracción / desinversión",
-    weight: 22,
-    direction: "contraccion",
-    // Cubre sustantivo Y verbo. Un test sobre titulares reales mostró que
-    // "vende la unidad de negocio" NO matcheaba, porque solo estaba "venta de":
-    // los titulares usan el verbo más seguido que el sustantivo, así que una
-    // desinversión se estaba contando como noticia neutra.
-    patterns:
-      /cierre de (planta|f[aá]brica|operaciones)|cierra su|despido|desvincula|reestructuraci[oó]n|(venta|vende|vendi[oó]|desprende)\s+(de\s+)?(la\s+|su\s+)?(unidad|divisi[oó]n|negocio|filial|participaci[oó]n)|desinversi[oó]n|se retira de|salida de(l)? (pa[ií]s|mercado)|abandona el mercado|default|concurso de acreedores|quiebra|suspensi[oó]n de pagos|aumento de (la )?deuda|endeudamiento|p[eé]rdidas|ca[ií]da de (ventas|ingresos)|recorte/i,
-  },
-  {
-    type: "Expansión / inversión",
-    weight: 25,
-    direction: "expansion",
-    // Mismo criterio que contracción: "adquiere competidor" no matcheaba porque
-    // solo estaba el sustantivo "adquisición". Se agregan las formas verbales
-    // frecuentes en titulares (adquiere, invierte, inaugura, se fusiona).
-    patterns:
-      /expansi[oó]n|inversi[oó]n|invierte|planta|f[aá]brica|apertura|inaugura|nuevo mercado|adquisici[oó]n|adquiere|adquiri[oó]|compra (la )?(empresa|competidor|participaci[oó]n)|fusi[oó]n|se fusiona|m&a|centro de distribuci[oó]n|licitaci[oó]n|rfp/i,
-  },
-  {
-    type: "Cambio ejecutivo",
-    weight: 20,
-    direction: "neutro",
-    patterns: /\bcio\b|\bcto\b|\bcdo\b|\bcfo\b|\bceo\b|nombramiento|nuevo director|nueva director|gerente de|ejecutiv/i,
-  },
-  {
-    type: "Implementación tecnológica",
-    weight: 15,
-    direction: "expansion",
-    patterns: /implementaci[oó]n|migraci[oó]n|moderniza|transformaci[oó]n digital|erp|crm|sap|oracle|cloud|nube/i,
-  },
-]
+// El vocabulario de eventos (expansión, contracción, cambio ejecutivo,
+// implementación) vive en `news-rules.ts` desde la fase 8: lo comparten el
+// timing del scorecard y el radar de noticias. Tenerlo acá obligaba a
+// duplicarlo y las dos copias iban a derivar.
+const TIMING_RULES = NEWS_EVENT_RULES
 
 /**
  * Clasifica un evento de timing. `storedDirection` es la dirección ya persistida

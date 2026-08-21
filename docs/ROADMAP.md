@@ -26,7 +26,7 @@ Seccion propia para v3; el resto del documento es historico de v2/ASCI general.
 
 | # | Iniciativa | Prioridad | Documento |
 |---|-----------|-----------|-----------|
-| V3-F | **Radiografia comercial self-service**: el bookmark genera solo el informe que hoy se arma a mano (movimientos de personal con fecha de ingreso, scorecard operativo con semaforo, vacantes con snippet segun propuesta, radar de noticias con lectura por vendor, angulos/riesgos, metodo autogenerado, export + digest). Fases 7-10 | Alta (norte del producto) | [Diseño, seccion F](./feature-v3-experiencia-cuentas-y-chat.md) |
+| V3-F | **Radiografia comercial self-service**: el bookmark genera solo el informe que hoy se arma a mano (movimientos de personal con fecha de ingreso, scorecard operativo con semaforo, vacantes con snippet segun propuesta, radar de noticias con lectura por vendor, angulos/riesgos, metodo autogenerado, export + digest). Fases 7-10; fase 7 (fechas de puesto + movimientos) implementada ago-2026, fase 8 (noticias) con diseño cerrado en la seccion G | Alta (norte del producto) | [Diseño, seccion F](./feature-v3-experiencia-cuentas-y-chat.md) |
 | V3-A | Chat de ingreso: busqueda en lenguaje natural + listado accionable con follow, paridad de tools con el MCP | Alta | [Diseño](./feature-v3-experiencia-cuentas-y-chat.md) |
 | V3-B | Rediseño de la vista de cuenta: datos accionables arriba, prosa IA acotada y colapsada — fases 1-3 hechas; el resto converge en V3-F | Alta | [Diseño](./feature-v3-experiencia-cuentas-y-chat.md) |
 | V3-C | Vacantes pre-digeridas con tags del diccionario — hecho; queda el filtro por propuesta de valor con snippet (parte de V3-F) | Hecha (base) | [Diseño](./feature-v3-experiencia-cuentas-y-chat.md) |
