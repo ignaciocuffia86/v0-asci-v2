@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation"
 import { getOnboardingStatus } from "@/app/actions/v3/workspace"
 import { getAccountDetail, getAccountReportData, getAccountSignals } from "@/app/actions/v3/accounts"
+import { listDecisionMakers } from "@/app/actions/v3/apollo"
 import { AccountDetailView } from "./_components/account-detail-view"
 
 export const metadata = {
@@ -34,14 +35,22 @@ export default async function V3AccountDetailPage({
     return null
   })
 
-  const [detail, signals] = await Promise.all([
+  const [detail, signals, decisionMakers] = await Promise.all([
     getAccountDetail(companyId),
     getAccountSignals(companyId).catch(() => null),
+    listDecisionMakers(companyId).catch(() => []),
   ])
   if (!detail.company) notFound()
 
   // Abrir el bookmark NO dispara búsquedas: la cara (los dos bundles de
   // noticias, ~US$0,20) sale una sola vez, al marcar la cuenta —
   // `followAccountAction`— y el cron mensual la refresca.
-  return <AccountDetailView detail={detail} signals={signals} reportPromise={reportPromise} />
+  return (
+    <AccountDetailView
+      detail={detail}
+      signals={signals}
+      reportPromise={reportPromise}
+      decisionMakers={decisionMakers}
+    />
+  )
 }
