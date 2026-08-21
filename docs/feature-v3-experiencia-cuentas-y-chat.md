@@ -595,6 +595,124 @@ radiografía completa.
 
 ---
 
+## H. Fase 9: el bookmark ES la radiografía (definido 21-ago-2026)
+
+Las fases 7 y 8 dejaron los datos en la base pero invisibles. Esta fase los pone
+en pantalla con la estructura del informe que hoy se arma a mano.
+
+### H.1 Navegación: informe vertical, no pestañas
+
+**Decisión:** las 9 secciones se leen en scroll continuo con un **índice sticky**
+al costado. Un informe se lee de arriba a abajo; las pestañas lo fragmentan.
+
+`Icebreakers` e `Historial` quedan como pestañas aparte: son herramientas y
+registro, no partes del informe. La `TabsList` sticky de la fase 3 se reemplaza
+por el índice del informe + esas dos pestañas.
+
+```
+┌─ Banco Ripley Chile  🟡 SEGUIR DE CERCA   bancoripley.com · Chile ─┐
+│ [Digest ●] [Dejar de seguir] [Chat]        [Icebreakers] [Historial]│
+├──────────┬──────────────────────────────────────────────────────────┤
+│ ÍNDICE   │ 1. Resumen ejecutivo                                     │
+│ ·Resumen │    · 44 vacantes IT activas, 3 mencionan Power BI        │
+│ ·Señales │    · Dos ingresos nuevos en infraestructura (feb, abr)   │
+│ ·Personas│    · Supera US$1.000M de ingresos en 2026                │
+│ ·Vacantes│    · Sin noticias de datacenter en la ventana            │
+│ ·Noticias│                                                          │
+│ ·Ángulos │ 2. Scorecard de señales   (tabla fuente × volumen × …)   │
+│ ·Riesgos │ 3. Movimientos de personal (feb–ago)                     │
+│ ·Método  │ 4. Búsquedas laborales activas                           │
+│          │ 5. Radar de noticias                                     │
+│          │ 6. Ángulos de entrada  7. Riesgos  8. Método             │
+└──────────┴──────────────────────────────────────────────────────────┘
+```
+
+### H.2 Semáforo: por evidencia accionable
+
+**Decisión** (cierra F.4.2). Reglas determinísticas, en este orden:
+
+| Estado | Condición |
+|---|---|
+| 🟢 **Abordar** | ≥1 noticia con `relevance_type='propuesta'` **o** ≥1 vacante con señal de la propuesta en los últimos 30 días |
+| 🟡 **Seguir de cerca** | Sin lo anterior, pero hay movimientos de personal en 6 meses **o** noticias de `negocio` en ventana |
+| 🔴 **Sin señal** | Nada en ninguna ventana |
+
+**La contracción reciente (≤60 días) baja un nivel**: 🟢→🟡, 🟡→🔴. Una cuenta
+que frena el CAPEX no se aborda igual aunque tenga match de propuesta.
+
+El score 0-100 pasa a interno (ordenar listados); deja de mostrarse en el
+bookmark. Absorbe definitivamente la ex-fase 3b / sección E.
+
+### H.3 Scorecard de señales (reemplaza al de 4 pilares)
+
+Tabla fuente × volumen × lectura, todo determinístico:
+
+| Fuente de señal | Volumen | Lectura |
+|---|---|---|
+| Movimientos de personal (6m) | `counts.total` | "N ingresos nuevos y M rotaciones internas; K con cargo de decisión" |
+| Perfiles de interés según tu propuesta | `counts.perfilesObjetivo` | "Hay equipo moviéndose: interlocutor técnico disponible" / "Sin perfiles del foco en la ventana" |
+| Decisores y compras | `counts.decisores` | "Hay poder de decisión recién llegado al rol" |
+| Avisos con señal (30d) | vacantes con tag de la propuesta | "N de M avisos mencionan lo que vendés" |
+| Noticias con señal (4m) | `counts.propuesta` / `counts.negocio` | "Señal pública verificable" / "Solo contexto de negocio" |
+
+Cada fila lleva su lectura como texto fijo por rango (0 / 1-2 / 3+), no
+generado por IA: son las mismas frases del informe manual.
+
+### H.4 Vacantes y noticias: señal primero, resto colapsado
+
+**Decisión:** las vacantes **con** señal de la propuesta van arriba, cada una con
+el **fragmento del aviso** donde aparece el término (existe `extract_snippet` en
+la base y `signals.keyword_matched`; falta exponerlo por vacante). Las demás
+quedan en "ver las otras N vacantes". Mismo tratamiento que el radar de noticias
+(`ruido` colapsado), y no se pierde nada.
+
+### H.5 Textos generados: al refrescar datos, no al abrir
+
+**Decisión:** el resumen en 4 puntos, los ángulos de entrada y los riesgos se
+generan en **una sola llamada batch (~US$0,001)** cuando cambia el insumo, y se
+guardan. Abrir la cuenta no cuesta nada.
+
+Tabla nueva `v3.account_reports` (workspace_id, company_id):
+
+```sql
+summary_points   text[]      -- 4 bullets factuales, incluye declarar ausencias
+entry_angles     text[]      -- ángulos de entrada comercial
+risks            text[]      -- riesgos a mitigar antes de abordar
+inputs_fingerprint text      -- hash de: último scrape de vacantes + de noticias
+                             --  + profile_version + conteos por fuente
+generated_at     timestamptz
+```
+
+Se regenera cuando `inputs_fingerprint` cambia — o sea, cuando entran vacantes o
+noticias nuevas, o cambia la propuesta de valor. Mismo criterio de frescura que
+la regeneración lazy de las lecturas (G.6), pero sobre el informe entero.
+
+Regla de redacción del resumen: **4 puntos factuales**, y uno de ellos declara
+explícitamente lo que NO se encontró ("sin avisos con señal en el scrape del
+período"). Es lo que separa un informe honesto de uno inflado.
+
+### H.6 Método y limitaciones: sin IA
+
+Se arma con metadatos reales, no redactado: fecha y ventana del último scrape de
+vacantes (`import_batches` con prefijo `apify://`), del de noticias
+(`company_news_scrapes`), fecha del último export de personas y su tamaño, y los
+disclaimers fijos (emails solo con estado `valid`, teléfonos sin validar, foto de
+30 días y no histórico).
+
+### H.7 Entregables
+
+1. `lib/v3/services/account-report.ts` — semáforo, scorecard operativo y
+   ensamblado de las 9 secciones desde los servicios ya existentes.
+2. Reglas puras de semáforo y lecturas del scorecard, con tests.
+3. Migración `v3.account_reports` + generación batch con prompt
+   `report.narrative` editable.
+4. Snippet por vacante (exponer `keyword_matched` + contexto en
+   `job-posting-provider`) y partición señal/resto.
+5. UI: informe vertical con índice sticky; `Icebreakers` e `Historial` como
+   pestañas; retiro del scorecard 0-100 de la vista.
+
+---
+
 ## Fases de implementación propuestas
 
 | Fase | Contenido | Dependencias |
@@ -607,7 +725,7 @@ radiografía completa.
 | **6. Chat de búsqueda** | A completa (refactor de tools a lib compartida, searchByCapability, SearchResultsCard con follow directo, resto de paridad) | Fase 4 (para tools que gastan) |
 | **7. ETL: fechas de puesto + movimientos** | F: tomar `current_position_started_on` y fechas del historial en el ETL de contactos; re-carga de exports para rearmar histórico; derivación ingreso/rotación + clasificación por foco | Ninguna |
 | **8. Noticias on-demand** | G completa: flujo liviano portado de v2, `v3.account_news_readings`, clasificación híbrida, regeneración lazy y kick con marca previa al gasto (alcance en G.8) | Ninguna — diseño cerrado |
-| **9. Bookmark = radiografía** | F: scorecard operativo (fuente × volumen × lectura) + semáforo reemplazan al 0-100 (absorbe la ex-fase 3b/E.3); vacantes filtradas por propuesta con snippet; categorías de foco editables; ángulos/riesgos; método autogenerado | Fases 7 y 8 |
+| **9. Bookmark = radiografía** | H completa: informe vertical con índice, semáforo por evidencia accionable, scorecard operativo, vacantes con snippet, `v3.account_reports` con textos generados al refrescar | Fases 7 y 8 ✅ — diseño cerrado |
 | **10. Export + digest** | F: export .docx/PDF de la radiografía + envío en el digest mensual al refrescar vacantes/noticias | Fase 9 |
 
 Las fases 1-3 ya están en producción; 4-6 son el funnel completo en la app; 7-10 convierten el bookmark en la radiografía self-service (norte F).
