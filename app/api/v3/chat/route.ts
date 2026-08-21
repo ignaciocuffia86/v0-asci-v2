@@ -69,7 +69,7 @@ function buildTools(ctx: { workspaceId: string; userId: string; conversationId: 
         .describe("Empresas resueltas con su companyId y nombre"),
     }),
     execute: async ({ companies }) => {
-      const { summarizeCachedSignals } = await import("@/lib/v3/services/fit")
+      const { summarizeCachedSignalsBatch } = await import("@/lib/v3/services/fit")
       const { checkResearchQuota, getWorkspaceUsage } = await import("@/lib/v3/plans")
 
       const [quota, usage] = await Promise.all([
@@ -81,6 +81,17 @@ function buildTools(ctx: { workspaceId: string; userId: string; conversationId: 
       ])
       const quotaByCompany = new Map(quota.items.map((i) => [i.companyId, i]))
 
+      // El resumen de señales de TODAS las empresas en 3 queries. Antes se
+      // llamaba una vez por empresa dentro del map de abajo, o sea 3 idas y
+      // vueltas por cada una del lote.
+      const resumenes = await summarizeCachedSignalsBatch(
+        companies.map((c) => c.companyId),
+        ctx.workspaceId,
+      ).catch((error) => {
+        console.error("[v3][chat] Error resumiendo señales en lote:", error)
+        return null
+      })
+
       const previews = await Promise.all(
         companies.map(async (c) => {
           const q = quotaByCompany.get(c.companyId)
@@ -90,7 +101,8 @@ function buildTools(ctx: { workspaceId: string; userId: string; conversationId: 
             nextAutoRefreshDate: q?.nextAutoRefreshDate ?? null,
           }
           try {
-            const s = await summarizeCachedSignals(c.companyId, ctx.workspaceId)
+            const s = resumenes?.get(c.companyId)
+            if (!s) throw new Error("sin resumen de señales")
             return {
               companyId: c.companyId,
               name: c.name,

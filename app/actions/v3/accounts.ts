@@ -16,6 +16,7 @@ import {
 import { getMicroAgentLabels } from "@/lib/v3/services/radar-agents"
 import { apifyBatchFilenamePrefix } from "@/lib/v3/services/apify-job-ingest"
 import type { UiJobPosting } from "@/lib/v3/services/job-posting-provider"
+import type { CachedSignalsSummary } from "@/lib/v3/services/fit"
 
 // ═══════════════════════════════════════════════════════════
 // Server actions de cuentas seguidas (vistas /v3/accounts).
@@ -126,15 +127,33 @@ export async function getRecentlyResearchedAccounts(): Promise<ResearchedAccount
     admin
       .schema("v3")
       .from("research_jobs")
-      .select("company_id, completed_at, companies:company_id(id, name, logo_url, industry, country)")
+      // `finished_at`, NO `completed_at`: esa columna no existe en
+      // v3.research_jobs. Con el nombre viejo PostgREST devolvía 42703, `data`
+      // venía null y toda la sección se rendía vacía sin decir nada — así que
+      // "Cuentas investigadas recientemente" nunca mostró una sola tarjeta.
+      .select("company_id, finished_at, companies:company_id(id, name, logo_url, industry, country)")
       .eq("workspace_id", workspaceId)
       .eq("status", "completed")
       .not("company_id", "is", null)
-      .gte("completed_at", since)
-      .order("completed_at", { ascending: false })
-      .limit(50),
+      .gte("finished_at", since)
+      .order("finished_at", { ascending: false })
+      // Se traen MUCHAS más filas que las 12 tarjetas que se muestran porque la
+      // deduplicación por empresa ocurre en memoria (PostgREST no tiene
+      // DISTINCT ON) y una misma cuenta puede tener decenas de research
+      // completados. Medido hoy: con `limit(50)`, las 50 filas más recientes
+      // pertenecían a sólo 4 empresas de las 6 que existen — o sea que el tope
+      // recortaba cuentas reales, no ruido. Si esto crece, el reemplazo es una
+      // función SQL con DISTINCT ON.
+      .limit(300),
     listFollowedAccounts(workspaceId, userId),
   ])
+
+  // Un error de esquema tiene que hacer ruido. El `data ?? []` de más abajo lo
+  // convierte en "no hay cuentas", que es indistinguible del caso legítimo y es
+  // exactamente lo que escondió el bug de la columna durante meses.
+  if (jobsRes.error) {
+    console.error("[v3] Error leyendo research_jobs recientes:", jobsRes.error.message)
+  }
 
   const followedIds = new Set(followedList.map((f) => f.company_id))
   const seen = new Set<string>()
@@ -149,29 +168,36 @@ export async function getRecentlyResearchedAccounts(): Promise<ResearchedAccount
     const company = Array.isArray(joined) ? ((joined[0] as Record<string, unknown>) ?? null) : ((joined as Record<string, unknown>) ?? null)
     candidates.push({
       companyId: cid,
-      researchedAt: (job.completed_at as string) ?? since,
+      researchedAt: (job.finished_at as string) ?? since,
       company,
     })
   }
 
-  // Resumen de señales/fit por empresa (en paralelo, máx 12 empresas)
-  const { summarizeCachedSignals } = await import("@/lib/v3/services/fit")
+  // Resumen de señales/fit de las 12 empresas en 3 queries, no en 3 por empresa.
+  const { summarizeCachedSignalsBatch } = await import("@/lib/v3/services/fit")
   const limited = candidates.slice(0, 12)
-  const summaries = await Promise.all(
-    limited.map((c) => summarizeCachedSignals(c.companyId, workspaceId).catch(() => null))
-  )
+  const summaries = await summarizeCachedSignalsBatch(
+    limited.map((c) => c.companyId),
+    workspaceId,
+  ).catch((error) => {
+    console.error("[v3] Error resumiendo señales en lote:", error)
+    return new Map<string, CachedSignalsSummary>()
+  })
 
-  return limited.map((c, i) => ({
-    companyId: c.companyId,
-    companyName: (c.company?.name as string) ?? "Empresa",
-    logoUrl: (c.company?.logo_url as string) ?? null,
-    industry: (c.company?.industry as string) ?? null,
-    country: (c.company?.country as string) ?? null,
-    researchedAt: c.researchedAt,
-    totalSignals: summaries[i]?.totalSignals ?? 0,
-    fitCount: summaries[i]?.fitCount ?? 0,
-    topMatches: summaries[i]?.topMatches ?? [],
-  }))
+  return limited.map((c) => {
+    const resumen = summaries.get(c.companyId)
+    return {
+      companyId: c.companyId,
+      companyName: (c.company?.name as string) ?? "Empresa",
+      logoUrl: (c.company?.logo_url as string) ?? null,
+      industry: (c.company?.industry as string) ?? null,
+      country: (c.company?.country as string) ?? null,
+      researchedAt: c.researchedAt,
+      totalSignals: resumen?.totalSignals ?? 0,
+      fitCount: resumen?.fitCount ?? 0,
+      topMatches: resumen?.topMatches ?? [],
+    }
+  })
 }
 
 // ─── Detalle de cuenta ───────────────────────────────────────

@@ -564,7 +564,7 @@ sospechosas dan Index Scan en 0,13 ms (movimientos sobre 538k contactos) y
 | 2 | La base está en `sa-east-1` (São Paulo) y `vercel.json` no fijaba `regions`, así que las funciones corrían en el default de Vercel. Cada round-trip pagaba la latencia física. | ✅ resuelto: `"regions": ["gru1"]` |
 | 3 | **Cuatro autenticaciones por carga**: `getOnboardingStatus()` y los tres server actions que la página resuelve en paralelo llamaban cada uno a `auth.getUser()` (round-trip real a la API de Auth) + resolución de workspace. 8 idas y vueltas para contestar "¿quién sos?", y el primer par bloquea antes del `Promise.all`. | ✅ resuelto |
 | 4 | El informe se armaba entero antes de mandar un byte: ~6 etapas de queries y, en la primera visita a una cuenta, una llamada de IA para la narrativa. | ✅ resuelto |
-| 5 | Volver al listado corre `summarizeCachedSignals` para hasta 12 empresas × 4 queries = ~48 round-trips. | ⏳ pendiente |
+| 5 | Se creía que volver al listado corría `summarizeCachedSignals` 12 veces. **Falso**: ese código nunca se ejecutaba (ver abajo). | ✅ resuelto, pero era otra cosa |
 
 **Cómo se resolvió 2.** Una línea en `vercel.json`: `"regions": ["gru1"]`
 (São Paulo). Se hace por archivo y no por el dashboard a propósito: `vercel.json`
@@ -591,6 +591,51 @@ Nota de implementación: los slots NO son componentes async usados como JSX.
 `@types/react` 19.0.0 no acepta `Promise<Element>` en `JSX.ElementType`, así que
 el patrón es pasar la promesa a componentes cliente y desenvolverla con `use()`,
 que además es el idiomático de React 19.
+
+### G.1sexies La causa 5 no era performance: era un bug callado (21-ago-2026)
+
+Al abrir `getRecentlyResearchedAccounts` para optimizarla apareció esto:
+
+```ts
+.select("company_id, completed_at, ...")
+.gte("completed_at", since)
+.order("completed_at", { ascending: false })
+```
+
+**`v3.research_jobs.completed_at` no existe.** La columna real es `finished_at`.
+Verificado contra producción: `ERROR: 42703: column "completed_at" does not exist`.
+
+Qué pasaba en cada carga del listado: PostgREST devolvía error, el código hacía
+`jobsRes.data ?? []`, `candidates` quedaba vacío y **`summarizeCachedSignals` no
+se llamaba nunca**. Es decir:
+
+- La estimación de "~48 round-trips" era incorrecta — ese código no corría. El
+  costo real era un round-trip fallido.
+- **La sección "Cuentas investigadas recientemente" jamás mostró una tarjeta**,
+  en silencio, desde que se escribió. El `.catch(() => [])` de la página tapaba
+  lo que quedara.
+
+Y al arreglar la columna apareció un **segundo** bug latente: el `.limit(50)`
+combinado con la deduplicación por empresa **en memoria**. Una misma cuenta puede
+tener decenas de research completados, así que las 50 filas más recientes
+pertenecían a sólo **4 empresas de las 6 que existen**: el tope recortaba cuentas
+reales, no ruido. Se subió a 300 (PostgREST no tiene `DISTINCT ON`; si crece, el
+reemplazo es una función SQL).
+
+**Lecciones que quedaron en el código:**
+
+1. `data ?? []` sobre una respuesta de Supabase convierte un error de esquema en
+   "no hay datos", que es indistinguible del caso legítimo. Ahora se loguea.
+2. Un `limit` antes de una deduplicación en memoria no acota el ruido: recorta
+   resultados válidos.
+
+**El batcheo se hizo igual**, porque ahora el código sí corre:
+`summarizeCachedSignalsBatch` resuelve N empresas en **3 queries** en vez de 3
+por empresa (findings y última corrida con `.in()`, y el perfil del workspace
+—que era idéntico N veces— una sola). `summarizeCachedSignals` pasó a ser un
+wrapper sobre el lote para que haya una sola implementación del matching. Lo usa
+también el chat, que llamaba una vez por empresa dentro de un `map`. De paso,
+`select("*")` sobre `radar_findings` pasó a una lista explícita de columnas.
 
 ### G.1ter Un solo motor de búsqueda: Parallel y Perplexity retirados (21-ago-2026)
 
