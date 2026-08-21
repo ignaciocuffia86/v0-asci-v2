@@ -1,6 +1,6 @@
 # ASCI - Roadmap de Features
 
-> **Ultima actualizacion**: 19 de agosto 2026
+> **Ultima actualizacion**: 20 de agosto 2026
 
 Este documento consolida todas las features de ASCI, separando lo ya implementado de lo planificado, con planes de implementacion detallados para cada feature nueva.
 
@@ -19,14 +19,17 @@ Seccion propia para v3; el resto del documento es historico de v2/ASCI general.
 | Corredor de scraping automatico de vacantes (cron cada 10 min, kick al seguir, sin CTA manual) | [Diseño, Parte 3](./feature-carga-masiva-cuentas-y-cron-jobpostings.md) | Ago 2026 |
 | Listado de vacantes en la cuenta (busqueda, orden cronologico, filas expandibles) | — | Ago 2026 |
 | Cupos por plan 10/60/120/240 con research alineado al follow y config unificada (`plan-config.ts`) | — | Ago 2026 |
+| Legibilidad de la vista de cuenta + tags del diccionario en vacantes con facetas (fases 1-2 de V3-B/C) | [Diseño](./feature-v3-experiencia-cuentas-y-chat.md) | Ago 2026 |
+| Resumen ejecutivo consolidado + proximos pasos del funnel + tabs sticky (fase 3 de V3-B) | [Diseño](./feature-v3-experiencia-cuentas-y-chat.md) | Ago 2026 |
 
 ### Planificadas
 
 | # | Iniciativa | Prioridad | Documento |
 |---|-----------|-----------|-----------|
+| V3-F | **Radiografia comercial self-service**: el bookmark genera solo el informe que hoy se arma a mano (movimientos de personal con fecha de ingreso, scorecard operativo con semaforo, vacantes con snippet segun propuesta, radar de noticias con lectura por vendor, angulos/riesgos, metodo autogenerado, export + digest). Fases 7-10 | Alta (norte del producto) | [Diseño, seccion F](./feature-v3-experiencia-cuentas-y-chat.md) |
 | V3-A | Chat de ingreso: busqueda en lenguaje natural + listado accionable con follow, paridad de tools con el MCP | Alta | [Diseño](./feature-v3-experiencia-cuentas-y-chat.md) |
-| V3-B | Rediseño de la vista de cuenta: datos accionables arriba, prosa IA acotada y colapsada | Alta | [Diseño](./feature-v3-experiencia-cuentas-y-chat.md) |
-| V3-C | Vacantes pre-digeridas con tags del diccionario (facetas + chips por vacante) | Alta (quick win) | [Diseño](./feature-v3-experiencia-cuentas-y-chat.md) |
+| V3-B | Rediseño de la vista de cuenta: datos accionables arriba, prosa IA acotada y colapsada — fases 1-3 hechas; el resto converge en V3-F | Alta | [Diseño](./feature-v3-experiencia-cuentas-y-chat.md) |
+| V3-C | Vacantes pre-digeridas con tags del diccionario — hecho; queda el filtro por propuesta de valor con snippet (parte de V3-F) | Hecha (base) | [Diseño](./feature-v3-experiencia-cuentas-y-chat.md) |
 | V3-D | Personas (Apollo) integrada al funnel de la cuenta, mismo viaje que el MCP + contabilidad unificada | Alta | [Diseño](./feature-v3-experiencia-cuentas-y-chat.md) |
 | V3-E | Fase 2 del import masivo: wizard self-service para admins de workspace | Media | [Diseño](./feature-carga-masiva-cuentas-y-cron-jobpostings.md) |
 

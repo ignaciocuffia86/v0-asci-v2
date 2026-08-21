@@ -377,19 +377,91 @@ duplicarían contabilidad — es la primera tarea técnica del paquete.
 
 ---
 
+## F. Radiografía comercial self-service (norte del bookmark, 20-ago-2026)
+
+El entregable manual que hoy se arma para clientes (ej. "Radiografía Legrand →
+OMARSA S.A.") es el norte de lo que el bookmark tiene que generar solo, de forma
+**incremental y on-demand**: el usuario entra/guarda la cuenta, el sistema sale a
+buscar lo que falta (vacantes ya automático desde Fase 4; noticias a agregar), la
+vista se va armando con lo que llega, y al mes siguiente el digest refresca y
+puede enviar/exportar el informe.
+
+### F.1 Estructura objetivo (la del documento entregado)
+
+| # | Sección | Qué contiene |
+|---|---|---|
+| 0 | Encabezado | Cuenta, país, fecha, **estado semáforo** (🟢 abordar / 🟡 seguir de cerca / 🔴 sin señal) |
+| 1 | Resumen ejecutivo | 4 puntos **factuales** (movimientos, noticia clave, dato de negocio, ausencias declaradas) |
+| 2 | Scorecard de señales | Tabla fuente × volumen × **lectura**: movimientos de personal (6m), perfiles por categoría de foco, decisores, avisos con señal, noticias |
+| 3 | Movimientos de personal | Ingresos nuevos / rotaciones internas con cargo, fecha de inicio, foco + contacto (LinkedIn, email `valid`, teléfono) |
+| 4 | Búsquedas laborales activas | Solo avisos **con señal según la propuesta de valor**, con el fragmento del aviso donde aparece la señal y link al posteo; si no hay, se declara |
+| 5 | Radar de noticias | Categoría, título, resumen, **"por qué le importa a [vendor]"**, fuente + fecha + URL, nota de cobertura (qué NO se encontró) |
+| 6 | Ángulos de entrada comercial | Bullets concretos derivados de las señales |
+| 7 | Riesgos a mitigar | Bullets |
+| 8 | Método y limitaciones | Fuentes, ventanas, definiciones, disclaimers — **autogenerado** desde los metadatos reales (batches, fechas de scrape, tamaños de base) |
+
+### F.2 Mapeo contra lo que existe (verificado en código)
+
+| Necesidad | Estado hoy | Brecha |
+|---|---|---|
+| Vacantes de la cuenta | ✅ `job_postings` + cron corredor (Fase 4) + tags del diccionario (C) | Filtrar por señal de la **propuesta del workspace** (hoy tags globales); extraer el **fragmento** del aviso (existe `extract_snippet` y `signals.keyword_matched` para contactos; falta exponer snippet por vacante en la UI) |
+| Noticias | ⚠️ `company_news` (título, resumen, fecha, dirección, evidence_level) se llena solo con research | Kick on-demand al guardar/abrir como el de vacantes; **"por qué le importa al vendor" por noticia** (hoy no existe: el rationale es global); nota de cobertura |
+| Movimientos de personal | ❌ El ETL de contactos (`process_contact_batch`, baseline:5175) **descarta la fecha de ingreso al puesto** que viene en el export crudo; `previous_positions` se guarda sin fechas | Tomar `current_position_started_on` (y fechas del historial) en el ETL; **re-cargar los archivos crudos rearma el histórico** (upsert por `linkedin_url`); derivar ingreso nuevo vs rotación interna; clasificar cargo por categoría de foco |
+| Contacto por persona | ✅ `contacts` tiene email1-4 con `*_status` y phone1-2 con `*_type` | Regla "solo emails `valid`" + etiqueta de teléfono en el render |
+| Categorías de foco | ⚠️ `workspace_value_profiles` (target_technologies/processes) | Derivar categorías de foco (ej. datacenter/infra, energía, decisores) del perfil + **editables por el admin** en Ajustes |
+| Scorecard operativo | ❌ Hoy score 0-100 con 4 pilares (ver E) | Tabla fuente × volumen × lectura; el 0-100 pasa a interno (ordenar listados); semáforo en el header |
+| Ángulos y riesgos | ⚠️ `next_actions` del brief (genéricos) | Prompt dedicado que los derive de las señales concretas de la radiografía |
+| Método y limitaciones | ❌ No existe | Autogenerar desde metadatos: fecha/tamaño del último scrape de vacantes, ventana de noticias, fecha del último export de personas |
+| Export / digest | ⚠️ Digest mensual existe (score before/after) | Export .docx/PDF de la radiografía + adjuntarla/enviarla en el digest cuando se refresquen vacantes/noticias |
+
+### F.3 Decisiones tomadas (20-ago-2026)
+
+1. **Informe incremental on-demand**: al entrar/guardar el bookmark, si no hay
+   noticias buscadas en el último mes se dispara la búsqueda; ídem vacantes (ya
+   automático). La vista del bookmark ES el informe armándose; el export y el
+   envío por correo van con el ciclo del digest mensual.
+2. **Fecha de ingreso al puesto**: se agrega al ETL de contactos (actual +
+   historial con fechas en `previous_positions`); se rearma el histórico
+   re-cargando los exports crudos.
+3. **Categorías de foco**: derivadas automáticamente de la propuesta de valor y
+   editables por el admin del workspace.
+4. **El scorecard operativo reemplaza al 0-100 en el bookmark**: semáforo +
+   tabla fuente × volumen × lectura; el score numérico queda interno para
+   ordenar listados. Esto absorbe la fase 3b (E.3): el problema del fit se
+   resuelve mostrando los datos en vez de un índice opaco.
+
+### F.4 Preguntas abiertas de F
+
+1. Ventanas por fuente (personal 6 meses, vacantes 30 días, noticias 4 meses en
+   el documento manual): ¿fijas o parametrizables por plan?
+2. Umbrales del semáforo 🟢🟡🔴: ¿reglas determinísticas sobre la tabla de
+   señales (propuesta: 🟢 = avisos con señal O noticia con proyecto concreto;
+   🟡 = movimientos/perfiles sin proyecto; 🔴 = nada en ventana)?
+3. "Por qué le importa al vendor" por noticia: ¿se genera al ingerir la noticia
+   (costo por research) o al armar/refrescar la radiografía (costo por vista)?
+4. La búsqueda de noticias on-demand, ¿reusa el bundle news del research (Opus,
+   caro) o un flujo liviano solo-noticias?
+5. Envío por correo del informe en el digest: ¿adjunto (PDF/docx) o el digest
+   linkea a la vista?
+
+---
+
 ## Fases de implementación propuestas
 
 | Fase | Contenido | Dependencias |
 |---|---|---|
-| **1. Quick wins de legibilidad** | B.4 (eliminar headline y fit_summary duplicado, line-clamp en findings, collapse de prosa) + límites de redacción en prompts/schemas (B.2.4) | Ninguna — solo UI + prompts |
-| **2. Vacantes con tags** | C completa (query + facetas + chips) | Ninguna |
-| **3. Resumen ejecutivo + orden** | Fusión brief+scorecard con chips de evidencia y próximos pasos accionables (B.2), resumen colapsado por defecto y tabs sticky bajo el header (prioridad de orden) | Fase 1 |
-| **3b. Scorecard v2** | E.3: fit alimentado también por señales de vacantes, matching unificado, card de señales con semántica separada | Decisión sobre E.3 |
+| ~~**1. Quick wins de legibilidad**~~ ✅ | B.4 + límites de redacción en prompts/schemas (B.2.4) — mergeado 20-ago (PR #106) | — |
+| ~~**2. Vacantes con tags**~~ ✅ | C completa (query + facetas + chips) — mergeado 20-ago (PR #106/#107) | — |
+| ~~**3. Resumen ejecutivo + orden**~~ ✅ | Fusión brief+scorecard, próximos pasos del funnel, tabs sticky — mergeado 20-ago (PR #107) | — |
 | **4. Contabilidad unificada** | D.4 (pools compartidos UI/MCP) | Ninguna; prerequisito de 5 y 6 |
 | **5. Personas en la cuenta** | D.2 + D.3 (funnel de 4 pasos, retiro de ROLE_RULES y de searchAccountDecisionMakers) | Fase 4 |
 | **6. Chat de búsqueda** | A completa (refactor de tools a lib compartida, searchByCapability, SearchResultsCard con follow directo, resto de paridad) | Fase 4 (para tools que gastan) |
+| **7. ETL: fechas de puesto + movimientos** | F: tomar `current_position_started_on` y fechas del historial en el ETL de contactos; re-carga de exports para rearmar histórico; derivación ingreso/rotación + clasificación por foco | Ninguna |
+| **8. Noticias on-demand** | F: kick de búsqueda de noticias al guardar/abrir bookmark (como el de vacantes), "por qué le importa al vendor" por noticia, nota de cobertura | Decidir F.4.3-4 |
+| **9. Bookmark = radiografía** | F: scorecard operativo (fuente × volumen × lectura) + semáforo reemplazan al 0-100 (absorbe la ex-fase 3b/E.3); vacantes filtradas por propuesta con snippet; categorías de foco editables; ángulos/riesgos; método autogenerado | Fases 7 y 8 |
+| **10. Export + digest** | F: export .docx/PDF de la radiografía + envío en el digest mensual al refrescar vacantes/noticias | Fase 9 |
 
-Las fases 1-2 son chicas y de impacto inmediato; 3 es mediana; 4-6 son el grueso.
+Las fases 1-3 ya están en producción; 4-6 son el funnel completo en la app; 7-10 convierten el bookmark en la radiografía self-service (norte F).
 
 ## Métricas de éxito
 
@@ -404,6 +476,10 @@ Las fases 1-2 son chicas y de impacto inmediato; 3 es mediana; 4-6 son el grueso
 - **Personas es sección del tab Señales, no pestaña** (19-ago-2026): las personas son
   primariamente fuente de evidencia tecnológica de la compañía; el contacto es el paso
   final del funnel, no el organizador de la vista.
+- **El bookmark apunta a la radiografía comercial self-service** (20-ago-2026): informe
+  incremental on-demand, ETL con fechas de puesto, categorías de foco derivadas +
+  editables, y el scorecard operativo reemplaza al 0-100 en la vista (detalle en F.3).
+  La ex-fase 3b (Scorecard v2 / E.3) queda absorbida por la fase 9.
 
 ## Preguntas abiertas
 
