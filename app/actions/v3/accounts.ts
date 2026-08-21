@@ -53,6 +53,17 @@ export async function followAccountAction(
     })
   })
 
+  // Kick de noticias (Fase 8): mismo criterio que las vacantes — el informe se
+  // arma solo. `scrapeCompanyNews` decide por su cuenta si corresponde (ventana
+  // de 30 días) y marca el intento antes de gastar, así que llamarlo de más es
+  // barato: sale por la guarda sin tocar el modelo.
+  after(async () => {
+    const { scrapeCompanyNews } = await import("@/lib/v3/services/news-scrape-runner")
+    await scrapeCompanyNews(companyId).catch((error) => {
+      console.warn("[v3] Kick de noticias post-follow falló:", error instanceof Error ? error.message : error)
+    })
+  })
+
   revalidatePath("/v3/accounts")
   return { success: true }
 }
