@@ -151,4 +151,23 @@ describe("exportAdvice", () => {
     expect(exportAdvice(200, 50)).not.toContain("NO intentes")
     expect(exportAdvice(201, 50)).toContain("NO intentes")
   })
+
+  it("cuenta las páginas contra el límite MÁXIMO, no contra el que se usó", () => {
+    // Visto en una corrida real por MCP: 59 empresas exploradas con limit 3
+    // decían "son 20 llamadas", y el modelo iba a hacer 20. Con limit 50 son 2.
+    const advice = exportAdvice(59, 3)
+    expect(advice).toContain("2 llamadas")
+    expect(advice).not.toContain("20 llamadas")
+    expect(advice).toContain("subí limit a 50")
+    expect(advice).toContain("venís usando 3")
+  })
+
+  it("no sugiere subir el límite si ya está en el máximo", () => {
+    expect(exportAdvice(59, 50)).not.toContain("subí limit")
+  })
+
+  it("cuenta contra el máximo también en la banda alta", () => {
+    // Con limit 25 (el default) 889 daría 36; el número honesto es 18.
+    expect(exportAdvice(889, 25)).toContain("18 llamadas aun con limit 50")
+  })
 })
