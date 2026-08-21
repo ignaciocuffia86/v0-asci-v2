@@ -1,7 +1,7 @@
 import { after } from "next/server"
 import { notFound, redirect } from "next/navigation"
 import { getOnboardingStatus } from "@/app/actions/v3/workspace"
-import { getAccountDetail, getAccountSignals } from "@/app/actions/v3/accounts"
+import { getAccountDetail, getAccountReportData, getAccountSignals } from "@/app/actions/v3/accounts"
 import { AccountDetailView } from "./_components/account-detail-view"
 
 export const metadata = {
@@ -19,9 +19,15 @@ export default async function V3AccountDetailPage({
   if (status.status === "no_workspace") redirect("/v3/onboarding")
   if (status.status !== "active_member") redirect("/v3/onboarding")
 
-  const [detail, signals] = await Promise.all([
+  const [detail, signals, report] = await Promise.all([
     getAccountDetail(companyId),
     getAccountSignals(companyId).catch(() => null),
+    // Si el informe falla (p.ej. la IA de la narrativa), la cuenta igual se
+    // muestra: las secciones determinísticas no dependen de esto.
+    getAccountReportData(companyId).catch((error) => {
+      console.error("[v3] No se pudo armar la radiografía:", error)
+      return null
+    }),
   ])
   if (!detail.company) notFound()
 
@@ -36,5 +42,5 @@ export default async function V3AccountDetailPage({
     })
   })
 
-  return <AccountDetailView detail={detail} signals={signals} />
+  return <AccountDetailView detail={detail} signals={signals} report={report} />
 }

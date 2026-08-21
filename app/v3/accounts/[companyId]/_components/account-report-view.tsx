@@ -1,0 +1,468 @@
+"use client"
+
+import { useState } from "react"
+import { Badge } from "@/components/ui/badge"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { ExternalLink, Linkedin, Mail, Star, TrendingDown } from "lucide-react"
+import { formatDistanceToNow } from "date-fns"
+import { es } from "date-fns/locale"
+import type { AccountReport } from "@/lib/v3/services/account-report"
+import { STATUS_EMOJI, STATUS_LABEL, type AccountStatus } from "@/lib/v3/services/account-report-rules"
+
+// ═══════════════════════════════════════════════════════════
+// Fase 9 · La radiografía comercial en pantalla (diseño H).
+//
+// Es un INFORME, no un tablero: se lee de arriba a abajo en el mismo orden que
+// el documento que se entrega a los clientes, con índice para saltar.
+// ═══════════════════════════════════════════════════════════
+
+export const REPORT_SECTIONS = [
+  { id: "resumen", label: "Resumen ejecutivo" },
+  { id: "scorecard", label: "Scorecard de señales" },
+  { id: "personas", label: "Movimientos de personal" },
+  { id: "vacantes", label: "Búsquedas laborales" },
+  { id: "noticias", label: "Radar de noticias" },
+  { id: "angulos", label: "Ángulos de entrada" },
+  { id: "riesgos", label: "Riesgos" },
+  { id: "metodo", label: "Método y limitaciones" },
+] as const
+
+const STATUS_STYLE: Record<AccountStatus, string> = {
+  abordar: "border-green-600/40 bg-green-600/10 text-green-700 dark:text-green-400",
+  seguir_de_cerca: "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+  sin_senal: "border-muted-foreground/30 bg-muted text-muted-foreground",
+}
+
+function fecha(iso: string | null): string {
+  if (!iso) return "—"
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return "—"
+  return d.toLocaleDateString("es", { day: "numeric", month: "short", year: "numeric" })
+}
+
+function relativo(iso: string | null): string {
+  if (!iso) return "nunca"
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return "nunca"
+  return formatDistanceToNow(d, { addSuffix: true, locale: es })
+}
+
+/** Chip de estado para el encabezado de la cuenta. */
+export function StatusBadge({ status }: { status: AccountStatus }) {
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-semibold ${STATUS_STYLE[status]}`}>
+      <span aria-hidden>{STATUS_EMOJI[status]}</span>
+      {STATUS_LABEL[status]}
+    </span>
+  )
+}
+
+function Section({
+  id,
+  title,
+  count,
+  children,
+}: {
+  id: string
+  title: string
+  count?: number
+  children: React.ReactNode
+}) {
+  return (
+    // scroll-mt deja aire para el encabezado sticky al saltar desde el índice.
+    <section id={id} className="scroll-mt-24">
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            {title}
+            {typeof count === "number" && <Badge variant="secondary">{count}</Badge>}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>{children}</CardContent>
+      </Card>
+    </section>
+  )
+}
+
+export function AccountReportView({ report }: { report: AccountReport }) {
+  const [showOtherJobs, setShowOtherJobs] = useState(false)
+  const [showNoise, setShowNoise] = useState(false)
+
+  const noticiasRelevantes = report.news.items.filter((n) => n.relevanceType !== "ruido")
+  const noticiasRuido = report.news.items.filter((n) => n.relevanceType === "ruido")
+
+  return (
+    <div className="flex flex-col gap-4 lg:flex-row lg:gap-6">
+      {/* Índice: sticky en desktop, chips scrolleables en mobile */}
+      <nav className="lg:sticky lg:top-20 lg:h-fit lg:w-48 lg:shrink-0" aria-label="Secciones del informe">
+        <div className="flex gap-1.5 overflow-x-auto pb-2 lg:flex-col lg:overflow-visible lg:pb-0">
+          {REPORT_SECTIONS.map((s) => (
+            <a
+              key={s.id}
+              href={`#${s.id}`}
+              className="shrink-0 rounded-md px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:text-sm"
+            >
+              {s.label}
+            </a>
+          ))}
+        </div>
+      </nav>
+
+      <div className="flex min-w-0 flex-1 flex-col gap-4">
+        {/* 1. Resumen ejecutivo */}
+        <Section id="resumen" title="Resumen ejecutivo">
+          <div className={`mb-3 rounded-md border px-3 py-2 text-sm ${STATUS_STYLE[report.status.status]}`}>
+            {report.status.loweredByContraction && <TrendingDown className="mr-1.5 inline size-4" />}
+            {report.status.reason}
+          </div>
+          {report.summaryPoints.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-pretty">
+              Todavía no hay datos suficientes para el resumen. Se arma solo cuando entren vacantes o noticias.
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {report.summaryPoints.map((punto) => (
+                <li key={punto} className="flex gap-2 text-sm text-pretty">
+                  <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-primary" aria-hidden />
+                  {punto}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Section>
+
+        {/* 2. Scorecard de señales */}
+        <Section id="scorecard" title="Scorecard de señales">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="pb-2 pr-3 font-medium">Fuente de señal</th>
+                  <th className="pb-2 pr-3 text-right font-medium">Vol.</th>
+                  <th className="pb-2 font-medium">Lectura</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {report.scorecard.map((row) => (
+                  <tr key={row.source}>
+                    <td className="py-2 pr-3 align-top">{row.source}</td>
+                    <td className="py-2 pr-3 text-right align-top tabular-nums font-semibold">{row.volume}</td>
+                    <td className="py-2 align-top text-muted-foreground text-pretty">{row.reading}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Section>
+
+        {/* 3. Movimientos de personal */}
+        <Section
+          id="personas"
+          title={`Movimientos de personal (${report.method.movementsWindowMonths} meses)`}
+          count={report.movements.counts.total}
+        >
+          {report.movements.movements.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-pretty">
+              Sin ingresos ni rotaciones registradas en la ventana.
+            </p>
+          ) : (
+            <ul className="divide-y">
+              {report.movements.movements.map((m) => (
+                <li key={m.contactId} className="flex flex-wrap items-start justify-between gap-3 py-2.5">
+                  <div className="flex min-w-0 flex-col gap-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium">{m.fullName}</span>
+                      <Badge variant={m.type === "ingreso_nuevo" ? "secondary" : "outline"} className="text-[10px]">
+                        {m.type === "ingreso_nuevo" ? "Ingreso nuevo" : "Rotación interna"}
+                      </Badge>
+                      {m.focus === "decisor" && <Badge className="text-[10px]">Decisor</Badge>}
+                      {m.focus === "perfil_objetivo" && (
+                        <Badge variant="secondary" className="text-[10px]">Perfil objetivo</Badge>
+                      )}
+                    </div>
+                    <span className="text-xs text-muted-foreground">
+                      {m.title ?? "Sin cargo"} · desde {fecha(m.startedOn)}
+                      {m.matchedTerms.length > 0 && ` · ${m.matchedTerms.join(", ")}`}
+                    </span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    {m.email && (
+                      <a
+                        href={`mailto:${m.email}`}
+                        className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                        aria-label={`Enviar email a ${m.fullName}`}
+                      >
+                        <Mail className="size-4" />
+                      </a>
+                    )}
+                    {m.linkedinUrl && (
+                      <a
+                        href={m.linkedinUrl.startsWith("http") ? m.linkedinUrl : `https://${m.linkedinUrl}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                        aria-label={`Ver LinkedIn de ${m.fullName}`}
+                      >
+                        <Linkedin className="size-4" />
+                      </a>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Section>
+
+        {/* 4. Búsquedas laborales: con señal primero, resto colapsado */}
+        <Section id="vacantes" title="Búsquedas laborales activas" count={report.jobs.total}>
+          {!report.hasVendorProfile && (
+            <p className="mb-3 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-pretty">
+              Sin propuesta de valor cargada no se puede separar qué avisos tienen señal para vos.
+            </p>
+          )}
+          {report.jobs.withSignal.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-pretty">
+              {report.jobs.total === 0
+                ? "Sin avisos en el scrape del período."
+                : `${report.jobs.total} avisos activos, ninguno menciona lo que vendés.`}
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-3">
+              {report.jobs.withSignal.map(({ posting, matchedTerms, snippet }) => (
+                <li key={posting.id} className="rounded-md border p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {posting.url ? (
+                      <a
+                        href={posting.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-sm font-medium hover:underline"
+                      >
+                        {posting.title}
+                        <ExternalLink className="size-3 shrink-0 text-muted-foreground" />
+                      </a>
+                    ) : (
+                      <span className="text-sm font-medium">{posting.title}</span>
+                    )}
+                    {matchedTerms.slice(0, 3).map((t) => (
+                      <Badge key={t} className="text-[10px]">{t}</Badge>
+                    ))}
+                  </div>
+                  <span className="text-xs text-muted-foreground">
+                    {[posting.location, posting.experienceLevel, fecha(posting.postedAt)].filter(Boolean).join(" · ")}
+                  </span>
+                  {snippet && (
+                    // El fragmento del aviso: es lo que convierte "tiene señal"
+                    // en "mirá dónde lo dice".
+                    <p className="mt-2 border-l-2 border-primary/40 bg-muted/40 py-1.5 pl-3 text-xs italic text-muted-foreground text-pretty">
+                      …{snippet}…
+                    </p>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {report.jobs.others.length > 0 && (
+            <div className="mt-3">
+              <button
+                type="button"
+                onClick={() => setShowOtherJobs((v) => !v)}
+                className="text-xs font-medium text-primary hover:underline"
+                aria-expanded={showOtherJobs}
+              >
+                {showOtherJobs
+                  ? "Ocultar el resto"
+                  : `Ver las otras ${report.jobs.others.length} vacantes sin señal`}
+              </button>
+              {showOtherJobs && (
+                <ul className="mt-2 max-h-72 divide-y overflow-y-auto rounded-md border">
+                  {report.jobs.others.map((p) => (
+                    <li key={p.id} className="px-3 py-2 text-sm">
+                      {p.url ? (
+                        <a href={p.url} target="_blank" rel="noopener noreferrer" className="hover:underline">
+                          {p.title}
+                        </a>
+                      ) : (
+                        p.title
+                      )}
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        {[p.location, fecha(p.postedAt)].filter(Boolean).join(" · ")}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </Section>
+
+        {/* 5. Radar de noticias */}
+        <Section
+          id="noticias"
+          title={`Radar de noticias (${report.method.newsWindowMonths} meses)`}
+          count={noticiasRelevantes.length}
+        >
+          {noticiasRelevantes.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-pretty">
+              Sin noticias con relevancia en la ventana.
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-3">
+              {noticiasRelevantes.map((n) => (
+                <li key={n.id} className="rounded-md border p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {n.relevanceType === "propuesta" ? (
+                      <Badge className="gap-1 text-[10px]">
+                        <Star className="size-3" />
+                        Para tu propuesta
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-[10px]">Contexto de negocio</Badge>
+                    )}
+                    {n.direction === "contraccion" && (
+                      <Badge variant="secondary" className="gap-1 text-[10px]">
+                        <TrendingDown className="size-3" />
+                        Contracción
+                      </Badge>
+                    )}
+                    <span className="text-xs uppercase tracking-wide text-muted-foreground">{n.eventType}</span>
+                  </div>
+                  <p className="mt-1 text-sm font-medium text-pretty">{n.title}</p>
+                  {n.whyItMatters && (
+                    <p className="mt-1 text-sm text-muted-foreground text-pretty">
+                      <span className="font-medium text-foreground">Por qué te importa:</span> {n.whyItMatters}
+                    </p>
+                  )}
+                  <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <span>{n.sourceName ?? "Fuente"} · {fecha(n.publishedAt)}</span>
+                    {n.sourceUrl && (
+                      <a
+                        href={n.sourceUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-primary hover:underline"
+                      >
+                        ver fuente
+                        <ExternalLink className="size-3" />
+                      </a>
+                    )}
+                    {n.matchedTerms.length > 0 && <span>· {n.matchedTerms.join(", ")}</span>}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {noticiasRuido.length > 0 && (
+            <div className="mt-3">
+              <button
+                type="button"
+                onClick={() => setShowNoise((v) => !v)}
+                className="text-xs font-medium text-primary hover:underline"
+                aria-expanded={showNoise}
+              >
+                {showNoise ? "Ocultar" : `${noticiasRuido.length} noticias sin relevancia para tu propuesta`}
+              </button>
+              {showNoise && (
+                <ul className="mt-2 divide-y rounded-md border">
+                  {noticiasRuido.map((n) => (
+                    <li key={n.id} className="px-3 py-2 text-sm">
+                      {n.sourceUrl ? (
+                        <a href={n.sourceUrl} target="_blank" rel="noopener noreferrer" className="hover:underline">
+                          {n.title}
+                        </a>
+                      ) : (
+                        n.title
+                      )}
+                      <span className="ml-2 text-xs text-muted-foreground">{fecha(n.publishedAt)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
+          {/* Nota de cobertura: la diferencia entre "no hay nada" y "no buscamos" */}
+          {report.news.uncovered.length > 0 && (
+            <p className="mt-3 rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground text-pretty">
+              <span className="font-medium text-foreground">Nota de cobertura:</span> sin evidencia pública en la
+              ventana sobre {report.news.uncovered.slice(0, 6).join(", ")}
+              {report.news.uncovered.length > 6 && ` y ${report.news.uncovered.length - 6} términos más`}.
+            </p>
+          )}
+        </Section>
+
+        {/* 6. Ángulos de entrada */}
+        <Section id="angulos" title="Ángulos de entrada comercial">
+          {report.entryAngles.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-pretty">
+              Sin ángulos derivables de la evidencia actual.
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {report.entryAngles.map((a) => (
+                <li key={a} className="flex gap-2 text-sm text-pretty">
+                  <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-primary" aria-hidden />
+                  {a}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Section>
+
+        {/* 7. Riesgos */}
+        <Section id="riesgos" title="Riesgos a mitigar antes de abordar">
+          {report.risks.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-pretty">Sin riesgos identificados en la evidencia.</p>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {report.risks.map((r) => (
+                <li key={r} className="flex gap-2 text-sm text-pretty">
+                  <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-amber-500" aria-hidden />
+                  {r}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Section>
+
+        {/* 8. Método y limitaciones — sin IA, todo metadatos reales */}
+        <Section id="metodo" title="Método y limitaciones">
+          <ul className="flex flex-col gap-2 text-xs text-muted-foreground">
+            <li className="text-pretty">
+              <span className="font-medium text-foreground">Vacantes:</span> scrape de LinkedIn Jobs vía Apify,
+              última corrida {relativo(report.method.jobsLastScrapedAt)}
+              {report.method.jobsLastScrapedAt && ` (${fecha(report.method.jobsLastScrapedAt)})`}. Se refresca cada{" "}
+              {report.method.jobsRefreshDays} días. Es una foto del período, no un histórico.
+            </li>
+            <li className="text-pretty">
+              <span className="font-medium text-foreground">Noticias:</span> búsqueda web sobre fuentes públicas,
+              ventana de {report.method.newsWindowMonths} meses, última corrida{" "}
+              {relativo(report.method.newsLastScrapedAt)}
+              {report.method.newsLastScrapedAt && ` (${fecha(report.method.newsLastScrapedAt)})`}. Se refresca cada{" "}
+              {report.method.newsRefreshDays} días. Donde no hubo evidencia se declara explícitamente en vez de
+              rellenar.
+            </li>
+            <li className="text-pretty">
+              <span className="font-medium text-foreground">Movimientos de personal:</span> base propia de perfiles,
+              filtrada por fecha de ingreso al puesto dentro de los últimos{" "}
+              {report.method.movementsWindowMonths} meses. &quot;Rotación interna&quot; significa que la empresa
+              anterior del perfil es la misma que la actual; &quot;ingreso nuevo&quot;, que venía de otra empresa o
+              no tiene empresa previa registrada.
+            </li>
+            <li className="text-pretty">
+              <span className="font-medium text-foreground">Contacto:</span> los emails se listan solo cuando la base
+              los marca con estado válido. Los teléfonos no tienen etiqueta de celular en el origen: hay que
+              validarlos antes de llamar.
+            </li>
+            <li className="text-pretty">
+              Este informe se apoya solo en información pública y en la base propia. No reemplaza la verificación en
+              la primera conversación con la cuenta.
+            </li>
+          </ul>
+        </Section>
+      </div>
+    </div>
+  )
+}

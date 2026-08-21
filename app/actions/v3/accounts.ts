@@ -617,3 +617,15 @@ export async function getAccountDetail(companyId: string): Promise<AccountDetail
     digests,
   }
 }
+
+/**
+ * Radiografía comercial de la cuenta (Fase 9).
+ *
+ * Ensambla las 9 secciones del informe. No dispara scrapes: los kicks de
+ * vacantes y noticias tienen su propia frescura; acá solo se lee e interpreta.
+ */
+export async function getAccountReportData(companyId: string) {
+  const { workspaceId } = await getAuthContext()
+  const { getAccountReport } = await import("@/lib/v3/services/account-report")
+  return getAccountReport(companyId, workspaceId)
+}
