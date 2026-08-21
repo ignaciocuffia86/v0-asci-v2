@@ -1,9 +1,10 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { ExternalLink, Linkedin, Mail, Star, TrendingDown } from "lucide-react"
+import { ExternalLink, Linkedin, Loader2, Mail, Star, TrendingDown } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 import { es } from "date-fns/locale"
 import type { AccountReport } from "@/lib/v3/services/account-report"
@@ -84,9 +85,36 @@ function Section({
   )
 }
 
+/** Cada cuánto se re-consulta mientras hay una búsqueda de noticias en vuelo. */
+const POLL_MS = 8000
+/** Techo de espera: ~4 minutos. Si no llegó, algo falló y el cartel lo dice. */
+const MAX_POLLS = 30
+
 export function AccountReportView({ report }: { report: AccountReport }) {
+  const router = useRouter()
   const [showOtherJobs, setShowOtherJobs] = useState(false)
   const [showNoise, setShowNoise] = useState(false)
+  const [polls, setPolls] = useState(0)
+
+  const buscandoNoticias = report.newsScrapeStatus === "pending" || report.newsScrapeStatus === "running"
+
+  // Las noticias entran por un scrape que corre en background (~30-60 s), así
+  // que el informe se refresca solo: sin esto el usuario veía "sin noticias" y
+  // tenía que recargar a mano para enterarse de que sí había.
+  useEffect(() => {
+    if (!buscandoNoticias || polls >= MAX_POLLS) return
+    const timer = setTimeout(() => {
+      setPolls((n) => n + 1)
+      router.refresh()
+    }, POLL_MS)
+    return () => clearTimeout(timer)
+  }, [buscandoNoticias, polls, router])
+
+  // Al llegar las noticias el estado pasa a "idle": se reinicia el contador
+  // para que un refresh posterior (otra cuenta, otro ciclo) vuelva a esperar.
+  useEffect(() => {
+    if (!buscandoNoticias) setPolls(0)
+  }, [buscandoNoticias])
 
   const noticiasRelevantes = report.news.items.filter((n) => n.relevanceType !== "ruido")
   const noticiasRuido = report.news.items.filter((n) => n.relevanceType === "ruido")
@@ -303,10 +331,30 @@ export function AccountReportView({ report }: { report: AccountReport }) {
           title={`Radar de noticias (${report.method.newsWindowMonths} meses)`}
           count={noticiasRelevantes.length}
         >
+          {/* Búsqueda en vuelo: se avisa en vez de mostrar un vacío que parece
+              un error. El informe se actualiza solo cuando llegan. */}
+          {buscandoNoticias && polls < MAX_POLLS && (
+            <div className="mb-3 flex items-center gap-2.5 rounded-md border border-primary/30 bg-primary/5 px-3 py-2.5 text-sm">
+              <Loader2 className="size-4 shrink-0 animate-spin text-primary" />
+              <p className="text-pretty">
+                Buscando noticias de los últimos {report.method.newsWindowMonths} meses… suele tardar entre 30 y 60
+                segundos. Aparecen acá solas, no hace falta recargar.
+              </p>
+            </div>
+          )}
+          {buscandoNoticias && polls >= MAX_POLLS && (
+            <div className="mb-3 rounded-md border px-3 py-2.5 text-sm text-muted-foreground text-pretty">
+              La búsqueda está demorando más de lo normal. Recargá la página en unos minutos; si sigue igual, la
+              corrida quedó registrada y se reintenta sola.
+            </div>
+          )}
+
           {noticiasRelevantes.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-pretty">
-              Sin noticias con relevancia en la ventana.
-            </p>
+            !buscandoNoticias && (
+              <p className="text-sm text-muted-foreground text-pretty">
+                Sin noticias con relevancia en la ventana.
+              </p>
+            )
           ) : (
             <ul className="flex flex-col gap-3">
               {noticiasRelevantes.map((n) => (

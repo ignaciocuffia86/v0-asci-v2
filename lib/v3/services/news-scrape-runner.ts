@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin"
 import { collect, structure } from "@/lib/research/engine"
 import { GEMINI_SYSTEM, NewsSchema, type NewsItem } from "@/lib/news-prompt"
 import { filterRelevantToCompany, checkUrlsAlive, STRUCTURER_DEFAULT_MODEL } from "@/lib/ai-structurer"
+import { buildEvidenceRow } from "@/lib/shared/evidence"
 import { classifyNewsEvent } from "./news-rules"
 
 // ═══════════════════════════════════════════════════════════
@@ -248,18 +249,24 @@ export async function scrapeCompanyNews(
         // global y determinística; se guarda al ingerir para que el radar y el
         // timing del scorecard no tengan que recalcularla en cada lectura.
         const event = classifyNewsEvent(item.title, item.summary)
-        return {
-          company_id: companyId,
+        // La fila la arma el contrato compartido de evidencia, NO a mano: es
+        // quien sabe que `company_news.source` es una columna legacy con CHECK
+        // (parallel | client_mcp | tech_radar) y mapea cada productor al valor
+        // permitido, además de llenar produced_by y dedupe_hash. Escribir el
+        // insert a mano acá costó dos scrapes fallidos en producción.
+        return buildEvidenceRow({
+          kind: "news",
+          producedBy: "cron_refresh",
+          companyId,
           title: item.title,
           summary: item.summary,
-          source_url: source.url,
-          source_name: item.source_name || hostname,
-          published_at: sanitizeDate(item.published_at),
+          sourceUrl: source.url,
+          sourceName: item.source_name || hostname,
+          occurredAt: sanitizeDate(item.published_at),
           category: item.category ?? event.eventType,
           direction: event.direction,
-          ai_provider: STRUCTURER_DEFAULT_MODEL,
-          source: "v3-news-scrape",
-        }
+          aiProvider: STRUCTURER_DEFAULT_MODEL,
+        }).row
       })
       // `published_at` es obligatorio: sin fecha no hay recencia y el radar no
       // puede ordenar ni decidir si está dentro de la ventana.

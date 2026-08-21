@@ -51,7 +51,19 @@ export interface AccountReportMethod {
   newsRefreshDays: number
 }
 
+/**
+ * Estado del scrape de noticias, para que la UI pueda avisar en vez de mostrar
+ * un vacío que parece un error:
+ *  - `pending`: nunca se buscó y el kick está por dispararse (el `after()` de
+ *    la página corre DESPUÉS de responder, así que en el primer render todavía
+ *    no hay ni fila de intento).
+ *  - `running`: hay una búsqueda en vuelo.
+ *  - `idle`: ya se buscó (con o sin resultados) dentro de la ventana.
+ */
+export type NewsScrapeStatus = "pending" | "running" | "idle"
+
 export interface AccountReport {
+  newsScrapeStatus: NewsScrapeStatus
   status: AccountStatusResult
   summaryPoints: string[]
   scorecard: ScorecardRow[]
@@ -90,7 +102,7 @@ export async function getAccountReport(
 ): Promise<AccountReport> {
   const admin = createAdminClient()
 
-  const [profile, jobsResult, movements, news, jobScrape] = await Promise.all([
+  const [profile, jobsResult, movements, news, jobScrape, lastNewsScrape] = await Promise.all([
     getWorkspaceFitProfile(workspaceId),
     listAccountJobPostings(companyId, 100),
     listPersonnelMovements(companyId, workspaceId),
@@ -105,7 +117,26 @@ export async function getAccountReport(
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle(),
+    // Último intento de scrape de noticias, en CUALQUIER estado: es lo que
+    // permite distinguir "todavía buscando" de "ya buscamos y no había nada".
+    admin
+      .from("company_news_scrapes")
+      .select("status, started_at")
+      .eq("company_id", companyId)
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ])
+
+  const newsScrapeStatus: NewsScrapeStatus = (() => {
+    const row = lastNewsScrape.data
+    if (!row) return "pending"
+    if (row.status !== "running") return "idle"
+    // Un 'running' viejo es un scrape colgado, no uno en vuelo: mismo criterio
+    // de 15 minutos que usa la elegibilidad del runner.
+    const ageMs = Date.now() - new Date(row.started_at).getTime()
+    return ageMs < 15 * 60 * 1000 ? "running" : "idle"
+  })()
 
   const targetTerms = [...profile.targetTechnologies, ...profile.targetProcesses]
   const targetTermsLower = targetTerms.map((t) => t.trim().toLowerCase()).filter((t) => t.length >= 3)
@@ -189,6 +220,7 @@ export async function getAccountReport(
   })
 
   return {
+    newsScrapeStatus,
     status,
     summaryPoints: narrative.summaryPoints,
     scorecard,
