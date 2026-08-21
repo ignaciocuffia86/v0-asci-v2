@@ -143,10 +143,51 @@ viejas, que todavía hablan de `matchedTerms` y `currentEmployees`. No se rompe 
 —verificado contra el MCP en vivo— pero el modelo lee una descripción desactualizada
 hasta que se despliegue el branch.
 
-## Lo que queda afuera
+## Volumen: qué hace la tool y qué no
 
-`export_capability_search`: aun con todo esto, 889 filas no entran en una
-conversación. Si exportar es un caso de uso recurrente, lo que falta no es un
-parámetro sino una tool que devuelva una URL firmada a un CSV. Necesita un bucket
-privado nuevo, política de retención y decidir el gate de PII; se dejó para una
-segunda tanda.
+Hay una restricción de MCP que decide todo este punto: **no hay canal lateral —
+todo lo que devuelve una tool entra al contexto del modelo**. No existe forma de
+que un resultado vaya a un archivo sin pasar por la ventana de contexto. Por eso
+"que el listado grande lo arme el cliente" no resuelve nada: las filas pasan por
+la conversación igual.
+
+Una fila pesa ~100–200 tokens (según cuántos `termHits` traiga y si se pidieron
+firmográficos). De ahí salen dos bandas, y `guidance` le dice al modelo en cuál
+está con el número concreto de llamadas de esa corrida:
+
+| Volumen | Qué hace la tool |
+|---|---|
+| ≤ 200 empresas | Dice cuántas llamadas son encadenando `cursor` (~4 de a 50 = 20–40k tokens) y que arme el listado; si el cliente tiene herramientas de archivo, que lo escriba como CSV en vez de volcarlo al chat |
+| > 200 empresas | Prohíbe paginar —889 filas son 18 llamadas y ~130k tokens, no entran— y manda a acotar (`minSignals` es lo que más recorta) o a exportar desde la web. **Le prohíbe explícitamente prometer un archivo o una descarga** |
+
+Qué puede hacer cada cliente, que no es blanco o negro:
+
+| Cliente | Filesystem | Sirve para exportar |
+|---|---|---|
+| Claude Code / Cursor | Sí | Hasta ~200 filas: pagina con `cursor` y escribe el CSV |
+| Claude Desktop / claude.ai | No | Puede mostrar tabla o artifact, pero los datos viven en el contexto igual |
+
+## Lo que queda afuera: `export_capability_search`
+
+Arriba de ~200 filas, lo único que saca el volumen del contexto es que la tool
+devuelva una **URL** (~200 bytes) en vez de las filas. Eso sí tiene que ser
+server-side, pero es bastante menos de lo que parecía:
+
+- **No necesita bucket ni Supabase Storage.** El repo ya tiene el patrón y por el
+  mismo motivo: `app/api/admin/export/job-postings/route.ts` streamea el CSV
+  paginando en el servidor porque "son 35k+ jobpostings y las descripciones suman
+  ~105 MB", que no entran en el payload de una server action. Mismo molde acá. Sin
+  objeto que guardar, no hay política de retención que definir.
+- **No necesita gate de PII.** Esta búsqueda devuelve *empresas*, no contactos:
+  `contactsInBase` es un conteo. El problema de PII es de `profiles_search` y del
+  enrichment, no de acá.
+- **Lo único abierto es la auth del link**, y depende de quién lo abre:
+  - Cliente con HTTP y API key (Claude Code): alcanza `Authorization: Bearer`, la
+    tool devuelve la URL y el cliente baja el archivo. Cero infra nueva.
+  - Link que abre el usuario en el browser (el caso de Claude Desktop, y el que
+    hace útil el export): no hay header, así que hace falta un token corto firmado
+    en el querystring — HMAC nuestro sobre los parámetros + expiración, no una URL
+    firmada de Storage. Sigue sin haber bucket.
+
+Queda para una segunda tanda, cuando esté confirmado si el caso de uso real es de
+200 filas o de 900.

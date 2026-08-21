@@ -52,6 +52,21 @@ const MAX_DETAIL_LIMIT = 50
  */
 const CROWDED_THRESHOLD = 40
 
+/**
+ * Hasta cuántas empresas tiene sentido bajar ENTERAS paginando con el cursor.
+ *
+ * El número sale de una restricción de MCP, no de la base: todo lo que devuelve
+ * una tool entra al contexto del modelo, no hay canal lateral. Una fila pesa
+ * ~100-200 tokens según cuántos termHits traiga y si se pidieron firmográficos,
+ * así que 200 filas son ~20-40k tokens repartidos en 4 llamadas de a 50: caro
+ * pero hacible cuando el usuario de verdad quiere la lista completa (para
+ * exportarla, para trabajarla afuera). 889 filas serían ~130k tokens en 18
+ * llamadas, y ahí ya no es "caro": no entra.
+ *
+ * Por encima de este techo la respuesta correcta NO es paginar: es acotar.
+ */
+const PAGINABLE_CEILING = 200
+
 export type CapabilityTerm = {
   id: string
   name: string
@@ -468,6 +483,7 @@ function buildGuidance(
           `(3) termsMode: "all" si el usuario quiere las que tienen TODOS los términos y no cualquiera. ` +
           `Países con más presencia: ${top.join(", ")}.`,
       )
+      parts.push(exportAdvice(payload.totalCompanies, params.limit ?? 25))
     } else {
       parts.push(
         `Son ${payload.totalCompanies} empresas, un volumen manejable: ` +
@@ -500,13 +516,45 @@ function buildGuidance(
 
   if (payload.truncated) {
     const shown = payload.offset + payload.returned
+    const limit = params.limit ?? 25
     parts.push(
       `Se devolvieron ${payload.returned} de ${payload.totalCompanies} (${payload.offset + 1}-${shown}), ` +
         `ordenadas por cantidad de señales. Para la página siguiente reenviá la MISMA llamada ` +
-        `agregando cursor: "<nextCursor>". Si son muchas páginas, conviene acotar con minSignals ` +
-        `o por país/industria en vez de paginar todo.`,
+        `agregando cursor: "<nextCursor>".`,
     )
+    parts.push(exportAdvice(payload.totalCompanies, limit))
   }
 
   return parts.join(" ")
+}
+
+/**
+ * Qué hacer cuando el usuario quiere la lista COMPLETA, no una muestra.
+ *
+ * Existe porque "paginá" a secas es un mal consejo y "acotá" a secas también:
+ * cuál de los dos es el correcto depende del volumen, y el modelo no tiene cómo
+ * saber dónde está el techo. Se lo decimos con el número concreto de la corrida.
+ */
+export function exportAdvice(totalCompanies: number, limit: number): string {
+  const pages = Math.ceil(totalCompanies / limit)
+
+  if (totalCompanies <= PAGINABLE_CEILING) {
+    const cost =
+      pages === 1
+        ? `es UNA sola llamada y entra: pedila`
+        : `son ${pages} llamadas encadenando cursor y entra: pedí las ${pages}`
+    return (
+      `Si lo que el usuario quiere es la lista COMPLETA (para exportarla o trabajarla afuera), ` +
+      `${cost} y armá vos el listado. Si tenés herramientas de archivo, escribilo como CSV en vez de ` +
+      `volcarlo en el chat. Si no, mostralo como tabla.`
+    )
+  }
+
+  return (
+    `NO intentes bajar las ${totalCompanies} paginando: son ${pages} llamadas y no entran en una ` +
+    `conversación. Si el usuario quiere el listado completo para exportar, decíselo con estas palabras: ` +
+    `hoy ASCI no tiene export por MCP, y el camino es acotar la búsqueda (minSignals es lo que más ` +
+    `recorta) hasta un recorte que sí pueda trabajar, o pedir el export por la aplicación web. ` +
+    `No le prometas un archivo ni una descarga.`
+  )
 }

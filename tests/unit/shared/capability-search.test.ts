@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
   decodeCursor,
   encodeCursor,
+  exportAdvice,
   resolveCapabilityTerms,
   type CapabilitySearchParams,
 } from "@/lib/v3/services/capability-search"
@@ -122,5 +123,32 @@ describe("firmográficos", () => {
 
   it("preserva un 0 de empleados en vez de convertirlo en null", () => {
     expect(firmographicsOf({ apollo_employees_count: 0 }).employeesApollo).toBe(0)
+  })
+})
+
+describe("exportAdvice", () => {
+  it("da el número concreto de llamadas cuando la lista entera entra", () => {
+    const advice = exportAdvice(89, 50)
+    expect(advice).toContain("2 llamadas")
+    expect(advice).not.toContain("NO intentes")
+  })
+
+  it("concuerda el singular cuando es una sola llamada", () => {
+    expect(exportAdvice(40, 50)).toContain("es UNA sola llamada y entra")
+    // "son 1 llamada ... pedí las 1" era lo que salía antes.
+    expect(exportAdvice(40, 50)).not.toMatch(/\b1 llamada\b|las 1\b/)
+  })
+
+  it("prohíbe paginar y prohíbe prometer una descarga cuando no entra", () => {
+    // El caso que originó todo: 889 filas son 18 llamadas y ~130k tokens.
+    const advice = exportAdvice(889, 50)
+    expect(advice).toContain("NO intentes")
+    expect(advice).toContain("18 llamadas")
+    expect(advice).toMatch(/No le prometas un archivo ni una descarga/)
+  })
+
+  it("corta en 200, no en el límite de página", () => {
+    expect(exportAdvice(200, 50)).not.toContain("NO intentes")
+    expect(exportAdvice(201, 50)).toContain("NO intentes")
   })
 })
