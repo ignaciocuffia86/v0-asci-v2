@@ -492,6 +492,16 @@ liviano. Presupuesto de búsqueda: 8 por bundle, 16 en total (antes 8).
 pipeline con dos dueños, que es exactamente cómo el incidente del modelo
 retirado pudo estar 2 meses roto de un lado y no del otro.
 
+**Sin acción del usuario: se retiró el CTA "Investigar".** Era un botón que
+prometía research y sólo navegaba a `/v3/chat`, sin siquiera preseleccionar la
+cuenta. Con las vacantes y las noticias buscándose solas al marcar el bookmark y
+refrescándose por cron, no hay nada que el usuario tenga que disparar: lo único
+que necesita saber es cuán fresco es lo que lee. En su lugar el encabezado
+muestra `DataFreshness` — "actualizado hace X (fecha) · próxima actualización:
+fecha" — donde la fecha de próxima es la de la fuente que vence ANTES, que es
+cuando el informe efectivamente cambia. El paso "sin research todavía" salió del
+funnel, que queda: seguir → decisores → icebreaker → contactar.
+
 **Se dispara al marcar el bookmark, no al abrirlo.** Con el flujo liviano había
 un kick también en `page.tsx` como auto-reparación; con el bundle caro eso
 convertiría cada visita a una cuenta vieja en un gasto potencial. Hoy el único
@@ -507,7 +517,28 @@ regla —primera pasada para las que nunca se buscaron, refresco para las que
 pasaron los 30 días— y hereda la marca previa al gasto, así que dos corridas que
 se pisaran no pagan la misma cuenta dos veces.
 
-### G.1ter Parallel, retirado (21-ago-2026)
+### G.1ter Un solo motor de búsqueda: Parallel y Perplexity retirados (21-ago-2026)
+
+Antes de este cambio convivían tres motores de búsqueda web. Ahora queda **uno**:
+`collect` con búsqueda server-side de Anthropic (haiku) por el AI Gateway, que
+alimenta noticias, radar técnico y documentos públicos, en v2 y en v3.
+
+| Motor | Estado |
+|---|---|
+| **haiku vía Gateway** (`collect`) | **El único.** Noticias (los dos bundles), radar, public-docs. Todo su costo entra en `v3.ai_usage_log`. |
+| **Parallel** | Retirado. Detalle abajo. |
+| **Perplexity** | Retirado. `generatePerplexityContent` le pegaba directo a `api.perplexity.ai` con su propia key, así que su gasto **no entraba en la contabilidad**: era el único canal de IA fuera de `ai_usage_log`. Colgaba de `searchWebSignals` → pestaña "Investigación Web Privada" del bookmark de v2, que además escribía en `company_news` y `company_implementations` con un `.insert()` crudo, esquivando el contrato de evidencia. Estaba muerto en los hechos: `user_company_signals`, su tabla propia, tenía **0 filas**, el componente `BookmarkSignals` **no estaba montado en ninguna página**, y `searchWeb` (una casi gemela) no tenía callers. Se borró todo: la función, las dos acciones y el componente. |
+| **SerpAPI** | Ya no existía en el código; sobrevive sólo como valor histórico de `ai_provider` en 48 filas. |
+
+Queda una llamada directa a un proveedor fuera del Gateway, a propósito y
+señalada acá para que no se confunda con un olvido: `lib/documents/extract-text.ts`
+usa Gemini contra `generativelanguage.googleapis.com` para **leer visualmente
+PDFs diseñados** cuando `pdf-parse` no saca texto. No es un motor de búsqueda,
+es OCR, y por eso no entra en esta unificación.
+
+#### Parallel
+
+
 
 Parallel era el buscador del research de v2. Se retiró hace meses, pero seguía
 presente de dos formas:

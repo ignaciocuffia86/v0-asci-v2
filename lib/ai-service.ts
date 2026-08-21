@@ -140,80 +140,21 @@ export async function generateGeminiContent(
 }
 
 /**
- * Genera contenido con Perplexity (búsqueda web con citas).
+ * Diagnóstico de configuración de IA.
  *
- * Sigue pegándole directo a `api.perplexity.ai` a propósito: Perplexity no es un
- * proveedor zero-config del AI Gateway y lo que se usa acá es su producto de
- * búsqueda, no una llamada LLM común.
- *
- * ⚠️ Este camino NO registra costo en `v3.ai_usage_log` porque el gasto lo
- * factura Perplexity aparte y su respuesta no trae tokens comparables. Es el
- * único canal de IA que queda fuera de la contabilidad, y es deliberado.
+ * Desde el retiro de Perplexity (21-ago-2026) TODO el consumo de IA pasa por el
+ * AI Gateway y queda contabilizado en `v3.ai_usage_log`. Ya no hay canal de IA
+ * fuera de la contabilidad, que es lo que este check existía para vigilar.
  */
-export async function generatePerplexityContent(
-  prompt: string,
-  model = "sonar-pro",
-  systemPrompt?: string,
-): Promise<string> {
-  const apiKey = process.env.PERPLEXITY_API_KEY
-  if (!apiKey) throw new Error("Perplexity API Key is missing")
-
-  console.log(`[v0] Sending request to Perplexity (${model})...`)
-
-  try {
-    const messages: Array<{ role: string; content: string }> = []
-
-    if (systemPrompt) {
-      messages.push({ role: "system", content: systemPrompt })
-    }
-    messages.push({ role: "user", content: prompt })
-
-    const response = await fetch("https://api.perplexity.ai/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: model,
-        messages: messages,
-      }),
-    })
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error(`[v0] Perplexity API Error (${response.status}):`, errorText)
-      throw new Error(`Perplexity API Failed: ${response.status} - ${errorText}`)
-    }
-
-    const data = await response.json()
-
-    if (!data.choices || data.choices.length === 0) {
-      console.error("[v0] Perplexity returned no choices:", JSON.stringify(data))
-      return ""
-    }
-
-    return data.choices[0].message.content || ""
-  } catch (error: any) {
-    console.error("[v0] Network/Parsing Error in generatePerplexityContent:", error)
-    throw error
-  }
-}
-
 export function debugAIConfiguration() {
   // Gemini ya no usa GOOGLE_GENERATIVE_AI_API_KEY: va por el Gateway, que se
   // autentica solo en Vercel (o con AI_GATEWAY_API_KEY fuera de Vercel).
   const gatewayKey = process.env.AI_GATEWAY_API_KEY
-  const perplexityKey = process.env.PERPLEXITY_API_KEY
 
   console.log("[v0] --- AI Configuration Check ---")
-  console.log("[v0] Gemini: via AI Gateway")
+  console.log("[v0] Todo el consumo de IA va por el AI Gateway")
   console.log("[v0] AI_GATEWAY_API_KEY:", gatewayKey ? "Present" : "ausente (OK dentro de Vercel: usa OIDC)")
-  console.log("[v0] Perplexity API Key:", perplexityKey ? "Present" : "MISSING")
   console.log("[v0] ------------------------------")
 
-  return {
-    hasGoogle: true,
-    hasPerplexity: !!perplexityKey,
-  }
+  return { hasGateway: true }
 }

@@ -23,7 +23,7 @@ export default async function AdminPromptsPage() {
       <div className="mb-8">
         <h1 className="text-3xl font-bold">Gestión de Prompts</h1>
         <p className="text-muted-foreground mt-2">
-          Administra los prompts que se usan para investigación con IA (Perplexity)
+          Administra los prompts que se usan para investigación con IA
         </p>
       </div>
 

@@ -41,7 +41,7 @@ import {
 import { setIcebreakerFeedback } from "@/app/actions/v3/icebreakers"
 import { ScoreBadge } from "@/components/v3/score-badge"
 import { SignalsTab } from "./signals-tab"
-import { AccountReportView, StatusBadge } from "./account-report-view"
+import { AccountReportView, DataFreshness, StatusBadge } from "./account-report-view"
 import type { AccountReport } from "@/lib/v3/services/account-report"
 
 const RADAR_CONFIG: Record<string, { label: string; icon: typeof Cpu }> = {
@@ -164,6 +164,10 @@ export function AccountDetailView({
               {company.country && <span>· {company.country}</span>}
               {company.industry && <Badge variant="secondary">{company.industry}</Badge>}
             </div>
+            {/* Reemplaza al CTA "Investigar": los datos se buscan solos al
+                seguir la cuenta y el cron los refresca al mes, así que lo único
+                que hace falta decir es cuán fresco es esto. */}
+            {report && isFollowed ? <DataFreshness method={report.method} /> : null}
           </div>
 
           <div className="flex items-center gap-2">
@@ -203,7 +207,6 @@ export function AccountDetailView({
 
       {/* Lo accionable arriba: el próximo paso del funnel, en una línea. */}
       <NextSteps
-        hasResearch={findings.length > 0}
         contactsCount={signals?.relatedContacts.length ?? 0}
         icebreakersCount={icebreakers.length}
         isFollowed={isFollowed}
@@ -479,7 +482,6 @@ function hostnameOf(url: string): string | null {
  * accionable: seguir → investigar → decisores → icebreaker → contactar.
  */
 function NextSteps({
-  hasResearch,
   contactsCount,
   icebreakersCount,
   isFollowed,
@@ -487,7 +489,6 @@ function NextSteps({
   onFollow,
   onGoToTab,
 }: {
-  hasResearch: boolean
   contactsCount: number
   icebreakersCount: number
   isFollowed: boolean
@@ -504,16 +505,6 @@ function NextSteps({
       <Button size="sm" onClick={onFollow} disabled={isPending}>
         <Star data-icon="inline-start" />
         Seguir
-      </Button>
-    )
-  } else if (!hasResearch) {
-    label = "Sin research todavía: investigala para sumar hallazgos verificables al informe."
-    cta = (
-      <Button size="sm" variant="outline" asChild>
-        <Link href="/v3/chat">
-          Investigar
-          <ArrowRight data-icon="inline-end" />
-        </Link>
       </Button>
     )
   } else if (contactsCount === 0) {

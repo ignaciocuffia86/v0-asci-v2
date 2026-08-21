@@ -48,6 +48,50 @@ function relativo(iso: string | null): string {
   return formatDistanceToNow(d, { addSuffix: true, locale: es })
 }
 
+/**
+ * Fechas de refresco de la cuenta.
+ *
+ * Reemplaza al CTA "Investigar", que le pedía al usuario una acción para algo
+ * que el sistema ya hace solo: al marcar el bookmark se buscan vacantes y
+ * noticias, y el cron las refresca al mes. Lo único que el usuario necesita
+ * saber es cuán fresco es lo que está leyendo y cuándo se renueva.
+ */
+export function DataFreshness({ method }: { method: AccountReport["method"] }) {
+  const corridas = [
+    { at: method.jobsLastScrapedAt, cada: method.jobsRefreshDays },
+    { at: method.newsLastScrapedAt, cada: method.newsRefreshDays },
+  ].filter((c): c is { at: string; cada: number } => !!c.at && !Number.isNaN(new Date(c.at).getTime()))
+
+  // Todavía no corrió ninguna fuente: el kick del alta o el cron la levantan.
+  if (corridas.length === 0) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Datos en preparación: se buscan solos al seguir la cuenta.
+      </p>
+    )
+  }
+
+  // La más reciente manda para "actualizado"; para "próxima" manda la que
+  // vence ANTES, que es cuando el informe efectivamente cambia.
+  const ultima = Math.max(...corridas.map((c) => new Date(c.at).getTime()))
+  const proxima = Math.min(
+    ...corridas.map((c) => new Date(c.at).getTime() + c.cada * 24 * 60 * 60 * 1000),
+  )
+  // Si alguna fuente nunca corrió, su refresco está pendiente ya mismo.
+  const faltaAlguna = corridas.length < 2
+  const proximaIso = new Date(proxima).toISOString()
+
+  return (
+    <p className="text-xs text-muted-foreground">
+      Actualizado {relativo(new Date(ultima).toISOString())} ({fecha(new Date(ultima).toISOString())})
+      {" · "}
+      {faltaAlguna || proxima <= Date.now()
+        ? "próxima actualización: en las próximas horas"
+        : `próxima actualización: ${fecha(proximaIso)}`}
+    </p>
+  )
+}
+
 /** Chip de estado para el encabezado de la cuenta. */
 export function StatusBadge({ status }: { status: AccountStatus }) {
   return (
