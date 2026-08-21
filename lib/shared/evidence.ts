@@ -38,6 +38,8 @@ import {
 export const PRODUCED_BY = [
   "v2_research",
   "v2_manual",
+  /** Bundles de noticias del bookmark de v3 (lib/shared/news-search.ts). */
+  "v3_news",
   "v3_radar",
   "v3_drilldown",
   "mcp_client",
@@ -65,19 +67,29 @@ export type EvidenceKind = "news" | "implementation" | "radar"
 export type { EvidenceLevel }
 
 /**
- * `company_news.source` es la columna legacy de procedencia: NOT NULL con
- * DEFAULT 'parallel'. `produced_by` la reemplaza, pero v2 y los guardrails de
- * v3 siguen leyendo `source`, así que se mantiene en sincronía al escribir.
- * Omitirla dejaría toda la evidencia del MCP marcada como 'parallel'.
+ * `company_news.source` es la columna legacy de procedencia: NOT NULL, hoy con
+ * DEFAULT 'research'. `produced_by` la reemplaza, pero v2 sigue leyendo
+ * `source`, así que se mantiene en sincronía al escribir.
+ *
+ * ── 'parallel' está deprecado (21-ago-2026) ──
+ * El valor original era 'parallel', por el buscador que usaba el research de v2.
+ * Parallel se retiró hace meses y la columna siguió estampando su nombre para
+ * filas producidas por cinco motores distintos (perplexity, gemini, serpapi,
+ * haiku…), así que no se podía medir quién generó qué. Ahora el valor grueso es
+ * 'research' = "lo buscó el pipeline del servidor", y QUIÉN exactamente lo dice
+ * `produced_by` (motor) + `ai_provider` (modelos reales de cada etapa).
+ *
+ * Contrato SQL: supabase/migrations/20260821160000_deprecate_parallel_source.sql
  */
 const LEGACY_NEWS_SOURCE: Record<ProducedBy, string> = {
-  v2_research: "parallel",
-  v2_manual: "parallel",
-  v3_radar: "parallel",
+  v2_research: "research",
+  v2_manual: "research",
+  v3_news: "research",
+  v3_radar: "research",
   v3_drilldown: "client_mcp",
   mcp_client: "client_mcp",
-  etl_apify: "parallel",
-  cron_refresh: "parallel",
+  etl_apify: "research",
+  cron_refresh: "research",
 }
 
 /** Tabla física donde aterriza cada tipo. */

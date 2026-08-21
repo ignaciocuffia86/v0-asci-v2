@@ -87,8 +87,13 @@ function Section({
 
 /** Cada cuánto se re-consulta mientras hay una búsqueda de noticias en vuelo. */
 const POLL_MS = 8000
-/** Techo de espera: ~4 minutos. Si no llegó, algo falló y el cartel lo dice. */
-const MAX_POLLS = 30
+/**
+ * Techo de espera: ~8 minutos. Son dos bundles en paralelo (~1-2 min) más el
+ * chequeo de links vivos; el margen cubre una corrida lenta sin llegar a los 15
+ * minutos que el runner usa para dar un scrape por colgado. Pasado esto, el
+ * cartel lo dice en vez de girar para siempre.
+ */
+const MAX_POLLS = 60
 
 export function AccountReportView({ report }: { report: AccountReport }) {
   const router = useRouter()
@@ -337,8 +342,8 @@ export function AccountReportView({ report }: { report: AccountReport }) {
             <div className="mb-3 flex items-center gap-2.5 rounded-md border border-primary/30 bg-primary/5 px-3 py-2.5 text-sm">
               <Loader2 className="size-4 shrink-0 animate-spin text-primary" />
               <p className="text-pretty">
-                Buscando noticias de los últimos {report.method.newsWindowMonths} meses… suele tardar entre 30 y 60
-                segundos. Aparecen acá solas, no hace falta recargar.
+                Buscando noticias de los últimos {report.method.newsWindowMonths} meses… suele tardar entre 1 y 2
+                minutos. Aparecen acá solas, no hace falta recargar.
               </p>
             </div>
           )}

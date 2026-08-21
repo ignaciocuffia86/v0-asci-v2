@@ -13,10 +13,11 @@
  *    filas historicas y tiene que usar el prompt EXACTO de produccion; si lo
  *    copiara, los dos derivarian y el reproceso dejaria de reflejar el endpoint.
  *
- * 2. Importar `app/api/research/news/route.ts` desde un script es imposible:
- *    arrastra `lib/parallel.ts`, que instancia el cliente de Parallel a nivel de
- *    modulo y lanza si falta `PARALLEL_API_KEY`. Un prompt no deberia obligar a
- *    tener credenciales de un servicio de busqueda para poder leerlo.
+ * 2. Un prompt no deberia obligar a arrastrar media app para poder leerlo.
+ *    Importar `app/api/research/news/route.ts` desde un script trae el cliente
+ *    de Supabase, el motor de research y la ruta entera; historicamente ademas
+ *    traia `lib/parallel.ts`, que instanciaba el cliente de Parallel a nivel de
+ *    modulo y lanzaba si faltaba su API key (Parallel ya esta retirado).
  */
 
 import { z } from 'zod/v3';

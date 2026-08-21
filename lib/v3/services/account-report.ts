@@ -8,7 +8,7 @@ import { getWorkspaceFitProfile } from "./workspace-fit-profile"
 import { listAccountJobPostings, type UiJobPosting } from "./job-posting-provider"
 import { listPersonnelMovements, type PersonnelMovementsSummary } from "./personnel-movements"
 import { getAccountNewsRadar, type AccountNewsRadar } from "./news-readings"
-import { NEWS_SCRAPE_COOLDOWN_DAYS, NEWS_WINDOW_MONTHS } from "./news-scrape-runner"
+import { NEWS_SCRAPE_COOLDOWN_DAYS, NEWS_SCRAPE_STALE_MS, NEWS_WINDOW_MONTHS } from "./news-scrape-runner"
 import { MOVEMENTS_WINDOW_MONTHS } from "./personnel-movements-rules"
 import {
   buildInputsFingerprint,
@@ -54,9 +54,9 @@ export interface AccountReportMethod {
 /**
  * Estado del scrape de noticias, para que la UI pueda avisar en vez de mostrar
  * un vacío que parece un error:
- *  - `pending`: nunca se buscó y el kick está por dispararse (el `after()` de
- *    la página corre DESPUÉS de responder, así que en el primer render todavía
- *    no hay ni fila de intento).
+ *  - `pending`: la cuenta se acaba de marcar y el kick está por dispararse (el
+ *    `after()` del alta corre DESPUÉS de responder, así que en el primer render
+ *    todavía no hay ni fila de intento).
  *  - `running`: hay una búsqueda en vuelo.
  *  - `idle`: ya se buscó (con o sin resultados) dentro de la ventana.
  */
@@ -102,7 +102,7 @@ export async function getAccountReport(
 ): Promise<AccountReport> {
   const admin = createAdminClient()
 
-  const [profile, jobsResult, movements, news, jobScrape, lastNewsScrape] = await Promise.all([
+  const [profile, jobsResult, movements, news, jobScrape, lastNewsScrape, followRow] = await Promise.all([
     getWorkspaceFitProfile(workspaceId),
     listAccountJobPostings(companyId, 100),
     listPersonnelMovements(companyId, workspaceId),
@@ -126,16 +126,37 @@ export async function getAccountReport(
       .order("started_at", { ascending: false })
       .limit(1)
       .maybeSingle(),
+    // Cuándo se marcó el bookmark. El scrape se dispara AHÍ (no al abrir la
+    // cuenta), así que es la única razón legítima para esperar sin fila.
+    admin
+      .schema("v3")
+      .from("followed_accounts")
+      .select("created_at")
+      .eq("company_id", companyId)
+      .eq("workspace_id", workspaceId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ])
 
   const newsScrapeStatus: NewsScrapeStatus = (() => {
     const row = lastNewsScrape.data
-    if (!row) return "pending"
-    if (row.status !== "running") return "idle"
-    // Un 'running' viejo es un scrape colgado, no uno en vuelo: mismo criterio
-    // de 15 minutos que usa la elegibilidad del runner.
-    const ageMs = Date.now() - new Date(row.started_at).getTime()
-    return ageMs < 15 * 60 * 1000 ? "running" : "idle"
+    if (row) {
+      if (row.status !== "running") return "idle"
+      // Un 'running' viejo es un scrape colgado, no uno en vuelo: mismo criterio
+      // que usa la elegibilidad del runner.
+      const ageMs = Date.now() - new Date(row.started_at).getTime()
+      return ageMs < NEWS_SCRAPE_STALE_MS ? "running" : "idle"
+    }
+    // Sin intento registrado. El kick sale del alta y corre en `after()`, así
+    // que justo después de marcar el bookmark todavía puede no haber fila.
+    // Pasado ese margen no hay nada en vuelo: dejar el loader girando para
+    // siempre sería mentirle al usuario (le pasaba a toda cuenta seguida antes
+    // de que el scrape existiera).
+    const followedAt = followRow.data?.created_at as string | undefined
+    return followedAt && Date.now() - new Date(followedAt).getTime() < NEWS_SCRAPE_STALE_MS
+      ? "pending"
+      : "idle"
   })()
 
   const targetTerms = [...profile.targetTechnologies, ...profile.targetProcesses]

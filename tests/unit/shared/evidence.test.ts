@@ -4,6 +4,7 @@ import {
   evidenceDedupeHash,
   isProducedBy,
   normalizeSourceUrl,
+  PRODUCED_BY,
   type EvidenceInput,
 } from "@/lib/shared/evidence"
 
@@ -197,8 +198,21 @@ describe("columna legacy `source` de company_news", () => {
     expect(buildEvidenceRow(news({ producedBy: "v3_drilldown" })).row.source).toBe("client_mcp")
   })
 
-  it("mantiene el valor histórico para el research de v2", () => {
-    expect(buildEvidenceRow(news({ producedBy: "v2_research" })).row.source).toBe("parallel")
+  it("marca 'research' para todo lo que busca el servidor, sea el motor que sea", () => {
+    for (const producer of ["v2_research", "v2_manual", "v3_news", "v3_radar", "etl_apify", "cron_refresh"] as const) {
+      expect(buildEvidenceRow(news({ producedBy: producer })).row.source).toBe("research")
+    }
+  })
+
+  it("nunca vuelve a escribir 'parallel'", () => {
+    // Parallel está retirado. La columna estampó su nombre durante meses para
+    // filas producidas por cinco motores distintos, y por eso no se podía medir
+    // quién generó qué: el que distingue es `produced_by`.
+    for (const producer of PRODUCED_BY) {
+      const row = buildEvidenceRow(news({ producedBy: producer })).row
+      expect(row.source).not.toBe("parallel")
+      expect(row.produced_by).toBe(producer)
+    }
   })
 })
 

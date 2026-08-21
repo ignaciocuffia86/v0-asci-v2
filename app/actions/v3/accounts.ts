@@ -53,13 +53,17 @@ export async function followAccountAction(
     })
   })
 
-  // Kick de noticias (Fase 8): mismo criterio que las vacantes — el informe se
-  // arma solo. `scrapeCompanyNews` decide por su cuenta si corresponde (ventana
-  // de 30 días) y marca el intento antes de gastar, así que llamarlo de más es
-  // barato: sale por la guarda sin tocar el modelo.
+  // Kick de noticias: mismo criterio que las vacantes — el informe se arma
+  // solo. Éste es el ÚNICO disparador de la búsqueda cara (dos bundles con
+  // haiku, ~US$0,20 por cuenta): marcar el bookmark es el momento en que el
+  // usuario declara que le importa, así que es donde se paga.
+  //
+  // `scrapeCompanyNews` decide por su cuenta si corresponde (ventana de 30
+  // días) y marca el intento antes de gastar, así que re-seguir una cuenta que
+  // ya se buscó sale por la guarda sin tocar el modelo.
   after(async () => {
     const { scrapeCompanyNews } = await import("@/lib/v3/services/news-scrape-runner")
-    await scrapeCompanyNews(companyId).catch((error) => {
+    await scrapeCompanyNews(companyId, { workspaceId, userId }).catch((error) => {
       console.warn("[v3] Kick de noticias post-follow falló:", error instanceof Error ? error.message : error)
     })
   })

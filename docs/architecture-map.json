@@ -1,9 +1,9 @@
 {
   "meta": {
     "name": "ASCI — Mapa de arquitectura v2 + v3",
-    "generatedAt": "2026-08-07",
+    "generatedAt": "2026-08-21",
     "repo": "ignaciocuffia86/v0-asci-v2",
-    "summary": "Monorepo Next.js único donde conviven ASCI v2 (producción, schema public) y ASCI v3 (multitenant, schema v3) sobre la MISMA base Supabase. El aislamiento es por schema, no por proyecto ni por base. Actualización 2026-08-07: se cerró la centralización del research. El Tech Radar dejó de recolectar con Parallel y ahora usa collectStructured (collect+structure por bundle) del motor único, con costo atribuido a feature 'radar-tech'; public-docs enruta su búsqueda por el AI Gateway (gateway.tools.parallelSearch), así que YA NO queda ninguna llamada directa al SDK parallel-web ni uso de PARALLEL_API_KEY en la app. Además se subió todo el stack AI SDK a ai@7 (providers a v4) y se agregó v3.tech_radar_runs como índice de corridas del radar.",
+    "summary": "Monorepo Next.js único donde conviven ASCI v2 (producción, schema public) y ASCI v3 (multitenant, schema v3) sobre la MISMA base Supabase. El aislamiento es por schema, no por proyecto ni por base. Actualización 2026-08-21: Parallel quedó RETIRADO por completo. public-docs, su último consumidor, migró a `collect` del motor de research, y se borró lib/parallel.ts. Además la búsqueda de noticias se unificó en lib/shared/news-search.ts (dos bundles profundos con haiku, ~US$0,20 por cuenta, sin cupo ni confirmación de costo), que usan tanto /api/research/news de v2 como el bookmark de v3; y company_news.source dejó de estampar 'parallel' para todo: ahora dice 'research' y la procedencia real vive en produced_by + ai_provider.",
     "stats": {
       "tsFiles": 370,
       "apiRoutes": 51,
@@ -76,16 +76,14 @@
     },
     {
       "id": "ext_parallel",
-      "label": "Parallel.ai",
+      "label": "Parallel.ai (retirado)",
       "zone": "external",
       "layer": 0,
       "kind": "api",
-      "desc": "Búsqueda web estructurada, ahora SIEMPRE vía AI Gateway (gateway.tools.parallelSearch). Su único consumidor es la búsqueda de documentos públicos (lib/parallel.ts -> searchPublicDocsViaGateway). news migró al motor de research y tech-radar a collectStructured, así que dejó de ser el recolector universal.",
-      "files": [
-        "lib/parallel.ts"
-      ],
+      "desc": "RETIRADO el 21-ago-2026. Fue el recolector web del research de v2 y del Tech Radar. Su último consumidor (public-docs) migró a `collect` del motor de research y lib/parallel.ts se borró: hoy NINGÚN camino del código lo llama, ni directo ni vía gateway.tools.parallelSearch.",
+      "files": [],
       "env": [],
-      "risk": "CORRIGE la nota anterior ('no es enrutable por el AI Gateway'), que solo era cierta para Parallel como MODEL provider (/v1/models no lo lista). Como TOOL sí es enrutable: gateway.tools.parallelSearch existe en @ai-sdk/gateway@4 (el que trae ai@7), se factura por AI_GATEWAY_API_KEY y la app ya NO necesita PARALLEL_API_KEY. Trade-off vigente: es una tool provider-executed, así que el objective y las search_queries las genera el MODELO; el código solo puede pinear el sourcePolicy (includeDomains/excludeDomains/afterDate), que es lo que sostiene el anti-contaminación. Además publishDate suele venir null."
+      "risk": "Queda en el mapa para que no se lo reintroduzca por error. Por qué se fue: (1) como tool provider-executed, el objective y las search_queries las generaba el MODELO y el código solo podía pinear el sourcePolicy, así que el anti-contaminación dependía de config y no del prompt; (2) publishDate venía null casi siempre; (3) sus URLs indexadas incluían links ya muertos (~79% vivas contra 96-100% del camino nativo, medido en scripts/bench-search-providers.mts). Su rastro sucio más caro fue company_news.source, que estampó 'parallel' durante meses para filas producidas por cinco motores distintos y hacía imposible medir quién generó qué."
     },
     {
       "id": "ext_anthropic",
@@ -357,7 +355,7 @@
       "zone": "v2",
       "layer": 2,
       "kind": "route",
-      "desc": "Implementaciones, noticias y documentos publicos de una empresa. Los tres caminos pasan por el AI Gateway: news e implementations recolectan y estructuran con el motor de research (implementations vía el Tech Radar con collectStructured), y public-docs busca con gateway.tools.parallelSearch. Ninguno le pega directo al SDK parallel-web.",
+      "desc": "Implementaciones, noticias y documentos publicos de una empresa. Los tres caminos pasan por el AI Gateway y ninguno usa Parallel: news busca con lib/shared/news-search.ts (los mismos dos bundles que el bookmark de v3) y persiste con recordEvidenceBatch; implementations va via el Tech Radar con collectStructured; public-docs recolecta con `collect` a partir de buildPublicDocsPrompt.",
       "files": [
         "app/api/research/implementations/route.ts",
         "app/api/research/news/route.ts",
@@ -714,7 +712,7 @@
       "zone": "v2",
       "layer": 3,
       "kind": "service",
-      "desc": "Investigacion de implementaciones tecnologicas por empresa: 17 micro-agentes mapeados a 4 bundles tematicos (+1 dinamico de keywords). Cada bundle corre collectStructured (collect+structure) del motor de research, en paralelo. Ya NO recolecta con Parallel: pasa por el AI Gateway y registra costo con feature 'radar-tech' + companyId/workspaceId, y agrega el uso para que el caller lo persista en v3.tech_radar_runs.",
+      "desc": "Investigacion de implementaciones tecnologicas por empresa: 17 micro-agentes mapeados a 4 bundles tematicos (+1 dinamico de keywords). Cada bundle corre collectStructured (collect+structure) del motor de research, en paralelo. Recolecta por el AI Gateway (Parallel está retirado) y registra costo con feature 'radar-tech' + companyId/workspaceId, y agrega el uso para que el caller lo persista en v3.tech_radar_runs.",
       "files": [
         "lib/tech-radar.ts",
         "lib/tech-radar-constants.ts",
@@ -1608,8 +1606,8 @@
       "id": "e38",
       "from": "api_research_v2",
       "to": "ext_parallel",
-      "kind": "call",
-      "label": "public-docs: busca vía Gateway"
+      "kind": "retired",
+      "label": "retirado: public-docs migró a collect"
     },
     {
       "id": "e39",
@@ -2468,7 +2466,7 @@
       "name": "Research de implementaciones y noticias",
       "version": "v2",
       "trigger": "Usuario abre el drilldown de una cuenta",
-      "desc": "Investiga evidencia externa de que la empresa usa una tecnología. La recolección quedó partida a propósito: tech-radar y public-docs siguen con Parallel, news recolecta con el motor. La estructuración, en cambio, ya es única para los tres.",
+      "desc": "Investiga evidencia externa de que la empresa usa una tecnología. La recolección ya NO está partida: tech-radar, public-docs y news recolectan los tres con el motor de research (collect / collectStructured). La estructuración también es única para los tres.",
       "steps": [
         {
           "n": 1,
@@ -2489,9 +2487,9 @@
         },
         {
           "n": 4,
-          "nodeId": "ext_parallel",
+          "nodeId": "svc_research_engine",
           "edgeId": "e38",
-          "detail": "Recolecta excerpts con contenido por URL. Antes este paso figuraba como Perplexity, pero el código nunca lo llamó desde acá: Perplexity solo se usa en lib/ai-service.ts."
+          "detail": "Recolecta con búsqueda web server-side de Anthropic y devuelve SOLO las fuentes que el modelo citó. Antes este paso era Parallel (y antes de eso figuraba como Perplexity, que el código nunca llamó desde acá)."
         },
         {
           "n": 5,
@@ -3708,11 +3706,11 @@
       "loc": 237,
       "evidence": [
         "ningun import de lib/parallel-extract",
-        "lib/parallel.ts si esta en uso"
+        "lib/parallel.ts fue borrado el 21-ago-2026"
       ],
-      "finding": "Segundo módulo para Parallel.ai; el activo es lib/parallel.ts.",
+      "finding": "Segundo módulo para Parallel.ai. El activo era lib/parallel.ts, que ya no existe: con Parallel retirado, este archivo quedó sin propósito y se puede borrar.",
       "verification": "Grep de 'parallel-extract' en app, components y lib: sin resultados fuera del archivo.",
-      "recommendation": "Borrar."
+      "recommendation": "Borrar. Era la base aspiracional para extraer contenido de PDFs con Parallel; con Parallel retirado, si algún día se extrae PDF va a ser por otro camino."
     },
     {
       "id": "DEAD-07",
