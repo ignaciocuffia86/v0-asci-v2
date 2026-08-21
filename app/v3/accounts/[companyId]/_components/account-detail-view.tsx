@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState, useTransition } from "react"
+import { Suspense, use, useMemo, useState, useTransition } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
@@ -40,6 +40,7 @@ import { setIcebreakerFeedback } from "@/app/actions/v3/icebreakers"
 import { ScoreBadge } from "@/components/v3/score-badge"
 import { SignalsTab } from "./signals-tab"
 import { AccountReportView, DataFreshness, StatusBadge } from "./account-report-view"
+import { ReportSkeleton } from "./report-skeleton"
 import type { AccountReport } from "@/lib/v3/services/account-report"
 
 const RADAR_CONFIG: Record<string, { label: string; icon: typeof Cpu }> = {
@@ -53,11 +54,17 @@ type Finding = AccountDetail["findings"][number]
 export function AccountDetailView({
   detail,
   signals,
-  report,
+  reportPromise,
 }: {
   detail: AccountDetail
   signals: AccountSignalsData | null
-  report: AccountReport | null
+  /**
+   * La radiografía, sin resolver. Se consume con `use()` dentro de los
+   * `Suspense` de abajo, así el encabezado y el resto de la cuenta se pintan
+   * sin esperarla. Por contrato NUNCA rechaza: el error ya se convirtió en
+   * null en el server component.
+   */
+  reportPromise: Promise<AccountReport | null>
 }) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
@@ -137,7 +144,11 @@ export function AccountDetailView({
                   "abordar / seguir de cerca / sin señal" es accionable; un 78
                   sobre 100 no dice qué hacer. El score sigue existiendo para
                   ordenar listados. */}
-              {report ? <StatusBadge status={report.status.status} /> : null}
+              {/* El chip llega con el informe. Sin fallback: un esqueleto
+                  pegado al título salta más de lo que aporta. */}
+              <Suspense fallback={null}>
+                <StatusBadgeSlot promise={reportPromise} />
+              </Suspense>
               {scoreDelta !== null && scoreDelta !== 0 && (
                 <Badge variant={scoreDelta > 0 ? "default" : "secondary"} className="tabular-nums">
                   {scoreDelta > 0 ? `+${scoreDelta}` : scoreDelta} vs. anterior
@@ -162,7 +173,13 @@ export function AccountDetailView({
             {/* Reemplaza al CTA "Investigar": los datos se buscan solos al
                 seguir la cuenta y el cron los refresca al mes, así que lo único
                 que hace falta decir es cuán fresco es esto. */}
-            {report && isFollowed ? <DataFreshness method={report.method} /> : null}
+            {isFollowed ? (
+              <Suspense
+                fallback={<p className="text-xs text-muted-foreground">Cargando estado de los datos…</p>}
+              >
+                <FreshnessSlot promise={reportPromise} />
+              </Suspense>
+            ) : null}
           </div>
 
           <div className="flex items-center gap-2">
@@ -203,7 +220,9 @@ export function AccountDetailView({
 
       {/* LA RADIOGRAFÍA (Fase 9): el informe se lee de arriba a abajo, en el
           mismo orden que el documento que se entrega al cliente. */}
-      {report && <AccountReportView report={report} />}
+      <Suspense fallback={<ReportSkeleton />}>
+        <ReportSlot promise={reportPromise} />
+      </Suspense>
 
       {/* El respaldo del informe, en la MISMA vista. Antes eran pestañas al pie
           del bookmark, y ahí se perdían: quedaban debajo de todo el informe y
@@ -433,6 +452,30 @@ function hostnameOf(url: string): string | null {
  * defecto. Los próximos pasos son deterministas y siguen el mismo funnel que el
  * MCP: seguir → investigar → decisores → icebreaker → contactar.
  */
+/**
+ * Consumidores de la radiografía.
+ *
+ * Cada uno desenvuelve la MISMA promesa con `use()` dentro de su propio
+ * `Suspense`, así el chip de estado, las fechas de refresco y el informe
+ * aterrizan sin bloquearse entre sí ni bloquear el encabezado. `use()` sobre
+ * una promesa ya resuelta no vuelve a suspender, así que compartirla entre los
+ * tres no cuesta tres cálculos.
+ */
+function StatusBadgeSlot({ promise }: { promise: Promise<AccountReport | null> }) {
+  const report = use(promise)
+  return report ? <StatusBadge status={report.status.status} /> : null
+}
+
+function FreshnessSlot({ promise }: { promise: Promise<AccountReport | null> }) {
+  const report = use(promise)
+  return report ? <DataFreshness method={report.method} /> : null
+}
+
+function ReportSlot({ promise }: { promise: Promise<AccountReport | null> }) {
+  const report = use(promise)
+  return report ? <AccountReportView report={report} /> : null
+}
+
 /**
  * Bloque de respaldo del informe: colapsado por defecto, se abre a un clic.
  *

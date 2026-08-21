@@ -1,3 +1,4 @@
+import { cache } from "react"
 import { createClient } from "@/lib/supabase/server"
 import { createAdminClient } from "@/lib/supabase/admin"
 
@@ -154,7 +155,9 @@ export async function getAuthUserByEmail(
  * estable entre requests: sin ORDER BY explicito Postgres no garantiza el
  * orden y el usuario podria caer en un workspace distinto en cada carga.
  */
-export async function getWorkspaceForUser(userId: string): Promise<WorkspaceWithMember | null> {
+export const getWorkspaceForUser = cache(async function getWorkspaceForUser(
+  userId: string,
+): Promise<WorkspaceWithMember | null> {
   // Usamos admin client para bypasear RLS - es seguro porque el userId viene de auth validado
   const admin = createAdminClient()
 
@@ -196,7 +199,7 @@ export async function getWorkspaceForUser(userId: string): Promise<WorkspaceWith
       joined_at: data.joined_at,
     },
   }
-}
+})
 
 /** Obtiene un workspace por id. */
 export async function getWorkspaceById(workspaceId: string): Promise<Workspace | null> {
@@ -372,7 +375,9 @@ export async function requireWorkspaceRole(
 /**
  * Verifica si el workspace tiene documentos (blocker para usar la plataforma)
  */
-export async function workspaceHasDocuments(workspaceId: string): Promise<boolean> {
+export const workspaceHasDocuments = cache(async function workspaceHasDocuments(
+  workspaceId: string,
+): Promise<boolean> {
   const admin = createAdminClient()
 
   const { count, error } = await admin
@@ -387,7 +392,7 @@ export async function workspaceHasDocuments(workspaceId: string): Promise<boolea
   }
 
   return (count ?? 0) > 0
-}
+})
 
 /**
  * Obtiene el workspace del usuario actual (usa auth session)

@@ -15,6 +15,7 @@ import {
   type WorkspaceRole,
   type WorkspaceWithMember,
 } from "@/lib/v3/workspace"
+import { getRequestUser } from "@/lib/v3/request-auth"
 import {
   createInvitation,
   revokeInvitation,
@@ -31,17 +32,11 @@ import {
 // AUTH HELPERS
 // ═══════════════════════════════════════════════════════════
 
+// Memoizado por request: `getOnboardingStatus` y los actions que lo llaman en
+// la misma carga comparten un solo round-trip a la API de Auth.
 async function getCurrentUser() {
-  const supabase = await createClient()
-  const {
-    data: { user },
-    error,
-  } = await supabase.auth.getUser()
-
-  if (error || !user) {
-    redirect("/auth/login")
-  }
-
+  const user = await getRequestUser()
+  if (!user) redirect("/auth/login")
   return user
 }
 
