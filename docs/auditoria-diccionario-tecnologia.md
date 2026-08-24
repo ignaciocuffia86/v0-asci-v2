@@ -351,3 +351,114 @@ matchea la ciudad; lo cubren `Palo Alto Networks` y `Palo Alto firewall`. Las ce
 - Borrar las 18.530 señales huérfanas.
 - Sacar las 36 keywords que nunca pueden matchear, más las 5 `php_*`.
 - Sacar las keywords de H2 marcadas "eliminar", que solas explican más de 9.000 señales falsas.
+
+---
+
+## Registro de ejecución · 24 de agosto de 2026
+
+Aplicado sobre producción con respaldo previo del diccionario completo en
+`dictionary_backup_20260824`. El script está en
+[`scripts/cleanup-dictionary-20260824.sql`](../scripts/cleanup-dictionary-20260824.sql).
+
+| Acción | Impacto | Verificación |
+| --- | ---: | --- |
+| Borrado de señales huérfanas (H4) | −18.607 | 0 huérfanas restantes |
+| Baja de las 36 keywords que nunca matchean + las 5 `php_*` (H1) | −41 kw | 12 productos actualizados |
+| Baja de las 10 keywords marcadas "eliminar" (H2) | −9.389 | `Storage`, `PAN`, `CMS`, `morgan`, `SAT`, `CP`, `Reactive`, `Buffer`, `S1`, `SNOW` |
+| Fusión de Oracle PL/SQL en Oracle Database (H5) | 88 kw | 13.372 señales en el producto unificado |
+| Unificación SAP ERP + SAP ECC 6 → "SAP ECC / Business Suite" (H3) | 169 kw | 13.538 señales / 5.123 cuentas; se deduplicaron 8.730 señales que eran la misma persona contada dos veces |
+| Separación de "Sentinel defender" en dos productos (H5) | +1 producto | Sentinel 97 kw / 96 señales · Defender 16 kw / 362 señales |
+
+**Estado final:** 81 productos (antes 82), 3.226 keywords (antes 3.300), 288.644 señales de
+tecnología (antes 329.101). Un 12% menos de señales, todas ruido demostrable o conteo duplicado.
+
+### Hallazgo nuevo, no incluido en la aprobación
+
+Al verificar la limpieza aparecieron **4.162 señales de tecnología cuyo `signal_id` apunta a
+productos que ya no existen** — ocho productos borrados entre noviembre de 2025 y marzo de 2026:
+uno de Node.js con 2.970 señales, uno de Angular con 601, uno de Laravel con 418, más Wordpress
+(81), Python (50), Django (28), Flask (12) y Copilot (2).
+
+Es un caso distinto del aprobado: no es una keyword huérfana, es un producto entero que
+desapareció y dejó sus señales atrás. La UI no puede mostrarlas asociadas a nada. El DELETE está
+comentado al final del script de limpieza, a la espera de aprobación.
+
+### Pendientes de la tabla H2
+
+Las keywords marcadas "→ reemplazar" siguen en el diccionario a propósito: cada una es una
+decisión de producto y se propone en el lote temático que corresponda. Entre ellas, dos que
+conviene no olvidar porque son las que arrastran más ruido: `Exchange` (5.030 señales) y
+`Javascript` dentro de React (10.603).
+
+---
+
+## Lote 2 · ERP — propuesto
+
+Nube keyword por keyword para los 12 productos ERP, con el conteo real de señales de cada
+término y evidencia de cada baja. Resumen:
+
+| Producto | Keywords hoy | Sacar | Mover | Agregar |
+| --- | ---: | ---: | ---: | ---: |
+| SAP ECC / Business Suite | 169 | 22 (939 señales falsas) | 9 (585) | 6 |
+| SAP S/4HANA | 108 | 37 (151) | 2 (90) | 8 |
+| SAP SuccessFactors | 39 | 7 (709) | — | 8 |
+| SAP Ariba | 32 | 19 (0) | — | 4 |
+| SAP Business One | 28 | 11 (0) | — | 4 |
+| Oracle E-Business Suite | 45 | 6 (666) | 1 (240) | 6 |
+| Oracle ERP Cloud | 56 | 4 (81) | 4 (443) | 6 |
+| Oracle HCM Cloud | 21 | 1 (29) | 2 (53) | 7 |
+| Oracle NetSuite | 1 | — | — | 16 |
+| Dynamics 365 ERP | 11 | — | — | 13 |
+| ODOO ERP | 73 | 47 (0) | — | 6 |
+| Workday Financial & HCM | 51 | 38 (2) | — | 12 |
+
+**Falsos positivos más grandes del lote**, todos verificados contra snippets:
+
+- `Order Management` en Oracle EBS (664) — "Order Management Analyst (Temporal) en Mondelēz".
+  Es un puesto de negocio, no el módulo OM.
+- `EC` (368) y `RCM` (289) en SuccessFactors — RCM es *Reliability Centered Maintenance*:
+  "Ingeniero de Procesos (RCM - HUAWEI/ZTE)", "Asset Management TPM RCM RCA". Entre las dos son
+  el 51% de las señales del producto.
+- `EDI` (315) en SAP ECC — estándar de industria, no de SAP.
+- `CTS` (190) en SAP ECC — en Perú es *Compensación por Tiempo de Servicios*: los snippets dicen
+  "gratificaciones", "ingreso a planilla", "impuestos mensuales".
+- `RFC` (149) en SAP ECC — registro fiscal mexicano. Lo cubren `tRFC` y `qRFC`.
+- `Investment Management` (149) en SAP ECC — "Investment Management Consultant" de banca.
+- `Transportation Management` (82) en S/4HANA — "Consultor Funcional Certificado 2024
+  **Oracle** Transportation Management OTM". Suma consultores de Oracle a la presencia de SAP.
+- `Setup and Maintenance` (39) en Oracle ERP Cloud — "NGS omics data pipeline",
+  "SugarCRM plugins development".
+- `FSM` (29) en Oracle HCM — *Field Service Management*, no Functional Setup Manager.
+
+**Huecos de cobertura más grandes:**
+
+- **Workday no tiene la keyword `Workday`.** 51 keywords generaron 60 señales entre todas.
+- **Dynamics 365 ERP no detecta `AX`, `NAV` ni `Navision`**, que es donde está la base instalada
+  real de Microsoft ERP en LatAm y el mejor indicador de una cuenta candidata a migrar.
+- **NetSuite tiene una sola keyword.** Falta toda la familia `Suite*` (SuiteScript, SuiteFlow,
+  SuiteTalk), que es T2 perfecta.
+- **Falta `RISE with SAP`** en S/4HANA: nadie lo menciona salvo que la cuenta esté en un proyecto
+  de migración.
+- **Falta `OpenERP`** en Odoo, el nombre viejo del producto, que sigue en perfiles con
+  experiencia previa a 2014.
+
+### Tres productos nuevos propuestos
+
+- **SAP BusinessObjects** — recibe 374 señales hoy escondidas dentro de ECC y S/4HANA
+  (`SAP BO`, `SAP BusinessObjects`, `Crystal Reports SAP`, `SAP Analytics Cloud`), más
+  `WebI`, `Universe Designer`, `Information Design Tool`.
+- **SAP PI / PO** — recibe 393 señales y resuelve el duplicado ECC↔S/4HANA. Como producto
+  propio distingue una cuenta con middleware SAP de una que solo tiene el ERP.
+- **SAP Signavio** — 8 señales. Volumen bajo pero venta separada; alternativa es dejarlo
+  dentro de S/4HANA.
+
+### Seis decisiones abiertas
+
+1. `EBS` en Oracle E-Business Suite (489 señales) — ya se sacó la colisión con Amazon EBS.
+2. Las siglas de SuccessFactors: `PCC`, `ECP`, `PMGM` (124 señales).
+3. `ALE` en SAP ECC (37) — jerga SAP legítima, pero "ale" es palabra común en inglés.
+4. Criterio para keywords con 0 señales que sí son jerga real (`FNDLOAD`, `SE11`, `SAP B1 SDK`):
+   cobertura futura o diccionario chico y mantenible.
+5. `SAP Signavio` como producto propio o dentro de S/4HANA.
+6. Las keywords en español propuestas (`Consultor Odoo`, `Módulo SAP`, `Soporte SAP`,
+   `Consultor Oracle EBS`): más cobertura en LatAm, menos precisión.
