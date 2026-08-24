@@ -151,10 +151,6 @@ async function buildXlsx(rows: ScreeningRow[], params: Record<string, unknown>):
   // —que arrastra jszip y su propio stack de streams— entra al grafo de módulos
   // de las 44, cuando la usa UNA. El import dinámico la deja fuera del bundle
   // hasta que alguien pide un xlsx de verdad.
-  //
-  // Es además la hipótesis de por qué el deploy de v0-asci-bot falló en este PR
-  // mientras v0-asci-v2 pasaba: mismo código, distinta configuración de proyecto,
-  // y lo único que este cambio agrega al grafo de la ruta es esta librería.
   const ExcelJS = (await import("exceljs")).default
   const workbook = new ExcelJS.Workbook()
   workbook.created = new Date()
