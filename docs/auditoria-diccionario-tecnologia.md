@@ -1122,3 +1122,87 @@ desarrollo.
   peor que el problema.
 
 
+
+
+### Saldo del lote
+
+La columna "antes" es el estado al empezar la auditoría: estos veinte productos no se habían
+tocado en los seis lotes anteriores, salvo por las bajas técnicas de la limpieza inicial.
+
+| Producto | Cuentas antes | Cuentas ahora | Señales ahora |
+| --- | ---: | ---: | ---: |
+| Java | 11.654 | 11.479 | 31.454 |
+| Python | 7.778 | 7.861 | 19.512 |
+| JavaScript / TypeScript *(nuevo)* | — | 6.893 | 12.955 |
+| PHP | 8.133 | 7.214 | 10.351 |
+| React | 9.947 | 4.241 | 8.355 |
+| Visual Basic | 4.026 | 3.993 | 5.757 |
+| Angular | 3.966 | 3.637 | 7.183 |
+| NodeJS / Express | 2.425 | 2.489 | 4.509 |
+| Spring Boot | 2.169 | 2.119 | 4.288 |
+| Wordpress | 1.892 | 1.998 | 2.406 |
+| Delphi | 1.825 | 1.784 | 2.444 |
+| Vue.js | 1.361 | 1.238 | 1.858 |
+| Django | 1.506 | 1.234 | 1.744 |
+| Cobol | 1.078 | 966 | 2.215 |
+| ASP.NET Core | 925 | 980 | 1.301 |
+| Next.js | 842 | 786 | 1.120 |
+| Flutter | 1.022 | 758 | 963 |
+| Ruby on Rails | 862 | 719 | 1.002 |
+| Ionic | 3.006 | 623 | 803 |
+| Flask | 553 | 550 | 813 |
+| IBM WebSphere *(nuevo)* | — | 425 | 705 |
+| Micro Focus | 134 | 81 | 101 |
+
+**Ionic cae de 3.006 cuentas a 623**, y no es de este lote: es de la primera limpieza, cuando
+salió `Storage` con sus 5.008 señales de "Data Base Storage" y "Application Server Storage". Es
+el ejemplo más extremo de todo el trabajo — una sola palabra genérica sostenía cuatro quintas
+partes de un producto.
+
+**NodeJS, Wordpress, Python y ASP.NET suben** pese a haber perdido keywords, por `NestJS` (650),
+`WooCommerce` (155), `Pandas` (199) y `FastAPI`. Es el mismo saldo que en IBM Z, Qlik y Microsoft
+365: **lo que faltaba valía más que lo que sobraba**, y pasó en cuatro de los siete lotes.
+
+Una corrección chica sobre la marcha: se había agregado `IBM MQ` al producto WebSphere nuevo.
+Está mal —es un broker de mensajería que se vende aparte— y se sacó antes de que generara señales.
+
+---
+
+## Cierre
+
+Los siete lotes están aplicados. El diccionario quedó en **90 productos y 3.038 keywords**,
+contra los 82 productos y 3.300 keywords del arranque: doce productos nuevos, cuatro fusiones y
+alrededor de **47.000 señales falsas eliminadas**.
+
+### El criterio, en una línea
+
+No es la longitud de la sigla ni si la palabra "suena" ambigua: es **la proporción entre señales
+identificablemente reales e identificablemente falsas en el corpus, con umbral en ~80:20**.
+
+La intuición falló en las dos direcciones cinco veces. Parecían riesgosas y no lo eran:
+`Palo Alto` (77% firewalls), `Lambda` (70/70 con AWS), `OSB` (354/354 con Oracle), `Tableau`
+(1.906 contra 1), `spring` (2.162 contra 13). Parecían inocentes y eran ruido: `Fabric`,
+`Exchange`, `Data Manager`, `Storage`, `Wheel`.
+
+### Los tres tipos de error que aparecieron
+
+1. **Falso positivo puro** — la keyword matchea algo que no es tecnología. `PAN` era "Pan
+   American Energy", `CTS` era "Compensación por Tiempo de Servicios", `SAT` la autoridad fiscal
+   mexicana, `Defender` y `Entra` verbos españoles. **Se eliminan.**
+2. **Vendor correcto, producto equivocado** — `Microsoft Dynamics` apuntaba más al ERP que al
+   CRM; `Copilot` es 56% GitHub. **Se mueven o se renombra el producto**, no se borran.
+3. **Nivel equivocado** — el lenguaje cargado dentro del framework (`Javascript` en React), la
+   herramienta suelta dentro de la plataforma (`Crystal Reports` en BusinessObjects), el producto
+   ajeno dentro del hermano (`Trello` en Jira). **Se crea el producto que faltaba.**
+
+### Lo que queda abierto
+
+- **Los vendors `Legacy`, `Backend`, `Frontend` y `CMS`** son categorías haciendo de vendors. Con
+  los lenguajes ya separados de los frameworks, es el momento más fácil que va a haber para
+  reagruparlos.
+- **`WPF`, `WinForms`, `Windows Forms` y `ADO.NET` dentro de Visual Basic** — son de .NET de
+  escritorio en general y necesitarían un producto propio.
+- **ELO Digital Office**, con 45 keywords y cero señales en los siete lotes.
+- **Keywords con co-ocurrencia** — la mejora de motor propuesta en la auditoría, que rescataría
+  términos como `Fabric` exigiendo contexto. Requiere un campo nuevo en `dictionary_products` y
+  tocar `process_dictionary_job`.

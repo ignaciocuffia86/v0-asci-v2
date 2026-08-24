@@ -100,3 +100,47 @@
 -- Visual Basic. Son de .NET de escritorio en general, no de VB: inflan el producto
 -- con desarrolladores de C#. No se movieron porque no hay producto destino y crear
 -- ".NET Desktop" para cuatro keywords es peor que el problema. Queda anotado.
+
+-- ---------------------------------------------------------------------------
+-- 6. Correccion sobre la marcha: IBM MQ
+-- ---------------------------------------------------------------------------
+-- Se habia agregado "IBM MQ" al producto IBM WebSphere nuevo. Esta mal: es un
+-- broker de mensajeria que IBM vende aparte del servidor de aplicaciones. Se saco
+-- antes de que generara senales.
+update dictionary_products p set keywords=(select array_agg(k.kw) from unnest(p.keywords) k(kw)
+  where lower(k.kw) <> 'ibm mq'), updated_at=now() where p.name='IBM WebSphere';
+
+-- ---------------------------------------------------------------------------
+-- Resultado del lote (cuentas antes de toda la auditoria -> ahora)
+-- ---------------------------------------------------------------------------
+--   Java                     11.654 -> 11.479
+--   Python                    7.778 ->  7.861
+--   JavaScript / TypeScript       — ->  6.893   (producto nuevo, el mas grande)
+--   PHP                       8.133 ->  7.214
+--   React                     9.947 ->  4.241
+--   Visual Basic              4.026 ->  3.993
+--   Angular                   3.966 ->  3.637
+--   NodeJS / Express          2.425 ->  2.489
+--   Spring Boot               2.169 ->  2.119
+--   Wordpress                 1.892 ->  1.998
+--   Django                    1.506 ->  1.234
+--   Flutter                   1.022 ->    758
+--   Ionic                     3.006 ->    623   (la caida es de la limpieza inicial,
+--                                                cuando salio Storage con 5.008 senales)
+--   IBM WebSphere                 — ->    425   (producto nuevo)
+--
+-- NodeJS, Wordpress, Python y ASP.NET suben pese a perder keywords, por NestJS
+-- (650), WooCommerce (155), Pandas (199) y FastAPI. Mismo saldo que en IBM Z,
+-- Qlik y Microsoft 365: lo que faltaba valia mas que lo que sobraba. Paso en
+-- cuatro de los siete lotes.
+--
+-- ---------------------------------------------------------------------------
+-- Cierre de los siete lotes
+-- ---------------------------------------------------------------------------
+-- El diccionario quedo en 90 productos y 3.038 keywords, contra 82 productos y
+-- 3.300 keywords del arranque. Doce productos nuevos, cuatro fusiones y unas
+-- 47.000 senales falsas eliminadas.
+--
+-- Queda una sola cosa grande sin decidir: los vendors Legacy, Backend, Frontend
+-- y CMS, que son categorias haciendo de vendors. Con los lenguajes ya separados
+-- de los frameworks, es el momento mas facil que va a haber para reagruparlos.
