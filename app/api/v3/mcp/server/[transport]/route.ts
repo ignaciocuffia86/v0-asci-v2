@@ -26,6 +26,7 @@ import { screenAccountList, MAX_ACCOUNTS_PER_CALL } from "@/lib/v3/services/scre
 import { estimateBatch, MAX_ACCOUNTS_PER_BATCH } from "@/lib/v3/services/mcp-batch-estimate"
 import { generateDeterministicIcebreaker } from "@/lib/v3/services/icebreaker-deterministic"
 import { createScreeningExport } from "@/lib/v3/services/mcp-export"
+import { createBatchJob, getBatchJob } from "@/lib/v3/services/mcp-batch-job"
 
 export const maxDuration = 120
 
@@ -438,6 +439,26 @@ const handler = createMcpHandler((rawServer) => {
       const auth = authOf(extra)
       await requirePaidMcp(auth, "usage:read", "read")
       return estimateBatch(auth, args)
+    }),
+  )
+  server.tool(
+    "create_batch_job",
+    "Ejecuta un lote ya cotizado por estimate_batch. Toma el `batchPlanHash` y hace de una sola vez lo que antes eran 42 llamadas sueltas: guarda las cuentas y lanza el research de todas.\n\nREQUIERE CONFIRMACIÓN porque ocupa lugares del plan y consume unidades de research. Mostrale primero al usuario los números que devolvió estimate_batch.\n\nES IDEMPOTENTE por batchPlanHash: si reintentás, devuelve el lote que ya existe en vez de volver a ocupar cupo. El cupo de cuentas no se recupera solo, así que un reintento por timeout no puede gastarlo dos veces.\n\nSE REANUDA SOLO: si un research queda colgado, el watchdog lo recupera cada 5 minutos. No relances el lote por eso; consultá get_batch_job.\n\nEL GASTO EN APOLLO NO VA INCLUIDO. El batchPlanHash autoriza el research y los lugares del plan, no el crédito de un tercero, que es irreversible. Las cuentas quedan marcadas como listas y el enrichment se confirma por cuenta.",
+    { batchPlanHash: z.string().min(16).max(64), userConfirmed: z.literal(true) },
+    async (args, extra) => safely(async () => {
+      const auth = authOf(extra)
+      await requirePaidMcp(auth, "research:run", "server_managed")
+      return createBatchJob(auth, args)
+    }),
+  )
+  server.tool(
+    "get_batch_job",
+    "Estado de un lote: cuántas cuentas terminaron el research, cuántas siguen en curso, cuáles fallaron y cuáles ya están listas para buscar contactos.\n\nNO consume cupo: consultá las veces que haga falta.\n\nMientras haya cuentas en curso NO hay nada que hacer: el research se recupera solo. `research: \"failed\"` sí es terminal para esa cuenta.",
+    { jobId: z.string().uuid() },
+    async ({ jobId }, extra) => safely(async () => {
+      const auth = authOf(extra)
+      await requirePaidMcp(auth, "accounts:read", "read")
+      return getBatchJob(auth, jobId)
     }),
   )
   server.tool(

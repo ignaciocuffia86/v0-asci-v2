@@ -1,7 +1,7 @@
 # MCP de ASCI — Inventario de tools, solapamientos y perfiles de acceso
 
 **Fecha:** 24-ago-2026
-**Alcance:** los tres servers MCP (`asci-v3`, `explore`, `profiles`) — 50 tools
+**Alcance:** los tres servers MCP (`asci-v3`, `explore`, `profiles`) — 54 tools
 **Objetivo:** entender qué hace y qué NO hace cada tool, dónde se solapan, y diseñar los dos perfiles de acceso: **admin** (consulta sin fricción, para armar información on-demand de clientes) y **standard** (con aviso de costos y tope por bookmarks).
 
 ---
@@ -171,9 +171,9 @@ Las dos capas pagas son las mismas del server standard, con otro nombre: `explor
 
 2. **`prepare_contact_enrichment` está gateada como si costara.** Pide `contacts:write` y `mode: "server_managed"` (`mcp-contact-enrichment.ts:141`), o sea que **un plan trial no puede ni ver el preview** de lo que le costaría. Un preview que no gasta créditos debería ser Tier 0.
 
-3. **No hay modo sin IA para el icebreaker.** La única puerta es `generate_account_icebreaker` (T2) o el par client-assisted (T2b). Un template determinístico sobre la evidencia ya existente sería T0 y sin riesgo de alucinación.
+3. ~~**No hay modo sin IA para el icebreaker.**~~ **RESUELTO** (24-ago-2026): `build_evidence_icebreaker` es T0, determinístico, agrega en vez de individualizar y se niega a escribir sobre evidencia de ex-empleados.
 
-4. **No hay export.** Ninguna de las 50 tools devuelve un archivo. La conversación es el único canal de transporte de datos.
+4. ~~**No hay export.**~~ **RESUELTO** (24-ago-2026): `create_export` devuelve un xlsx o csv por URL firmada, tomando un `screeningId` para que la tabla no viaje dos veces por la conversación.
 
 5. **No hay teléfono.** `get_company_contacts` evalúa frescura de teléfono, pero el enrichment escribe `phone_status: "not_requested"`. El dato existe en el modelo y no hay camino para obtenerlo.
 
@@ -235,6 +235,6 @@ La regla que no se negocia: **admin no significa "sin medición", significa "sin
 | 3 | ~~Presupuesto en USD por workspace~~ — **descartado por ahora**: medir antes de trabar | — |
 | 4 | Flag `unrestricted` en los guards de capa 2 | 3 |
 | 5 | Server `admin` con sus propias descripciones e `instructions` | 4 |
-| 6 | Export (`create_export`) — sin esto el informe on-demand sigue viajando por la conversación | 2 |
+| 6 | ~~Export (`create_export`)~~ ✅ | — |
 
 Los pasos 2, 3 y 6 son las Fases 2 y 3 del plan de ejecución directa (`docs/plan-mcp-ejecucion-directa.md`): el perfil admin **no es un proyecto paralelo**, es lo que queda habilitado cuando ese plan termina.
