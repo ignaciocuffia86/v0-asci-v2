@@ -1,6 +1,6 @@
 # Plan de implementación — MCP para ejecución directa sobre listas
 
-**Estado:** propuesta, pendiente de validación
+**Estado:** Fase 0 y Fase 1 implementadas · Fases 2-4 pendientes
 **Insumo:** `ASCI MCP — Diseño para ejecución directa` (sesión 24-ago-2026, screening Power BI / 61 cuentas Chile)
 **Alcance:** MCP `asci-v3` (`app/api/v3/mcp/server/[transport]/route.ts` + `lib/v3/**`)
 
@@ -155,12 +155,61 @@ Con la Fase 1 sola, el paso 1 ya reemplaza las 9 llamadas de paginación y el ma
 
 ---
 
-## 5. Decisiones que necesito validar antes de escribir código
+## 5. Decisiones validadas (24-ago-2026)
 
-**A. Alcance del primer entregable.** Fase 0 + Fase 1 (desbloquea el caso, ~4 días) o hasta Fase 2 (suma control de costos, ~7 días).
+| Decisión | Elegido |
+|---|---|
+| Alcance del primer entregable | **Fase 0 + Fase 1** |
+| Default de `aliasStrategy` | **`strict` global** — corrige la inflación en todas las tools, con `signalsOwn` / `signalsConsolidated` para que el cambio de números sea legible |
+| Icebreaker determinístico | **Agregado por default** (no nombra personas físicas); el nombre propio queda como opción explícita. Se implementa en Fase 3 |
+| Modelo de cupo | **Decisión posterior.** Las tools nuevas quedan Tier 0 puras: leen el catálogo global y no tocan el cupo |
 
-**B. Default de `aliasStrategy`.** `strict` global cambia números que el usuario ya vio en pantalla pero corrige la inflación en todos lados; `balanced` como default y `strict` solo en las tools nuevas es más conservador pero deja el número inflado donde ya está.
+---
 
-**C. Icebreaker sin IA: agregado o nominal por default.** Recomiendo agregado (no nombrar personas físicas), con nominal como opción que el vendedor activa a conciencia.
+## 6. Qué quedó implementado
 
-**D. Modelo de cupo.** Si la separación seguidas/consultadas se decide ahora, la diseño desde la Fase 1; si es decisión de pricing posterior, las tools nuevas quedan Tier 0 puras y no tocan el cupo (que igual es lo correcto).
+### Fase 0 — Precisión de alias
+
+`lib/v3/services/company-signal-summary.ts`
+
+- `aliasScore` pasa a coeficiente de **Dice simétrico**. El score anterior, `shared / canonical.size`, no miraba cuántos tokens tenía el candidato: con una canónica de un token, cualquier homónimo daba 1.0.
+- **Guarda de token único**: si la canónica aporta un solo token discriminativo, el nombre no alcanza como prueba de identidad y se exige dominio en común. Es la regla que hace el trabajo, no el umbral: contra otra entidad llamada exactamente "Consorcio", Dice da 1.0 y ningún umbral la frena.
+- No se cruzan países cuando los dos son conocidos; país desconocido pasa, para no fragmentar cuentas reales.
+- `aliasStrategy: strict | balanced | broad`, default `strict`.
+- El payload separa `signalsOwn` de `signalsConsolidated` y `aliasResolution.consolidatedEntities` dice **qué** entidades se consolidaron y **por qué**.
+- 12 tests en `tests/unit/shared/alias-consolidation.test.ts` sobre los nombres que rompieron en producción.
+
+Alcance real del cambio, más chico de lo que estimaba el plan original: `getCompanySignalSummary` de `lib/v3` la consume **solo el MCP**. La app web usa otra función homónima en `app/actions/search-v2.ts`, que no se tocó.
+
+### Fase 1 — Cruce de listas
+
+**`v3.screen_account_list`** (`scripts/456_v3_screen_account_list.sql` + `supabase/migrations/20260824190000_screen_account_list.sql`)
+
+Una fila por input, cuatro estados, más `ambiguityReason` (`multiple_candidates` = elegir; `low_confidence` = confirmar) y `signalStrength` (`solid | weak | none | not_evaluated`) para el requisito de §7.5. Sin `terms`, reconcilia la lista contra el catálogo sin evaluar señales.
+
+Tres cosas se descubrieron **probando contra un Postgres real**, no revisando el diseño:
+
+1. **El ranking por evidencia estaba al revés.** La primera versión elegía el candidato con más señales del término. Para "CONSORCIO SEGUROS" eso devolvía *Consorcio Persa* (7 señales, similitud 0.42) por encima de *Consorcio* (6 señales, 0.56): exactamente la mis-atribución que el plan decía evitar. Ahora es identidad primero, evidencia como desempate.
+2. **La contención de núcleo premiaba al homónimo.** "Consorcio" está contenido en "CONSORCIO SEGUROS", así que la entidad genérica se llevaba 0.88 de confianza. Se resolvió con la misma guarda de dos tokens de la Fase 0.
+3. **La performance era inviable y el plan lo marcaba como riesgo.** Medido sobre 300.000 empresas sintéticas con nombres deliberadamente parecidos entre sí (el peor caso para trigram): 200 nombres tardaban **76 s** contra el techo de 8 s de PostgREST. La causa era correr la pasada difusa para todos los inputs. Con **dos pasadas** —difusa solo para lo que no resolvió por núcleo canónico o dominio— el mismo lote baja a **1,9 s**, y el peor caso posible (los 200 necesitan la difusa) a **5,6 s**.
+
+| Escenario, 200 nombres / 300k empresas | Antes | Ahora |
+|---|---|---|
+| Mayoría resuelve exacto | 76 s | **1,9 s** |
+| Todos necesitan la pasada difusa | 76 s | **5,6 s** |
+
+**`detail: "evidence"`** en `get_company_signal_summary`: un término, hasta 2 fragmentos de 300 caracteres, con `sourceField`, `occurredAt`, `sourceUrl`, LinkedIn de la persona e `isCurrentEmployee`. Objetivo <600 tokens por cuenta contra los ~15.000 de `full`. El flag de ex-empleado viaja siempre (§7.4). Si el término pedido resuelve a varias etiquetas del catálogo, se informa `omittedLabels` en vez de dejar caer evidencia en silencio.
+
+**Fallback global en `get_account_evidence_detail`**: en vez de `ACCOUNT_NOT_AVAILABLE_IN_WORKSPACE`, lee la evidencia cruda global y lo declara en `source` (`workspace_snapshot` | `global_signals`).
+
+**`instructions` del server**: tres reglas nuevas — usar `screen_account_list` ante una lista, no afirmar ausencia de señal sin el estado explícito, y que leer evidencia no exige guardar la cuenta.
+
+### Pendiente de despliegue
+
+La migración **no se aplicó**: `20260824190000_screen_account_list.sql` está validada contra un Postgres 16 local con datos de prueba, pero aplicarla contra la base de producción es una decisión del dueño del proyecto. La tool `screen_account_list` falla hasta que la función exista.
+
+---
+
+## 7. Qué sigue
+
+Fases 2 a 4 sin cambios respecto de §3: `estimate_batch` + `batchPlanHash` de lote y presupuesto server-side; jobs, export e icebreaker `evidence_quote`; y las decisiones de modelo de negocio (cupo de consultadas vs seguidas, teléfono, BYOK de Apollo).
