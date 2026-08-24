@@ -310,9 +310,26 @@ de web genérico (formularios, HTML, UX). Invertido respecto del umbral, así qu
 `ASP.NET Web Forms` cubre el caso limpio. Es la cuarta vez en el trabajo que verificar las propias
 altas encuentra algo — después de `CCSA`, `Pub/Sub` y `Crystal Reports`.
 
-### Lo que sigue abierto
+### Baja de ELO Digital Office
 
-- **ELO Digital Office**, con 45 keywords y cero señales.
+45 keywords y cero señales en los siete lotes. Antes de borrarlo se verificó que el cero fuera
+real y no un "nunca se procesó":
+
+| | |
+| --- | ---: |
+| Jobs `add_keyword` | 45 |
+| Completados | **45** |
+| Señales | 0 |
+| `document_tags` que lo referencian | 0 |
+
+Las keywords corrieron contra toda la base y matchearon cero. **No es un problema de cómo estaban
+escritas** —todas arrancan con "ELO" y son inequívocas— simplemente no hay nadie en el corpus que
+lo mencione.
+
+Se borró el producto y el vendor, que quedaba huérfano. Las 45 keywords siguen recuperables en
+`dictionary_backup_20260824` si algún día entra una cuenta con ELO.
+
+### Lo que sigue abierto
 - **Keywords con co-ocurrencia** — la mejora de motor que rescataría términos como `Fabric`
   exigiendo contexto.
 - **"Observabilidad y gestión de servicios"** junta monitoreo con ITSM por falta de masa. Si el

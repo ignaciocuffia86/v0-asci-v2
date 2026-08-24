@@ -210,3 +210,29 @@ where s.signal_id=p.id and s.signal_type='technology'
 -- Estado final: 91 productos, 14 en legado sobre 14.976 cuentas.
 --   Visual Basic                 3.993 -> 3.629 cuentas
 --   .NET Framework y escritorio         2.125 cuentas (producto nuevo)
+
+-- ---------------------------------------------------------------------------
+-- 5. Baja de ELO Digital Office
+--    45 keywords, cero senales en los siete lotes. Antes de borrar se verifico
+--    que el cero fuera real y no un "nunca se proceso":
+--
+--      jobs add_keyword: 45   completados: 45   senales: 0   document_tags: 0
+--
+--    O sea que las keywords corrieron contra toda la base y matchearon cero.
+--    No es un problema de como estaban escritas (todas arrancan con "ELO" y son
+--    inequivocas): simplemente no hay nadie en el corpus que lo mencione.
+--
+--    Las 45 keywords quedan recuperables en dictionary_backup_20260824 si algun
+--    dia entra una cuenta con ELO.
+-- ---------------------------------------------------------------------------
+delete from public.dictionary_jobs j using public.dictionary_products p
+where p.id = j.signal_id and p.name = 'Elo Digital Office';
+
+delete from public.dictionary_products where name = 'Elo Digital Office';
+
+delete from public.dictionary_vendors v
+where v.name = 'ELO Digital Office'
+  and not exists (select 1 from public.dictionary_products p where p.vendor_id = v.id);
+
+-- Estado final del diccionario: 90 productos, 25 vendors, 3.000 keywords,
+-- 0 sin categoria, 0 senales sin producto.
