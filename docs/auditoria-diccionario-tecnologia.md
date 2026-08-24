@@ -891,10 +891,133 @@ no solo Viya.
 
 ---
 
-## Lotes pendientes
+## Lote 6 · CRM y productividad — aplicado el 24 de agosto de 2026
 
-6. **CRM y productividad** — Salesforce, HubSpot, Zoho, ServiceNow, M365, Google Workspace,
-   Atlassian (incluye sacar Confluence, Bitbucket y Trello de adentro de Jira).
+Diecinueve productos. Script en
+[`scripts/apply-crm-productividad-batch-20260824.sql`](../scripts/apply-crm-productividad-batch-20260824.sql).
+
+Este lote casi no tuvo falsos positivos clásicos. El problema era otro y más difícil de ver:
+**keywords que apuntan al vendor correcto pero al producto equivocado.**
+
+### Un cuarto de Jira no era Jira
+
+`Bitbucket` (437), `Trello` (336), `Atlassian` (187), `Confluence` (86) y `Bamboo` (48) estaban
+dentro del producto Jira: 1.094 de sus 5.242 señales. Eso ya estaba marcado en la auditoría,
+pero faltaba saber si importaba — si quien usa Trello igual usa Jira, mezclarlos casi no cambia
+nada. Medido:
+
+| De los contactos que mencionan… | Total | También mencionan Jira | % |
+| --- | ---: | ---: | ---: |
+| `Atlassian` | 187 | 19 | 10% |
+| `Bitbucket` | 437 | 17 | 4% |
+| `Trello` | 336 | 17 | 5% |
+| `Confluence` | 86 | 3 | 3% |
+
+Poblaciones casi disjuntas. Jira reportaba 2.452 cuentas cuando buena parte nunca vio un Jira, y
+del otro lado escondía 360 cuentas con Bitbucket y 298 con Trello — conversaciones comerciales
+completamente distintas.
+
+Cuatro productos nuevos: **Confluence**, **Bitbucket y Bamboo**, **Trello** y
+**Atlassian (producto sin identificar)**. El último suena raro a propósito: `Atlassian` trae
+señal real (168 contactos que nombran la marca sin decir qué usan) pero no dice qué producto.
+Ponerlo en Jira era mentir; borrarlo era perder información.
+
+### Vendor correcto, producto equivocado
+
+| Keyword | Señales | Medición | Qué se hizo |
+| --- | ---: | --- | --- |
+| `Microsoft Dynamics` | 1.009 | 294 con contexto CRM vs **472 con contexto ERP** (AX, NAV, Navision, Business Central, contabilidad, manufactura) | Movida a Dynamics 365 ERP: pasa de acertar 294 y errar 472 a lo inverso, +178 atribuciones correctas |
+| `Copilot` | 687 | 382 (56%) con contexto de GitHub, repos, código o IDE | Se **mantiene**; el producto se renombra a "Copilot (GitHub y Microsoft 365)" |
+
+**La distinción que quedó:** cuando una keyword ambigua reparte entre un producto y algo que no
+es tecnología (`Exchange`, `Fabric`, `Defender`, `PAN`), sale. Cuando reparte entre dos productos
+del mismo vendor (`Copilot`, `Microsoft Dynamics`), se queda y lo que se arregla es dónde vive y
+cómo se llama. `Copilot` tiene la misma proporción que `Exchange` (56:44 contra 57:43) y sin
+embargo se trata distinto: en Exchange el 43% no era Microsoft en absoluto.
+
+### Falsos positivos
+
+| Keyword | Sumaba a | Señales | Qué era |
+| --- | --- | ---: | --- |
+| `Commerce Cloud` | Salesforce Commerce Cloud | 106 | SAP y Oracle también tienen uno: "Ingeniero de solución **SAP** Commerce Cloud" |
+| `MCC` | Marketing Cloud | 71 | Minería: "Mantenimiento Centrado en Confiabilidad", "GUARDIA BRIGADISTA 7X7 MCC" |
+| `Microsoft Cloud` | Microsoft 365 | 66 | Marca paraguas, se pisa con Azure |
+| `CPQ` | Sales Cloud | 52 | Categoría, no producto: Oracle CPQ, SAP CPQ, Conga |
+| `MCP Servers` | Copilot | 30 | Model Context Protocol es un estándar abierto |
+| `eDiscovery` | Google Workspace | 27 | Genérico, y además función de Purview |
+| `CRM Cloud`, `Order Management System` | Sales / Commerce Cloud | 37 | Frases de categoría |
+| `FSL`, `Query Studio`, `Salesforce Integration` | varios | 22 | Siglas cortas y keywords en el producto de otro vendor |
+| 6 duplicados cross-product | Microsoft 365 | 45 | `SharePoint Administrator`, `Exchange Administrator`, `Intune Administrator`, `Teams Administrator`, `Microsoft 365 Defender`, `Azure AD Connect` |
+
+También se movió `Power Platform Developer` (96) de Microsoft 365 a Power Apps.
+
+### Los tres Zoho eran uno
+
+Zoho CRM (681), Zoho Marketing (30) y Zoho Desk (**1**). Y dentro de Zoho CRM estaban cargadas
+`zoho desk` y `zoho mail`: la separación ni siquiera se respetaba a sí misma. Se unificaron en
+**Zoho**.
+
+Es la decisión inversa a la de Jira y por el mismo motivo: **la granularidad tiene que seguir a
+la evidencia.** Atlassian se partió porque las poblaciones eran disjuntas y grandes; Zoho se
+unificó porque no había poblaciones que distinguir.
+
+### Altas
+
+**Microsoft 365 no tenía `Microsoft Teams`** — la aplicación con la que la gente identifica a
+M365 más que con ninguna otra. Entró con 391 señales. Y en Salesforce faltaba todo el oficio:
+`Salesforce Apex`, `Apex Trigger`, `Lightning Web Components`, `Salesforce Flow`, `Trailhead`.
+Mismo hueco que Power BI en el lote anterior — el producto detectaba el nombre pero no a quien lo
+construye. *No entró `Apex` a secas: colisiona con Oracle APEX.*
+
+También: `Power Fx`, `Dataverse`, `Jira Software`, `Jira Service Management`, `Google Meet`,
+`Automation 360`, `ServiceNow CMDB` y las certificaciones (`PL-100`, `PL-200`, `PL-400`,
+`PL-500`, `MS-102`, `ServiceNow CSA`, `HubSpot Certified`, `Salesforce Certified`).
+
+`Dataverse` se verificó tras el alta —también es un repositorio de datos académico y un nombre de
+empresa— y quedó 24 de 30 con contexto Microsoft. Pasa.
+
+### Saldo
+
+| Producto | Señales antes | Señales ahora | Cuentas |
+| --- | ---: | ---: | ---: |
+| Sales Cloud | 5.756 | 5.714 | 2.156 |
+| Microsoft SharePoint | 4.745 | 4.745 | 2.687 |
+| Jira | 5.242 | 4.378 | 2.070 |
+| Dynamics 365 ERP | 858 | 2.659 | 1.708 |
+| Microsoft 365 | 2.134 | 2.326 | 1.586 |
+| Power Automate | 1.350 | 1.352 | 951 |
+| Power Apps | 861 | 956 | 668 |
+| HubSpot | 781 | 774 | 525 |
+| Copilot (GitHub y M365) | 767 | 737 | 335 |
+| ServiceNow | 711 | 718 | 389 |
+| Google Workspace | 662 | 711 | 491 |
+| Zoho | 711 | 694 | 596 |
+| Marketing Cloud | 670 | 606 | 301 |
+| Bitbucket y Bamboo *(nuevo)* | — | 535 | 360 |
+| Trello *(nuevo)* | — | 336 | 298 |
+| Automation Anywhere | 312 | 315 | 214 |
+| Dynamics 365 CRM | 1.318 | 309 | 222 |
+| Service Cloud | 291 | 287 | 162 |
+| Atlassian sin identificar *(nuevo)* | — | 194 | 132 |
+| Confluence *(nuevo)* | — | 101 | 69 |
+| Commerce Cloud | 159 | 39 | 30 |
+| ELO Digital Office | 0 | 0 | 0 |
+
+- **Jira baja de 2.452 cuentas a 2.070**, y aparecen 360 con Bitbucket, 298 con Trello, 132 con
+  Atlassian y 69 con Confluence.
+- **Dynamics 365 CRM cae de 1.318 señales a 309.** La corrección más brusca del lote: nueve de
+  cada diez de sus señales venían de una keyword que apuntaba mayormente al ERP.
+- **Microsoft 365 sube pese a perder ocho keywords**, por `Microsoft Teams`.
+
+**ELO Digital Office sigue en cero**, con 45 keywords. Es el único producto del diccionario que
+nunca generó una sola señal en ninguno de los seis lotes. Las keywords están bien armadas —todas
+empiezan con "ELO"— simplemente no hay nadie en la base que lo mencione. Vale decidir si se
+mantiene por cobertura futura o se saca.
+
+---
+
+## Lote pendiente
+
 7. **Stacks de desarrollo** — el bloque más ruidoso: ahí está `Javascript` con 10.603 señales
    cargada dentro de React, y el vendor "Legacy" con Java. Conviene decidir antes si detectar
    frameworks aporta al objetivo comercial o si el bloque se achica.
