@@ -646,14 +646,124 @@ y las vacantes, y recién ahí decidir qué keyword lo captura.
 
 ---
 
+## Lote 4 · Cloud e infraestructura — aplicado el 24 de agosto de 2026
+
+Trece productos: AWS, Azure, Google Cloud Platform, Oracle Database, Weblogic, SQL Server,
+Windows Server, Exchange Server, SCCM, Datadog, Dynatrace, AS/400 e IBM Z.
+
+Script en [`scripts/apply-cloud-batch-20260824.sql`](../scripts/apply-cloud-batch-20260824.sql).
+
+| | |
+| --- | ---: |
+| Keywords antes / ahora | 530 / 454 |
+| Señales falsas eliminadas | 10.229 |
+| Keywords nuevas | 78 |
+
+### Corrección de un error mío en el lote ERP
+
+En el lote de ERP afirmé, para justificar que `EBS` se quedara en Oracle E-Business Suite:
+*"ya salió la colisión con Amazon EBS, así que hoy la mayoría de los EBS del corpus son
+Oracle"*. **Era falso: nunca la saqué de AWS.** La decisión de dejar `EBS` en Oracle se aprobó
+sobre una premisa que afirmé sin verificar.
+
+Medido ahora: de las 1.679 señales que `EBS` generaba **dentro de AWS**, solo 3 mencionan algo
+de AWS en el mismo texto. Los snippets dicen "Oracle EBS Finance Technical Consultant" y
+"Oracle EBS Functional Analyst" — consultores de Oracle contando como usuarios de Amazon Web
+Services. Ya está resuelto: `EBS` salió de AWS y entró `Amazon EBS`.
+
+### El criterio, ya estabilizado
+
+No es la longitud de la sigla ni si "suena" ambigua: es **la proporción entre señales
+identificablemente reales e identificablemente falsas** en el corpus. Se queda por encima de
+~80:20, sale por debajo.
+
+Cinco keywords que estaban en la lista de bajas y la medición salvó:
+
+| Keyword | Producto | Señales | Medición |
+| --- | --- | ---: | --- |
+| `OSB` | Weblogic | 354 | 354/354 mencionan Oracle, SOA o middleware |
+| `Lambda` | AWS | 70 | 70/70 mencionan AWS. En la auditoría la había marcado genérica |
+| `Bicep` | Azure | 24 | 24/24 con contexto Azure o IaC |
+| `Configuration Manager` | SCCM | 452 | 219 contexto Microsoft vs 40 ITIL — 85:15 |
+| `OCI` | Oracle Database | 901 | 66% con contexto Oracle. Proponía reemplazarla; no hacía falta |
+| `ILE` | AS/400 | 45 | 39/45 con contexto IBM i |
+
+Y la que salió por el mismo criterio: **`Exchange`** (5.028) — 1.380 con contexto de correo
+contra 1.026 de "foreign exchange", "stock exchange", "data exchange" e "intercambio". 57:43,
+la peor relación del lote.
+
+### Los falsos positivos
+
+| Keyword | Sumaba a | Señales | Qué era |
+| --- | --- | ---: | --- |
+| `Exchange` | Exchange Server | 5.028 | Ver arriba |
+| `EBS` | AWS | 1.679 | "Oracle EBS Finance Technical Consultant" |
+| `Visual Studio` | Azure | 1.117 | Es un IDE, no una nube |
+| `Redis` | AWS | 526 | Base independiente; aparece más junto a GCP (49) que a AWS (37) |
+| `OEM` | Oracle Database | 271 | Original Equipment Manufacturer, perfiles de automotriz |
+| `Power Systems` | AS/400 | 220 | Ingeniería eléctrica. Solo 19 de 220 mencionan IBM |
+| `Entra ID` | Azure | 106 | Duplicada — la agregué al producto Entra en el lote anterior |
+| `SNS` | AWS | 98 | "prevención de riesgo - SNS Iquique", empresa chilena |
+| `Aurora` | AWS | 89 | Nombre propio; 3 de 89 con contexto AWS |
+| `RBAC` | Azure | 82 | Término genérico de identidad |
+| `MSU` | IBM Z | 72 | "MSU S.A", "MSU ENERGY" |
+| `Comprehend` | AWS | 72 | El verbo inglés; cero contexto AWS |
+| `ECS` | AWS | 59 | 2 de 59 con contexto AWS |
+| `TPF` | IBM Z | 55 | "TPF INGENIERIA" |
+| `X-Ray` | AWS | 48 | Radiografía; cero contexto AWS |
+| `AMI` | AWS | 47 | También Advanced Metering Infrastructure en utilities |
+| `PDS`, `SNA`, `RMF`, `GDG`, `HMC`, `MIPS`, `VTL`, `IPL`, `WLM`, `IFL` | IBM Z | 248 | Siglas que en este corpus casi nunca aparecen en contexto de mainframe |
+| `Lex`, `Polly` | AWS | 46 | "Lex Doctor", "Polly Pocket" |
+| `CIAM` | Google Cloud | 26 | Customer IAM; no tiene nada de Google |
+| `App Engine`, `Compute Engine`, `Cloud SQL`, `Cloud IAM`, `Cloud Functions` | GCP | 49 | Nombres de Google que como frase suelta leen genéricos |
+| `spool`, `NoSQL Database`, `APN`, `Memcached` | IBM Z / AWS | 101 | Categorías o siglas de otra industria |
+| 26 términos genéricos de Java EE | Weblogic | 20 | `JMS Queues`, `WSDL Services`, `XSLT Transformations`… |
+
+### Los huecos de cobertura
+
+El desbalance más llamativo del diccionario: **AWS tenía 134 keywords** — entre ellas
+`AWS DeepRacer`, `AWS DeepLens` y `AWS DeepComposer`, tres juguetes educativos que nadie pone
+en un perfil — y **ninguna para S3, EC2, RDS o Lambda con el nombre completo**.
+
+| Producto | Lo que faltaba |
+| --- | --- |
+| AWS | `Amazon S3`, `S3 Bucket`, `Amazon EC2`, `Amazon RDS`, `AWS RDS`, `AWS Lambda`, `Amazon ElastiCache` |
+| Azure | `Azure DevOps`, `Azure Functions`, `Azure Kubernetes Service`, `AKS`, `Azure App Service`, `Azure Monitor`, `Application Insights`, `Azure Databricks` |
+| Google Cloud | `BigQuery`, `Google Cloud Storage`, `Pub/Sub`, `Cloud Dataflow`, `Cloud Build`, `Cloud Spanner` |
+| IBM Z | `JCL`, `VSAM`, `CICS`, `ISPF`, `RACF`, `DB2 for z/OS`, `Endevor`, `Changeman` |
+| AS/400 | `RPGLE`, `RPG IV`, `CL/400`, `Query/400`, `IBM Power Systems` |
+
+Los dos más caros:
+
+- **Google Cloud no tenía `BigQuery`**, el producto insignia de la plataforma y el que más
+  aparece en vacantes de datos. Sí tenía `Eventarc` y `Anthos`.
+- **IBM Z no tenía `JCL`, `VSAM`, `CICS` ni `ISPF`**, la jerga central del mainframe. Sí tenía
+  `MSU`, `MIPS` y `VTL`, que resultaron ser nombres de empresas. El producto miraba exactamente
+  al lado equivocado.
+
+Se agregaron también las certificaciones de cada nube (`AZ-104`, `AZ-305`, `AZ-900`,
+`Professional Cloud Architect`, `OCI Architect`).
+
+### Los que no se tocaron
+
+Microsoft SQL Server (21.422 señales, el producto más detectado del diccionario), Windows
+Server, Datadog y Dynatrace pasaron sin bajas. Todos tienen nombre de marca inventado o siglas
+inequívocas (`T-SQL`, `SSIS`, `SSRS`, `SSAS`, `WSUS`).
+
+**El patrón de los cuatro lotes:** los productos con nombre de marca inventado no dan problemas
+nunca. Sufren los que usan palabras del idioma — Exchange, Aurora, Lambda, Comprehend, Defender,
+Entra — o siglas que otra industria también usa.
+
+---
+
 ## Lotes pendientes
 
-4. **Cloud e infraestructura** — AWS, Azure, GCP, Oracle Cloud.
 5. **Datos y BI** — Power BI, Fabric, Tableau, Qlik, Looker, MicroStrategy, SAS, y el
    Oracle Analytics Cloud que se creó en este lote.
 6. **CRM y productividad** — Salesforce, HubSpot, Zoho, ServiceNow, M365, Google Workspace,
    Atlassian (incluye sacar Confluence, Bitbucket y Trello de adentro de Jira).
-7. **Stacks de desarrollo** — el bloque más ruidoso. Conviene decidir antes si aporta al
-   objetivo comercial o si se achica.
+7. **Stacks de desarrollo** — el bloque más ruidoso: ahí está `Javascript` con 10.603 señales
+   cargada dentro de React, y el vendor "Legacy" con Java. Conviene decidir antes si detectar
+   frameworks aporta al objetivo comercial o si el bloque se achica.
 
 
