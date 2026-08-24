@@ -98,6 +98,9 @@ export async function GET(request: Request) {
             ok: result.ok,
             no_hq: result.noHq,
             no_result: result.noResult,
+            // [453] URLs que resultaron ser de otra empresa. Se registran para
+            // revision y no se les escribio ninguna columna.
+            identity_mismatch: result.identityMismatch,
             filled: result.filled,
             skipped_for_quota: result.skippedForQuota,
             stopped_for_budget: result.stoppedForBudget,
