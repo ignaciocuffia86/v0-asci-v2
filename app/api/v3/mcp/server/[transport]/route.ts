@@ -24,6 +24,7 @@ import { recommendAccountsForValueProposition } from "@/lib/v3/services/value-pr
 import { searchCompaniesByCapability } from "@/lib/v3/services/capability-search"
 import { screenAccountList, MAX_ACCOUNTS_PER_CALL } from "@/lib/v3/services/screen-account-list"
 import { estimateBatch, MAX_ACCOUNTS_PER_BATCH } from "@/lib/v3/services/mcp-batch-estimate"
+import { generateDeterministicIcebreaker } from "@/lib/v3/services/icebreaker-deterministic"
 
 export const maxDuration = 120
 
@@ -383,7 +384,7 @@ const handler = createMcpHandler((rawServer) => {
   server.tool("refresh_prompt_package", "Reemite el prompt package de una ejecución client-assisted cuya vigencia venció, SIN consumir cuota ni volver a investigar. Usala cuando un submit falle con CLIENT_PACKAGE_EXPIRED: la cuota ya se consumió al preparar, así que no hay que llamar de nuevo a prepare_account_research. Devuelve el packageHash nuevo con el que hay que reintentar el submit. Tiene un máximo de refrescos por ejecución.", { executionId: z.string().uuid() }, async ({ executionId }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "accounts:read", "read"); return refreshPromptPackage(auth, executionId) }))
   server.tool("get_client_research_status", "Consulta estado y próximo package del research client-assisted.", { executionId: z.string().uuid() }, async ({ executionId }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "accounts:read", "read"); return getClientResearchStatus(auth, executionId) }))
 
-  server.tool("generate_account_icebreaker", "Genera un icebreaker server-managed con AI Gateway de ASCI y límites separados.", { companyId: z.string().uuid(), contactName: z.string().min(2), contactTitle: z.string().optional(), contactCountry: z.string().optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, contactName, contactTitle, contactCountry, idempotencyKey }, extra) => safely(async () => {
+  server.tool("generate_account_icebreaker", "Genera un icebreaker con el AI Gateway de ASCI. CONSUME CUPO. Antes de llamarla, preguntate si alcanza con build_evidence_icebreaker, que cita la misma evidencia sin IA, sin cupo y sin riesgo de alucinación: para trabajar una lista, alcanza. Usá esta cuando el usuario pida tono propio, personalización por industria o síntesis de varias señales.", { companyId: z.string().uuid(), contactName: z.string().min(2), contactTitle: z.string().optional(), contactCountry: z.string().optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, contactName, contactTitle, contactCountry, idempotencyKey }, extra) => safely(async () => {
     const auth = authOf(extra); await requirePaidMcp(auth, "icebreakers:generate", "server_managed"); await getAccountIntelligence(auth, companyId)
     const reservation = await reserveMcpUsage({ principal: auth, pool: "icebreaker_server", units: 1, idempotencyKey, metadata: { companyId } }); if (!reservation.allowed || !reservation.reservationId) return reservation
     if (reservation.idempotent && reservation.status === "committed" && reservation.metadata?.icebreakerId) {
@@ -398,6 +399,24 @@ const handler = createMcpHandler((rawServer) => {
       await setReservationStatus(reservation.reservationId, "released"); throw error
     }
   }))
+  server.tool(
+    "build_evidence_icebreaker",
+    "Arma un icebreaker que CITA LA EVIDENCIA, sin IA. Es la tool para \"un mensaje que nombre lo que vimos, no el producto\".\n\nNO consume cupo, NO llama a ningún modelo y NO exige que la cuenta esté guardada: lee la evidencia ya persistida y la escribe con un template. Como no hay modelo, no puede inventar una tecnología que la cuenta no tenga — que es el peor error posible frente a un cliente. Es determinístico: dos llamadas iguales dan el mismo texto.\n\nUSALA POR DEFAULT para trabajar una lista. Dejá `generate_account_icebreaker` (que sí consume cupo de IA) para cuando el usuario pida tono, personalización por industria o síntesis de varias señales.\n\nPOR DEFAULT NO NOMBRA A NINGUNA PERSONA: dice \"en el equipo varios perfiles mencionan X\", que transmite la misma señal sin exponer a nadie. `nameIndividuals` existe para que un vendedor lo active a conciencia, y cuando lo activa la respuesta trae un aviso legal: nombrar a alguien a partir de su perfil para venderle a su empleador cae bajo la Ley 19.628 y su reforma 21.719 en Chile, y bajo GDPR si hay matriz europea.\n\nSI TODA LA EVIDENCIA ES DE EX-EMPLEADOS, NO ESCRIBE EL MENSAJE y te dice por qué: que alguien haya usado una tecnología no prueba que la cuenta la use hoy. No lo rodees generando el icebreaker por otra vía.",
+    {
+      companyId: z.string().uuid(),
+      term: z.string().min(2).max(120).optional().describe("El término a citar. Sin él usa los de más señales de la cuenta."),
+      contactName: z.string().max(200).optional().describe("Solo se usa en el texto si nameIndividuals es true."),
+      contactTitle: z.string().max(200).optional(),
+      contactCountry: z.string().max(120).optional().describe("Ajusta el registro (voseo, tuteo, inglés)."),
+      nameIndividuals: z.boolean().default(false).describe("Nombrar a la persona en el mensaje. Dejalo en false salvo que el usuario lo pida explícitamente."),
+      includeQuote: z.boolean().default(false).describe("Sumar una cita textual corta del perfil."),
+    },
+    async (args, extra) => safely(async () => {
+      const auth = authOf(extra)
+      await requirePaidMcp(auth, "icebreakers:generate", "read")
+      return generateDeterministicIcebreaker(auth, args)
+    }),
+  )
   server.tool("prepare_account_icebreaker", "Prepara un icebreaker para ejecutar con tokens del cliente. Requiere que la cuenta esté guardada en el workspace.", { companyId: z.string().uuid(), contactName: z.string().min(2), contactTitle: z.string().optional(), contactCountry: z.string().optional(), idempotencyKey: z.string().min(8).max(200) }, async (args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "icebreakers:prepare", "client_assisted"); return prepareAccountIcebreaker(auth, args) }))
   server.tool("submit_account_icebreaker", "Valida y guarda un icebreaker generado por el modelo del cliente.", { executionId: z.string().uuid(), packageHash: z.string().length(64), result: z.unknown(), clientModel: z.string().max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async (args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "icebreakers:submit", "client_assisted"); return submitAccountIcebreaker(auth, args) }))
   server.tool("create_document_draft", "Inicia un documento compartido desde texto, URL HTTPS pública/Google Drive público o una carga temporal. Para upload devuelve un enlace de un solo uso por 15 minutos.", { title: z.string().min(2).max(240), sourceType: z.enum(["text", "url", "upload"]), text: z.string().max(2_000_000).optional(), url: z.string().url().optional() }, async ({ title, sourceType, text: sourceText, url }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "documents:write", "client_assisted"); if (sourceType === "text" && !sourceText) throw new Error("TEXT_REQUIRED"); if (sourceType === "url" && !url) throw new Error("URL_REQUIRED"); const source = sourceType === "text" ? { type: "text" as const, text: sourceText! } : sourceType === "url" ? { type: "url" as const, url: url! } : { type: "upload" as const }; return createDocumentDraft({ workspaceId: auth.workspaceId, userId: auth.userId, title, source }) }))
