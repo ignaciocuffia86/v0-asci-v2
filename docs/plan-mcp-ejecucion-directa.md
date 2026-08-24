@@ -1,6 +1,6 @@
 # Plan de implementación — MCP para ejecución directa sobre listas
 
-**Estado:** Fase 0 y Fase 1 implementadas · Fases 2-4 pendientes
+**Estado:** Fases 0 y 1 completas · Fase 2 en curso (`estimate_batch` hecho, falta el presupuesto en USD) · Fases 3-4 pendientes
 **Insumo:** `ASCI MCP — Diseño para ejecución directa` (sesión 24-ago-2026, screening Power BI / 61 cuentas Chile)
 **Alcance:** MCP `asci-v3` (`app/api/v3/mcp/server/[transport]/route.ts` + `lib/v3/**`)
 
@@ -113,6 +113,10 @@ status: "matched" | "matched_ambiguous" | "matched_no_signal" | "no_match"
 **Esfuerzo:** ~3-4 días. **Riesgo principal:** performance del matching difuso con 200 nombres contra el techo de 8 s de PostgREST. Mitigación: la pasada exacta resuelve la mayoría, la difusa va acotada y medida; si hace falta, índice trigram sobre `name` (decisión explícita, no se crea a ciegas — mismo criterio que scripts/429).
 
 ### Fase 2 — Control de costos
+
+**Hecho (24-ago-2026):** `v3.mcp_batch_plans` + `estimate_batch` + créditos de Apollo expuestos en `get_ai_usage`. Falta el tope de presupuesto en USD con enforcement en `reserveMcpUsage`.
+
+Un detalle que apareció implementando: `checkResearchQuota` devuelve `allowed: false` por dos motivos **opuestos** —una cuenta en seguimiento que no cuesta nada, y una cuenta nueva que no entra en el cupo— y `monthlyRemaining` viene ya descontado el lote. Colapsar las dos categorías habría presentado un lote que no entra en el plan como si fuera más barato de lo cotizado. `classifyResearchQuota` las separa y hay tests que lo fijan.
 
 - Tabla `v3.mcp_batch_plans` (`batch_plan_hash`, workspace, payload congelado, `expires_at`, estado). Mismo patrón que `plan_hash` de enrichment (`lib/v3/services/mcp-contact-enrichment.ts:285-317`), que es lo mejor diseñado del MCP hoy y conviene replicar tal cual.
 - Tool `estimate_batch` (Tier 0): agrega `checkResearchQuota` + `getContactEnrichmentLimits` + `PLAN_CONFIG` + `cacheHits` y devuelve **un** `batchPlanHash`. El costo USD sale de datos reales, no de una constante: promedio por cuenta de `v3.ai_usage_log` de los últimos 90 días (la telemetría ya existe: `verifiedAi.costUsd`).

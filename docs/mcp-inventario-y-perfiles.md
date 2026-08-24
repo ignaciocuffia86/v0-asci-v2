@@ -124,7 +124,8 @@ Dos caminos en paralelo para lo mismo, con pools de cupo **independientes**:
 | `get_document_text` | Texto completo paginado | Hay que leer todo antes de extraer | `documents:read` · T0 |
 | `get_document_dictionaries` | Tecnologías, procesos e industrias + JSON Schema | — | `documents:read` · T0 |
 | `confirm_document_analysis` | Persiste la extracción | Exige `userConfirmed` y citas literales | `documents:write` · T2b |
-| `get_ai_usage` | Cuota mensual, reservas por pool, tokens y costo verificado | **No expone créditos de Apollo** (ver §5) | `usage:read` · T0 |
+| `get_ai_usage` | Los **tres** medidores mensuales: research server, research cliente y créditos de Apollo, más tokens y costo verificado | No responde cuánto cuesta un lote concreto: para eso está `estimate_batch` | `usage:read` · T0 |
+| `estimate_batch` ⭐ | Cotiza un lote entero y devuelve **un** `batchPlanHash`: lugares del plan, unidades de research, créditos de Apollo y costo en USD | Máx 200 cuentas · el hash vence en 1 h y queda ligado a esas cuentas y roles · **no reserva nada** · el costo en USD viene en null si no hay telemetría | `usage:read` · T0 |
 
 ---
 
@@ -160,7 +161,7 @@ Las dos capas pagas son las mismas del server standard, con otro nombre: `explor
 |---|---|---|
 | `get_company_signals` vs `get_company_signal_summary` | Se pisan en el 80%, pero **no** es un subconjunto estricto: `get_company_signals` excluye vacantes a propósito (`scope: "contact-signals-only"`) y es la **única** que devuelve el aviso agregado de ex-empleados ("N de M señales son de ex-empleados"). El panorama, que es el que se usa para decidir, no lo tiene | No deprecar. Subir `formerEmployeeWarning` al panorama —es el dato que evita construir un icebreaker sobre alguien que se fue— y dejar `get_company_signals` como corte explícito "solo perfiles, sin vacantes" |
 | `list_saved_accounts` vs `list_workspace_accounts` vs `check_account_access` | Tres tools para responder "¿qué cuentas tengo y cuánto cupo me queda?". La diferencia guardadas/investigadas no es evidente por el nombre | Unificar en una con un parámetro `filter`, o renombrar a `list_followed_accounts` / `list_researched_accounts` |
-| `get_ai_usage` + `list_saved_accounts` + `prepare_contact_enrichment` | **Cuatro medidores en tres tools** y ninguna responde "¿cuánto me cuesta este lote?". Los créditos de Apollo solo se ven adentro del preview | Exponer Apollo en `get_ai_usage` y agregar `estimate_batch` (Fase 2 del plan) |
+| ~~`get_ai_usage` + `list_saved_accounts` + `prepare_contact_enrichment`~~ | ~~**Cuatro medidores en tres tools**~~ **RESUELTO** (24-ago-2026). Los créditos de Apollo ya salen en `get_ai_usage`, y `estimate_batch` responde "¿cuánto me cuesta este lote?" con los cuatro números juntos y una sola confirmación | — |
 | `explore_prepare/run_decision_makers` vs `prepare/run_contact_enrichment` | **Dos implementaciones de Apollo** con contratos distintos, en dos servers. Un cambio de precio o de política de Apollo hay que hacerlo dos veces | Unificar sobre el mismo servicio, dejando dos fachadas si hace falta |
 | `recommend_accounts_for_value_proposition` vs `screen_account_list` | Ambas devuelven "cuentas que te convienen", una desde documentación y otra desde una lista. Se van a pisar cuando el usuario tenga las dos cosas | Documentar la frontera: propuesta de valor → descubrimiento; lista del cliente → screening |
 
@@ -230,7 +231,7 @@ La regla que no se negocia: **admin no significa "sin medición", significa "sin
 | Paso | Qué | Depende de |
 |---|---|---|
 | 1 | ~~Arreglar scopes de `standard`~~ ✅ | — |
-| 2 | `estimate_batch` + `batchPlanHash` de lote | — |
+| 2 | ~~`estimate_batch` + `batchPlanHash` de lote~~ ✅ | — |
 | 3 | Presupuesto en USD por workspace, verificado en `reserveMcpUsage` | 2 |
 | 4 | Flag `unrestricted` en los guards de capa 2 | 3 |
 | 5 | Server `admin` con sus propias descripciones e `instructions` | 4 |

@@ -23,6 +23,7 @@ import { confirmDocumentAnalysis, documentAnalysisSchema, getDocumentDictionarie
 import { recommendAccountsForValueProposition } from "@/lib/v3/services/value-proposition-recommender"
 import { searchCompaniesByCapability } from "@/lib/v3/services/capability-search"
 import { screenAccountList, MAX_ACCOUNTS_PER_CALL } from "@/lib/v3/services/screen-account-list"
+import { estimateBatch, MAX_ACCOUNTS_PER_BATCH } from "@/lib/v3/services/mcp-batch-estimate"
 
 export const maxDuration = 120
 
@@ -404,7 +405,22 @@ const handler = createMcpHandler((rawServer) => {
   server.tool("get_document_dictionaries", "Obtiene tecnologías, procesos e industrias actuales de ASCI y el JSON Schema obligatorio. Mapea equivalencias claras y conserva términos libres.", {}, async (_args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "documents:read", "read"); return getDocumentDictionaries() }))
   server.tool("confirm_document_analysis", "Persiste la extracción client-assisted únicamente después de mostrarla, permitir correcciones y recibir confirmación explícita del usuario. Todas las evidencias deben ser citas literales del documento.", { draftId: z.string().uuid(), userConfirmed: z.literal(true), analysis: documentAnalysisSchema }, async ({ draftId, analysis }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "documents:write", "client_assisted"); return confirmDocumentAnalysis(auth, draftId, analysis) }))
   server.tool("recommend_accounts_for_value_proposition", "Prefiltra hasta 20 cuentas del catálogo v2 según toda la documentación complementaria del workspace. Antes de llamar, pregunta explícitamente qué países interesan y envía ISO alpha-2. No completa con matches débiles.", { countries: z.array(z.string().length(2)).min(1).max(20), limit: z.number().int().min(1).max(20).default(20) }, async ({ countries, limit }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "recommendations:read", "client_assisted"); return recommendAccountsForValueProposition(auth.workspaceId, countries, limit) }))
-  server.tool("get_ai_usage", "Devuelve cuota mensual, reservas por pool y tokens/costo server-managed verificados.", {}, async (_args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "usage:read", "read"); return getMcpUsage(auth) }))
+  server.tool(
+    "estimate_batch",
+    "Cotiza UN LOTE de cuentas ANTES de ejecutarlo y devuelve un único `batchPlanHash`. Es la tool para \"voy a investigar estas 42 cuentas y buscar sus CIO: ¿cuánto me cuesta?\".\n\nNO GASTA NADA: no reserva cupo, no reserva créditos, no llama a ningún modelo. Solo mide.\n\nUSALA EN VEZ DE: pedir prepare_contact_enrichment cuenta por cuenta para descubrir el presupuesto (42 previews para una sola decisión), o lanzar el lote y ver qué pasa.\n\nDEVUELVE LOS CUATRO MEDIDORES JUNTOS, que es lo que no existía en ningún lado: lugares del plan, unidades de research, créditos de Apollo y costo estimado en dólares.\n\nMOSTRALE AL USUARIO los cuatro números y pedile UNA confirmación para el lote entero. Ese es el punto de la tool: reemplazar 42 confirmaciones por una.\n\nSi `estimatedCostUsd.research` viene en null es porque no hay telemetría suficiente. Decilo así: NO inventes un número. Si `executable` es false, `blockers` explica por qué el lote no entra como está.\n\nEl hash vence en 1 hora y queda ligado a ESTAS cuentas y estos roles.",
+    {
+      operation: z.enum(["research", "enrichment", "research+enrichment"]).describe("Qué se va a hacer con el lote. Define qué medidores se cotizan."),
+      companyIds: z.array(z.string().uuid()).min(1).max(MAX_ACCOUNTS_PER_BATCH).describe("Los companyId (UUID) del lote. Los que devolvió screen_account_list."),
+      roles: z.array(z.string().min(2).max(120)).max(25).optional().describe("Cargos a buscar en Apollo. Solo para las operaciones que incluyen enrichment."),
+      maxContactsPerAccount: z.number().int().min(1).max(50).optional().describe("Contactos por cuenta. Se recorta al máximo del plan."),
+    },
+    async (args, extra) => safely(async () => {
+      const auth = authOf(extra)
+      await requirePaidMcp(auth, "usage:read", "read")
+      return estimateBatch(auth, args)
+    }),
+  )
+  server.tool("get_ai_usage", "Devuelve los TRES medidores mensuales del workspace: monthlyServerResearch (research con tokens de ASCI), monthlyClientResearch (research con tus tokens, que igual ocupa cupo del plan) y monthlyApolloCredits (créditos de contactos, 1 crédito = 1 contacto). Suma tokens y costo verificado del server-managed. Son independientes entre sí. Para saber cuánto cuesta un LOTE concreto antes de correrlo, usá estimate_batch.", {}, async (_args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "usage:read", "read"); return getMcpUsage(auth) }))
 }, {
   serverInfo: { name: "asci-v3", version: "2.0.0" },
   /**

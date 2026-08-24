@@ -2,7 +2,7 @@ import "server-only"
 
 import crypto from "crypto"
 import { createAdminClient } from "@/lib/supabase/admin"
-import { getWorkspacePlan, getWorkspaceUsage } from "@/lib/v3/plans"
+import { getWorkspacePlan, getWorkspaceUsage, getContactEnrichmentLimits } from "@/lib/v3/plans"
 
 export type McpUsagePool =
   | "research_server"
@@ -348,7 +348,11 @@ export async function getMcpUsage(principal: McpPrincipal) {
     byPool[row.pool][row.status as "reserved" | "committed" | "released"] += row.units
   }
   const monthStart = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString()
-  const clientResearchUsed = await getMonthlyPoolUsage(principal.workspaceId, "research_client")
+  const [clientResearchUsed, apolloUsed, enrichmentLimits] = await Promise.all([
+    getMonthlyPoolUsage(principal.workspaceId, "research_client"),
+    getMonthlyPoolUsage(principal.workspaceId, "apollo_enrichment"),
+    getContactEnrichmentLimits(principal.workspaceId),
+  ])
 
   return {
     plan: planUsage.plan,
@@ -370,8 +374,20 @@ export async function getMcpUsage(principal: McpPrincipal) {
     // Alias del pool server-managed. Se mantiene para no romper a ningún cliente
     // que ya lea esta clave; usar los dos campos de arriba, que son explícitos.
     monthlyResearch: { used: planUsage.monthlyResearchCount, limit: planUsage.config.monthlyResearchCap },
+    // Cuarto medidor. Existía y era el único que NO se podía consultar a priori:
+    // vivía adentro de prepare_contact_enrichment, así que para saber cuántos
+    // créditos quedaban había que pedir el preview de una cuenta concreta. Con un
+    // lote de 42 eso significa descubrir el presupuesto gastando llamadas.
+    monthlyApolloCredits: {
+      used: apolloUsed,
+      limit: enrichmentLimits.monthlyUnits,
+      remaining: Math.max(0, enrichmentLimits.monthlyUnits - apolloUsed),
+      allowed: enrichmentLimits.allowed,
+      reason: enrichmentLimits.reason,
+      note: "1 crédito = 1 contacto. Son créditos de Apollo que absorbe ASCI, NO tokens: se cuentan aparte de los dos pools de research.",
+    },
     poolsNote:
-      "Los dos pools son independientes: un research client-assisted no mueve monthlyServerResearch, y viceversa. Si preparaste research con tu modelo, mirá monthlyClientResearch.",
+      "Son TRES medidores independientes: monthlyServerResearch (tokens de ASCI), monthlyClientResearch (tus tokens, cupo del plan) y monthlyApolloCredits (créditos de terceros). Un research client-assisted no mueve monthlyServerResearch, y ninguno de los dos mueve los créditos de Apollo.",
     monthStart,
     lastSevenDays: byPool,
     verifiedAi: (aiUsage.data ?? []).reduce((acc, row) => ({
