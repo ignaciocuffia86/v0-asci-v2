@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { resolveApiKeyAccess, isGlobalSuperAdmin } from "@/lib/v3/api-key-access"
 import { getWorkspaceMembers, resolveUserIdentities } from "@/lib/v3/workspace"
+import { SCOPES_BY_TYPE, keyTypeFromScopes, type ApiKeyType } from "@/lib/v3/mcp-key-scopes"
 
 export interface ApiKeyWorkspaceOption {
   id: string
@@ -18,7 +19,9 @@ export interface ApiKeyOwnerOption {
   role: "admin" | "member"
 }
 
-export type ApiKeyType = "standard" | "explore" | "profiles"
+// El tipo y el set de scopes viven en lib/v3/mcp-key-scopes.ts: los comparte con
+// la validación de cada request, que no puede importar un módulo "use server".
+export type { ApiKeyType } from "@/lib/v3/mcp-key-scopes"
 
 export interface ApiKeyListItem {
   id: string
@@ -31,42 +34,6 @@ export interface ApiKeyListItem {
   owner_email: string | null
   owner_name: string | null
   key_type: ApiKeyType
-}
-
-/**
- * Scopes por tipo de key.
- * - standard: el MCP actual (señales v2, research, icebreakers, contactos).
- * - explore: el MCP paralelo sobre la tabla cruda. Incluye explore:read y los
- *   scopes de las capas pagas del embudo (scrape de vacantes y Apollo).
- * - profiles: el tercer MCP, persona-first, para búsqueda de talento. Es de solo
- *   lectura sobre la tabla cruda de contactos, así que solo lleva profiles:read
- *   (más usage:read para consultar consumo). No tiene capas pagas.
- */
-const SCOPES_BY_TYPE: Record<ApiKeyType, { scopes: string[]; allowedModes: string[] }> = {
-  standard: {
-    scopes: ["companies:read", "signals:read", "accounts:read", "research:run", "research:prepare", "research:submit", "icebreakers:generate", "icebreakers:prepare", "icebreakers:submit", "usage:read"],
-    allowedModes: ["read", "server_managed", "client_assisted"],
-  },
-  explore: {
-    scopes: ["explore:read", "research:run", "accounts:read", "accounts:write", "contacts:write", "usage:read"],
-    allowedModes: ["read", "server_managed"],
-  },
-  profiles: {
-    scopes: ["profiles:read", "usage:read"],
-    allowedModes: ["read"],
-  },
-}
-
-/**
- * Deriva el tipo de una key a partir de sus scopes guardados. El orden importa:
- * profiles:read y explore:read son marcadores exclusivos de cada MCP; se chequean
- * antes de caer en standard.
- */
-function keyTypeFromScopes(scopes: string[] | null): ApiKeyType {
-  const list = scopes ?? []
-  if (list.includes("profiles:read")) return "profiles"
-  if (list.includes("explore:read")) return "explore"
-  return "standard"
 }
 
 async function getAuthenticatedUserId(): Promise<string | null> {

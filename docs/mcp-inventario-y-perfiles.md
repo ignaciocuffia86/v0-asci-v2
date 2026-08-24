@@ -166,8 +166,7 @@ Las dos capas pagas son las mismas del server standard, con otro nombre: `explor
 
 ### 5.3 Huecos encontrados al inventariar
 
-1. **Nueve tools son inalcanzables con una API key `standard`.** `SCOPES_BY_TYPE.standard` (`app/actions/v3/api-keys.ts:45`) otorga 10 scopes que **no incluyen** `accounts:write`, `contacts:write`, `documents:read/write` ni `recommendations:read`. La expansión automática de `mcp-auth.ts:86` solo se dispara para keys legacy que guardaron los scopes literales `"read"` / `"write"`. Resultado: con una key standard nueva **no se puede ni guardar una cuenta**, que es el primer paso de todo el flujo. Con OAuth sí, porque el catálogo de consentimiento sí los ofrece.
-   → **Es un bug, no una decisión.** Hay que agregar `accounts:write`, `contacts:write`, `documents:*` y `recommendations:read` a `standard`.
+1. ~~**Nueve tools son inalcanzables con una API key `standard`.**~~ **ARREGLADO** (24-ago-2026). `SCOPES_BY_TYPE.standard` no incluía `accounts:write`, `contacts:write`, `documents:read/write` ni `recommendations:read`, así que con una key standard nueva no se podía ni guardar una cuenta. La causa de fondo era que el set de scopes estaba **duplicado**: uno en la creación de la key y otro en la validación de cada request, y solo se actualizó el primero. Ahora vive en `lib/v3/mcp-key-scopes.ts` como fuente única, las keys ya emitidas se completan en validación (sin migración de datos) y un test lee las tools del código para que el catálogo no vuelva a quedar viejo. Las keys **legacy** de solo lectura no se amplían: ver §6.2.
 
 2. **`prepare_contact_enrichment` está gateada como si costara.** Pide `contacts:write` y `mode: "server_managed"` (`mcp-contact-enrichment.ts:141`), o sea que **un plan trial no puede ni ver el preview** de lo que le costaría. Un preview que no gasta créditos debería ser Tier 0.
 
@@ -204,7 +203,7 @@ Ya está casi entero, y es coherente: `followedCap` limita cuántas cuentas se p
 
 Lo que falta para cerrarlo:
 
-1. **Arreglar los scopes de `standard`** (hueco 5.3.1) — hoy no puede guardar cuentas.
+1. ~~Arreglar los scopes de `standard`~~ — **hecho**. Una key standard ya alcanza las 39 tools de su MCP. Las keys legacy que guardaron los literales `"read"` / `"write"` **no** se completan por tipo a propósito: `accounts:write` corre en modo `read`, así que `allowedModes` no lo frenaría y una credencial que alguien limitó a solo lectura pasaría a poder ocupar lugares del plan.
 2. **Separar consultar de seguir.** Leer el catálogo no debería ocupar un lugar del plan. Con `screen_account_list` y `detail:"evidence"` esto ya es cierto técnicamente (son T0 sin guard); falta que el modelo de precios lo refleje.
 3. **`estimate_batch`** para que el aviso de costo sea una vez por lote y no 42 veces.
 4. **Tope de presupuesto en USD por workspace**, verificado dentro de `reserveMcpUsage`, además del tope de unidades.
@@ -230,7 +229,7 @@ La regla que no se negocia: **admin no significa "sin medición", significa "sin
 
 | Paso | Qué | Depende de |
 |---|---|---|
-| 1 | Arreglar scopes de `standard` (hueco 5.3.1) | — |
+| 1 | ~~Arreglar scopes de `standard`~~ ✅ | — |
 | 2 | `estimate_batch` + `batchPlanHash` de lote | — |
 | 3 | Presupuesto en USD por workspace, verificado en `reserveMcpUsage` | 2 |
 | 4 | Flag `unrestricted` en los guards de capa 2 | 3 |
