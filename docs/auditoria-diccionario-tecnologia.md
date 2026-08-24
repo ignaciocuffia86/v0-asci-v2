@@ -655,9 +655,10 @@ Script en [`scripts/apply-cloud-batch-20260824.sql`](../scripts/apply-cloud-batc
 
 | | |
 | --- | ---: |
-| Keywords antes / ahora | 530 / 454 |
+| Keywords antes / ahora | 512 / 515 |
 | Señales falsas eliminadas | 10.229 |
-| Keywords nuevas | 78 |
+| Keywords nuevas | 80 |
+| Señales reales que aportaron las altas | 7.528 |
 
 ### Corrección de un error mío en el lote ERP
 
@@ -743,6 +744,41 @@ Los dos más caros:
 
 Se agregaron también las certificaciones de cada nube (`AZ-104`, `AZ-305`, `AZ-900`,
 `Professional Cloud Architect`, `OCI Architect`).
+
+Una de las altas no pasó su propia prueba: `Pub/Sub` en Google Cloud quedó en 82 con contexto
+Google contra 32 de Kafka, RabbitMQ y SQS — *publish/subscribe* es también un patrón de
+arquitectura genérico. 72:28 está debajo del umbral, así que se reemplazó por `Cloud Pub/Sub` y
+`Google Pub/Sub`. Es la misma verificación que descartó `CCSA` en el lote anterior: **medir las
+altas, no solo las bajas**.
+
+### Saldo
+
+| Producto | Kw antes | Kw ahora | Señales antes | Señales ahora | Cuentas antes | Cuentas ahora |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Microsoft SQL Server | 22 | 25 | 21.422 | 22.288 | 11.339 | 11.722 |
+| AWS | 134 | 139 | 19.731 | 17.535 | 6.573 | 5.627 |
+| Oracle Database | 88 | 87 | 13.355 | 13.380 | 5.731 | 5.681 |
+| Google Cloud Platform | 16 | 22 | 5.697 | 6.594 | 2.217 | 2.493 |
+| Microsoft Windows Server | 20 | 22 | 5.321 | 5.341 | 3.804 | 3.814 |
+| Azure | 63 | 65 | 3.347 | 4.790 | 1.999 | 2.303 |
+| Weblogic | 62 | 36 | 3.511 | 3.491 | 1.624 | 1.614 |
+| AS/400 | 12 | 15 | 2.194 | 2.047 | 1.289 | 1.204 |
+| IBM Z | 49 | 44 | 809 | 1.851 | 441 | 655 |
+| Microsoft Exchange Server | 15 | 22 | 5.738 | 1.102 | 3.779 | 903 |
+| System Center Configuration Manager | 18 | 21 | 930 | 935 | 608 | 610 |
+| Datadog | 8 | 10 | 622 | 622 | 273 | 273 |
+| Dynatrace | 5 | 7 | 475 | 475 | 283 | 283 |
+
+**Exchange Server es la corrección más grande de todo el trabajo:** pasó de 3.779 cuentas a 903.
+Casi tres mil cuentas dejaron de figurar con un servidor de correo Microsoft que nunca tuvieron.
+
+**IBM Z va en la dirección opuesta y es el mejor resultado del lote:** subió de 441 cuentas a 655
+*después* de sacarle 14 keywords. Sacar las siglas que eran nombres de empresa y poner en su
+lugar `JCL`, `VSAM`, `CICS` e `ISPF` más que duplicó las señales del producto. Es la
+demostración de que el problema no era tener pocas keywords, era tener las equivocadas.
+
+Azure ganó 304 cuentas por `Azure DevOps` sola (2.073 señales) y Google Cloud 276 por `BigQuery`
+(822). Las dos faltaban por completo.
 
 ### Los que no se tocaron
 

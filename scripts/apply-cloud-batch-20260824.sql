@@ -109,3 +109,37 @@
 -- El patron de los cuatro lotes: los productos con nombre de marca inventado no
 -- dan problemas nunca. Sufren los que usan palabras del idioma (Exchange, Aurora,
 -- Lambda, Comprehend, Defender, Entra) o siglas que otra industria tambien usa.
+
+-- ---------------------------------------------------------------------------
+-- 5. Verificacion de las altas, mismo dia: Pub/Sub calificada
+-- ---------------------------------------------------------------------------
+-- Se midieron las altas nuevas, no solo las bajas (leccion de CCSA en el lote
+-- anterior). Pub/Sub en Google Cloud quedo 82 con contexto Google contra 32 de
+-- Kafka, RabbitMQ y SQS: publish/subscribe es tambien un patron de arquitectura
+-- generico. 72:28 esta debajo del umbral de ~80:20.
+update dictionary_products p
+set keywords = (select array_agg(k.kw) from unnest(p.keywords) k(kw) where lower(k.kw) <> 'pub/sub')
+               || array['Cloud Pub/Sub','Google Pub/Sub'],
+    updated_at = now()
+where p.name = 'Google Cloud Platform';
+
+-- ---------------------------------------------------------------------------
+-- Resultado del lote (jobs procesados)
+-- ---------------------------------------------------------------------------
+--   Microsoft SQL Server    21.422 -> 22.288 senales   11.339 -> 11.722 cuentas
+--   AWS                     19.731 -> 17.535            6.573 ->  5.627
+--   Oracle Database         13.355 -> 13.380            5.731 ->  5.681
+--   Google Cloud Platform    5.697 ->  6.594            2.217 ->  2.493
+--   Microsoft Windows Server 5.321 ->  5.341            3.804 ->  3.814
+--   Azure                    3.347 ->  4.790            1.999 ->  2.303
+--   Weblogic                 3.511 ->  3.491            1.624 ->  1.614
+--   AS/400                   2.194 ->  2.047            1.289 ->  1.204
+--   IBM Z                      809 ->  1.851              441 ->    655
+--   Microsoft Exchange Server 5.738 ->  1.102            3.779 ->    903
+--   SCCM                       930 ->    935              608 ->    610
+--
+-- Se fueron 10.229 senales falsas y entraron 7.528 reales.
+--
+-- Exchange Server es la correccion mas grande del trabajo: 3.779 -> 903 cuentas.
+-- IBM Z es el mejor resultado: subio de 441 a 655 cuentas DESPUES de sacarle 14
+-- keywords. El problema no era tener pocas keywords, era tener las equivocadas.
