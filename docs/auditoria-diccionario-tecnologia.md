@@ -1195,14 +1195,99 @@ La intuición falló en las dos direcciones cinco veces. Parecían riesgosas y n
    herramienta suelta dentro de la plataforma (`Crystal Reports` en BusinessObjects), el producto
    ajeno dentro del hermano (`Trello` en Jira). **Se crea el producto que faltaba.**
 
+### Lo que quedó abierto al cerrar los siete lotes — y cómo se resolvió
+
+- ~~**Los vendors `Legacy`, `Backend`, `Frontend` y `CMS`** son categorías haciendo de
+  vendors.~~ → Resuelto por el rediseño de taxonomía: la categoría pasó a ser un eje propio y
+  esos cuatro pseudo-vendors dejaron de existir. Ver `docs/rediseno-taxonomia-diccionario.md`.
+- ~~**`WPF`, `WinForms`, `Windows Forms` y `ADO.NET` dentro de Visual Basic**~~ → Resuelto: se
+  creó **.NET Framework y escritorio**, marcado `legado`.
+- ~~**ELO Digital Office**, con 45 keywords y cero señales en los siete lotes.~~ → Dado de baja.
+---
+
+## Co-ocurrencia: recuperar lo que la limpieza tuvo que tirar
+
+Durante los siete lotes hubo una tercera categoría de error que no tenía remedio. No era la
+keyword falsa (se borra) ni la mal ubicada (se mueve): era **la keyword que es a la vez la forma
+en que la gente nombra el producto y una palabra común**. `Fabric`, `Exchange`, `Commerce Cloud`,
+`Pub/Sub`, `Web Forms`. Con las dos únicas herramientas disponibles —dejarla o sacarla— se
+eligió sacarlas, y con eso se fueron también las señales buenas.
+
+La co-ocurrencia agrega la tercera opción: **la keyword cuenta solo si el texto cumple una
+condición adicional**. Se implementó en `process_dictionary_job` y en el matcher de TypeScript
+(`matchTextAgainstDictionary`), con dos campos nuevos en `dictionary_products`.
+
+### Son dos mecanismos, porque son dos errores distintos
+
+Medir el ruido de `Fabric` mostró que venía de dos lugares que necesitan remedios opuestos:
+
+| | Ambigüedad de **dominio** | Ambigüedad de **colocación** |
+|---|---|---|
+| Qué pasa | La misma palabra en otra industria | La palabra es parte del nombre de otro producto |
+| Ejemplos | `Fabric` textil, `Fabric` de redes, `Exchange` bursátil | `Service Fabric`, `Hyperledger Fabric`, `SAP Commerce Cloud` |
+| Campo | `keywords_contexto` | `keywords_excluye` |
+| Qué hace | Exige que el texto **también** diga algo del dominio correcto | **Enmascara** la frase y exige que la keyword siga apareciendo |
+| Alcance | **Entidad**: evidencia sobre el dominio de la persona o la vacante | **Ocurrencia**: es sobre esa mención puntual |
+
+La distinción de alcance no es cosmética. El contexto mira todo el perfil porque un perfil de
+redes no dice "Power BI" en ninguna parte, mientras que uno de datos sí, aunque `Fabric` esté en
+el headline y "Power BI" en un puesto de 2019. La exclusión, en cambio, tiene que ser por
+ocurrencia: **el contexto no filtra las colocaciones**, porque quien escribe "Service Fabric" es
+justamente gente de datos que también usa Power BI. Enmascarar en vez de descartar la entidad
+entera es lo que permite que un perfil que dice las dos cosas conserve la señal.
+
+Sobre `Fabric`, la exclusión descartó 17 de los 154 perfiles que el contexto solo dejaba pasar.
+
+### Resultado de las cinco primeras keywords
+
+| Keyword | Producto | Crudo | Tras exclusión | Final | Muestra leída |
+|---|---|---:|---:|---:|---|
+| `Exchange` | Microsoft Exchange Server | 4.927 | 3.814 | 2.238 | 44/45 (98%) |
+| `Fabric` | Microsoft Fabric | 556 | 376 | 123 | 43/45 (96%) |
+| `Web Forms` | .NET Framework y escritorio | 211 | 211 | 191 | 24/25 (96%) |
+| `Commerce Cloud` | Commerce Cloud (Salesforce) | 188 | 127 | 100 | 24/25 (96%) |
+| `Pub/Sub` | Google Cloud Platform | 166 | 166 | 140 | contexto GCP, 84% |
+
+Las cinco quedan muy por encima del umbral de 80:20 que se usó en toda la auditoría. En cuentas:
+
+| Producto | Cuentas antes | Cuentas ahora |
+|---|---:|---:|
+| Microsoft Exchange Server | 903 | **2.118** |
+| Microsoft Fabric | 41 | **146** |
+| Commerce Cloud | 30 | **69** |
+| .NET Framework y escritorio | 2.125 | 2.188 |
+| Google Cloud Platform | 2.490 | 2.516 |
+
+Exchange y Fabric son el caso extremo: la keyword que se había borrado por ruidosa aportaba el
+67% y el 78% de la cobertura del producto.
+
+### Dos cosas que el método volvió a confirmar
+
+1. **Los términos de contexto también hay que medirlos.** Para `Fabric` se descartaron
+   `Business Intelligence`, `Data Engineer` y `Warehouse` aunque sumaban 26 perfiles: al leerlos,
+   la mitad eran textiles ("fabric samples", "fabric roll") y Fabric Care de P&G. Un término de
+   contexto que ensancha la red sin discriminar no sirve para nada.
+2. **Varias exclusiones aparecieron leyendo lo que sobrevivía al primer filtro**, no pensándolas
+   de antemano: `Fabric UI` (el CSS de Office), `Fabric Manager` (Cisco), `K2View Fabric`,
+   `urban fabric`, `Fabric Controller` (Azure), `e-commerce cloud`. Es la misma lección de los
+   lotes anteriores: **medir lo que se agrega, no solo lo que se saca.**
+
+### Cómo se opera
+
+En el ABM del diccionario, cada keyword de un producto tiene un botón de mira (`Crosshair`) que
+abre el panel de co-ocurrencia con las dos listas. Las keywords que tienen reglas quedan marcadas
+en ámbar en la tabla, porque son las que sin reglas no podrían estar en el diccionario.
+
+Cambiar las reglas de una keyword que ya existe encola **remove + add**: las señales viejas se
+generaron con las reglas anteriores y hay que rehacerlas. Los dos jobs van en inserts separados a
+propósito — en un solo insert compartirían `created_at`, el desempate quedaría indefinido y un
+`add` que corriera antes que su `remove` terminaría borrando la keyword.
+
 ### Lo que queda abierto
 
-- **Los vendors `Legacy`, `Backend`, `Frontend` y `CMS`** son categorías haciendo de vendors. Con
-  los lenguajes ya separados de los frameworks, es el momento más fácil que va a haber para
-  reagruparlos.
-- **`WPF`, `WinForms`, `Windows Forms` y `ADO.NET` dentro de Visual Basic** — son de .NET de
-  escritorio en general y necesitarían un producto propio.
-- **ELO Digital Office**, con 45 keywords y cero señales en los siete lotes.
-- **Keywords con co-ocurrencia** — la mejora de motor propuesta en la auditoría, que rescataría
-  términos como `Fabric` exigiendo contexto. Requiere un campo nuevo en `dictionary_products` y
-  tocar `process_dictionary_job`.
+- **Más keywords candidatas.** Las cinco de este lote eran las que ya estaban identificadas. El
+  mismo tratamiento sirve para cualquier término que se haya descartado por ruidoso: la consulta
+  de medición está en `scripts/`.
+- **Co-ocurrencia en procesos.** Los campos están solo en `dictionary_products`; un job de
+  proceso nunca los levanta. Si aparece el caso, es agregar las columnas en
+  `dictionary_processes` y una rama más en la función.

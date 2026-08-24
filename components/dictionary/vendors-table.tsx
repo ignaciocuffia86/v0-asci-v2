@@ -7,7 +7,7 @@ import { createClient } from "@/lib/supabase/client"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Plus, Trash2, ChevronRight, ChevronDown, X, Pencil } from "lucide-react"
+import { Plus, Trash2, ChevronRight, ChevronDown, X, Pencil, Crosshair } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -34,6 +34,9 @@ type Product = {
   vendor_id: string
   categoria: string | null
   ciclo_vida: string | null
+  /** Co-ocurrencia: keyword → términos. Ver el diálogo de edición. */
+  keywords_contexto: Record<string, string[]> | null
+  keywords_excluye: Record<string, string[]> | null
 }
 
 /**
@@ -275,11 +278,29 @@ export function VendorsTable() {
                                     )}
                                   </div>
                                   <div className="flex flex-wrap gap-1 mt-2">
-                                    {product.keywords?.map((kw, i) => (
-                                      <Badge key={i} variant="secondary" className="text-xs">
-                                        {kw}
-                                      </Badge>
-                                    ))}
+                                    {product.keywords?.map((kw, i) => {
+                                      // Las keywords con co-ocurrencia se marcan: son las que sin
+                                      // reglas serían demasiado ruidosas para estar en el diccionario.
+                                      const k = kw.toLowerCase()
+                                      const conReglas =
+                                        (product.keywords_contexto?.[k]?.length ?? 0) > 0 ||
+                                        (product.keywords_excluye?.[k]?.length ?? 0) > 0
+                                      return (
+                                        <Badge
+                                          key={i}
+                                          variant="secondary"
+                                          className={`text-xs ${
+                                            conReglas
+                                              ? "border border-amber-500/60 text-amber-700 dark:text-amber-400"
+                                              : ""
+                                          }`}
+                                          title={conReglas ? "Tiene reglas de co-ocurrencia" : undefined}
+                                        >
+                                          {conReglas && <Crosshair className="h-2.5 w-2.5 mr-1" />}
+                                          {kw}
+                                        </Badge>
+                                      )
+                                    })}
                                   </div>
                                 </div>
                                 <div className="flex gap-1">
@@ -331,6 +352,8 @@ export function VendorsTable() {
           itemName={editingProduct.name}
           itemType="product"
           currentKeywords={editingProduct.keywords || []}
+          currentContexto={editingProduct.keywords_contexto ?? {}}
+          currentExcluye={editingProduct.keywords_excluye ?? {}}
           onSave={fetchData}
         />
       )}

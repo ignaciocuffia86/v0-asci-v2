@@ -28,6 +28,8 @@ const DICT: DictionaryData = {
       keywords: ["Dynamics 365", "D365"],
       categoria: "ERP y backoffice",
       ciclo_vida: "vigente",
+      keywords_contexto: {},
+      keywords_excluye: {},
     },
     {
       id: "p-d365-crm",
@@ -36,6 +38,8 @@ const DICT: DictionaryData = {
       keywords: ["Dynamics CRM"],
       categoria: "CRM y marketing",
       ciclo_vida: "vigente",
+      keywords_contexto: {},
+      keywords_excluye: {},
     },
     {
       id: "p-angular",
@@ -44,6 +48,8 @@ const DICT: DictionaryData = {
       keywords: ["AngularJS"],
       categoria: "Desarrollo",
       ciclo_vida: "vigente",
+      keywords_contexto: {},
+      keywords_excluye: {},
     },
     {
       id: "p-forms",
@@ -52,6 +58,8 @@ const DICT: DictionaryData = {
       keywords: ["Forms 6i"],
       categoria: "Desarrollo",
       ciclo_vida: "legado",
+      keywords_contexto: {},
+      keywords_excluye: {},
     },
     {
       id: "p-ebs",
@@ -60,6 +68,8 @@ const DICT: DictionaryData = {
       keywords: ["E-Business Suite"],
       categoria: "ERP y backoffice",
       ciclo_vida: "legado",
+      keywords_contexto: {},
+      keywords_excluye: {},
     },
   ],
   processes: [{ id: "pr-fin", name: "Control administrativo financiero", keywords: ["contabilidad"] }],

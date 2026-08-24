@@ -141,6 +141,29 @@ Postgres siga trabajando.
 
 ---
 
+## 8. Guardas adicionales: después del predicado indexable, nunca en su lugar
+
+La co-ocurrencia de keywords (`keywords_contexto` / `keywords_excluye`, ver
+`docs/auditoria-diccionario-tecnologia.md`) agrega condiciones sobre el texto que no son
+indexables: concatenan varias columnas y aplican `regexp_replace`. La regla para no perder los
+índices GIN trgm es la misma para cualquier guarda de este tipo:
+
+- **El predicado crudo por columna va primero.** Es el que usa el índice. Enmascarar solo puede
+  quitar coincidencias, así que el conjunto crudo es siempre un **superconjunto** del filtrado:
+  filtrar después es correcto y barato.
+- **Envolver la columna en una función en el predicado principal mata el índice.** Poner
+  `dict_mask(c.headline, ...) ~* patron` en lugar del predicado crudo convierte el match de
+  contactos en un seq scan sobre toda la tabla.
+- **Usar `CASE`, no `OR`, para saltear la guarda cuando no aplica.** En Postgres el `OR` puede
+  reordenarse por costo y evaluar igual la rama cara; el `CASE` garantiza que no se evalúe. Con
+  esto, las keywords sin reglas (la enorme mayoría) siguen costando exactamente lo mismo que
+  antes.
+- **Filtrar temprano si el filtro es barato.** El guarda del match se hereda: las fases de insert
+  trabajan sobre `dictionary_job_matches`, que ya viene filtrado, así que solo hace falta repetir
+  ahí lo que decide *por bloque* (qué campo generó la señal), no lo que decide por entidad.
+
+---
+
 ## Checklist para tareas de ETL/matcheo sobre tablas grandes
 - [ ] ¿Paginás con keyset (no OFFSET)?
 - [ ] ¿Es set-based (`INSERT...SELECT`) en vez de loop por fila?
@@ -149,6 +172,7 @@ Postgres siga trabajando.
 - [ ] ¿Hay guardia para que un solo worker procese cada job?
 - [ ] ¿Los timeouts (lote → RPC → cliente → serverless) son coherentes?
 - [ ] ¿Preservás el contrato de dedupe (`ON CONFLICT` sobre las unique keys de `signals`)?
+- [ ] ¿Las condiciones no indexables van **después** del predicado crudo, y salteadas con `CASE`?
 
 ## Referencias
 - Keyset vs OFFSET: OFFSET degrada O(n) con el desplazamiento; keyset es O(1) por página vía índice.

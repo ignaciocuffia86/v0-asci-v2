@@ -162,6 +162,19 @@ export interface DictionaryData {
     categoria: string | null
     /** 'vigente' | 'legado'. Legado solo si el vendor anunció sucesor y fin de soporte. */
     ciclo_vida: string | null
+    /**
+     * Co-ocurrencia obligatoria, a nivel entidad: keyword → términos que el
+     * texto también tiene que mencionar para que la keyword cuente. Es para
+     * ambigüedad de dominio ("Fabric" textil o de redes vs. Microsoft Fabric).
+     */
+    keywords_contexto: Record<string, string[]>
+    /**
+     * Colocaciones que neutralizan la ocurrencia: keyword → frases que la
+     * contienen y significan otra cosa ("Service Fabric", "Hyperledger
+     * Fabric"). Se enmascaran y la keyword tiene que seguir apareciendo en lo
+     * que queda, así un perfil que dice las dos cosas conserva la señal.
+     */
+    keywords_excluye: Record<string, string[]>
   }[]
   processes: { id: string; name: string; keywords: string[] }[]
 }

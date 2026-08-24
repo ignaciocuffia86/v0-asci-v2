@@ -16,7 +16,10 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
-import { X, Plus, AlertTriangle, Loader2, ArrowLeft } from "lucide-react"
+import { X, Plus, AlertTriangle, Loader2, ArrowLeft, Crosshair, RefreshCw } from "lucide-react"
+
+/** keyword (en minúsculas) → términos. Ver dictionary_products.keywords_contexto. */
+type TermMap = Record<string, string[]>
 
 type EditKeywordsDialogProps = {
   open: boolean
@@ -25,13 +28,24 @@ type EditKeywordsDialogProps = {
   itemName: string
   itemType: "product" | "process"
   currentKeywords: string[]
+  /** Solo productos. Los procesos no tienen co-ocurrencia. */
+  currentContexto?: TermMap
+  currentExcluye?: TermMap
   onSave: () => void
 }
 
+// "recalculate" es un cambio de co-ocurrencia sobre una keyword que ya existe.
+// No alcanza con guardar el mapa: las señales viejas se generaron con las
+// reglas anteriores, así que hay que borrarlas y volver a generarlas.
 type PendingChange = {
-  type: "add" | "remove"
+  type: "add" | "remove" | "recalculate"
   keyword: string
 }
+
+const termKey = (keyword: string) => keyword.toLowerCase()
+
+const sameTerms = (a: string[] = [], b: string[] = []) =>
+  a.length === b.length && a.every((t, i) => t === b[i])
 
 type DialogView = "edit" | "confirm"
 
@@ -42,6 +56,8 @@ export function EditKeywordsDialog({
   itemName,
   itemType,
   currentKeywords,
+  currentContexto,
+  currentExcluye,
   onSave,
 }: EditKeywordsDialogProps) {
   const [keywords, setKeywords] = useState<string[]>([])
@@ -50,6 +66,11 @@ export function EditKeywordsDialog({
   const [isProcessing, setIsProcessing] = useState(false)
   const [editingName, setEditingName] = useState(itemName)
   const [view, setView] = useState<DialogView>("edit")
+  const [contexto, setContexto] = useState<TermMap>({})
+  const [excluye, setExcluye] = useState<TermMap>({})
+  /** Keyword cuyo panel de co-ocurrencia está abierto. */
+  const [afinando, setAfinando] = useState<string | null>(null)
+  const [nuevoTermino, setNuevoTermino] = useState({ contexto: "", excluye: "" })
   const supabase = createClient()
 
   // Reset state when dialog opens
@@ -60,11 +81,15 @@ export function EditKeywordsDialog({
       setNewKeyword("")
       setEditingName(itemName)
       setView("edit")
+      setContexto({ ...(currentContexto ?? {}) })
+      setExcluye({ ...(currentExcluye ?? {}) })
+      setAfinando(null)
+      setNuevoTermino({ contexto: "", excluye: "" })
     }
-  }, [open, currentKeywords, itemName])
+  }, [open, currentKeywords, itemName, currentContexto, currentExcluye])
 
   // Calculate pending changes by comparing current vs original
-  const calculateChanges = (newKeywords: string[]): PendingChange[] => {
+  const calculateChanges = (newKeywords: string[], ctx: TermMap, exc: TermMap): PendingChange[] => {
     const changes: PendingChange[] = []
 
     // Find removed keywords
@@ -81,7 +106,43 @@ export function EditKeywordsDialog({
       }
     })
 
+    // Keywords que siguen estando pero cambiaron sus reglas de co-ocurrencia.
+    // Las que se agregan o se sacan no entran acá: su job ya recalcula todo.
+    newKeywords.forEach((kw) => {
+      if (!currentKeywords.includes(kw)) return
+      const k = termKey(kw)
+      const cambio =
+        !sameTerms(ctx[k], (currentContexto ?? {})[k]) || !sameTerms(exc[k], (currentExcluye ?? {})[k])
+      if (cambio) changes.push({ type: "recalculate", keyword: kw })
+    })
+
     return changes
+  }
+
+  /** Reescribe uno de los dos mapas para una keyword y recalcula los pendientes. */
+  const setTerminos = (campo: "contexto" | "excluye", keyword: string, terms: string[]) => {
+    const k = termKey(keyword)
+    const next = campo === "contexto" ? { ...contexto } : { ...excluye }
+    if (terms.length > 0) next[k] = terms
+    else delete next[k]
+
+    const ctx = campo === "contexto" ? next : contexto
+    const exc = campo === "excluye" ? next : excluye
+    if (campo === "contexto") setContexto(next)
+    else setExcluye(next)
+    setPendingChanges(calculateChanges(keywords, ctx, exc))
+  }
+
+  const agregarTermino = (campo: "contexto" | "excluye", keyword: string) => {
+    const crudos = nuevoTermino[campo]
+      .split(/[;,]/)
+      .map((t) => t.trim())
+      .filter(Boolean)
+    if (crudos.length === 0) return
+    const actuales = (campo === "contexto" ? contexto : excluye)[termKey(keyword)] ?? []
+    const nuevos = crudos.filter((t) => !actuales.includes(t))
+    if (nuevos.length > 0) setTerminos(campo, keyword, [...actuales, ...nuevos])
+    setNuevoTermino((prev) => ({ ...prev, [campo]: "" }))
   }
 
   const handleAddKeyword = () => {
@@ -96,15 +157,25 @@ export function EditKeywordsDialog({
     if (newKeywords.length > 0) {
       const updatedKeywords = [...keywords, ...newKeywords]
       setKeywords(updatedKeywords)
-      setPendingChanges(calculateChanges(updatedKeywords))
+      setPendingChanges(calculateChanges(updatedKeywords, contexto, excluye))
     }
     setNewKeyword("")
   }
 
   const handleRemoveKeyword = (keyword: string) => {
     const updatedKeywords = keywords.filter((k) => k !== keyword)
+    // Si se va la keyword se van sus reglas: un mapa con claves huérfanas no
+    // rompe nada, pero queda basura que después nadie sabe de dónde salió.
+    const k = termKey(keyword)
+    const ctx = { ...contexto }
+    const exc = { ...excluye }
+    delete ctx[k]
+    delete exc[k]
     setKeywords(updatedKeywords)
-    setPendingChanges(calculateChanges(updatedKeywords))
+    setContexto(ctx)
+    setExcluye(exc)
+    if (afinando === keyword) setAfinando(null)
+    setPendingChanges(calculateChanges(updatedKeywords, ctx, exc))
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -117,6 +188,11 @@ export function EditKeywordsDialog({
   const hasChanges = pendingChanges.length > 0 || editingName !== itemName
   const addedKeywords = pendingChanges.filter((c) => c.type === "add")
   const removedKeywords = pendingChanges.filter((c) => c.type === "remove")
+  const recalcKeywords = pendingChanges.filter((c) => c.type === "recalculate")
+  const tieneReglas = (kw: string) => {
+    const k = termKey(kw)
+    return (contexto[k]?.length ?? 0) > 0 || (excluye[k]?.length ?? 0) > 0
+  }
 
   const handleApplyChanges = async () => {
     setIsProcessing(true)
@@ -131,6 +207,10 @@ export function EditKeywordsDialog({
         .update({
           name: editingName,
           keywords: keywords,
+          // Los mapas de co-ocurrencia solo existen en productos.
+          ...(itemType === "product"
+            ? { keywords_contexto: contexto, keywords_excluye: excluye }
+            : {}),
         })
         .eq("id", itemId)
 
@@ -139,15 +219,33 @@ export function EditKeywordsDialog({
       //    "canceling statement due to lock timeout" (DELETE con ILIKE sobre
       //    signals bajo el statement_timeout de 8s del rol authenticated).
       //    Ahora el cron/driver procesa remove_keyword con timeout amplio.
-      const jobs = pendingChanges.map((change) => ({
-        job_type: change.type === "add" ? "add_keyword" : "remove_keyword",
+      //    Un cambio de co-ocurrencia se encola como remove + add: las señales
+      //    viejas se generaron con las reglas anteriores y hay que rehacerlas.
+      //
+      //    Los dos jobs de una misma keyword TIENEN que salir en ese orden, y
+      //    el cron los ordena por created_at. Por eso van en dos inserts
+      //    separados y no en uno solo: en un único insert las dos filas
+      //    comparten el created_at de la transacción, el desempate queda
+      //    indefinido y un add que corriera antes que su remove terminaría con
+      //    la keyword borrada.
+      const base = (keyword: string) => ({
         signal_id: itemId,
         signal_type: signalType,
-        keyword: change.keyword,
+        keyword,
         status: "pending",
-      }))
-      if (jobs.length > 0) {
-        await supabase.from("dictionary_jobs").insert(jobs)
+      })
+      const removeJobs = pendingChanges
+        .filter((c) => c.type === "remove" || c.type === "recalculate")
+        .map((c) => ({ ...base(c.keyword), job_type: "remove_keyword" }))
+      const addJobs = pendingChanges
+        .filter((c) => c.type === "add" || c.type === "recalculate")
+        .map((c) => ({ ...base(c.keyword), job_type: "add_keyword" }))
+
+      if (removeJobs.length > 0) {
+        await supabase.from("dictionary_jobs").insert(removeJobs)
+      }
+      if (addJobs.length > 0) {
+        await supabase.from("dictionary_jobs").insert(addJobs)
       }
 
       onSave()
@@ -195,16 +293,33 @@ export function EditKeywordsDialog({
                   ) : (
                     keywords.map((kw) => {
                       const isNew = !currentKeywords.includes(kw)
+                      const conReglas = tieneReglas(kw)
                       return (
                         <Badge
                           key={kw}
                           variant={isNew ? "default" : "secondary"}
-                          className={`gap-1 pr-1 ${isNew ? "bg-green-600 hover:bg-green-700" : ""}`}
+                          className={`gap-1 pr-1 ${isNew ? "bg-green-600 hover:bg-green-700" : ""} ${
+                            afinando === kw ? "ring-2 ring-primary" : ""
+                          }`}
                         >
                           {kw}
+                          {itemType === "product" && (
+                            <button
+                              onClick={() => {
+                                setAfinando(afinando === kw ? null : kw)
+                                setNuevoTermino({ contexto: "", excluye: "" })
+                              }}
+                              title="Co-ocurrencia: exigir contexto o excluir colocaciones"
+                              className={`ml-1 rounded-full p-0.5 hover:bg-black/20 ${
+                                conReglas ? "text-amber-600 dark:text-amber-400" : "opacity-60"
+                              }`}
+                            >
+                              <Crosshair className="h-3 w-3" />
+                            </button>
+                          )}
                           <button
                             onClick={() => handleRemoveKeyword(kw)}
-                            className="ml-1 hover:bg-black/20 rounded-full p-0.5"
+                            className="ml-0.5 hover:bg-black/20 rounded-full p-0.5"
                           >
                             <X className="h-3 w-3" />
                           </button>
@@ -214,6 +329,92 @@ export function EditKeywordsDialog({
                   )}
                 </div>
               </div>
+
+              {/* Co-ocurrencia de una keyword puntual */}
+              {afinando && itemType === "product" && (
+                <div className="space-y-3 p-3 border rounded-md bg-muted/40">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Crosshair className="h-4 w-4 shrink-0 text-primary" />
+                      <span className="text-sm font-medium truncate">Co-ocurrencia de "{afinando}"</span>
+                    </div>
+                    <button onClick={() => setAfinando(null)} className="shrink-0 hover:bg-black/10 rounded p-1">
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Para keywords que son palabras comunes. Sirven para dos cosas distintas: el contexto resuelve
+                    la ambigüedad de dominio (&quot;Fabric&quot; de tela o de redes) y las exclusiones resuelven la
+                    de nombre (&quot;Service Fabric&quot;, &quot;Hyperledger Fabric&quot;). Dejar las dos vacías es
+                    matcheo directo, como siempre.
+                  </p>
+
+                  {(["contexto", "excluye"] as const).map((campo) => {
+                    const terms = (campo === "contexto" ? contexto : excluye)[termKey(afinando)] ?? []
+                    return (
+                      <div key={campo} className="space-y-1.5">
+                        <Label className="text-xs">
+                          {campo === "contexto"
+                            ? "Exigir que el texto también diga alguno de:"
+                            : "No contar la mención cuando es parte de:"}
+                        </Label>
+                        <div className="flex flex-wrap gap-1.5">
+                          {terms.length === 0 ? (
+                            <span className="text-xs text-muted-foreground italic">Sin términos</span>
+                          ) : (
+                            terms.map((t) => (
+                              <Badge
+                                key={t}
+                                variant="outline"
+                                className={`gap-1 pr-1 text-xs font-normal ${
+                                  campo === "contexto"
+                                    ? "border-emerald-500/60 text-emerald-700 dark:text-emerald-400"
+                                    : "border-red-500/60 text-red-700 dark:text-red-400"
+                                }`}
+                              >
+                                {t}
+                                <button
+                                  onClick={() =>
+                                    setTerminos(campo, afinando, terms.filter((x) => x !== t))
+                                  }
+                                  className="ml-0.5 hover:bg-black/20 rounded-full p-0.5"
+                                >
+                                  <X className="h-2.5 w-2.5" />
+                                </button>
+                              </Badge>
+                            ))
+                          )}
+                        </div>
+                        <div className="flex gap-2">
+                          <Input
+                            value={nuevoTermino[campo]}
+                            onChange={(e) => setNuevoTermino((prev) => ({ ...prev, [campo]: e.target.value }))}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault()
+                                agregarTermino(campo, afinando)
+                              }
+                            }}
+                            placeholder={
+                              campo === "contexto" ? "Power BI, Synapse, OneLake" : "Service Fabric, Data Fabric"
+                            }
+                            className="h-8 text-xs"
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-8"
+                            onClick={() => agregarTermino(campo, afinando)}
+                          >
+                            <Plus className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
 
               {/* Add new keyword */}
               <div className="space-y-2">
@@ -272,6 +473,21 @@ export function EditKeywordsDialog({
                       </p>
                     </div>
                   )}
+
+                  {recalcKeywords.length > 0 && (
+                    <div className="text-sm">
+                      <span className="text-blue-700 dark:text-blue-400">
+                        ~ Recalcular co-ocurrencia ({recalcKeywords.length}):
+                      </span>
+                      <p className="text-blue-600 dark:text-blue-300 break-words">
+                        {recalcKeywords.map((c) => c.keyword).join(", ")}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Las señales actuales de estas keywords se borran y se vuelven a generar con las reglas
+                        nuevas.
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -321,6 +537,21 @@ export function EditKeywordsDialog({
                   </span>
                   <p className="text-red-600 dark:text-red-300 ml-3">
                     {removedKeywords.map((c) => c.keyword).join(", ")}
+                  </p>
+                </div>
+              )}
+
+              {recalcKeywords.length > 0 && (
+                <div className="text-sm">
+                  <span className="text-blue-600 dark:text-blue-400 font-medium flex items-center gap-1.5">
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Recalcular {recalcKeywords.length} keyword(s) por co-ocurrencia:
+                  </span>
+                  <p className="text-blue-600 dark:text-blue-300 ml-3">
+                    {recalcKeywords.map((c) => c.keyword).join(", ")}
+                  </p>
+                  <p className="text-xs text-muted-foreground ml-3 mt-1">
+                    Se borran sus señales actuales y se regeneran con las reglas nuevas.
                   </p>
                 </div>
               )}
