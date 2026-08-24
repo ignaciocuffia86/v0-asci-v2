@@ -2,14 +2,18 @@
 -- Fusión reversible de contactos duplicados
 --
 -- La migración anterior deja de CREAR duplicados. Esta fusiona los que ya
--- están: 6.312 filas con evidencia fuerte de ser la misma persona, repartidas
--- así por la regla que lo prueba —
---     email 2.826 grupos    phone 2.427    suffix 130    slug 101
+-- están. Dry run sobre producción, con el tope de identidad compartida en 5:
+--
+--     email 2.857 grupos   phone 477   slug 126   suffix 106
+--     3.566 grupos, 3.577 fusiones, 4.266 filas de `contacts` distintas.
+--
+-- Sin el tope, la regla del teléfono sube a 2.427 grupos, pero muchos salen de
+-- conmutadores: 1.676 números están en más de 20 contactos y hay uno en 4.941.
 --
 -- Es el gemelo de merge_companies() / v3.company_merges, con las mismas
 -- garantías: snapshot de la fila que desaparece, registro de qué se movió,
 -- dry_run, y reversión. Un merge que no se puede deshacer no se ejecuta en
--- masa sobre 6.312 filas.
+-- masa sobre 4.266 filas.
 --
 -- La diferencia con empresas es que contacts tiene solo dos hijos por FK
 -- (signals y pending_signals, ambos ON DELETE CASCADE) y tres referencias
@@ -67,6 +71,11 @@ DECLARE
   v_moved    JSONB := '{}'::jsonb;
   v_deleted  JSONB := '{}'::jsonb;
   v_ids      JSONB;
+  v_master   JSONB;
+  v_fresco   JSONB;
+  v_viejo    JSONB;
+  v_lista_fresco JSONB;
+  v_lista_viejo  JSONB;
   v_merge_id UUID;
   v_result   JSONB;
 BEGIN
@@ -160,44 +169,84 @@ BEGIN
     WHERE ci.contact_id = p_duplicate_id
     ON CONFLICT DO NOTHING;
 
-    -- El master se queda con lo que el duplicado tenía y a él le falta. Nunca
-    -- pisa: el master se eligió por ser el más completo y el más fresco.
+    -- ── Qué fila sobrevive y con qué contenido ──
+    --
+    -- Son dos decisiones distintas y hay que separarlas:
+    --
+    --   El ID que sobrevive es el que tiene la evidencia colgada (pick_contact_master
+    --   elige por cantidad de señales). Mover señales es caro y hay bookmarks e
+    --   icebreakers apuntando ahí.
+    --
+    --   El CONTENIDO del perfil, en cambio, tiene que ser el del scrapeo más
+    --   fresco, sin importar en cuál de las dos filas esté. Medido sobre los
+    --   2.470 pares de la base: el cargo difiere en el 65%, el headline en el
+    --   60% y la empresa actual en el 23% —la persona cambió de trabajo—, y en
+    --   701 pares las señales están del lado de la fila VIEJA. Quedarse con los
+    --   valores del master sería mostrar el cargo de hace un año en 1 de cada 4
+    --   fusiones.
+    --
+    -- Por eso: el perfil vigente pisa, el viejo solo rellena huecos. Es un
+    -- reemplazo de contenido dentro del ID que conserva la evidencia.
+    SELECT to_jsonb(c) INTO v_master FROM public.contacts c WHERE c.id = p_master_id;
+
+    IF (v_snapshot->>'updated_at')::timestamptz > (v_master->>'updated_at')::timestamptz THEN
+      v_fresco := v_snapshot; v_viejo := v_master;
+    ELSE
+      v_fresco := v_master; v_viejo := v_snapshot;
+    END IF;
+
+    v_lista_fresco := CASE WHEN jsonb_typeof(v_fresco->'previous_positions') = 'array'
+                           THEN v_fresco->'previous_positions' ELSE '[]'::jsonb END;
+    v_lista_viejo  := CASE WHEN jsonb_typeof(v_viejo->'previous_positions') = 'array'
+                           THEN v_viejo->'previous_positions' ELSE '[]'::jsonb END;
+
+    -- El DELETE va ANTES del UPDATE: linkedin_url es UNIQUE y el master puede
+    -- quedarse con la URL del duplicado, que hasta que no se borre está ocupada.
+    DELETE FROM public.contacts WHERE id = p_duplicate_id;
+
     UPDATE public.contacts m SET
-      first_name                  = coalesce(m.first_name,                  v_snapshot->>'first_name'),
-      last_name                   = coalesce(m.last_name,                   v_snapshot->>'last_name'),
-      headline                    = coalesce(m.headline,                    v_snapshot->>'headline'),
-      about                       = coalesce(m.about,                       v_snapshot->>'about'),
-      profile_picture_url         = coalesce(m.profile_picture_url,         v_snapshot->>'profile_picture_url'),
-      current_position_title      = coalesce(m.current_position_title,      v_snapshot->>'current_position_title'),
-      current_position_description= coalesce(m.current_position_description,v_snapshot->>'current_position_description'),
-      current_position_started_on = coalesce(m.current_position_started_on, (v_snapshot->>'current_position_started_on')::date),
-      current_company_id          = coalesce(m.current_company_id,          (v_snapshot->>'current_company_id')::uuid),
-      country                     = coalesce(nullif(m.country, ''),         nullif(v_snapshot->>'country', '')),
-      email1        = coalesce(m.email1,        v_snapshot->>'email1'),
-      email1_type   = coalesce(m.email1_type,   v_snapshot->>'email1_type'),
-      email1_status = coalesce(m.email1_status, v_snapshot->>'email1_status'),
-      email2        = coalesce(m.email2,        v_snapshot->>'email2'),
-      email2_type   = coalesce(m.email2_type,   v_snapshot->>'email2_type'),
-      email2_status = coalesce(m.email2_status, v_snapshot->>'email2_status'),
-      email3        = coalesce(m.email3,        v_snapshot->>'email3'),
-      email3_type   = coalesce(m.email3_type,   v_snapshot->>'email3_type'),
-      email3_status = coalesce(m.email3_status, v_snapshot->>'email3_status'),
-      email4        = coalesce(m.email4,        v_snapshot->>'email4'),
-      email4_type   = coalesce(m.email4_type,   v_snapshot->>'email4_type'),
-      email4_status = coalesce(m.email4_status, v_snapshot->>'email4_status'),
-      phone1        = coalesce(m.phone1,        v_snapshot->>'phone1'),
-      phone1_type   = coalesce(m.phone1_type,   v_snapshot->>'phone1_type'),
-      phone2        = coalesce(m.phone2,        v_snapshot->>'phone2'),
-      phone2_type   = coalesce(m.phone2_type,   v_snapshot->>'phone2_type'),
-      -- previous_positions: se queda el historial más largo, no el más nuevo.
+      linkedin_url                = coalesce(v_fresco->>'linkedin_url',                 v_viejo->>'linkedin_url'),
+      full_name                   = coalesce(v_fresco->>'full_name',                    v_viejo->>'full_name'),
+      first_name                  = coalesce(v_fresco->>'first_name',                   v_viejo->>'first_name'),
+      last_name                   = coalesce(v_fresco->>'last_name',                    v_viejo->>'last_name'),
+      headline                    = coalesce(v_fresco->>'headline',                     v_viejo->>'headline'),
+      about                       = coalesce(v_fresco->>'about',                        v_viejo->>'about'),
+      profile_picture_url         = coalesce(v_fresco->>'profile_picture_url',          v_viejo->>'profile_picture_url'),
+      current_position_title      = coalesce(v_fresco->>'current_position_title',       v_viejo->>'current_position_title'),
+      current_position_description= coalesce(v_fresco->>'current_position_description', v_viejo->>'current_position_description'),
+      current_position_started_on = coalesce((v_fresco->>'current_position_started_on')::date, (v_viejo->>'current_position_started_on')::date),
+      current_company_id          = coalesce((v_fresco->>'current_company_id')::uuid,   (v_viejo->>'current_company_id')::uuid),
+      country                     = coalesce(nullif(v_fresco->>'country', ''),          nullif(v_viejo->>'country', '')),
+      -- Mails y teléfonos se ACUMULAN: el fresco tiene prioridad de posición,
+      -- pero lo que solo estaba en el viejo no se tira. En 53 pares el dato de
+      -- contacto está únicamente en la fila vieja.
+      email1        = coalesce(v_fresco->>'email1',        v_viejo->>'email1'),
+      email1_type   = coalesce(v_fresco->>'email1_type',   v_viejo->>'email1_type'),
+      email1_status = coalesce(v_fresco->>'email1_status', v_viejo->>'email1_status'),
+      email2        = coalesce(v_fresco->>'email2',        v_viejo->>'email2'),
+      email2_type   = coalesce(v_fresco->>'email2_type',   v_viejo->>'email2_type'),
+      email2_status = coalesce(v_fresco->>'email2_status', v_viejo->>'email2_status'),
+      email3        = coalesce(v_fresco->>'email3',        v_viejo->>'email3'),
+      email3_type   = coalesce(v_fresco->>'email3_type',   v_viejo->>'email3_type'),
+      email3_status = coalesce(v_fresco->>'email3_status', v_viejo->>'email3_status'),
+      email4        = coalesce(v_fresco->>'email4',        v_viejo->>'email4'),
+      email4_type   = coalesce(v_fresco->>'email4_type',   v_viejo->>'email4_type'),
+      email4_status = coalesce(v_fresco->>'email4_status', v_viejo->>'email4_status'),
+      phone1        = coalesce(v_fresco->>'phone1',        v_viejo->>'phone1'),
+      phone1_type   = coalesce(v_fresco->>'phone1_type',   v_viejo->>'phone1_type'),
+      phone2        = coalesce(v_fresco->>'phone2',        v_viejo->>'phone2'),
+      phone2_type   = coalesce(v_fresco->>'phone2_type',   v_viejo->>'phone2_type'),
+      -- Historial: gana el MÁS LARGO, no el más fresco. En 733 pares el scrapeo
+      -- nuevo trajo menos puestos previos que el viejo; pisar sería perderlos.
+      --
+      -- El typeof no es defensa de más: la columna guarda el JSON `null` (no
+      -- SQL NULL) cuando el perfil no tenía puestos previos, y coalesce() no lo
+      -- atrapa — jsonb_array_length() sobre eso revienta la fusión entera.
       previous_positions = CASE
-        WHEN jsonb_array_length(coalesce(v_snapshot->'previous_positions', '[]'::jsonb))
-             > jsonb_array_length(coalesce(m.previous_positions, '[]'::jsonb))
-        THEN v_snapshot->'previous_positions' ELSE m.previous_positions END,
+        WHEN jsonb_array_length(v_lista_viejo) > jsonb_array_length(v_lista_fresco)
+        THEN v_lista_viejo ELSE v_lista_fresco END,
       updated_at = timezone('utc'::text, now())
     WHERE m.id = p_master_id;
-
-    DELETE FROM public.contacts WHERE id = p_duplicate_id;
 
     INSERT INTO v3.contact_merges (
       master_id, duplicate_id, duplicate_snapshot, moved, deleted,
@@ -213,6 +262,7 @@ BEGIN
       'master_id', p_master_id,
       'duplicate_id', p_duplicate_id,
       'duplicate_name', v_snapshot->>'full_name',
+      'perfil_vigente', CASE WHEN v_fresco = v_snapshot THEN 'el duplicado' ELSE 'el master' END,
       'moved', v_moved,
       'deleted', v_deleted,
       'moved_total', (SELECT coalesce(sum(jsonb_array_length(value)), 0) FROM jsonb_each(v_moved)),
@@ -300,9 +350,24 @@ $function$;
 --   email    la persona cambió de vanity URL; el mail la sigue identificando.
 --   phone    idem con el teléfono.
 --   suffix   cambió el nombre visible y LinkedIn conservó el sufijo del slug.
+--
+-- `p_max_compartido` es la guarda contra conmutadores y casillas genéricas.
+-- Medido: 1.676 teléfonos están en más de 20 contactos y hay uno en 4.941 —es
+-- la central de la empresa, no el número de una persona. Un valor así no
+-- identifica a nadie y lo único que lo salvaba era el nombre. Por encima del
+-- tope el valor se descarta como identidad: preferimos dejar un duplicado sin
+-- detectar antes que fusionar a dos homónimos de una empresa de 5.000 personas.
+-- El slug no lleva tope: es único por perfil.
+--
+-- El orden de las operaciones importa para que esto corra. Primero se agrupa
+-- `contact_identities` por (kind, value) —que es el prefijo de su PK— y recién
+-- sobre los valores repetidos, que son pocos, se une a `contacts` para aplicar
+-- la guarda de nombre. Al revés hay que normalizar el nombre de 2,1M filas y la
+-- consulta no termina.
 create or replace function public.get_duplicate_contact_candidates(
   p_limit integer default 100,
-  p_rules text[] default array['slug','email','phone','suffix']
+  p_rules text[] default array['slug','email','phone','suffix'],
+  p_max_compartido integer default 5
 )
 returns table (
   rule text,
@@ -318,23 +383,31 @@ stable
 security definer
 set search_path to 'public', 'pg_catalog'
 as $function$
-  WITH claves AS (
-    SELECT ci.contact_id,
-           public.normalize_person_name(c.full_name) AS nombre,
-           CASE ci.kind WHEN 'linkedin_slug' THEN 'slug'
-                        WHEN 'linkedin_suffix' THEN 'suffix'
-                        ELSE ci.kind END AS rule,
-           ci.value
+  WITH repetidos AS (
+    SELECT ci.kind, ci.value, array_agg(DISTINCT ci.contact_id) AS ids
     FROM public.contact_identities ci
-    JOIN public.contacts c ON c.id = ci.contact_id
-    WHERE public.normalize_person_name(c.full_name) IS NOT NULL
+    WHERE CASE ci.kind WHEN 'linkedin_slug' THEN 'slug'
+                       WHEN 'linkedin_suffix' THEN 'suffix'
+                       ELSE ci.kind END = ANY(p_rules)
+    GROUP BY ci.kind, ci.value
+    HAVING count(DISTINCT ci.contact_id) > 1
+       AND (ci.kind = 'linkedin_slug' OR count(DISTINCT ci.contact_id) <= p_max_compartido)
+  ),
+  expandido AS (
+    SELECT r.kind, r.value, cid, public.normalize_person_name(c.full_name) AS nombre
+    FROM repetidos r
+    CROSS JOIN LATERAL unnest(r.ids) AS cid
+    JOIN public.contacts c ON c.id = cid
   ),
   grupos AS (
-    SELECT rule, value, nombre, array_agg(DISTINCT contact_id) AS ids
-    FROM claves
-    WHERE rule = ANY(p_rules)
-    GROUP BY rule, value, nombre
-    HAVING count(DISTINCT contact_id) > 1
+    SELECT CASE kind WHEN 'linkedin_slug' THEN 'slug'
+                     WHEN 'linkedin_suffix' THEN 'suffix'
+                     ELSE kind END AS rule,
+           value, nombre, array_agg(DISTINCT cid) AS ids
+    FROM expandido
+    WHERE nombre IS NOT NULL
+    GROUP BY 1, value, nombre
+    HAVING count(DISTINCT cid) > 1
   )
   SELECT g.rule,
          g.value,
@@ -361,7 +434,8 @@ $function$;
 create or replace function public.auto_merge_contact_duplicates(
   p_limit integer default 100,
   p_rules text[] default array['slug','email','phone','suffix'],
-  p_dry_run boolean default false
+  p_dry_run boolean default false,
+  p_max_compartido integer default 5
 )
 returns jsonb
 language plpgsql
@@ -374,9 +448,12 @@ DECLARE
   v_fusiones INTEGER := 0;
   v_grupos INTEGER := 0;
   v_errores JSONB := '[]'::jsonb;
+  v_por_regla JSONB := '{}'::jsonb;
+  v_perfil_en_dup INTEGER := 0;
+  v_res JSONB;
 BEGIN
   FOR v_grupo IN
-    SELECT * FROM public.get_duplicate_contact_candidates(p_limit, p_rules)
+    SELECT * FROM public.get_duplicate_contact_candidates(p_limit, p_rules, p_max_compartido)
   LOOP
     v_grupos := v_grupos + 1;
 
@@ -389,12 +466,18 @@ BEGIN
       CONTINUE WHEN NOT EXISTS (SELECT 1 FROM public.contacts WHERE id = v_grupo.master_id);
 
       BEGIN
-        PERFORM public.merge_contacts(
+        v_res := public.merge_contacts(
           v_grupo.master_id, v_dup, p_dry_run,
           v_grupo.rule, 1.0,
           format('auto: mismo nombre (%s) y %s compartido (%s)', v_grupo.full_name, v_grupo.rule, v_grupo.identity_value)
         );
         v_fusiones := v_fusiones + 1;
+        v_por_regla := jsonb_set(v_por_regla, array[v_grupo.rule],
+                                 to_jsonb(coalesce((v_por_regla->>v_grupo.rule)::int, 0) + 1));
+        -- Cuántas veces el perfil vigente estaba en la fila que se borra. En el
+        -- dry run sobre producción fue 1 de cada 4: es la medida de cuánto
+        -- importa que el contenido lo aporte el más fresco y no el master.
+        IF v_res->>'perfil_vigente' = 'el duplicado' THEN v_perfil_en_dup := v_perfil_en_dup + 1; END IF;
       EXCEPTION WHEN OTHERS THEN
         v_errores := v_errores || jsonb_build_object('duplicate_id', v_dup, 'error', SQLERRM);
       END;
@@ -405,8 +488,11 @@ BEGIN
     'dry_run', p_dry_run,
     'grupos_procesados', v_grupos,
     'fusiones', v_fusiones,
-    'errores', v_errores,
-    'quedan_grupos', (SELECT count(*) FROM public.get_duplicate_contact_candidates(1000, p_rules))
+    'por_regla', v_por_regla,
+    'el_perfil_vigente_estaba_en_la_fila_que_se_borra', v_perfil_en_dup,
+    -- No devuelve cuántos grupos quedan a propósito: recalcularlo obliga a
+    -- rehacer la detección entera en cada lote y la corrida se vuelve cuadrática.
+    'errores', v_errores
   );
 END;
 $function$;

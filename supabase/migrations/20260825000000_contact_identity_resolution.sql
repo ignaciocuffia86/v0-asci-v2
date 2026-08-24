@@ -107,7 +107,13 @@ DECLARE
 BEGIN
   IF p_url IS NULL OR p_url = '' OR p_url LIKE 'placeholder:%' THEN RETURN NULL; END IF;
 
-  v_slug := substring(lower(public.url_decode(p_url)) from 'linkedin\.com/in/([^/?#]+)');
+  -- url_decode() parte la URL carácter por carácter con un regex: es caro y solo
+  -- 299 de las 544.808 filas lo necesitan. El resto se saltea el decodificado.
+  IF strpos(p_url, '%') > 0 THEN
+    v_slug := substring(lower(public.url_decode(p_url)) from 'linkedin\.com/in/([^/?#]+)');
+  ELSE
+    v_slug := substring(lower(p_url) from 'linkedin\.com/in/([^/?#]+)');
+  END IF;
   IF v_slug IS NULL OR v_slug = '' THEN RETURN NULL; END IF;
 
   -- Acentos fuera: 88.891 URLs los traen y el mismo perfil aparece con y sin.
