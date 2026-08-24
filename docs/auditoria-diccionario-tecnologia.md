@@ -1016,10 +1016,109 @@ mantiene por cobertura futura o se saca.
 
 ---
 
-## Lote pendiente
+## Lote 7 · Stacks de desarrollo — aplicado el 24 de agosto de 2026
 
-7. **Stacks de desarrollo** — el bloque más ruidoso: ahí está `Javascript` con 10.603 señales
-   cargada dentro de React, y el vendor "Legacy" con Java. Conviene decidir antes si detectar
-   frameworks aporta al objetivo comercial o si el bloque se achica.
+Veinte productos de los vendors Backend, Frontend, Legacy y CMS. Script en
+[`scripts/apply-stacks-dev-batch-20260824.sql`](../scripts/apply-stacks-dev-batch-20260824.sql).
+
+### Los lenguajes estaban dentro de los frameworks
+
+El producto React tenía cargadas `Javascript` (10.596 señales) y `TypeScript` (1.244): entre las
+dos, **más de la mitad de todas las señales del producto**.
+
+Es el error más caro del diccionario y el más fácil de pasar por alto, porque las señales no son
+falsas — la gente sí sabe JavaScript. Simplemente eso no dice nada sobre React. Es como contar a
+todo el que sabe SQL como cliente de Oracle.
+
+No se borraron: se creó el producto **JavaScript / TypeScript**, que además recibe el tooling
+transversal del ecosistema (`Jest`, `Cypress`, `Playwright`, `Vitest`, `ESLint`, `Webpack`,
+`Vite`, `Babel`).
+
+| Producto | Cuentas antes | Cuentas ahora |
+| --- | ---: | ---: |
+| React | 9.947 | 4.403 |
+| JavaScript / TypeScript *(nuevo)* | — | 6.747 |
+
+**El diccionario reportaba 9.947 cuentas con React y hay 4.403.** Con 6.747 cuentas,
+JavaScript / TypeScript es el producto más grande del diccionario; que no existiera hasta hoy
+dice bastante sobre cómo se había armado.
+
+Mismo criterio dos veces más dentro de Java: `WebSphere Application Server` (162) salió a producto
+propio (**IBM WebSphere**) y `WebLogic Server` (192) salió porque duplicaba al producto Weblogic
+de Oracle.
+
+### Cinco que se salvaron por medirlas
+
+| Keyword | Producto | Señales | Contexto dev | En contra |
+| --- | --- | ---: | ---: | ---: |
+| `spring` | Spring Boot | 2.466 | 2.162 | 13 |
+| `vue` | Vue.js | 923 | 436 | 0 |
+| `ruby` | Ruby on Rails | 491 | 306 | 0 |
+| `vercel` | Next.js | 103 | 23 | 0 |
+| `dart` | Flutter | 89 | 52 | 0 |
+
+`spring` venía marcada como sospechosa desde la auditoría original por "Spring 2024". Trece de
+2.466 mencionan temporada. En un corpus de LinkedIn en español, "Spring" sin más es Java.
+
+Quinta vez en siete lotes que la intuición falla en las dos direcciones.
+
+### Falsos positivos medidos en este lote
+
+| Keyword | Sumaba a | Señales | Qué era |
+| --- | --- | ---: | --- |
+| `Assembler` | Cobol | 152 | Assembly de microprocesadores y embebidos, no mainframe |
+| `composer` | PHP | 173 | 19 con contexto dev contra 9 de música. Debajo del umbral |
+| `Enterprise Server` | Micro Focus | 55 | 10 de 55 con contexto dev. Igual `Enterprise Developer`, `Enterprise Analyzer`, `Net Express`, `Server Express` |
+| `Model Validation` | ASP.NET Core | 40 | Validación de modelos de riesgo: "Corporate Model Risk division of Wells Fargo" |
+| `Wheel` | Python | 36 | Cero contexto dev: "Maintenance Engineer CAT machinery. Dozers, excavadoras" |
+| `hypothesis testing` | Python | 25 | El método estadístico, no la librería |
+| `Theming` | Ionic | 22 | Genérico de front-end (SASS, Drupal) |
+| `Observables` | Angular | 21 | Término genérico de programación reactiva |
+
+### Los que arrastraba desde la auditoría
+
+La tabla H2 los marcó hace siete lotes y quedaron pendientes a propósito: cada uno era una
+decisión de producto que correspondía a este lote. Todos salieron y entró su versión calificada.
+
+| Producto | Salieron | Señales | Entraron |
+| --- | --- | ---: | --- |
+| PHP (Laravel) | `Vapor`, `Nova`, `Horizon`, `Scout`, `Fortify` | 1.791 | `Laravel Vapor`, `Laravel Nova`, `Laravel Horizon`, `Laravel Scout`, `Laravel Fortify` |
+| ASP.NET Core | `Swagger`, `OpenAPI`, `Dapper`, `IoC`, `Dependency Injection` | 616 | `Dapper ORM`, `ASP.NET MVC`, `Minimal APIs` |
+| Django | `ORM`, `Memcached`, `Redis Cache` | 525 | `Django ORM`, `Django REST Framework` |
+| Angular | `Subjects` | 487 | `RxJS Subject`, `BehaviorSubject` |
+| React | `CRA`, `Relay`, `Emotion` | 359 | `React Hooks`, `Redux Toolkit` |
+| Flutter | `Navigator`, `DevTools` | 346 | `Flutter Navigator`, `Flutter DevTools`, `Flutter Bloc` |
+| Spring Boot, Next.js, Wordpress | `Flux`, `ISR`, `CPT` | 341 | `Project Reactor`, `Incremental Static Regeneration`, `Custom Post Type` |
+| Ruby on Rails | `Rack`, `Devise` | 299 | `Rack Middleware`, `Devise gem` |
+| NodeJS | `npm`, `npx` | 236 | `NestJS`, `Fastify`, `TypeORM`, `Prisma ORM` |
+
+**Un patrón que vale nombrar: Laravel.** Cinco de sus productos se llaman `Vapor`, `Nova`,
+`Horizon`, `Scout` y `Fortify` — cinco palabras comunes que entre todas metían **1.791 señales
+falsas** en PHP, más que cualquier otro grupo del diccionario salvo `Exchange`. Es el mismo
+fenómeno que Microsoft con Fabric, Defender, Sentinel y Entra, concentrado en un solo framework.
+
+### Los huecos
+
+**NodeJS no tenía `NestJS`**, que entró con 650 señales de una. **Python no tenía `FastAPI`.**
+**Wordpress no tenía `WooCommerce`**, que es la razón principal por la que una cuenta elige
+Wordpress. Los tres son el mismo caso que `BigQuery`, `DAX` y `Microsoft Teams`: el diccionario
+tenía las variantes del nombre y le faltaba aquello por lo que la gente lo usa.
+
+También entraron `Maven`, `Gradle`, `Jakarta EE`, `Quarkus`, `Micronaut` (Java), `Pandas`,
+`NumPy`, `Poetry` (Python), `NgRx`, `Angular Signals` (Angular), `Elementor`, `ACF Pro`
+(Wordpress) y `NET MAUI`.
+
+`Pandas` se verificó tras el alta —el riesgo era el animal— y quedó 175 de 199 con contexto de
+desarrollo.
+
+### Lo que quedó sin tocar, a propósito
+
+- **Los vendors `Legacy`, `Backend`, `Frontend` y `CMS`** siguen siendo categorías usadas como
+  vendors. Se propuso reagruparlos en la auditoría y se decidió no avanzar. Es el último problema
+  de taxonomía abierto del diccionario.
+- **`WPF` (325), `WinForms` (123), `Windows Forms` (93) y `ADO.NET` (86) dentro de Visual Basic.**
+  Son de .NET de escritorio en general, no de VB: inflan el producto con desarrolladores de C#.
+  No se movieron porque no hay producto destino y crear un ".NET Desktop" para cuatro keywords es
+  peor que el problema.
 
 

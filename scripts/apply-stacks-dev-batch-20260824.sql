@@ -1,0 +1,102 @@
+-- Lote 7 del diccionario — Stacks de desarrollo. Ejecutado el 24/08/2026.
+-- Veinte productos de los vendors Backend, Frontend, Legacy y CMS.
+-- Resultado: 2 productos nuevos, -3.700 senales mal atribuidas, 59 keywords nuevas.
+
+-- ---------------------------------------------------------------------------
+-- 1. El problema central: lenguajes cargados dentro de frameworks
+-- ---------------------------------------------------------------------------
+-- "Javascript" (10.596 senales) y "TypeScript" (1.244) estaban dentro de React.
+-- Cualquier perfil que dijera "JavaScript" contaba como cuenta con React, que es
+-- como contar a todo el que sabe SQL como cliente de Oracle.
+--
+-- No se borraron: son senales validas, solo estaban en el producto equivocado.
+-- Se creo el producto "JavaScript / TypeScript", que ademas recibe el tooling
+-- transversal del ecosistema (Jest, Cypress, Playwright, Vitest, ESLint, Webpack,
+-- Vite, Babel) y suma ECMAScript, ES6 y Vanilla JavaScript.
+--
+-- Efecto: React pasa de 4.403+ cuentas infladas a 4.403 reales, y aparece un
+-- producto de 6.747 cuentas que antes no existia — el mas grande del diccionario.
+--
+-- Mismo criterio para "WebSphere Application Server" (162), que estaba dentro de
+-- Java: es un app server de IBM que se vende y se opera aparte. Producto propio.
+-- Y "WebLogic Server" (192), tambien en Java, salio porque duplicaba al producto
+-- Weblogic de Oracle que ya existe.
+
+-- ---------------------------------------------------------------------------
+-- 2. Falsos positivos medidos
+-- ---------------------------------------------------------------------------
+--   Wheel              Python    36   cero contexto de desarrollo. Snippets:
+--                                     "lending, non-profit accounting" y
+--                                     "Maintenance Engineer CAT machinery. Dozers"
+--   hypothesis testing Python    25   cero contexto de desarrollo: es el metodo
+--                                     estadistico, no la libreria hypothesis
+--   Model Validation   ASP.NET   40   2 de 40 con contexto dev. Es validacion de
+--                                     modelos de riesgo: "Corporate Model Risk
+--                                     division of Wells Fargo"
+--   Assembler          Cobol    152   assembly generico de microprocesadores y
+--                                     sistemas embebidos, no mainframe
+--   Enterprise Server  Microfocus 55  frase generica. Igual que Enterprise Developer,
+--                                     Enterprise Analyzer, Net Express y Server Express:
+--                                     nombres de producto que como frase suelta no
+--                                     identifican a Micro Focus
+--   Theming            Ionic     22   generico de front-end (los snippets hablan de
+--                                     SASS y Drupal)
+--   Observables        Angular   21   termino generico de programacion reactiva
+--
+-- Mas las que ya estaban documentadas en la tabla H2 de la auditoria y seguian
+-- pendientes porque eran decisiones de producto: Vapor (640), Nova (571),
+-- Horizon (206), Scout (204) y Fortify (170) en PHP — todos productos de Laravel
+-- cuyo nombre es una palabra comun; Subjects (487) en Angular; ORM (414) en Django;
+-- Navigator (319) en Flutter; Rack (200) y Devise (99) en Ruby; CRA (180) y
+-- Relay (143) en React; Flux (129) en Spring Boot; CPT (112) en Wordpress;
+-- Memcached (85) en Django; ISR (100) en Next.js; Dapper (61) e IoC (52) en ASP.NET.
+-- Todas reemplazadas por su version calificada con la marca.
+--
+-- Y composer (173) en PHP: 19 con contexto de desarrollo contra 9 de musica.
+-- Numeros chicos para los dos lados, pero por debajo del umbral. Entraron
+-- "PHP Composer" y "composer install".
+
+-- ---------------------------------------------------------------------------
+-- 3. Cuatro que se salvaron por medirlas
+-- ---------------------------------------------------------------------------
+--   spring   Spring Boot  2.466  2.162 con contexto de desarrollo, 13 de temporada.
+--                                Estaba en la lista de sospechosas desde la auditoria
+--                                por "Spring 2024"; en este corpus no pasa.
+--   ruby     Rails          491  306 con contexto dev, 54 mencionan Rails
+--   vue      Vue.js         923  436 con contexto dev, cero evidencia en contra
+--   dart     Flutter         89  52 con contexto dev, cero en contra
+--   vercel   Next.js        103  23 con contexto dev, cero en contra
+--
+-- Quinta vez que la intuicion falla en las dos direcciones. El criterio sigue
+-- siendo el mismo desde el lote de cloud: proporcion entre senales
+-- identificablemente reales e identificablemente falsas, umbral ~80:20.
+
+-- ---------------------------------------------------------------------------
+-- 4. Huecos tapados
+-- ---------------------------------------------------------------------------
+--   Python   FastAPI, Pandas, NumPy, Poetry    (no tenia FastAPI, que hoy es el
+--                                               framework de API mas pedido)
+--   Node     NestJS, Fastify, TypeORM, Prisma ORM  (no tenia NestJS)
+--   Wordpress WooCommerce, Elementor, ACF Pro   (no tenia WooCommerce, que es la
+--                                               razon principal por la que una
+--                                               cuenta elige Wordpress)
+--   Java     Maven, Gradle, Jakarta EE, Quarkus, Micronaut
+--   Angular  NgRx, Angular Signals, RxJS Subject, BehaviorSubject
+--   .NET     ASP.NET MVC, Minimal APIs, NET MAUI
+--   React    React Hooks, Redux Toolkit
+--
+-- No entro "X++" (Dynamics) ni ningun keyword que empiece o termine en simbolo,
+-- por el \y del motor. Tampoco "Apex" a secas, que colisiona con Oracle APEX.
+
+-- ---------------------------------------------------------------------------
+-- 5. Lo que NO se toco, a proposito
+-- ---------------------------------------------------------------------------
+-- Los vendors "Legacy", "Backend", "Frontend" y "CMS" siguen siendo categorias
+-- usadas como vendors. Se propuso reagruparlos en la auditoria y el usuario
+-- decidio no avanzar con eso, asi que quedan como estan. Es el ultimo problema
+-- de taxonomia abierto del diccionario.
+--
+-- WPF (325), WinForms (123), Windows Forms (93) y ADO.NET (86) siguen dentro de
+-- Visual Basic. Son de .NET de escritorio en general, no de VB: inflan el producto
+-- con desarrolladores de C#. No se movieron porque no hay producto destino y crear
+-- ".NET Desktop" para cuatro keywords es peor que el problema. Queda anotado.
