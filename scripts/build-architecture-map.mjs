@@ -25,6 +25,7 @@ const html = `<!doctype html>
   --fg:#dde6ef; --muted:#7f91a3; --dim:#5a6a7a;
   --v2:#e0a33e; --v3:#3fb9c9; --shared:#a184dd; --external:#6b7d8f;
   --crit:#e5544b; --alta:#e0a33e; --media:#5c9ce0; --baja:#6b7c8d;
+  --ok:#5aab7a;
   --r:6px;
 }
 *{box-sizing:border-box}
@@ -98,6 +99,8 @@ aside{width:430px;flex:0 0 430px;border-left:1px solid var(--line);background:va
 .tag.alta{background:rgba(224,163,62,.15);color:var(--alta)}
 .tag.media{background:rgba(92,156,224,.15);color:var(--media)}
 .tag.baja{background:rgba(107,124,141,.17);color:var(--baja)}
+.tag.resuelta{background:rgba(90,171,122,.16);color:var(--ok)}
+.item.done button .t{opacity:.62}
 
 .detail{padding:2px 11px 11px;font-size:11.5px;color:#b7c5d2}
 .detail p{margin:7px 0}
@@ -443,9 +446,16 @@ const cpHTML=()=>'<p class="lead">Los puntos donde v2 y v3 <b>se tocan de verdad
 const cpDetail=c=>'<div class="detail"><p>'+esc(c.desc)+'</p><div class="lbl">Impacto</div><p>'+esc(c.impact)+'</p>'+
   '<div class="lbl">Nodos involucrados</div>'+nodeChips(c.nodes)+'</div>';
 
-const optHTML=()=>'<p class="lead">Cuestiones de diseño verificadas en código, ordenadas por severidad. <b>'+optimizations.filter(o=>o.severity==="critica").length+'</b> críticas.</p>'+
-  optimizations.map(o=>'<article class="item" id="it-'+o.id+'"><button data-opt="'+o.id+'"><span class="t">'+esc(o.title)+'</span>'+
+// Las resueltas van al final y atenuadas: se CONSERVAN a proposito (el porque de
+// un arreglo es tan util como el hallazgo), pero no deben competir con lo abierto.
+const byOpen=(a,b)=>(a.severity==="resuelta"?1:0)-(b.severity==="resuelta"?1:0);
+const optHTML=()=>{
+  const done=optimizations.filter(o=>o.severity==="resuelta").length;
+  return'<p class="lead">Cuestiones de diseño verificadas en código, ordenadas por severidad. <b>'+
+    optimizations.filter(o=>o.severity==="critica").length+'</b> críticas abiertas · <b>'+done+'</b> ya resueltas.</p>'+
+  optimizations.slice().sort(byOpen).map(o=>'<article class="item'+(o.severity==="resuelta"?" done":"")+'" id="it-'+o.id+'"><button data-opt="'+o.id+'"><span class="t">'+esc(o.title)+'</span>'+
     '<span class="m"><span class="tag '+o.severity+'">'+o.severity+'</span><span>'+esc(o.area)+'</span><span>·</span><span>'+esc(o.id)+'</span></span></button></article>').join("");
+};
 const optDetail=o=>'<div class="detail"><div class="lbl">Hallazgo</div><p>'+esc(o.finding)+'</p>'+
   '<div class="lbl">Por qué importa</div><p>'+esc(o.why)+'</p>'+
   '<div class="lbl">Evidencia</div><ul class="ev">'+o.evidence.map(e=>'<li><code>'+esc(e)+'</code></li>').join("")+'</ul>'+
@@ -453,9 +463,12 @@ const optDetail=o=>'<div class="detail"><div class="lbl">Hallazgo</div><p>'+esc(
   '<div class="fix"><div class="lbl">Cómo lo resolvería</div>'+esc(o.fix)+'</div></div>';
 
 function deadHTML(){
-  const loc=deadCode.reduce((a,d)=>a+(d.loc||0),0);
-  return'<p class="lead">Código sin referencias, verificado por grep de importadores y por existencia real en la base. Total: <b>~'+loc+' líneas</b> borrables.</p>'+
-  deadCode.map(d=>'<article class="item" id="it-'+d.id+'"><button data-dead="'+d.id+'"><span class="t">'+esc(d.title)+'</span>'+
+  // El total cuenta solo lo que SIGUE borrable: sumar las lineas ya borradas
+  // inflaria la deuda pendiente, que es justo lo que este panel mide.
+  const abierto=deadCode.filter(d=>d.severity!=="resuelta");
+  const loc=abierto.reduce((a,d)=>a+(d.loc||0),0);
+  return'<p class="lead">Código sin referencias, verificado por grep de importadores y por existencia real en la base. Pendiente: <b>~'+loc+' líneas</b> borrables en <b>'+abierto.length+'</b> hallazgos · <b>'+(deadCode.length-abierto.length)+'</b> ya resueltos.</p>'+
+  deadCode.slice().sort(byOpen).map(d=>'<article class="item'+(d.severity==="resuelta"?" done":"")+'" id="it-'+d.id+'"><button data-dead="'+d.id+'"><span class="t">'+esc(d.title)+'</span>'+
     '<span class="m"><span class="tag '+d.severity+'">'+d.severity+'</span>'+(d.loc?'<span>'+d.loc+' loc</span>':'')+
     '<span>·</span><span>'+esc(d.id)+'</span></span></button></article>').join("");
 }
