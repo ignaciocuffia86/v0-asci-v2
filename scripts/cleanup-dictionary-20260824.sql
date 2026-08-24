@@ -164,12 +164,12 @@ select
 -- 24/08/2026: 81 productos · 3.226 keywords · 288.644 señales · 0 huerfanas · 4.162 sin producto
 
 -- ---------------------------------------------------------------------------
--- PENDIENTE — no ejecutado, requiere aprobacion
--- 4.162 señales cuyo signal_id apunta a productos borrados entre nov-2025 y
--- mar-2026 (8 productos: uno de Node.js con 2.970, Angular 601, Laravel 418,
--- Wordpress 81, Python 50, Django 28, Flask 12, Copilot 2). La UI no puede
--- mostrarlas asociadas a nada.
+-- Paso 5 — senales de productos borrados (aprobado y ejecutado despues)
+-- 4.162 senales cuyo signal_id apuntaba a ocho productos borrados entre
+-- nov-2025 y mar-2026 (Node.js 2.970, Angular 601, Laravel 418, Wordpress 81,
+-- Python 50, Django 28, Flask 12, Copilot 2). La UI no podia mostrarlas.
 -- ---------------------------------------------------------------------------
--- delete from signals s
--- where s.signal_type = 'technology'
---   and not exists (select 1 from dictionary_products p where p.id = s.signal_id);
+delete from signals s
+where s.signal_type = 'technology'
+  and not exists (select 1 from dictionary_products p where p.id = s.signal_id);
+-- 4.162 filas. Restantes: 0.

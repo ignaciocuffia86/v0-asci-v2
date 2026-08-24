@@ -372,16 +372,16 @@ Aplicado sobre producción con respaldo previo del diccionario completo en
 **Estado final:** 81 productos (antes 82), 3.226 keywords (antes 3.300), 288.644 señales de
 tecnología (antes 329.101). Un 12% menos de señales, todas ruido demostrable o conteo duplicado.
 
-### Hallazgo nuevo, no incluido en la aprobación
+### Hallazgo nuevo — aprobado y ejecutado
 
-Al verificar la limpieza aparecieron **4.162 señales de tecnología cuyo `signal_id` apunta a
+Al verificar la limpieza aparecieron **4.162 señales de tecnología cuyo `signal_id` apuntaba a
 productos que ya no existen** — ocho productos borrados entre noviembre de 2025 y marzo de 2026:
 uno de Node.js con 2.970 señales, uno de Angular con 601, uno de Laravel con 418, más Wordpress
 (81), Python (50), Django (28), Flask (12) y Copilot (2).
 
-Es un caso distinto del aprobado: no es una keyword huérfana, es un producto entero que
-desapareció y dejó sus señales atrás. La UI no puede mostrarlas asociadas a nada. El DELETE está
-comentado al final del script de limpieza, a la espera de aprobación.
+Era un caso distinto del aprobado en su momento: no una keyword huérfana, sino un producto
+entero que desapareció y dejó sus señales atrás. La UI no podía mostrarlas asociadas a nada.
+Se borraron junto con el lote ERP; quedan 0.
 
 ### Pendientes de la tabla H2
 
@@ -392,7 +392,7 @@ conviene no olvidar porque son las que arrastran más ruido: `Exchange` (5.030 s
 
 ---
 
-## Lote 2 · ERP — propuesto
+## Lote 2 · ERP — aplicado el 24 de agosto de 2026
 
 Nube keyword por keyword para los 12 productos ERP, con el conteo real de señales de cada
 término y evidencia de cada baja. Resumen:
@@ -462,3 +462,87 @@ término y evidencia de cada baja. Resumen:
 5. `SAP Signavio` como producto propio o dentro de S/4HANA.
 6. Las keywords en español propuestas (`Consultor Odoo`, `Módulo SAP`, `Soporte SAP`,
    `Consultor Oracle EBS`): más cobertura en LatAm, menos precisión.
+
+
+### Registro de ejecución del lote ERP
+
+Script en [`scripts/apply-erp-batch-20260824.sql`](../scripts/apply-erp-batch-20260824.sql).
+
+| | |
+| --- | ---: |
+| Productos revisados | 12 |
+| Productos nuevos | 4 |
+| Keywords dadas de baja | 159 |
+| Keywords agregadas | 86 |
+| Señales falsas eliminadas | 3.522 |
+| Jobs `add_keyword` encolados | 111 |
+
+**Estado del diccionario:** 85 productos, 3.128 keywords, 281.633 señales de tecnología.
+Contando la limpieza previa, las señales bajaron de 329.101 a 281.633 — un **14% menos**.
+
+Las 111 keywords nuevas quedaron encoladas como jobs `add_keyword`. El cron
+`process-dictionary` corre cada minuto y las procesa solo; las señales aparecen sin
+intervención. Las otras 142 keywords sin señales ya tenían un job completado que matcheó cero,
+así que no valía reprocesarlas.
+
+#### Las seis decisiones abiertas, resueltas
+
+Criterio único: **precisión sobre cobertura**, que es el objetivo declarado del diccionario.
+Cada una se revierte sola si conviene lo contrario.
+
+| Decisión | Resolución | Por qué |
+| --- | --- | --- |
+| `EBS` en Oracle E-Business Suite (489 señales) | Se queda | Ya salió la colisión con Amazon EBS, así que hoy la mayoría de los "EBS" del corpus son Oracle. Es la keyword que más cuentas aporta al producto. |
+| Siglas de SuccessFactors: `PCC`, `ECP`, `PMGM` (124) | Fuera | Los nombres completos (`Employee Central Payroll`, `SuccessFactors Payroll Control Center`) ya estaban y cubren el caso sin la ambigüedad. |
+| `ALE` en SAP ECC (37) | Fuera, entra `SAP ALE` | "Ale" es apodo de Alejandro y aparece en cualquier perfil de LatAm. |
+| Keywords con 0 señales que son jerga real | Se quedan | `FNDLOAD`, `SE11`, `SAP B1 SDK` no cuestan nada y son T2 pura. Solo se sacaron las construcciones artificiales. |
+| `SAP Signavio` | Producto propio | Venta separada y señal de transformación en curso. Mezclado en S/4HANA no se leía como tal. |
+| Keywords en español | No entraron | `Consultor Odoo`, `Módulo SAP`, `Soporte SAP`: suben cobertura pero bajan precisión. |
+
+#### Dos cosas que salieron distinto de lo propuesto
+
+- **Hizo falta un cuarto producto nuevo: Oracle Analytics Cloud.** El lote movía
+  `Oracle Analytics Cloud` y `OAC` fuera de Oracle HCM "al lote de Datos y BI", pero ese lote
+  todavía no existe y el movimiento necesitaba un destino. Se creó con `Oracle Analytics Server`,
+  `OBIEE`, `Oracle BI EE` y `Oracle BI Publisher`. `OAC` quedó afuera por la regla de siglas de
+  tres letras.
+- **`HDL` y `SBO` no entraron.** Estaban propuestas para Oracle HCM y Business One, pero violan
+  la regla de siglas cortas — HDL además es un tipo de colesterol. `HCM Data Loader` escrito
+  completo sí entró.
+
+#### Estado por producto
+
+| Producto | Keywords | Señales | Cuentas |
+| --- | ---: | ---: | ---: |
+| SAP ECC / Business Suite | 140 | 12.073 | 4.444 |
+| Oracle E-Business Suite (EBS) | 43 | 2.884 | 1.558 |
+| SAP S/4HANA | 73 | 2.670 | 1.432 |
+| SAP Business One | 30 | 1.433 | 933 |
+| Oracle ERP Cloud | 53 | 929 | 506 |
+| Dynamics 365 ERP | 25 | 858 | 527 |
+| SAP Ariba | 17 | 791 | 470 |
+| Oracle NetSuite | 17 | 725 | 309 |
+| SAP SuccessFactors | 37 | 561 | 351 |
+| ODOO ERP | 27 | 526 | 410 |
+| SAP BusinessObjects *(nuevo)* | 14 | 369 | 308 |
+| Oracle HCM Cloud | 25 | 330 | 172 |
+| SAP PI / PO *(nuevo)* | 7 | 231 | 176 |
+| Workday Financial & HCM | 19 | 50 | 31 |
+| Oracle Analytics Cloud *(nuevo)* | 5 | 37 | 18 |
+| SAP Signavio *(nuevo)* | 4 | 8 | 5 |
+
+Los conteos no incluyen todavía lo que aporten los 111 jobs en cola.
+
+---
+
+## Lotes pendientes
+
+3. **Cloud e infraestructura** — AWS, Azure, GCP, Oracle Cloud.
+4. **Datos y BI** — Power BI, Fabric, Tableau, Qlik, Looker, MicroStrategy, SAS, y el
+   Oracle Analytics Cloud que se creó en este lote.
+5. **CRM y productividad** — Salesforce, HubSpot, Zoho, ServiceNow, M365, Google Workspace,
+   Atlassian (incluye sacar Confluence, Bitbucket y Trello de adentro de Jira).
+6. **Stacks de desarrollo** — el bloque más ruidoso. Conviene decidir antes si aporta al
+   objetivo comercial o si se achica.
+
+Sigue pendiente de decisión el lote de ciberseguridad, propuesto en la auditoría original.
