@@ -1,0 +1,93 @@
+-- Lote 6 del diccionario — CRM y productividad. Ejecutado el 24/08/2026.
+-- Diecinueve productos: Salesforce (Sales/Service/Marketing/Commerce Cloud), HubSpot,
+-- Zoho, ServiceNow, Microsoft 365, SharePoint, Power Apps, Power Automate, Copilot,
+-- Google Workspace, Jira, Dynamics 365 CRM, Automation Anywhere y ELO Digital Office.
+-- Resultado: 4 productos nuevos, 3 renombrados, 2 unificados, -462 senales falsas.
+
+-- ---------------------------------------------------------------------------
+-- 1. Jira contenia cuatro productos que no son Jira
+-- ---------------------------------------------------------------------------
+-- Bitbucket (437), Trello (336), Atlassian (187), Confluence (86) y Bamboo (48)
+-- estaban cargados dentro del producto Jira: 1.094 de sus 4.807 senales.
+--
+-- Lo que decidio separarlos no fue que "son productos distintos" sino medir el
+-- solapamiento. De los contactos que mencionan cada uno, cuantos mencionan Jira:
+--   Atlassian    19 de 187
+--   Bitbucket    17 de 437
+--   Trello       17 de 336
+--   Confluence    3 de  86
+-- Son poblaciones casi disjuntas. Mezclarlas hacia que Jira reportara 1.959
+-- cuentas cuando buena parte usa Trello o Bitbucket y nunca vio un Jira.
+--
+-- Productos nuevos: Confluence, Bitbucket y Bamboo, Trello, y
+-- "Atlassian (producto sin identificar)" para la keyword de marca, que trae senal
+-- real (168 contactos que no nombran ningun producto) pero no dice cual.
+
+-- ---------------------------------------------------------------------------
+-- 2. Dos casos de marca correcta, producto equivocado
+-- ---------------------------------------------------------------------------
+-- Distintos de los falsos positivos de los lotes anteriores: aca el vendor SI es
+-- el que dice la keyword, lo que no se puede resolver es que producto suyo es.
+--
+--   Microsoft Dynamics  1.009 senales en Dynamics 365 CRM
+--     294 con contexto de CRM  /  472 con contexto de ERP (AX, NAV, Navision,
+--     Business Central, contabilidad, almacen, manufactura)
+--     -> movida a Dynamics 365 ERP. No queda perfecta, pero pasa de acertar 294
+--        y errar 472 a lo inverso: +178 atribuciones correctas.
+--
+--   Copilot  687 senales
+--     382 con contexto de GitHub, repositorios, codigo o IDE (56%)
+--     -> el producto se renombra a "Copilot (GitHub y Microsoft 365)" y la keyword
+--        se mantiene. La proporcion 56:44 es la misma que la de Exchange, que si
+--        se saco, pero el error es de otra clase: en Exchange el 43% no era
+--        Microsoft en absoluto ("foreign exchange"), aca las dos mitades son
+--        productos de Microsoft. La senal de vendor es correcta.
+
+-- ---------------------------------------------------------------------------
+-- 3. Bajas por falso positivo
+-- ---------------------------------------------------------------------------
+--   MCC                      Marketing Cloud   71  cero contexto de CRM. Los snippets
+--                                                  dicen "Mantenimiento Centrado en
+--                                                  Confiabilidad" y "GUARDIA BRIGADISTA
+--                                                  7X7 MCC": es mineria
+--   Commerce Cloud           Commerce Cloud   106  SAP y Oracle tambien tienen uno. El
+--                                                  primer snippet dice "Ingeniero de
+--                                                  solucion SAP Commerce Cloud"
+--   Microsoft Cloud          Microsoft 365     66  marca paraguas, se pisa con Azure
+--   CPQ                      Sales Cloud       52  Configure Price Quote es generico:
+--                                                  Oracle CPQ, SAP CPQ. Entro Salesforce CPQ
+--   eDiscovery               Google Workspace  27  generico; tambien es de Purview
+--   CRM Cloud                Sales Cloud       21  frase generica
+--   Order Management System  Commerce Cloud    16  frase generica
+--   MCP Servers              Copilot           30  Model Context Protocol es un estandar
+--                                                  abierto, no un producto de Microsoft
+--   FSL, Query Studio, Salesforce Integration  22  siglas cortas y keywords en el
+--                                                  producto equivocado
+--
+-- Y seis duplicados cross-product que ya estaban marcados desde la auditoria:
+-- SharePoint Administrator, Exchange Administrator, Intune Administrator,
+-- Teams Administrator, Microsoft 365 Defender y Azure AD Connect salieron de
+-- Microsoft 365, donde duplicaban al producto que les corresponde.
+-- Power Platform Developer (96) se movio de Microsoft 365 a Power Apps.
+
+-- ---------------------------------------------------------------------------
+-- 4. Los tres productos Zoho se unificaron en uno
+-- ---------------------------------------------------------------------------
+-- Zoho CRM (681), Zoho Desk (1) y Zoho Marketing (30). La separacion no funcionaba:
+-- "zoho desk" y "zoho mail" estaban cargadas dentro de Zoho CRM, y Zoho Desk tenia
+-- una sola senal. Con este volumen, un producto "Zoho" es mas honesto que tres.
+
+-- ---------------------------------------------------------------------------
+-- 5. Altas
+-- ---------------------------------------------------------------------------
+--   Salesforce   Salesforce Apex, Apex Trigger, Apex Classes, Lightning Web Components,
+--                LWC Salesforce, Salesforce Flow, Salesforce CPQ, Salesforce Certified,
+--                Trailhead, Journey Builder, Marketing Cloud Connect
+--                (no entro "Apex" a secas: colisiona con Oracle APEX)
+--   Microsoft    Microsoft Teams, OneDrive for Business, Microsoft Viva, Teams Phone,
+--                Power Fx, Dataverse, MS-102, PL-100, PL-200, PL-400, PL-500
+--   ServiceNow   ServiceNow Certified, ServiceNow CSA, ServiceNow CMDB,
+--                ServiceNow Discovery, Flow Designer ServiceNow
+--   Jira         Jira Software, Jira Service Management, Jira Align, Jira Cloud
+--   Zoho         Zoho One, Zoho Books, Zoho People, Zoho Creator, Zoho Analytics
+--   Otros        HubSpot Workflows, HubSpot Certified, Google Meet, Automation 360

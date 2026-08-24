@@ -1,0 +1,145 @@
+-- Lote 4 del diccionario — Cloud e infraestructura. Ejecutado el 24/08/2026.
+-- Trece productos: AWS, Azure, Google Cloud Platform, Oracle Database, Weblogic,
+-- Microsoft SQL Server, Windows Server, Exchange Server, SCCM, Datadog, Dynatrace,
+-- AS/400, IBM Z.
+-- Resultado: 530 -> 454 keywords, -10.229 senales falsas, 78 jobs add_keyword.
+
+-- ---------------------------------------------------------------------------
+-- 0. CORRECCION de un error mio en el lote ERP
+-- ---------------------------------------------------------------------------
+-- En el lote ERP afirme, para justificar que EBS se quedara en Oracle E-Business
+-- Suite: "ya salio la colision con Amazon EBS". Era falso: nunca la saque de AWS.
+-- El usuario aprobo dejar EBS en Oracle sobre una premisa inventada.
+--
+-- Medido ahora: de las 1.679 senales que EBS generaba DENTRO de AWS, solo 3
+-- mencionan algo de AWS en el mismo texto. Los snippets dicen "Oracle EBS Finance
+-- Technical Consultant" y "Oracle EBS Functional Analyst": consultores de Oracle
+-- contando como usuarios de Amazon Web Services.
+-- Resuelto en este lote: EBS sale de AWS, entra "Amazon EBS".
+
+-- ---------------------------------------------------------------------------
+-- 1. El criterio, ya estabilizado despues de tres lotes
+-- ---------------------------------------------------------------------------
+-- No es la longitud de la sigla ni si "suena" ambigua: es la proporcion entre
+-- senales identificablemente reales e identificablemente falsas en el corpus.
+-- Se queda por encima de ~80:20, sale por debajo.
+--
+-- Cinco keywords que estaban en la lista de bajas y la medicion salvo:
+--   OSB                    Weblogic   354   354/354 mencionan Oracle/SOA/middleware
+--   Lambda                 AWS         70    70/70 mencionan AWS
+--   Bicep                  Azure       24    24/24 con contexto Azure/IaC
+--   Configuration Manager  SCCM       452   219 contexto Microsoft vs 40 ITIL (85:15)
+--   OCI                    Oracle DB  901   66% con contexto Oracle
+--   ILE                    AS/400      45   39/45 con contexto IBM i
+--
+-- Y la que salio por el mismo criterio:
+--   Exchange   Exchange Server  5.028  1.380 contexto correo vs 1.026 de
+--                                      "foreign exchange", "stock exchange",
+--                                      "data exchange", "intercambio" (57:43)
+
+-- ---------------------------------------------------------------------------
+-- 2. Bajas por falso positivo, todas verificadas contra snippets
+-- ---------------------------------------------------------------------------
+--  Exchange        Exchange Server  5.028  ver arriba
+--  EBS             AWS              1.679  "Oracle EBS Finance Technical Consultant"
+--  Visual Studio   Azure            1.117  es un IDE, no una nube: "Eclipse... Toad",
+--                                          "SharePoint 2007... SharePoint Designer"
+--  Redis           AWS                526  base de datos independiente; aparece mas
+--                                          veces junto a GCP (49) que a AWS (37)
+--  OEM             Oracle Database    271  Original Equipment Manufacturer:
+--                                          "FMEA y Control Plans PPAP APQP PSW 8D"
+--  Power Systems   AS/400             220  ingenieria electrica: "T&D Planning Chief
+--                                          Engineer". Solo 19 de 220 mencionan IBM
+--  Entra ID        Azure              106  duplicada: la agregue al producto Entra
+--                                          en el lote de ciberseguridad
+--  SNS             AWS                 98  "prevencion de riesgo - SNS Iquique",
+--                                          empresa chilena
+--  Aurora          AWS                 89  nombre propio; 3 de 89 con contexto AWS
+--  RBAC            Azure               82  termino generico de identidad
+--  MSU             IBM Z               72  "MSU S.A", "MSU ENERGY"
+--  Comprehend      AWS                 72  el verbo ingles; cero contexto AWS
+--  ECS             AWS                 59  2 de 59 con contexto AWS
+--  TPF             IBM Z               55  "TPF INGENIERIA"
+--  X-Ray           AWS                 48  radiografia; cero contexto AWS
+--  AMI             AWS                 47  tambien Advanced Metering Infrastructure
+--  PDS SNA RMF GDG HMC MIPS VTL IPL WLM IFL   IBM Z  248
+--  Lex Polly       AWS                 46  "Lex Doctor", "Polly Pocket"
+--  CIAM            Google Cloud        26  Customer IAM, no tiene nada de Google
+--  App Engine, Compute Engine, Cloud SQL, Cloud IAM, Cloud Functions  GCP  49
+--                                          nombres de Google que como frase suelta
+--                                          leen genericos; aparecen mas junto a AWS
+--  spool, NoSQL Database, APN, Memcached    IBM Z / AWS  101
+--  26 terminos genericos de Java EE en Weblogic (JMS Queues, WSDL Services,
+--    Security Realms, XSLT Transformations, Message Flow...)          20
+--  SQL Trace       SAP ECC              8  duplicada con Oracle Database
+--
+-- Ademas se deduplico DASD, que estaba dos veces en IBM Z.
+
+-- ---------------------------------------------------------------------------
+-- 3. Altas: los huecos de cobertura
+-- ---------------------------------------------------------------------------
+-- El desbalance mas llamativo del diccionario: AWS tenia 134 keywords, entre ellas
+-- AWS DeepRacer, AWS DeepLens y AWS DeepComposer (tres juguetes educativos que
+-- nadie pone en un perfil), y ninguna para S3, EC2, RDS o Lambda con nombre completo.
+--
+--   AWS      Amazon S3, S3 Bucket, Amazon EC2, Amazon RDS, AWS RDS, AWS Lambda,
+--            Amazon ElastiCache + los reemplazos calificados de las bajas
+--   Azure    Azure DevOps, Azure Functions, Azure Kubernetes Service, AKS,
+--            Azure App Service, Azure Monitor, Application Insights, Azure Databricks
+--   GCP      BigQuery, Google Cloud Storage, Pub/Sub, Cloud Dataflow, Cloud Build,
+--            Cloud Spanner + Google App Engine / Compute Engine / Cloud SQL / Functions
+--   IBM Z    JCL, VSAM, CICS, ISPF, RACF, DB2 for z/OS, Endevor, Changeman
+--   AS/400   RPGLE, RPG IV, CL/400, Query/400, IBM Power Systems
+--   Otros    MSSQL, ConfigMgr, MECM, Datadog Synthetics, Dynatrace OneAgent
+--   Certificaciones  AZ-104, AZ-305, AZ-900, Professional Cloud Architect, OCI Architect
+--
+-- Los dos huecos mas caros:
+--   Google Cloud no tenia BigQuery, el producto insignia de la plataforma y el que
+--   mas aparece en vacantes de datos. Si tenia Eventarc y Anthos.
+--   IBM Z no tenia JCL, VSAM, CICS ni ISPF, que es la jerga central del mainframe.
+--   Si tenia MSU, MIPS y VTL, que resultaron ser nombres de empresas.
+
+-- ---------------------------------------------------------------------------
+-- 4. Los que no se tocaron, y por que
+-- ---------------------------------------------------------------------------
+-- Microsoft SQL Server (21.422 senales, el mas detectado del diccionario),
+-- Windows Server, Datadog y Dynatrace pasaron sin bajas. Todos tienen nombre de
+-- marca inventado o siglas inequivocas (T-SQL, SSIS, SSRS, SSAS, WSUS).
+--
+-- El patron de los cuatro lotes: los productos con nombre de marca inventado no
+-- dan problemas nunca. Sufren los que usan palabras del idioma (Exchange, Aurora,
+-- Lambda, Comprehend, Defender, Entra) o siglas que otra industria tambien usa.
+
+-- ---------------------------------------------------------------------------
+-- 5. Verificacion de las altas, mismo dia: Pub/Sub calificada
+-- ---------------------------------------------------------------------------
+-- Se midieron las altas nuevas, no solo las bajas (leccion de CCSA en el lote
+-- anterior). Pub/Sub en Google Cloud quedo 82 con contexto Google contra 32 de
+-- Kafka, RabbitMQ y SQS: publish/subscribe es tambien un patron de arquitectura
+-- generico. 72:28 esta debajo del umbral de ~80:20.
+update dictionary_products p
+set keywords = (select array_agg(k.kw) from unnest(p.keywords) k(kw) where lower(k.kw) <> 'pub/sub')
+               || array['Cloud Pub/Sub','Google Pub/Sub'],
+    updated_at = now()
+where p.name = 'Google Cloud Platform';
+
+-- ---------------------------------------------------------------------------
+-- Resultado del lote (jobs procesados)
+-- ---------------------------------------------------------------------------
+--   Microsoft SQL Server    21.422 -> 22.288 senales   11.339 -> 11.722 cuentas
+--   AWS                     19.731 -> 17.535            6.573 ->  5.627
+--   Oracle Database         13.355 -> 13.380            5.731 ->  5.681
+--   Google Cloud Platform    5.697 ->  6.594            2.217 ->  2.493
+--   Microsoft Windows Server 5.321 ->  5.341            3.804 ->  3.814
+--   Azure                    3.347 ->  4.790            1.999 ->  2.303
+--   Weblogic                 3.511 ->  3.491            1.624 ->  1.614
+--   AS/400                   2.194 ->  2.047            1.289 ->  1.204
+--   IBM Z                      809 ->  1.851              441 ->    655
+--   Microsoft Exchange Server 5.738 ->  1.102            3.779 ->    903
+--   SCCM                       930 ->    935              608 ->    610
+--
+-- Se fueron 10.229 senales falsas y entraron 7.528 reales.
+--
+-- Exchange Server es la correccion mas grande del trabajo: 3.779 -> 903 cuentas.
+-- IBM Z es el mejor resultado: subio de 441 a 655 cuentas DESPUES de sacarle 14
+-- keywords. El problema no era tener pocas keywords, era tener las equivocadas.
