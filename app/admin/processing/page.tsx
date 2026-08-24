@@ -27,6 +27,7 @@ import {
   Timer,
   Hourglass,
   CircleDashed,
+  Moon,
 } from "lucide-react"
 import {
   getDashboardCounts,
@@ -97,6 +98,12 @@ function StatusBadge({ status }: { status: string }) {
       return <Badge className="gap-1 bg-green-600 text-white"><CheckCircle className="h-3 w-3" />Completado</Badge>
     case "failed":
       return <Badge variant="destructive" className="gap-1"><XCircle className="h-3 w-3" />Error</Badge>
+    case "deferred":
+      return (
+        <Badge className="gap-1 bg-indigo-600 text-white" title="Recálculo de co-ocurrencia. Se libera a las 05:30 UTC y lo procesa el cron del minuto.">
+          <Moon className="h-3 w-3" />De madrugada
+        </Badge>
+      )
     default:
       return <Badge variant="outline" className="gap-1"><Clock className="h-3 w-3" />{status || "Desconocido"}</Badge>
   }
@@ -689,7 +696,7 @@ function BatchTable({ batches, onRefresh }: { batches: ImportBatch[]; onRefresh:
 
 function DictionaryJobsSection({ jobs, stats, onRefresh }: { jobs: DictionaryJob[]; stats: DictJobStats | null; onRefresh: () => void }) {
   const supabase = createClient()
-  const [filter, setFilter] = useState<"all" | "pending" | "processing" | "completed" | "failed">("all")
+  const [filter, setFilter] = useState<"all" | "pending" | "processing" | "completed" | "failed" | "deferred">("all")
 
   // Reset completo para que el reintento arranque siempre desde cero:
   // ademas de status/error, limpiamos phase, cursores keyset y contadores de
@@ -763,6 +770,10 @@ function DictionaryJobsSection({ jobs, stats, onRefresh }: { jobs: DictionaryJob
             { key: "processing" as const, label: "Procesando", count: stats?.processing || jobs.filter((j) => j.status === "processing").length },
             { key: "completed" as const, label: "Completados", count: stats?.completed || jobs.filter((j) => j.status === "completed").length },
             { key: "failed" as const, label: "Fallidos", count: stats?.failed || jobs.filter((j) => j.status === "failed").length },
+            // Recálculos de co-ocurrencia esperando la ventana nocturna. No son
+            // "pendientes": el cron del minuto no los mira hasta que
+            // /api/cron/dictionary-reprocess los libera a las 05:30 UTC.
+            { key: "deferred" as const, label: "De madrugada", count: stats?.deferred || jobs.filter((j) => j.status === "deferred").length },
           ]).map(({ key, label, count }) => (
             <Button
               key={key}

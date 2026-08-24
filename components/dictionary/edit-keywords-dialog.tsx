@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { X, Plus, AlertTriangle, Loader2, ArrowLeft, Crosshair, RefreshCw } from "lucide-react"
+import { planDictionaryJobs, type PendingChange } from "@/lib/dictionary/plan-jobs"
 
 /** keyword (en minúsculas) → términos. Ver dictionary_products.keywords_contexto. */
 type TermMap = Record<string, string[]>
@@ -37,10 +38,7 @@ type EditKeywordsDialogProps = {
 // "recalculate" es un cambio de co-ocurrencia sobre una keyword que ya existe.
 // No alcanza con guardar el mapa: las señales viejas se generaron con las
 // reglas anteriores, así que hay que borrarlas y volver a generarlas.
-type PendingChange = {
-  type: "add" | "remove" | "recalculate"
-  keyword: string
-}
+// El tipo y el reparto en carriles viven en lib/dictionary/plan-jobs.
 
 const termKey = (keyword: string) => keyword.toLowerCase()
 
@@ -214,38 +212,39 @@ export function EditKeywordsDialog({
         })
         .eq("id", itemId)
 
-      // 2. Encolar TODOS los cambios como jobs en background.
+      // 2. Encolar los cambios como jobs en background, en dos carriles.
+      //
       //    El borrado ya NO se hace síncrono desde el browser: eso disparaba
       //    "canceling statement due to lock timeout" (DELETE con ILIKE sobre
       //    signals bajo el statement_timeout de 8s del rol authenticated).
       //    Ahora el cron/driver procesa remove_keyword con timeout amplio.
-      //    Un cambio de co-ocurrencia se encola como remove + add: las señales
-      //    viejas se generaron con las reglas anteriores y hay que rehacerlas.
       //
-      //    Los dos jobs de una misma keyword TIENEN que salir en ese orden, y
-      //    el cron los ordena por created_at. Por eso van en dos inserts
-      //    separados y no en uno solo: en un único insert las dos filas
-      //    comparten el created_at de la transacción, el desempate queda
-      //    indefinido y un add que corriera antes que su remove terminaría con
-      //    la keyword borrada.
-      const base = (keyword: string) => ({
-        signal_id: itemId,
-        signal_type: signalType,
-        keyword,
-        status: "pending",
-      })
-      const removeJobs = pendingChanges
-        .filter((c) => c.type === "remove" || c.type === "recalculate")
-        .map((c) => ({ ...base(c.keyword), job_type: "remove_keyword" }))
-      const addJobs = pendingChanges
-        .filter((c) => c.type === "add" || c.type === "recalculate")
-        .map((c) => ({ ...base(c.keyword), job_type: "add_keyword" }))
-
-      if (removeJobs.length > 0) {
-        await supabase.from("dictionary_jobs").insert(removeJobs)
+      //    Carril inmediato: agregar y sacar keywords. Lo toma el cron que
+      //    corre cada minuto, así el editor ve el efecto de lo que acaba de
+      //    tocar.
+      const { inmediatos, recalcs } = planDictionaryJobs(pendingChanges, itemId, signalType)
+      if (inmediatos.length > 0) {
+        await supabase.from("dictionary_jobs").insert(inmediatos)
       }
-      if (addJobs.length > 0) {
-        await supabase.from("dictionary_jobs").insert(addJobs)
+
+      //    Carril nocturno: recálculos de co-ocurrencia. Cambiar el contexto de
+      //    una keyword obliga a rehacer señales que YA existen y que nadie está
+      //    esperando —reprocesar "Exchange" toca ~5.000 contactos—, así que no
+      //    tiene por qué competir con el trabajo interactivo. Salen 'deferred'
+      //    y los libera el cron nocturno.
+      //
+      //    Va por RPC y no por insert: el dedupe usa un índice único PARCIAL
+      //    (solo sobre deferred) y PostgREST no sabe expresar el predicado que
+      //    ON CONFLICT necesita para inferirlo. La RPC además inserta el par
+      //    remove → add en una sola transacción con created_at explícito, que
+      //    es lo que garantiza que el add no corra antes que su remove.
+      if (recalcs.length > 0) {
+        const { error: recalcError } = await supabase.rpc("enqueue_dictionary_recalc", {
+          p_signal_id: itemId,
+          p_signal_type: signalType,
+          p_keywords: recalcs,
+        })
+        if (recalcError) throw recalcError
       }
 
       onSave()
@@ -484,7 +483,7 @@ export function EditKeywordsDialog({
                       </p>
                       <p className="text-xs text-muted-foreground mt-1">
                         Las señales actuales de estas keywords se borran y se vuelven a generar con las reglas
-                        nuevas.
+                        nuevas. Corre de noche: es trabajo pesado sobre señales que ya existen.
                       </p>
                     </div>
                   )}
@@ -551,13 +550,15 @@ export function EditKeywordsDialog({
                     {recalcKeywords.map((c) => c.keyword).join(", ")}
                   </p>
                   <p className="text-xs text-muted-foreground ml-3 mt-1">
-                    Se borran sus señales actuales y se regeneran con las reglas nuevas.
+                    Se borran sus señales actuales y se regeneran con las reglas nuevas. Queda encolado para la
+                    madrugada; hasta entonces las señales siguen mostrando las reglas viejas.
                   </p>
                 </div>
               )}
 
               <p className="text-sm text-muted-foreground pt-2 border-t">
-                Los cambios se procesarán en background. Puedes ver el progreso en Admin → Procesamiento.
+                Agregar y sacar keywords se procesa en minutos. Los recálculos de co-ocurrencia se procesan de
+                madrugada. Podés ver el progreso en Admin → Procesamiento.
               </p>
             </div>
 

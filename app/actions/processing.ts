@@ -230,11 +230,17 @@ export async function getDictionaryJobStats() {
   const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString()
 
   // Use exact counts per status to avoid the 1000-row default limit
-  const [pendingRes, processingRes, completedRes, failedRes, totalRes] = await Promise.all([
+  // 'deferred' son los recálculos de co-ocurrencia esperando la ventana
+  // nocturna. Se cuentan aparte: no están pendientes de que el cron del minuto
+  // los tome, están esperando a que /api/cron/dictionary-reprocess los libere.
+  // Sin este contador quedarían sumados solo en `total` y la pantalla daría a
+  // entender que el cambio se perdió.
+  const [pendingRes, processingRes, completedRes, failedRes, deferredRes, totalRes] = await Promise.all([
     supabase.from("dictionary_jobs").select("*", { count: "exact", head: true }).eq("status", "pending"),
     supabase.from("dictionary_jobs").select("*", { count: "exact", head: true }).eq("status", "processing"),
     supabase.from("dictionary_jobs").select("*", { count: "exact", head: true }).eq("status", "completed"),
     supabase.from("dictionary_jobs").select("*", { count: "exact", head: true }).eq("status", "failed"),
+    supabase.from("dictionary_jobs").select("*", { count: "exact", head: true }).eq("status", "deferred"),
     supabase.from("dictionary_jobs").select("*", { count: "exact", head: true }),
   ])
 
@@ -242,6 +248,7 @@ export async function getDictionaryJobStats() {
   const processing = processingRes.count || 0
   const completed = completedRes.count || 0
   const failed = failedRes.count || 0
+  const deferred = deferredRes.count || 0
   const total = totalRes.count || 0
 
   // Get progress data only for active jobs (pending + processing) - won't hit 1000 limit
@@ -288,7 +295,7 @@ export async function getDictionaryJobStats() {
   }
 
   return {
-    pending, processing, completed, failed, stuck, total,
+    pending, processing, completed, failed, deferred, stuck, total,
     totalContactsToProcess, totalContactsProcessed,
     totalJobPostingsToProcess, totalJobPostingsProcessed,
     estimatedMinutesRemaining,

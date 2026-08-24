@@ -164,6 +164,89 @@ indexables: concatenan varias columnas y aplican `regexp_replace`. La regla para
 
 ---
 
+## 9. Separar el trabajo urgente del que solo es pesado
+
+No todo lo que se encola merece la misma prioridad, y meterlo todo en la misma
+cola hace que lo pesado le robe turno a lo interactivo.
+
+En el diccionario hay dos clases de cambio que se veían iguales —los dos
+terminan en `dictionary_jobs`— y no lo son:
+
+| | agregar / sacar keyword | recalcular co-ocurrencia |
+|---|---|---|
+| Qué toca | señales que no existen todavía | señales que **ya existen** |
+| Quién espera el resultado | el editor, que acaba de tocarlo | nadie |
+| Tamaño típico | una keyword nueva y específica | `Exchange` ≈ 5.000 contactos |
+
+Cambiar `keywords_contexto` de una keyword existente obliga a rehacer sus
+señales, porque las viejas se generaron con las reglas anteriores. Es trabajo
+caro cuyo resultado nadie está mirando: no tiene por qué competir con el cron
+que corre cada minuto.
+
+La separación se hace con un **estado**, no con un timestamp:
+
+```sql
+-- dictionary_jobs.status ahora admite 'deferred'
+check (status in ('pending', 'processing', 'completed', 'failed', 'deferred'))
+```
+
+El cron del minuto **no se toca**. Su selector ya era
+
+```ts
+.in("status", ["processing", "pending"])
+```
+
+así que `deferred` queda afuera sin modificar una línea del camino caliente.
+`/api/cron/dictionary-reprocess` (05:30 UTC ≈ 02:30 Buenos Aires) los pasa a
+`pending` y el cron del minuto los drena de ahí.
+
+La alternativa era `scheduled_for timestamptz` con el cron del minuto
+filtrando `<= now()`. Sale más caro: hay que tocar el selector caliente y cada
+job carga una fecha que sirve una sola vez. El estado separa las dos preguntas
+—"¿está listo?" y "¿cuándo se libera?"— y deja el release en un solo lugar.
+
+**El release no toca `created_at`.** El par `remove` → `add` de cada keyword se
+encola con un milisegundo de diferencia y el cron ordena por `created_at`;
+reescribir la fecha al liberar pondría en riesgo ese orden, y un `add`
+corriendo antes que su `remove` dejaría la keyword borrada.
+
+### Dedupe con índice parcial: por qué el encolado va por RPC
+
+Editar la misma keyword tres veces antes de la noche no debe encolar tres
+recálculos. El job no lleva las reglas adentro —lee `keywords_contexto` de la
+tabla al momento de correr—, así que uno solo ya aplica la última versión.
+
+```sql
+create unique index idx_dictionary_jobs_deferred_unico
+  on public.dictionary_jobs (signal_id, keyword, job_type)
+  where status = 'deferred';
+```
+
+Ese índice es **parcial**, y ahí aparece el detalle que decide la arquitectura:
+`ON CONFLICT` contra un índice parcial necesita repetir el predicado para que
+Postgres pueda inferirlo.
+
+```sql
+on conflict (signal_id, keyword, job_type) where status = 'deferred' do nothing
+```
+
+PostgREST no sabe expresar ese `where`: su `on_conflict` es solo una lista de
+columnas. Un upsert desde el cliente falla con *"no unique or exclusion
+constraint matching the ON CONFLICT specification"*. Tampoco servía borrar los
+duplicados antes de insertar: `dictionary_jobs` no tiene policy de `DELETE`
+para `authenticated`.
+
+Por eso el encolado va por `enqueue_dictionary_recalc`, una RPC
+`SECURITY DEFINER` que además:
+
+- chequea superadmin a mano (SECURITY DEFINER saltea RLS, así que la condición
+  de las policies hay que repetirla adentro);
+- inserta el par `remove` → `add` en una sola transacción con `created_at`
+  explícito, en vez de depender de dos round-trips separados desde el browser.
+
+**Regla general:** si el dedupe necesita un índice parcial, el insert no puede
+salir del cliente por PostgREST. Poné una RPC.
+
 ## Checklist para tareas de ETL/matcheo sobre tablas grandes
 - [ ] ¿Paginás con keyset (no OFFSET)?
 - [ ] ¿Es set-based (`INSERT...SELECT`) en vez de loop por fila?
@@ -173,6 +256,8 @@ indexables: concatenan varias columnas y aplican `regexp_replace`. La regla para
 - [ ] ¿Los timeouts (lote → RPC → cliente → serverless) son coherentes?
 - [ ] ¿Preservás el contrato de dedupe (`ON CONFLICT` sobre las unique keys de `signals`)?
 - [ ] ¿Las condiciones no indexables van **después** del predicado crudo, y salteadas con `CASE`?
+- [ ] ¿El trabajo pesado que nadie está esperando corre en su propia ventana, fuera de la cola interactiva?
+- [ ] Si el dedupe usa un índice **parcial**, ¿el insert va por RPC y no por PostgREST?
 
 ## Referencias
 - Keyset vs OFFSET: OFFSET degrada O(n) con el desplazamiento; keyset es O(1) por página vía índice.
