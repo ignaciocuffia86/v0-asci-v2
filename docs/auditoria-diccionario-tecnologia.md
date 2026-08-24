@@ -792,10 +792,107 @@ Entra — o siglas que otra industria también usa.
 
 ---
 
+## Lote 5 · Datos y BI — aplicado el 24 de agosto de 2026
+
+Once productos (diez más uno nuevo). Script en
+[`scripts/apply-datos-bi-batch-20260824.sql`](../scripts/apply-datos-bi-batch-20260824.sql).
+
+### El caso Fabric
+
+Tres keywords de una palabra sostenían casi todo el volumen del lote y las tres parecían
+igual de riesgosas: `Tableau` es una palabra francesa, `Looker` parece un sustantivo inglés y
+`Fabric` es "tela".
+
+| Keyword | Señales | Con contexto BI | Claramente otra cosa | Veredicto |
+| --- | ---: | ---: | ---: | --- |
+| `Tableau` | 3.184 | 1.906 | 1 | Se queda |
+| `Looker` | 884 | 504 | 1 | Se queda |
+| `Fabric` | 631 | 164 | 80 | **Sale** (67:33) |
+
+Las 80 de `Fabric` son de redes ("switching y routing", "AWS Edge Fabric", "Service Fabric") y
+de la industria textil. Microsoft eligió para su producto una palabra que ya estaba ocupada en
+dos lugares distintos. **Es exactamente el mismo problema que `Defender`, `Exchange`,
+`Sentinel`, `Entra`, `Aurora` y `Comprehend`: la lista de productos que rompen el diccionario
+es la lista de productos cuyo nombre es una palabra que ya existía.**
+
+La diferencia con Tableau y Looker no es qué tan rara suena la palabra, es si la gente que la
+escribe en LatAm la usa para otra cosa.
+
+### Bajas
+
+| Keyword | Sumaba a | Señales | Qué era |
+| --- | --- | ---: | --- |
+| `Fabric` | Microsoft Fabric | 631 | Redes y textil |
+| `Data Manager` | Qlik | 409 | Es un puesto, no un producto. Solo 22 de 409 con contexto BI: "Technical Data Manager", "Clinical Data Manager Assistant" |
+| `Dossiers` | MicroStrategy | 39 | Cero contexto BI: "Press & Communications", "Asuntos Regulatorios", "Document Control" |
+| `Strategy One` | MicroStrategy | 2 | Frase genérica |
+| `Data Model Viewer`, `Data Load Editor` | Qlik | 0 | Nombres de pantalla que leen genéricos |
+| 23 verticales de SAS | SAS | 0 | `SAS Tax Fraud`, `SAS Social Benefits Analytics`, `SAS Claims Fraud` |
+| 8 combinatorias de Looker | Looker | 0 | `Looker BI`, `Looker Data Platform`, `Looker REST API` |
+
+Más el duplicado literal `Microstrategy`/`MicroStrategy`.
+
+**Una que no se agregó a propósito: `SAS`.** En LatAm es "Sociedad por Acciones Simplificada" y
+aparece en miles de razones sociales. Mismo caso que `CTS` en Perú o `RFC` en México.
+
+### Altas
+
+Power BI tenía 12 keywords y 10.536 señales, pero todas eran variantes del nombre. **Ninguna era
+del oficio.** Se agregaron `DAX`, `Power Query`, `PBIX`, `Tabular Editor`, `RLS Power BI`,
+`Power BI Dataflows`, `Power BI Report Builder`, `PL-300`.
+
+`DAX` y `Power Query` son el lenguaje y el motor de transformación: quien los escribe construyó
+modelos, no miró un dashboard. Es la diferencia entre una cuenta que *tiene* Power BI y una que
+lo *usa en serio*.
+
+También: `OneLake`, `Direct Lake`, `Fabric Lakehouse` (Fabric); `tMap` (Talend); `LOD Expressions`
+(Tableau); `BEx Analyzer`, `SAP Datasphere` (BusinessObjects); `Qlik` a secas; `Oracle Analytics`,
+`OBIA` (Oracle Analytics Cloud). Se dejó afuera `OAS`, que en inglés es también *Organization of
+American States*.
+
+### Una alta que salió mal y terminó en producto nuevo
+
+Se agregó `Crystal Reports` a SAP BusinessObjects. El job trajo **974 señales**, casi duplicando
+el producto. Al revisar: **solo 17 de esos 974 contactos tienen alguna otra señal de
+BusinessObjects.** Los otros 957 escriben "Crystal Reports" y nada más de la plataforma.
+
+Tiene sentido: Crystal Reports se vende suelto y lo usa gente que no tiene ni va a tener
+BusinessObjects. Como señal comercial son dos cuentas distintas. Se creó **SAP Crystal Reports**
+como producto propio; la señal no se pierde, deja de disfrazarse.
+
+*Tercera vez en tres lotes que verificar las propias altas encuentra algo:* `CCSA` resultó una
+certificación de auditoría, `Pub/Sub` un patrón genérico, y ahora esto. **Medir las bajas no
+alcanza.**
+
+### Saldo
+
+| Producto | Kw antes | Kw ahora | Señales antes | Señales ahora | Cuentas |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Power BI | 12 | 21 | 10.536 | 11.157 | 4.817 |
+| Tableau | 16 | 20 | 3.219 | 3.222 | 1.550 |
+| Qlik Sense & QlikView | 55 | 55 | 1.450 | 1.795 | 1.184 |
+| SAP BusinessObjects | 14 | 17 | 1.459 | 1.491 | 945 |
+| Google Looker | 18 | 10 | 1.042 | 1.301 | 687 |
+| SAP Crystal Reports *(nuevo)* | — | 6 | — | 979 | 854 |
+| MicroStrategy | 27 | 26 | 767 | 727 | 440 |
+| Oracle Analytics Cloud | 5 | 9 | 651 | 727 | 479 |
+| Talend | 14 | 17 | 260 | 264 | 205 |
+| SAS Viya y SAS 9 | 79 | 56 | 172 | 194 | 144 |
+| Microsoft Fabric | 20 | 28 | 648 | 45 | 41 |
+
+- **Power BI ganó 621 señales** solo con `DAX` y `Power Query`.
+- **Qlik subió a pesar de perder 409:** sacar `Data Manager` y agregar `Qlik` dio saldo +345.
+  Mismo patrón que IBM Z — la keyword que faltaba valía más que las que sobraban.
+- **Microsoft Fabric cae de 397 cuentas a 41, y es correcto.** El producto salió en 2023; que
+  397 cuentas de LatAm ya lo tuvieran era implausible.
+
+El producto "Viya Platform" se renombró a **"SAS Viya y SAS 9"**: cubre las dos generaciones,
+no solo Viya.
+
+---
+
 ## Lotes pendientes
 
-5. **Datos y BI** — Power BI, Fabric, Tableau, Qlik, Looker, MicroStrategy, SAS, y el
-   Oracle Analytics Cloud que se creó en este lote.
 6. **CRM y productividad** — Salesforce, HubSpot, Zoho, ServiceNow, M365, Google Workspace,
    Atlassian (incluye sacar Confluence, Bitbucket y Trello de adentro de Jira).
 7. **Stacks de desarrollo** — el bloque más ruidoso: ahí está `Javascript` con 10.603 señales
