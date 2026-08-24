@@ -49,6 +49,8 @@ export interface EnrichmentResult {
   errors: number
   /** [453] URLs que resultaron ser de otra empresa. No se les escribio nada. */
   identityMismatch: number
+  /** [454] Filas que venian bautizadas con el slug y adoptaron su nombre real. */
+  renamed: number
   filled: Record<string, number>
   skippedForQuota: boolean
   quota: QuotaStatus | null
@@ -217,10 +219,38 @@ export function esLaMismaEmpresa(
   // menos, matchea por accidente: "EY" esta contenido en "Ripley Customer SpA"
   // (ripl-EY-customerspa) y esa fila, que en realidad tenia la URL de Ernst &
   // Young, pasaba como si fuera la misma empresa.
-  const MIN_CONTAINMENT = 4
+  // [454] Bajado de 4 a 3. Con 4 se bloqueaban siglas legitimas de tres letras
+  // ("Epe_2" contra "EPE", "Nfqgroup" contra "NFQ"). El caso que motivo el
+  // minimo era "EY" dentro de "ripl-EY-customerspa", que con 2 caracteres sigue
+  // sin pasar.
+  const MIN_CONTAINMENT = 3
   if (Math.min(a.length, b.length) >= MIN_CONTAINMENT && (a.includes(b) || b.includes(a))) return true
   const enBase = new Set(palabrasLargas(nombreBase ?? ""))
   return palabrasLargas(nombreLinkedIn ?? "").some((w) => enBase.has(w))
+}
+
+/**
+ * [454] ¿El nombre de la fila es, literalmente, el slug de su propia URL?
+ *
+ * upsert_company, cuando el ETL no trae nombre, lo inventa con
+ * INITCAP(SPLIT_PART(url,'/',5)). Quedan filas llamadas "Unvimeoficial",
+ * "Grupomat" o "Epe_2": eso no es un nombre, es un placeholder.
+ *
+ * Importa para el guard de identidad. Medido en la primera corrida real del
+ * drenaje: los 11 identity_mismatch eran TODOS filas asi. Contrastar el nombre
+ * que devolvio LinkedIn contra un placeholder no prueba nada — no hay dos
+ * nombres que comparar, hay uno solo — y el guard bloqueaba enriquecimientos
+ * correctos ("Unvimeoficial" contra "Universidad Nacional de Villa Mercedes",
+ * que es la misma universidad).
+ */
+export function nombreEsElSlug(
+  nombre: string | null | undefined,
+  linkedinUrl: string | null | undefined,
+): boolean {
+  const slug = slugFromUrl(linkedinUrl)
+  if (!slug) return false
+  const n = soloAlfanum(nombre ?? "")
+  return n.length > 0 && n === soloAlfanum(slug)
 }
 
 async function runActor(token: string, urls: string[]): Promise<any[]> {
@@ -387,6 +417,7 @@ export async function runLinkedInEnrichment(options: RunOptions = {}): Promise<E
     noResult: 0,
     errors: 0,
     identityMismatch: 0,
+    renamed: 0,
     filled: {},
     skippedForQuota: false,
     quota: null,
@@ -479,11 +510,16 @@ export async function runLinkedInEnrichment(options: RunOptions = {}): Promise<E
           continue
         }
 
+        // [454] Si la fila esta bautizada con el slug de su propia URL, su
+        // "nombre" es un placeholder y no sirve para contrastar identidad. El
+        // guard no aplica: mas abajo se adopta el nombre que trae LinkedIn.
+        const bautizadaConElSlug = nombreEsElSlug(c.name, c.linkedin_url)
+
         // [453] Antes de escribir NADA: si el nombre que devolvio LinkedIn no
         // tiene relacion con el de la fila, la URL es de otra empresa. Se
         // guarda el payload (es la evidencia para revisarlo) pero no se toca
         // ninguna columna, y no se reintenta: no es un fallo transitorio.
-        if (!esLaMismaEmpresa(c.name, item.name)) {
+        if (!bautizadaConElSlug && !esLaMismaEmpresa(c.name, item.name)) {
           result.identityMismatch++
           if (!dryRun) {
             await db.query(
@@ -511,6 +547,32 @@ export async function runLinkedInEnrichment(options: RunOptions = {}): Promise<E
         const filled: string[] = []
 
         if (!dryRun) {
+          // [454] La fila venia bautizada con el slug: LinkedIn acaba de decir
+          // como se llama de verdad, asi que se adopta. Es el mismo arreglo que
+          // el script 452 hizo contra el import del proveedor, pero para las
+          // filas que ese import no cubria.
+          //
+          // normalized_name se recalcula si o si: si queda apuntando al slug
+          // viejo, la busqueda por nombre (script 450) no encuentra la empresa.
+          //
+          // El NOT EXISTS cubre el UNIQUE de companies.name: si el nombre real
+          // ya lo tiene otra fila, son duplicados y no se renombra nada. Los
+          // resuelve la deteccion nocturna, que deja registro y se revierte.
+          if (typeof item.name === "string" && item.name.trim().length >= 3 && bautizadaConElSlug) {
+            const nombreReal = item.name.trim()
+            const { rowCount } = await db.query(
+              `UPDATE public.companies
+                  SET name = $1,
+                      normalized_name = public.company_core_name($1),
+                      updated_at = now()
+                WHERE id = $2
+                  AND NOT EXISTS (
+                    SELECT 1 FROM public.companies o WHERE o.name = $1 AND o.id <> $2)`,
+              [nombreReal, c.id],
+            )
+            if (rowCount && rowCount > 0) result.renamed++
+          }
+
           // Un UPDATE por columna, cada uno condicionado a que este vacia. Asi
           // nunca se sobrescribe y cada trigger se dispara donde corresponde.
           const setIfEmpty = async (col: string, value: unknown) => {
