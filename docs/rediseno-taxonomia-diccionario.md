@@ -227,6 +227,8 @@ quedaron abiertas se resolvieron con lo propuesto: las nueve categorías tal cua
 
 90 productos, **0 sin categoría**. 13 productos en `legado` sobre **14.005 cuentas distintas**.
 
+*(Con el split de .NET de escritorio que sigue: 91 productos, 14 en legado sobre 14.976 cuentas.)*
+
 ### Java fuera de legado: la decisión se validó sola
 
 Sacar Java del eje bajó el total de 14.008 a 14.005 cuentas: **aportaba 3 cuentas únicas**. Sus
@@ -273,10 +275,43 @@ Los 15 productos sin vendor habrían quedado invisibles en el ABM, porque el ár
 `dictionary_products` filtrando por `vendor_id`. Se agregó un grupo "Sin vendor (open source)"
 en la vista por vendor, y en la vista por categoría aparecen naturalmente.
 
+### .NET de escritorio fuera de Visual Basic
+
+`WPF`, `WinForms`, `Windows Forms` y `ADO.NET` estaban dentro de Visual Basic. Medido sobre sus
+627 señales, **el contexto de C# le gana al de VB 4 a 1**:
+
+| Keyword | Señales | Contexto VB | Contexto C# |
+| --- | ---: | ---: | ---: |
+| `WPF` | 325 | 26 | 116 |
+| `WinForms` | 123 | 10 | 30 |
+| `Windows Forms` | 93 | 11 | 28 |
+| `ADO.NET` | 86 | 8 | 54 |
+
+Y sobre la plataforma, **.NET Framework viejo le gana a .NET moderno 3 a 1** (225 contra 70), así
+que el producto nuevo va como `legado`: el sucesor anunciado por Microsoft es .NET 8+.
+
+Se creó **`.NET Framework y escritorio`** (Microsoft · Desarrollo · legado) con las cuatro
+keywords movidas más `NET Framework`, `WCF`, `Windows Communication Foundation`,
+`ASP.NET Web Forms`, `ASMX`, `XAML` y `Windows Presentation Foundation`.
+
+`NET Framework` entró con **1.466 señales** —el 100% con contexto de desarrollo— y `WCF` con 856.
+Eran dos huecos grandes: el diccionario no detectaba la plataforma .NET clásica de ninguna forma.
+
+**Resultado:** Visual Basic pasó de 3.993 a **3.629 cuentas**, y el producto nuevo arrancó con
+**2.125 cuentas**.
+
+**Caveat sobre la marca de legado:** ese 24% con contexto de .NET moderno hace que el flag sea más
+débil acá que en los otros trece productos del eje, donde no hay variante moderna posible (Cobol,
+AS/400, Oracle Forms). Si molesta, se baja a `vigente` con un `update`; las keywords de Framework
+puro (`WCF`, `ASMX`, `ASP.NET Web Forms`) quedan igual para separarlo después.
+
+**Y una alta que no pasó su propia prueba:** `Web Forms` quedó 23 con contexto ASP.NET contra 29
+de web genérico (formularios, HTML, UX). Invertido respecto del umbral, así que salió.
+`ASP.NET Web Forms` cubre el caso limpio. Es la cuarta vez en el trabajo que verificar las propias
+altas encuentra algo — después de `CCSA`, `Pub/Sub` y `Crystal Reports`.
+
 ### Lo que sigue abierto
 
-- **`WPF`, `WinForms`, `Windows Forms` y `ADO.NET` dentro de Visual Basic** — son de .NET de
-  escritorio en general y necesitarían un producto propio.
 - **ELO Digital Office**, con 45 keywords y cero señales.
 - **Keywords con co-ocurrencia** — la mejora de motor que rescataría términos como `Fabric`
   exigiendo contexto.

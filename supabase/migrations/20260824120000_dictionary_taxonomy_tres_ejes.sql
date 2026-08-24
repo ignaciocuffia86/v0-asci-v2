@@ -133,3 +133,80 @@ where v.name in ('Legacy','Backend','Frontend','CMS')
 -- Estado resultante: 90 productos, 0 sin categoria, 13 en legado sobre 14.005
 -- cuentas distintas. 26 vendors reales + 15 productos sin vendor comercial.
 -- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- 4. .NET de escritorio sale de Visual Basic
+--    WPF, WinForms, Windows Forms y ADO.NET son de .NET en general, no de VB:
+--    estaban inflando el producto con desarrolladores de C#. Medido sobre sus
+--    627 senales, el contexto de C# le gana al de VB 4 a 1:
+--
+--      wpf            325   26 con contexto VB  / 116 con contexto C#
+--      winforms       123   10                  /  30
+--      windows forms   93   11                  /  28
+--      ado.net         86    8                  /  54
+--
+--    Y sobre la plataforma, .NET Framework viejo le gana a .NET moderno 3 a 1
+--    (225 contra 70), por eso el producto nuevo va como legado: el sucesor
+--    anunciado por Microsoft es .NET 8+.
+--
+--    CAVEAT: ese 24% con contexto de .NET moderno hace que la marca de legado
+--    sea mas debil aca que en los otros trece productos del eje, donde no hay
+--    variante moderna posible (Cobol, AS/400, Oracle Forms). Si molesta, se
+--    baja a 'vigente' con un update y las keywords de Framework puro (WCF,
+--    Web Forms, ASMX) quedan igual para separarlo despues.
+-- ---------------------------------------------------------------------------
+insert into public.dictionary_products (vendor_id, name, keywords, categoria, ciclo_vida)
+select v.id, '.NET Framework y escritorio',
+ array['WCF','Windows Communication Foundation','ASP.NET Web Forms','Web Forms','ASMX',
+       'XAML','Windows Presentation Foundation','NET Framework'],
+ 'Desarrollo','legado'
+from public.dictionary_vendors v where v.name='Microsoft';
+
+-- Mover WPF, WinForms, Windows Forms y ADO.NET desde Visual Basic. El dedup
+-- tiene que cubrir las colisiones DENTRO del conjunto que se mueve: cuatro
+-- keywords del mismo contacto convergen en la misma fila destino y violan
+-- unique_signal_per_contact_company_dict.
+do $$
+declare m text; v_src uuid; v_dst uuid;
+begin
+  select id into v_src from public.dictionary_products where name='Visual Basic';
+  select id into v_dst from public.dictionary_products where name='.NET Framework y escritorio';
+  foreach m in array array['wpf','winforms','windows forms','ado.net'] loop
+    delete from public.signals where ctid in (select ctid from (
+      select s.ctid, row_number() over (
+        partition by s.contact_id, s.company_id, s.job_posting_id, s.signal_type
+        order by s.created_at) rn
+      from public.signals s where s.signal_id=v_src and lower(s.keyword_matched)=m) t where rn>1);
+    delete from public.signals s where s.signal_id=v_src and lower(s.keyword_matched)=m
+      and exists (select 1 from public.signals d where d.signal_id=v_dst and d.signal_type=s.signal_type
+            and d.contact_id is not distinct from s.contact_id
+            and d.company_id is not distinct from s.company_id
+            and d.job_posting_id is not distinct from s.job_posting_id);
+    update public.dictionary_products p set keywords = p.keywords ||
+      (select array_agg(k.kw) from unnest((select keywords from public.dictionary_products where id=v_src)) k(kw)
+       where lower(k.kw)=m)
+    where p.id=v_dst and not (m = any (select lower(k) from unnest(p.keywords) k));
+    update public.signals set signal_id=v_dst where signal_id=v_src and lower(keyword_matched)=m;
+    update public.dictionary_products p set keywords=(select array_agg(k.kw) from unnest(p.keywords) k(kw)
+      where lower(k.kw)<>m), updated_at=now() where p.id=v_src;
+  end loop;
+end $$;
+
+-- Resultado: Visual Basic 3.993 -> 3.629 cuentas.
+-- .NET Framework y escritorio arranca con 627 senales sobre 516 cuentas.
+
+-- Verificacion de las altas del producto nuevo: "Web Forms" quedo 23 con
+-- contexto ASP.NET contra 29 de web generico (formularios, HTML, UX). Invertido
+-- respecto del umbral, asi que sale. "ASP.NET Web Forms" (51 senales, 100% con
+-- contexto de desarrollo) ya cubre el caso limpio.
+update public.dictionary_products p set keywords=(select array_agg(k.kw) from unnest(p.keywords) k(kw)
+  where lower(k.kw) <> 'web forms'), updated_at=now()
+where p.name='.NET Framework y escritorio';
+
+delete from public.signals s using public.dictionary_products p
+where s.signal_id=p.id and s.signal_type='technology'
+  and not exists (select 1 from unnest(p.keywords) k where lower(k)=lower(s.keyword_matched));
+
+-- Estado final: 91 productos, 14 en legado sobre 14.976 cuentas.
+--   Visual Basic                 3.993 -> 3.629 cuentas
+--   .NET Framework y escritorio         2.125 cuentas (producto nuevo)
