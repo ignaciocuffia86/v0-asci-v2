@@ -153,7 +153,16 @@ export interface CompanyResolution {
 
 export interface DictionaryData {
   vendors: { id: string; name: string }[]
-  products: { id: string; vendor_id: string | null; name: string; keywords: string[] }[]
+  products: {
+    id: string
+    vendor_id: string | null
+    name: string
+    keywords: string[]
+    /** Para qué sirve el producto. Eje de búsqueda independiente del vendor. */
+    categoria: string | null
+    /** 'vigente' | 'legado'. Legado solo si el vendor anunció sucesor y fin de soporte. */
+    ciclo_vida: string | null
+  }[]
   processes: { id: string; name: string; keywords: string[] }[]
 }
 

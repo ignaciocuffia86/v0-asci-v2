@@ -1,7 +1,7 @@
-# Rediseño de la taxonomía del diccionario — propuesta
+# Rediseño de la taxonomía del diccionario
 
 > Fecha: 24 de agosto de 2026
-> Estado: propuesta, sin aplicar
+> Estado: **aplicado** el 24/08/2026 · migración `20260824120000_dictionary_taxonomy_tres_ejes.sql`
 > Contexto: último punto abierto tras los siete lotes de limpieza documentados en
 > `auditoria-diccionario-tecnologia.md`
 
@@ -201,3 +201,84 @@ ya existen; si algo sale mal se revierte con un `update`.
    (junta cosas distintas por falta de masa) e *Intune* (¿ciberseguridad o productividad?).
 4. **¿RRHH sale de ERP?** SuccessFactors, Workday y Oracle HCM están dentro de "ERP y backoffice".
 5. **El ABM:** ¿el árbol pasa a colgar de categoría, o un selector para ver por vendor o categoría?
+
+
+---
+
+## Registro de ejecución · 24 de agosto de 2026
+
+Aplicado con los tres ejes y Java fuera de `legado`, como se decidió. Las tres preguntas que
+quedaron abiertas se resolvieron con lo propuesto: las nueve categorías tal cual, RRHH dentro de
+"ERP y backoffice", y el ABM con un selector vendor/categoría en lugar de reemplazar el árbol.
+
+### Estado resultante
+
+| Categoría | Productos | En legado | Cuentas |
+| --- | ---: | ---: | ---: |
+| Desarrollo | 22 | 5 | 28.137 |
+| Cloud e infraestructura | 12 | 5 | 22.465 |
+| ERP y backoffice | 12 | 2 | 9.470 |
+| Datos y BI | 11 | 0 | 7.616 |
+| Productividad y colaboración | 11 | 1 | 6.247 |
+| CRM y marketing | 7 | 0 | 3.127 |
+| Automatización y low-code | 4 | 0 | 1.275 |
+| Ciberseguridad e identidad | 8 | 0 | 1.274 |
+| Observabilidad y gestión de servicios | 3 | 0 | 812 |
+
+90 productos, **0 sin categoría**. 13 productos en `legado` sobre **14.005 cuentas distintas**.
+
+### Java fuera de legado: la decisión se validó sola
+
+Sacar Java del eje bajó el total de 14.008 a 14.005 cuentas: **aportaba 3 cuentas únicas**. Sus
+11.728 cuentas ya estaban cubiertas por los otros doce productos, así que en la práctica solo
+agregaba ruido conceptual sin agregar alcance. La regla estricta —solo `legado` si el vendor
+anunció sucesor y fin de soporte— se sostiene.
+
+### Vendors
+
+- **Tres vendors nuevos:** IBM (IBM Z, AS/400, IBM WebSphere), Micro Focus / OpenText (Cobol,
+  Microfocus) y Embarcadero (Delphi).
+- **Java pasó a Oracle**, `Visual Basic` y `ASP.NET Core` a Microsoft.
+- **15 productos quedaron con `vendor_id` NULL** por la regla "el vendor es quien te lo puede
+  vender": React, Angular, Vue, Next.js, Flutter, Ionic, NodeJS, Python, PHP, Django, Flask,
+  Rails, Spring Boot, JavaScript/TypeScript y Wordpress.
+- **Los cuatro vendors falsos se borraron.** Quedan 26 vendors reales.
+- Se limpiaron los espacios finales de `Zoho ` y `SentinelOne `.
+
+### Código
+
+| Archivo | Cambio |
+| --- | --- |
+| `supabase/migrations/20260824120000_…sql` | Columnas, constraint, índices, backfill y vendors |
+| `lib/v3/services/types.ts` | `categoria` y `ciclo_vida` en `DictionaryData` |
+| `lib/v3/services/dictionary.ts` | Los dos campos en el `select` del diccionario |
+| `lib/v3/services/capability-search.ts` | Niveles **3a** (categoría) y **3c** (ciclo de vida), con alias cortos |
+| `components/dictionary/vendors-table.tsx` | Selector vendor/categoría, badges de categoría y legado |
+| `tests/unit/shared/capability-search.test.ts` | Fixture actualizado + 4 tests nuevos |
+
+**La expansión por categoría acepta alias cortos** porque nadie escribe el nombre completo:
+`erp`, `crm`, `bi`, `datos`, `cloud`, `nube`, `seguridad`, `ciberseguridad`, `identidad`,
+`productividad`, `desarrollo`, `automatizacion`, `rpa`, `itsm`, `observabilidad`. Y `legado`
+—junto con `legacy`, `obsoleto` y `modernizacion`— expande a los 13 productos del eje.
+
+**`vigente` no expande a propósito:** son 77 productos y devolver casi todo el diccionario no es
+una respuesta útil.
+
+Verificación: `tsc --noEmit` limpio, 199 tests en verde (23 en capability-search, 4 de ellos
+nuevos), `eslint` sin errores sobre los archivos tocados.
+
+### Efecto colateral bueno en el ABM
+
+Los 15 productos sin vendor habrían quedado invisibles en el ABM, porque el árbol consultaba
+`dictionary_products` filtrando por `vendor_id`. Se agregó un grupo "Sin vendor (open source)"
+en la vista por vendor, y en la vista por categoría aparecen naturalmente.
+
+### Lo que sigue abierto
+
+- **`WPF`, `WinForms`, `Windows Forms` y `ADO.NET` dentro de Visual Basic** — son de .NET de
+  escritorio en general y necesitarían un producto propio.
+- **ELO Digital Office**, con 45 keywords y cero señales.
+- **Keywords con co-ocurrencia** — la mejora de motor que rescataría términos como `Fabric`
+  exigiendo contexto.
+- **"Observabilidad y gestión de servicios"** junta monitoreo con ITSM por falta de masa. Si el
+  diccionario crece por ahí, se parte en dos.

@@ -12,18 +12,55 @@ import type { DictionaryData } from "@/lib/v3/services/types"
 
 // Diccionario mínimo que reproduce los dos casos que rompieron en producción:
 // una familia partida entre dos productos por keywords ("Dynamics 365") y un
-// vendor con varios productos ("Oracle").
+// vendor con varios productos ("Oracle"). Desde el rediseño de taxonomía cada
+// producto además declara categoría y ciclo de vida, que son ejes de expansión
+// equivalentes al vendor (ver docs/rediseno-taxonomia-diccionario.md).
 const DICT: DictionaryData = {
   vendors: [
     { id: "v-ms", name: "Microsoft" },
     { id: "v-oracle", name: "Oracle" },
   ],
   products: [
-    { id: "p-d365-erp", vendor_id: "v-ms", name: "Dynamics 365 ERP", keywords: ["Dynamics 365", "D365"] },
-    { id: "p-d365-crm", vendor_id: "v-ms", name: "Dynamics 365 CRM", keywords: ["Dynamics CRM"] },
-    { id: "p-angular", vendor_id: null, name: "Angular", keywords: ["AngularJS"] },
-    { id: "p-forms", vendor_id: "v-oracle", name: "Oracle Forms", keywords: ["Forms 6i"] },
-    { id: "p-ebs", vendor_id: "v-oracle", name: "Oracle EBS", keywords: ["E-Business Suite"] },
+    {
+      id: "p-d365-erp",
+      vendor_id: "v-ms",
+      name: "Dynamics 365 ERP",
+      keywords: ["Dynamics 365", "D365"],
+      categoria: "ERP y backoffice",
+      ciclo_vida: "vigente",
+    },
+    {
+      id: "p-d365-crm",
+      vendor_id: "v-ms",
+      name: "Dynamics 365 CRM",
+      keywords: ["Dynamics CRM"],
+      categoria: "CRM y marketing",
+      ciclo_vida: "vigente",
+    },
+    {
+      id: "p-angular",
+      vendor_id: null,
+      name: "Angular",
+      keywords: ["AngularJS"],
+      categoria: "Desarrollo",
+      ciclo_vida: "vigente",
+    },
+    {
+      id: "p-forms",
+      vendor_id: "v-oracle",
+      name: "Oracle Forms",
+      keywords: ["Forms 6i"],
+      categoria: "Desarrollo",
+      ciclo_vida: "legado",
+    },
+    {
+      id: "p-ebs",
+      vendor_id: "v-oracle",
+      name: "Oracle EBS",
+      keywords: ["E-Business Suite"],
+      categoria: "ERP y backoffice",
+      ciclo_vida: "legado",
+    },
   ],
   processes: [{ id: "pr-fin", name: "Control administrativo financiero", keywords: ["contabilidad"] }],
 }
@@ -48,6 +85,29 @@ describe("resolveCapabilityTerms", () => {
   it("expande un vendor a todos sus productos dentro del mismo grupo", async () => {
     const result = await resolveCapabilityTerms(["Oracle"], DICT)
     expect(result.groups[0].ids.sort()).toEqual(["p-ebs", "p-forms"])
+  })
+
+  it("expande una categoría a todos sus productos, sin importar el vendor", async () => {
+    // El punto del eje: "ERP" junta un producto de Microsoft con uno de Oracle,
+    // que es justo lo que la búsqueda por vendor no puede hacer.
+    const result = await resolveCapabilityTerms(["ERP"], DICT)
+    expect(result.groups).toHaveLength(1)
+    expect(result.groups[0].ids.sort()).toEqual(["p-d365-erp", "p-ebs"])
+  })
+
+  it("acepta el nombre completo de la categoría además del alias corto", async () => {
+    const result = await resolveCapabilityTerms(["ERP y backoffice"], DICT)
+    expect(result.groups[0].ids.sort()).toEqual(["p-d365-erp", "p-ebs"])
+  })
+
+  it("expande 'legado' a los productos con sucesor anunciado", async () => {
+    const result = await resolveCapabilityTerms(["legado"], DICT)
+    expect(result.groups[0].ids.sort()).toEqual(["p-ebs", "p-forms"])
+  })
+
+  it("no expande 'vigente': devolvería casi todo el diccionario", async () => {
+    const result = await resolveCapabilityTerms(["vigente"], DICT)
+    expect(result.groups).toHaveLength(0)
   })
 
   it("permite que un id caiga en más de un grupo cuando los términos se solapan", async () => {

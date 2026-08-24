@@ -26,7 +26,7 @@ export async function loadDictionary(): Promise<DictionaryData> {
   const admin = createAdminClient()
   const [vendorsRes, productsRes, processesRes] = await Promise.all([
     admin.from("dictionary_vendors").select("id, name"),
-    admin.from("dictionary_products").select("id, vendor_id, name, keywords"),
+    admin.from("dictionary_products").select("id, vendor_id, name, keywords, categoria, ciclo_vida"),
     admin.from("dictionary_processes").select("id, name, keywords"),
   ])
 
@@ -35,6 +35,8 @@ export async function loadDictionary(): Promise<DictionaryData> {
     products: (productsRes.data ?? []).map((p) => ({
       ...p,
       keywords: Array.isArray(p.keywords) ? p.keywords : [],
+      categoria: p.categoria ?? null,
+      ciclo_vida: p.ciclo_vida ?? null,
     })),
     processes: (processesRes.data ?? []).map((p) => ({
       ...p,

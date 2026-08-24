@@ -130,7 +130,13 @@ function norm(value: string): string {
  * Niveles (los 1-3 se suman entre si; el 4 es fallback solo si no hubo nada):
  *   1. nombre exacto del producto/proceso
  *   2. keyword exacta
- *   3. vendor exacto -> todos sus productos ("Microsoft" = 10, "SAP" = 6)
+ *   3. vendor exacto -> todos sus productos ("Microsoft" = 21, "SAP" = 9)
+ *   3a. categoria exacta -> todos sus productos ("ERP" = 12, "Datos y BI" = 11).
+ *       Mismo mecanismo que el vendor pero por el otro eje: responde "que
+ *       cuentas tienen un ERP" sin que haya que saber la marca. Ver
+ *       docs/rediseno-taxonomia-diccionario.md.
+ *   3c. ciclo de vida -> "legado" devuelve los 13 productos con sucesor
+ *       anunciado por el propio vendor (SAP ECC, Oracle Forms, AS/400...).
  *   3b. prefijo de familia: el termino es prefijo del nombre del producto y lo
  *       que sigue es un sufijo corto de variante ("Dynamics 365" -> "... CRM",
  *       "... ERP"). Esto es lo que reune la familia partida por keywords.
@@ -182,6 +188,49 @@ export async function resolveCapabilityTerms(
     const vendor = dict.vendors.find((v) => norm(v.name) === q)
     if (vendor) {
       for (const p of dict.products) if (p.vendor_id === vendor.id) hits.push(asProduct(p))
+    }
+
+    // 3a. categoría exacta → todos sus productos. El mismo mecanismo que el
+    //     vendor, sobre el otro eje: "ERP" devuelve los 12 productos de ERP sin
+    //     importar la marca. Se aceptan variantes cortas de uso comun ("BI",
+    //     "seguridad") porque nadie escribe el nombre completo de la categoria.
+    const CATEGORIA_ALIAS: Record<string, string> = {
+      erp: "ERP y backoffice",
+      backoffice: "ERP y backoffice",
+      crm: "CRM y marketing",
+      marketing: "CRM y marketing",
+      bi: "Datos y BI",
+      "business intelligence": "Datos y BI",
+      datos: "Datos y BI",
+      cloud: "Cloud e infraestructura",
+      nube: "Cloud e infraestructura",
+      infraestructura: "Cloud e infraestructura",
+      seguridad: "Ciberseguridad e identidad",
+      ciberseguridad: "Ciberseguridad e identidad",
+      identidad: "Ciberseguridad e identidad",
+      productividad: "Productividad y colaboracion",
+      colaboracion: "Productividad y colaboracion",
+      desarrollo: "Desarrollo",
+      automatizacion: "Automatizacion y low-code",
+      "low-code": "Automatizacion y low-code",
+      rpa: "Automatizacion y low-code",
+      observabilidad: "Observabilidad y gestion de servicios",
+      itsm: "Observabilidad y gestion de servicios",
+    }
+    const categoriaBuscada =
+      CATEGORIA_ALIAS[q] ??
+      dict.products.find((p) => p.categoria && norm(p.categoria) === q)?.categoria ??
+      null
+    if (categoriaBuscada) {
+      for (const p of dict.products) {
+        if (p.categoria && norm(p.categoria) === norm(categoriaBuscada)) hits.push(asProduct(p))
+      }
+    }
+
+    // 3c. ciclo de vida. Solo "legado" expande: "vigente" son 77 productos y
+    //     devolver casi todo el diccionario no es una respuesta util.
+    if (q === "legado" || q === "legacy" || q === "obsoleto" || q === "modernizacion") {
+      for (const p of dict.products) if (p.ciclo_vida === "legado") hits.push(asProduct(p))
     }
 
     // 3b. prefijo de familia. Reúne "Dynamics 365 CRM" + "Dynamics 365 ERP" bajo

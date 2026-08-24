@@ -32,11 +32,31 @@ type Product = {
   name: string
   keywords: string[]
   vendor_id: string
+  categoria: string | null
+  ciclo_vida: string | null
+}
+
+/**
+ * El diccionario tiene tres ejes (ver docs/rediseno-taxonomia-diccionario.md):
+ * vendor (quién te lo vende), categoría (para qué sirve) y ciclo de vida
+ * (si es oportunidad de modernización). El ABM agrupa por los dos primeros;
+ * el tercero se muestra como marca en cada producto.
+ */
+type Agrupacion = "vendor" | "categoria"
+
+type Grupo = {
+  id: string
+  name: string
+  products: Product[]
+  /** Solo los grupos por vendor se pueden borrar o recibir productos nuevos. */
+  esVendor: boolean
 }
 
 export function VendorsTable() {
   const [vendors, setVendors] = useState<Vendor[]>([])
   const [expandedVendor, setExpandedVendor] = useState<string | null>(null)
+  const [agrupacion, setAgrupacion] = useState<Agrupacion>("vendor")
+  const [sinVendor, setSinVendor] = useState<Product[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [editingProduct, setEditingProduct] = useState<Product | null>(null)
   const supabase = createClient()
@@ -58,6 +78,17 @@ export function VendorsTable() {
       )
       setVendors(vendorsWithProducts)
     }
+
+    // Los productos open source no tienen vendor. Antes del rediseño colgaban de
+    // los vendors ficticios (Backend, Frontend, Legacy, CMS); ahora tienen
+    // vendor_id NULL y sin esto quedarían invisibles en el ABM.
+    const { data: huerfanos } = await supabase
+      .from("dictionary_products")
+      .select("*")
+      .is("vendor_id", null)
+      .order("name")
+    setSinVendor(huerfanos || [])
+
     setIsLoading(false)
   }
 
@@ -121,9 +152,50 @@ export function VendorsTable() {
     fetchData()
   }
 
+  const todosLosProductos: Product[] = [...vendors.flatMap((v) => v.products || []), ...sinVendor]
+
+  const grupos: Grupo[] =
+    agrupacion === "vendor"
+      ? [
+          ...vendors.map((v) => ({ id: v.id, name: v.name, products: v.products || [], esVendor: true })),
+          ...(sinVendor.length > 0
+            ? [{ id: "__sin_vendor__", name: "Sin vendor (open source)", products: sinVendor, esVendor: false }]
+            : []),
+        ]
+      : Object.entries(
+          todosLosProductos.reduce<Record<string, Product[]>>((acc, p) => {
+            const k = p.categoria || "Sin categoría"
+            ;(acc[k] ||= []).push(p)
+            return acc
+          }, {}),
+        )
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([name, products]) => ({
+            id: `cat:${name}`,
+            name,
+            products: products.sort((a, b) => a.name.localeCompare(b.name)),
+            esVendor: false,
+          }))
+
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-1 rounded-md border p-0.5">
+          {(["vendor", "categoria"] as const).map((eje) => (
+            <Button
+              key={eje}
+              variant={agrupacion === eje ? "secondary" : "ghost"}
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => {
+                setAgrupacion(eje)
+                setExpandedVendor(null)
+              }}
+            >
+              {eje === "vendor" ? "Por vendor" : "Por categoría"}
+            </Button>
+          ))}
+        </div>
         <AddVendorDialog onAdd={addVendor} />
       </div>
 
@@ -132,13 +204,13 @@ export function VendorsTable() {
           <TableHeader>
             <TableRow>
               <TableHead className="w-[50px]"></TableHead>
-              <TableHead>Vendor</TableHead>
+              <TableHead>{agrupacion === "vendor" ? "Vendor" : "Categoría"}</TableHead>
               <TableHead>Productos</TableHead>
               <TableHead className="text-right">Acciones</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {vendors.map((vendor) => (
+            {grupos.map((vendor) => (
               <>
                 <TableRow key={vendor.id} className="group">
                   <TableCell>
@@ -157,14 +229,16 @@ export function VendorsTable() {
                   <TableCell className="font-medium">{vendor.name}</TableCell>
                   <TableCell>{vendor.products?.length || 0}</TableCell>
                   <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-destructive hover:text-destructive"
-                      onClick={() => deleteVendor(vendor.id)}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    {vendor.esVendor && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-destructive hover:text-destructive"
+                        onClick={() => deleteVendor(vendor.id)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
                   </TableCell>
                 </TableRow>
                 {expandedVendor === vendor.id && (
@@ -173,7 +247,7 @@ export function VendorsTable() {
                       <div className="space-y-4 pl-10">
                         <div className="flex justify-between items-center">
                           <h4 className="text-sm font-semibold">Productos de {vendor.name}</h4>
-                          <AddProductDialog vendorId={vendor.id} onAdd={addProduct} />
+                          {vendor.esVendor && <AddProductDialog vendorId={vendor.id} onAdd={addProduct} />}
                         </div>
 
                         {vendor.products && vendor.products.length > 0 ? (
@@ -184,7 +258,22 @@ export function VendorsTable() {
                                 className="flex items-start justify-between p-3 bg-background border rounded-md"
                               >
                                 <div className="flex-1">
-                                  <div className="font-medium text-sm">{product.name}</div>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="font-medium text-sm">{product.name}</span>
+                                    {agrupacion === "vendor" && product.categoria && (
+                                      <Badge variant="outline" className="text-[10px] font-normal">
+                                        {product.categoria}
+                                      </Badge>
+                                    )}
+                                    {product.ciclo_vida === "legado" && (
+                                      <Badge
+                                        variant="outline"
+                                        className="text-[10px] font-normal border-amber-500/60 text-amber-700 dark:text-amber-400"
+                                      >
+                                        legado
+                                      </Badge>
+                                    )}
+                                  </div>
                                   <div className="flex flex-wrap gap-1 mt-2">
                                     {product.keywords?.map((kw, i) => (
                                       <Badge key={i} variant="secondary" className="text-xs">
@@ -223,10 +312,10 @@ export function VendorsTable() {
                 )}
               </>
             ))}
-            {!isLoading && vendors.length === 0 && (
+            {!isLoading && grupos.length === 0 && (
               <TableRow>
                 <TableCell colSpan={4} className="text-center h-24 text-muted-foreground">
-                  No hay vendors configurados.
+                  No hay {agrupacion === "vendor" ? "vendors" : "categorías"} configuradas.
                 </TableCell>
               </TableRow>
             )}
