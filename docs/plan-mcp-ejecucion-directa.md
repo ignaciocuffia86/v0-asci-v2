@@ -121,7 +121,11 @@ Un detalle que apareció implementando: `checkResearchQuota` devuelve `allowed: 
 - Tabla `v3.mcp_batch_plans` (`batch_plan_hash`, workspace, payload congelado, `expires_at`, estado). Mismo patrón que `plan_hash` de enrichment (`lib/v3/services/mcp-contact-enrichment.ts:285-317`), que es lo mejor diseñado del MCP hoy y conviene replicar tal cual.
 - Tool `estimate_batch` (Tier 0): agrega `checkResearchQuota` + `getContactEnrichmentLimits` + `PLAN_CONFIG` + `cacheHits` y devuelve **un** `batchPlanHash`. El costo USD sale de datos reales, no de una constante: promedio por cuenta de `v3.ai_usage_log` de los últimos 90 días (la telemetría ya existe: `verifiedAi.costUsd`).
 - Exponer créditos Apollo en `get_ai_usage` (`lib/v3/mcp-usage.ts:324`), que hoy es el único medidor que no se puede consultar a priori.
-- **Presupuesto por workspace con enforcement server-side** (§7.1): columna de tope mensual en USD + verificación dentro de `reserveMcpUsage`, que rechaza por encima del tope. En el server, no en el prompt.
+- ~~**Presupuesto por workspace con enforcement server-side**~~ — **descartado por ahora (24-ago-2026).** Decisión de producto: **no se ponen topes de consumo hasta medir cuánto uso le dan los usuarios.** Trabar funcionalidad antes de tener datos de uso arriesga cortar justo el comportamiento que se quiere entender.
+
+  Lo que sí exige esa decisión es que la medición sea confiable, y ahí había un defecto: `verifiedAi` en `get_ai_usage` está filtrado por **usuario** y por **7 días**, pero se leía como "lo que va del mes" del workspace — el estimado de US$0,05–0,15 por cuenta del documento original salió de esa lectura y estaba sub-reportado en los dos ejes. Ahora cada bloque declara su `scope` y se agrega `workspaceAi` (workspace, desde el 1° del mes).
+
+  Cuando haya datos para decidir, el enforcement va en `reserveMcpUsage`: en el server, no en el prompt (§7.1).
 
 **Esfuerzo:** ~2-3 días.
 

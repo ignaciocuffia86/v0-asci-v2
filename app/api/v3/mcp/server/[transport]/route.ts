@@ -420,7 +420,7 @@ const handler = createMcpHandler((rawServer) => {
       return estimateBatch(auth, args)
     }),
   )
-  server.tool("get_ai_usage", "Devuelve los TRES medidores mensuales del workspace: monthlyServerResearch (research con tokens de ASCI), monthlyClientResearch (research con tus tokens, que igual ocupa cupo del plan) y monthlyApolloCredits (créditos de contactos, 1 crédito = 1 contacto). Suma tokens y costo verificado del server-managed. Son independientes entre sí. Para saber cuánto cuesta un LOTE concreto antes de correrlo, usá estimate_batch.", {}, async (_args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "usage:read", "read"); return getMcpUsage(auth) }))
+  server.tool("get_ai_usage", "Devuelve los TRES medidores mensuales del workspace: monthlyServerResearch (research con tokens de ASCI), monthlyClientResearch (research con tus tokens, que igual ocupa cupo del plan) y monthlyApolloCredits (créditos de contactos, 1 crédito = 1 contacto). Suma tokens y costo verificado del AI Gateway. Son independientes entre sí.\n\nCUIDADO CON EL ALCANCE al citar cifras: `workspaceAi` es del WORKSPACE desde el 1° del mes y es la que hay que usar para decir cuánto consume la cuenta. `verifiedAi` y `lastSevenDays` son de QUIEN LLAMA y de los últimos 7 días: con varios miembros en el workspace, sub-reportan. Cada bloque declara su `scope`.\n\nPara saber cuánto cuesta un LOTE concreto antes de correrlo, usá estimate_batch.", {}, async (_args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "usage:read", "read"); return getMcpUsage(auth) }))
 }, {
   serverInfo: { name: "asci-v3", version: "2.0.0" },
   /**

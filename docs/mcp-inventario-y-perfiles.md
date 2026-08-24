@@ -207,7 +207,7 @@ Lo que falta para cerrarlo:
 1. ~~Arreglar los scopes de `standard`~~ — **hecho**. Una key standard ya alcanza las 39 tools de su MCP. Las keys legacy que guardaron los literales `"read"` / `"write"` **no** se completan por tipo a propósito: `accounts:write` corre en modo `read`, así que `allowedModes` no lo frenaría y una credencial que alguien limitó a solo lectura pasaría a poder ocupar lugares del plan.
 2. **Separar consultar de seguir.** Leer el catálogo no debería ocupar un lugar del plan. Con `screen_account_list` y `detail:"evidence"` esto ya es cierto técnicamente (son T0 sin guard); falta que el modelo de precios lo refleje.
 3. **`estimate_batch`** para que el aviso de costo sea una vez por lote y no 42 veces.
-4. **Tope de presupuesto en USD por workspace**, verificado dentro de `reserveMcpUsage`, además del tope de unidades.
+4. ~~**Tope de presupuesto en USD por workspace**~~ — **descartado por ahora.** Decisión de producto (24-ago-2026): no se ponen topes de consumo hasta medir el uso real. La contrapartida es que la telemetría tiene que ser fiable: `get_ai_usage` ahora declara el `scope` de cada bloque y expone `workspaceAi` (workspace, mes en curso), porque `verifiedAi` es de quien llama y de 7 días — y se venía leyendo como si fuera del workspace.
 
 ### 6.3 Perfil `admin` — qué hay que construir
 
@@ -232,7 +232,7 @@ La regla que no se negocia: **admin no significa "sin medición", significa "sin
 |---|---|---|
 | 1 | ~~Arreglar scopes de `standard`~~ ✅ | — |
 | 2 | ~~`estimate_batch` + `batchPlanHash` de lote~~ ✅ | — |
-| 3 | Presupuesto en USD por workspace, verificado en `reserveMcpUsage` | 2 |
+| 3 | ~~Presupuesto en USD por workspace~~ — **descartado por ahora**: medir antes de trabar | — |
 | 4 | Flag `unrestricted` en los guards de capa 2 | 3 |
 | 5 | Server `admin` con sus propias descripciones e `instructions` | 4 |
 | 6 | Export (`create_export`) — sin esto el informe on-demand sigue viajando por la conversación | 2 |
