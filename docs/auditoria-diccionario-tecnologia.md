@@ -535,14 +535,112 @@ Los conteos no incluyen todavía lo que aporten los 111 jobs en cola.
 
 ---
 
+## Lote 3 · Ciberseguridad — aplicado el 24 de agosto de 2026
+
+Ocho productos de seguridad, identidad y gestión de endpoint. Se sumaron Purview, Intune y
+Entra a los cinco de la propuesta original: son el mismo dominio y arrastraban dos de los
+falsos positivos pendientes de la tabla H2 (`SITs` y `Entra`).
+
+Script en [`scripts/apply-cyber-batch-20260824.sql`](../scripts/apply-cyber-batch-20260824.sql).
+
+| | |
+| --- | ---: |
+| Keywords antes / ahora | 331 / 181 |
+| Señales falsas eliminadas | 640 |
+| Jobs `add_keyword` encolados | 55 |
+
+### Corrección de la propuesta original: `Palo Alto` se queda
+
+En la auditoría propuse sacarla porque matchea la ciudad de California. Medido sobre sus 474
+señales antes de aplicar nada:
+
+| | Cantidad | % |
+| --- | ---: | ---: |
+| Mencionan un firewall o marca de seguridad en el mismo snippet (Fortinet, Cisco, Check Point, NGFW, VPN, Panorama, Prisma, Cortex) | 365 | 77% |
+| Mencionan California, Stanford, Silicon Valley o una universidad | 14 | 3% |
+| Total | 474 | 100% |
+
+Son ingenieros de redes enumerando marcas de firewall. Sacarla habría dejado al producto con
+66 señales en vez de 540.
+
+**La lección aplica al resto del trabajo:** "esta palabra podría ser ambigua" no es evidencia.
+`PAN` resultó 85% "Pan American Energy" y `Palo Alto` resultó 77% firewalls, y las dos parecían
+igual de sospechosas antes de mirar los datos.
+
+### Los seis falsos positivos que sí eran
+
+Los ocho productos tenían 1.615 señales. 634 venían de estas seis keywords — el 39% del total.
+Sacando Palo Alto, que está sano y aporta un tercio del volumen, el resto era **59% falso**.
+
+| Keyword | Sumaba a | Señales | Qué era en realidad |
+| --- | --- | ---: | --- |
+| `Defender` | Microsoft Defender | 308 | El verbo español. Solo 88 de 308 tenían contexto de seguridad: "exponer y **defender** la propuesta", "**defender** la cartera de clientes". |
+| `SITs` | Purview | 147 | La palabra inglesa "sits": "Evaluación de **sits** costo", "Multi-disciplinary Team Lead - **SITS** Team". |
+| `Sentinel` | Microsoft Sentinel | 86 | El buró de crédito peruano: "Verificación de clientes nuevos en **SENTINEL**". |
+| `Singularity` | SentinelOne | 44 | Singularity University. Estaba además duplicada en el array. |
+| `Entra` | Microsoft Entra | 25 | El verbo español: "todo producto que **entra**", "lo que no **entra** en un currículum". |
+| `Mobile Device Management` | Intune | 24 | La categoría, no el producto. Puede ser Jamf, Workspace ONE o MobileIron. |
+
+Más `ASIM` (2, nombre de pila común), `Mobile Application Management` (2) y
+`Mobile Threat Defense` (2).
+
+**Efecto sobre las cuentas:** Microsoft Sentinel figuraba con 96 señales sobre 84 cuentas.
+Reales son 8, sobre 8 cuentas. Las otras 76 nunca tuvieron el SIEM — la señal venía de gente
+que consultó un buró de crédito. Purview pasó de 148 cuentas a 60 por el mismo motivo.
+
+### Saldo por producto
+
+| Producto | Kw antes | Kw ahora | Señales antes | Señales ahora | Cuentas |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Palo Alto Networks | 16 | 20 | 540 | 540 | 366 |
+| Check Point | 12 | 18 | 153 | 153 | 119 |
+| Microsoft Entra | 17 | 21 | 95 | 70 | 68 |
+| Microsoft Purview | 74 | 26 | 214 | 67 | 60 |
+| Microsoft Intune | 86 | 32 | 82 | 54 | 50 |
+| Microsoft Defender | 16 | 23 | 362 | 54 | 49 |
+| SentinelOne | 13 | 14 | 73 | 29 | 25 |
+| Microsoft Sentinel | 97 | 27 | 96 | 8 | 8 |
+
+Los conteos de "ahora" no incluyen todavía las 55 keywords nuevas en cola.
+
+**Este lote hace que el diccionario reporte menos presencia de ciberseguridad, no más.** Es el
+resultado correcto: una lista de cuentas "con SIEM de Microsoft" que es 90% ruido no sirve para
+prospectar.
+
+### Criterios aplicados
+
+- **Formas cortas sin marca**, solo cuando son inequívocas: `Defender for Endpoint`, `Entra ID`,
+  `Intune` a secas. Nadie las usa hablando de otra cosa. Es lo que permite sacar `Defender` y
+  `Entra` sin perder cobertura real.
+- **Certificaciones** — la señal más limpia de LinkedIn, nadie las pone sin haber rendido el
+  examen: `PCNSE`, `PCNSA`, `CCSA`, `CCSE`, `SC-200`, `SC-300`, `SC-400`, `MD-102`.
+- **Jerga exclusiva aunque tenga 0 señales**: `SmartConsole`, `Gaia OS`, `Storyline`, `Purple AI`,
+  `Ranger IoT`, `VM-Series`.
+- **Fuera las siglas de tres letras que colisionan**: `MDE`. Se dejó `KQL`: son tres letras pero
+  no choca con ninguna palabra común, solo con el KQL de Elastic, marginal en este corpus.
+- **Variantes de escritura que faltaban**: `CheckPoint` sin espacio es como lo escribe buena
+  parte de los perfiles y no se detectaba.
+
+### Un patrón que ya se repitió tres veces
+
+En ERP, y de nuevo en Sentinel, Purview e Intune, apareció lo mismo: productos con 70 a 100
+keywords generadas por combinatoria ("producto + sustantivo") de las que el 90% nunca matchea
+nada, y al lado una o dos palabras sueltas que traen todo el volumen y son falsos positivos.
+Es el resultado de poblar el diccionario listando features en vez de mirar cómo escribe la gente.
+
+Para los lotes que quedan conviene invertir el orden: partir de lo que aparece en los perfiles
+y las vacantes, y recién ahí decidir qué keyword lo captura.
+
+---
+
 ## Lotes pendientes
 
-3. **Cloud e infraestructura** — AWS, Azure, GCP, Oracle Cloud.
-4. **Datos y BI** — Power BI, Fabric, Tableau, Qlik, Looker, MicroStrategy, SAS, y el
+4. **Cloud e infraestructura** — AWS, Azure, GCP, Oracle Cloud.
+5. **Datos y BI** — Power BI, Fabric, Tableau, Qlik, Looker, MicroStrategy, SAS, y el
    Oracle Analytics Cloud que se creó en este lote.
-5. **CRM y productividad** — Salesforce, HubSpot, Zoho, ServiceNow, M365, Google Workspace,
+6. **CRM y productividad** — Salesforce, HubSpot, Zoho, ServiceNow, M365, Google Workspace,
    Atlassian (incluye sacar Confluence, Bitbucket y Trello de adentro de Jira).
-6. **Stacks de desarrollo** — el bloque más ruidoso. Conviene decidir antes si aporta al
+7. **Stacks de desarrollo** — el bloque más ruidoso. Conviene decidir antes si aporta al
    objetivo comercial o si se achica.
 
-Sigue pendiente de decisión el lote de ciberseguridad, propuesto en la auditoría original.
+
