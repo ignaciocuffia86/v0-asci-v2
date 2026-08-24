@@ -545,9 +545,9 @@ Script en [`scripts/apply-cyber-batch-20260824.sql`](../scripts/apply-cyber-batc
 
 | | |
 | --- | ---: |
-| Keywords antes / ahora | 331 / 181 |
+| Keywords antes / ahora | 331 / 180 |
 | Señales falsas eliminadas | 640 |
-| Jobs `add_keyword` encolados | 55 |
+| Señales reales nuevas que aportaron las altas | 1.418 |
 
 ### Corrección de la propuesta original: `Palo Alto` se queda
 
@@ -566,6 +566,13 @@ Son ingenieros de redes enumerando marcas de firewall. Sacarla habría dejado al
 **La lección aplica al resto del trabajo:** "esta palabra podría ser ambigua" no es evidencia.
 `PAN` resultó 85% "Pan American Energy" y `Palo Alto` resultó 77% firewalls, y las dos parecían
 igual de sospechosas antes de mirar los datos.
+
+### Y la simétrica: `CCSA` tampoco era lo que parecía
+
+Agregué `CCSA` como certificación de Check Point. Cuando corrieron los jobs generó 27 señales y
+al revisarlas **solo una era de Check Point**: nueve eran auditores internos, porque CCSA también
+es la *Certification in Control Self-Assessment* del IIA. Se sacó el mismo día. Es el mismo error
+señalado arriba, cometido en la dirección contraria: agregar una sigla sin medirla primero.
 
 ### Los seis falsos positivos que sí eran
 
@@ -590,22 +597,28 @@ que consultó un buró de crédito. Purview pasó de 148 cuentas a 60 por el mis
 
 ### Saldo por producto
 
-| Producto | Kw antes | Kw ahora | Señales antes | Señales ahora | Cuentas |
+| Producto | Kw antes | Kw ahora | Señales antes | Señales ahora | Cuentas ahora |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Palo Alto Networks | 16 | 20 | 540 | 540 | 366 |
-| Check Point | 12 | 18 | 153 | 153 | 119 |
-| Microsoft Entra | 17 | 21 | 95 | 70 | 68 |
-| Microsoft Purview | 74 | 26 | 214 | 67 | 60 |
-| Microsoft Intune | 86 | 32 | 82 | 54 | 50 |
-| Microsoft Defender | 16 | 23 | 362 | 54 | 49 |
-| SentinelOne | 13 | 14 | 73 | 29 | 25 |
-| Microsoft Sentinel | 97 | 27 | 96 | 8 | 8 |
+| Check Point | 12 | 17 | 153 | 877 | 598 |
+| Palo Alto Networks | 16 | 20 | 540 | 562 | 381 |
+| Microsoft Intune | 86 | 32 | 82 | 312 | 260 |
+| Microsoft Entra | 17 | 21 | 95 | 184 | 163 |
+| SentinelOne | 13 | 14 | 73 | 107 | 97 |
+| Microsoft Defender | 16 | 23 | 362 | 83 | 77 |
+| Microsoft Purview | 74 | 26 | 214 | 69 | 62 |
+| Microsoft Sentinel | 97 | 27 | 96 | 39 | 33 |
 
-Los conteos de "ahora" no incluyen todavía las 55 keywords nuevas en cola.
+Los 55 jobs ya corrieron, así que la columna "ahora" es el estado final. **Saldo neto positivo:**
+se fueron 640 señales falsas y entraron 1.418 reales.
 
-**Este lote hace que el diccionario reporte menos presencia de ciberseguridad, no más.** Es el
-resultado correcto: una lista de cuentas "con SIEM de Microsoft" que es 90% ruido no sirve para
-prospectar.
+**Check Point es el caso más contundente:** pasó de 153 señales a 877 y de 119 cuentas a 598.
+Casi todo lo aporta `CheckPoint` sin espacio, que nunca había estado en el diccionario. Verificado:
+de sus 720 señales, 475 mencionan un firewall o marca de red en el mismo texto y apenas 8 tienen
+contexto de git, machine learning o gaming — los otros usos posibles de la palabra. La misma
+proporción que `Palo Alto`.
+
+En sentido inverso, **Microsoft Sentinel pasa de aparentar 84 cuentas a mostrar 33**. Una lista de
+cuentas "con SIEM de Microsoft" que era 90% ruido no servía para prospectar.
 
 ### Criterios aplicados
 

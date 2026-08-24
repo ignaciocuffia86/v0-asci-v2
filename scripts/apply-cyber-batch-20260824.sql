@@ -94,3 +94,44 @@ where p.name in ('Microsoft Sentinel','Microsoft Defender','Palo Alto Networks',
   and not exists (select 1 from dictionary_jobs j where j.signal_id = p.id
                     and j.job_type = 'add_keyword' and lower(j.keyword) = lower(k.kw));
 -- 55 jobs. El cron process-dictionary corre cada minuto y los procesa solo.
+
+-- ---------------------------------------------------------------------------
+-- 5. Correccion posterior, mismo dia: CCSA fuera
+-- ---------------------------------------------------------------------------
+-- CCSA se agrego como certificacion de Check Point. Al correr el job genero 27
+-- senales y solo UNA tenia contexto de Check Point; nueve eran auditores internos,
+-- porque CCSA es tambien la Certification in Control Self-Assessment del IIA.
+--
+--   select count(*) total,
+--     count(*) filter (where snippet ~* '\y(check ?point|firewall|gaia|smartconsole|perimetral|ngfw)\y') as checkpoint,
+--     count(*) filter (where snippet ~* '\y(iia|auditor|auditoria|internal audit|compliance|control self|crma)\y') as auditoria
+--   from signals where signal_type='technology' and lower(keyword_matched)='ccsa';
+--   -- 27 / 1 / 9
+--
+update dictionary_products p
+set keywords = (select array_agg(k.kw order by ord)
+                from unnest(p.keywords) with ordinality as k(kw, ord)
+                where lower(k.kw) <> 'ccsa'),
+    updated_at = now()
+where p.name = 'Check Point';
+
+delete from signals s using dictionary_products p
+where s.signal_id = p.id and s.signal_type = 'technology'
+  and not exists (select 1 from unnest(p.keywords) k where lower(k) = lower(s.keyword_matched));
+
+-- ---------------------------------------------------------------------------
+-- Resultado del lote (jobs ya procesados)
+-- ---------------------------------------------------------------------------
+--   Check Point           153 -> 877 senales   119 -> 598 cuentas
+--   Palo Alto Networks    540 -> 562           366 -> 381
+--   Microsoft Intune       82 -> 312            50 -> 260
+--   Microsoft Entra        95 -> 184            68 -> 163
+--   SentinelOne            73 -> 107            25 ->  97
+--   Microsoft Defender    362 ->  83            49 ->  77
+--   Microsoft Purview     214 ->  69            60 ->  62
+--   Microsoft Sentinel     96 ->  39             8 ->  33
+--
+-- Saldo neto positivo: se fueron 640 senales falsas y entraron 1.418 reales.
+-- "CheckPoint" sin espacio explica casi toda la ganancia: de sus 720 senales,
+-- 475 mencionan un firewall o marca de red en el mismo texto y solo 8 tienen
+-- contexto de git, ML o gaming. Misma proporcion que "Palo Alto".
