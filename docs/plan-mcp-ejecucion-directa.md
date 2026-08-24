@@ -208,9 +208,20 @@ Tres cosas se descubrieron **probando contra un Postgres real**, no revisando el
 
 **`instructions` del server**: tres reglas nuevas — usar `screen_account_list` ante una lista, no afirmar ausencia de señal sin el estado explícito, y que leer evidencia no exige guardar la cuenta.
 
-### Pendiente de despliegue
+### Desplegado (24-ago-2026)
 
-La migración **no se aplicó**: `20260824190000_screen_account_list.sql` está validada contra un Postgres 16 local con datos de prueba, pero aplicarla contra la base de producción es una decisión del dueño del proyecto. La tool `screen_account_list` falla hasta que la función exista.
+Las migraciones están aplicadas en `asciv2-database`. Validar contra los datos reales —514.269 empresas, 1.676.533 señales— encontró **cuatro defectos que las pruebas locales sobre datos sintéticos no podían mostrar**:
+
+| Defecto | Síntoma medido | Corrección |
+|---|---|---|
+| Ambigüedad falsa | 6 de 9 nombres reales salían `matched_ambiguous` porque el catálogo tiene la misma empresa cargada varias veces ("AFP HABITAT" / "AFP HÁBITAT" / "AFP HABITAT SA") | Las entidades de igual núcleo canónico son duplicados, no rivales: solo un núcleo distinto genera ambigüedad |
+| Subconteo por fragmentación | Las señales se contaban sobre la entidad ganadora sola, así que un "0 señales" podía ser falso | Se suman por núcleo; viajan `signalsOwn` y `signalsForTerms` |
+| `matched_*` de empresas inexistentes | "Empresa Que No Existe SpA" devolvía `matched_ambiguous` con 0.43 de confianza | Piso de confianza 0.50: por debajo, `no_match` |
+| Performance sobrestimada | La medición local decía 5,6 s para 200 nombres; contra los datos reales eran ~26 s, contra un techo de 8 s | Umbral trigram 0.45 (145k → 24k bloques de heap) y tope 100. Medido: 100 nombres todos difusos = **5,7 s** |
+
+El tercero y el cuarto son los que más importan: uno rompía la distinción entre "no tiene la señal" y "no la tenemos", que es el núcleo del diseño; el otro hacía que la tool no entrara en el presupuesto de PostgREST con una lista grande.
+
+La lección de método: **los datos sintéticos parecían el peor caso y no lo eran.** Los nombres artificialmente parecidos entre sí producían menos trabajo de heap que los nombres reales, y ninguna de las cuatro fallas era visible sin el catálogo real.
 
 ---
 

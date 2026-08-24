@@ -33,6 +33,8 @@ describe("prepareAccounts", () => {
   })
 
   it("el tope por llamada es el mismo que el de la RPC", () => {
-    expect(MAX_ACCOUNTS_PER_CALL).toBe(200)
+    // 100, no 200: medido contra las 514.269 empresas reales, 200 nombres difusos
+    // superaban el techo de 8 s de PostgREST.
+    expect(MAX_ACCOUNTS_PER_CALL).toBe(100)
   })
 })

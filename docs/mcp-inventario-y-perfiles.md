@@ -61,7 +61,7 @@ Costo: **T0** determinístico (sin costo marginal) · **T1** scraping · **T2** 
 |---|---|---|---|
 | `search_companies` | Un nombre → empresas rankeadas por evidencia, con `likelyCanonical` y `duplicateWarning` | No filtra por país ni industria · no devuelve señales por término · un nombre por llamada | `companies:read` · T0 |
 | `search_companies_by_capability` | Búsqueda **inversa**: término → empresas. Dos pasos (`screening` → `detail`) | No acepta lista de nombres · máx 50 por página y techo práctico de ~200 paginando · máx 2 procesos / 20 productos · **no consolida homónimos** (cuenta por entidad) | `companies:read` · T0 |
-| `screen_account_list` ⭐ | **Lista del cliente × términos** → una fila por nombre, cuatro estados | No resuelve la ambigüedad sola (devuelve candidatos) · no trae firmográficos · máx 200 nombres · acrónimos <4 letras no matchean por similitud | `companies:read` · T0 |
+| `screen_account_list` ⭐ | **Lista del cliente × términos** → una fila por nombre, cuatro estados. Consolida las entidades duplicadas del catálogo y separa `signalsOwn` de `signalsForTerms` | No resuelve la ambigüedad sola (devuelve candidatos) · no trae firmográficos · **máx 100 nombres** (medido: 100 difusos = 5,7 s contra el techo de 8 s) · acrónimos <4 letras solo matchean por nombre canónico exacto | `companies:read` · T0 |
 | `recommend_accounts_for_value_proposition` | Prefiltra hasta 20 cuentas contra la documentación del workspace | Máx 20 · exige países ISO-2 · no explica el descarte | `recommendations:read` · T2b |
 
 ### 3.2 Evidencia de una cuenta

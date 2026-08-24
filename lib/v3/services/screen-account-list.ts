@@ -21,8 +21,15 @@ import { resolveCapabilityTerms, type CapabilityTerm } from "./capability-search
 // no exige que las cuentas estén guardadas.
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** Tope duro de nombres por llamada. Mismo techo que la RPC. */
-export const MAX_ACCOUNTS_PER_CALL = 200
+/**
+ * Tope duro de nombres por llamada. Mismo techo que la RPC.
+ *
+ * Bajó de 200 a 100 al medir contra producción: la prueba local sobre 300.000
+ * empresas sintéticas daba 5,6 s para 200 nombres difusos, pero contra las
+ * 514.269 reales eran ~26 s, muy por encima del techo de 8 s de PostgREST. Con
+ * el umbral trigram en 0.45, 100 nombres TODOS difusos miden 5,7 s.
+ */
+export const MAX_ACCOUNTS_PER_CALL = 100
 
 export type ScreenAccountInput = {
   name: string
@@ -143,6 +150,7 @@ export async function screenAccountList(params: ScreenAccountListParams) {
       "• matched_ambiguous — hay que confirmar con el usuario ANTES de usar la fila. `ambiguityReason` dice qué preguntar: \"multiple_candidates\" = elegir entre los `candidates`; \"low_confidence\" = confirmar que el único candidato es la empresa correcta.",
       "NUNCA presentes una fila matched_ambiguous como si fuera matched: atribuirle a un cliente la evidencia de un homónimo es el peor error posible de este reporte.",
       "`signalStrength` en \"weak\" significa menos señales que el mínimo pedido: una mención suelta en un solo perfil no es una oportunidad. Marcalo o filtralo, no lo mezcles con las sólidas.",
+      "`signalsForTerms` es el total de la EMPRESA, sumando las entidades duplicadas que el catálogo tiene con el mismo nombre canónico. `signalsOwn` es solo de la entidad que se devuelve, y `duplicateEntities` dice cuántas se consolidaron. Si las dos cifras difieren, la cuenta está fragmentada: usá el total y mencionalo.",
       "Para la cita textual de una cuenta, seguí con get_company_signal_summary detail=\"evidence\" y el `term`: no consume cupo ni necesita research previo.",
     ].join("\n"),
   }
