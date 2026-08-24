@@ -1,0 +1,70 @@
+-- =============================================================================
+-- 455 - Una sola normalizacion canonica de nombres
+-- =============================================================================
+--
+-- EL PROBLEMA: CINCO NORMALIZADORES
+--
+-- Auditado el sistema completo, habia cinco funciones que normalizan nombres de
+-- empresa, y no coincidian entre si:
+--
+--   public.company_core_name          SQL   la canonica, la que usa upsert_company
+--   public.normalize_company_name     SQL   la vieja, del script 026
+--   normalizeCompanyName              TS    lib/v3/services/company-aliases.ts
+--   normalizeCompanyNameForDedup      TS    lib/v3/services/account-import-parse.ts
+--   normalizeCompanyName              TS    lib/v3/services/apify-job-ingest.ts
+--
+-- Medido con el mismo input, la vieja SQL y la canonica se contradicen:
+--
+--     Grupo Arcor S.A.I.C.    vieja "grupo arcor s.a.i.c"    core "arcor"
+--     Carlsberg Group         vieja "carlsberg"              core "carlsberg group"
+--     The Coca Cola Company   vieja "the coca cola company"  core "coca cola company"
+--     Holding Alimentos SA    vieja "holding alimentos"      core "alimentos"
+--
+-- La diferencia de fondo es de criterio: la canonica quita el sufijo societario
+-- SOLO al final y el prefijo SOLO al principio, y corta el nombre en la barra.
+-- Las otras quitan sufijos en cualquier posicion, que rompe los nombres donde
+-- esas palabras son parte del nombre real.
+--
+-- QUE SE HACE Y QUE NO
+--
+-- No se unifican las cinco en una, porque hay dos propositos distintos
+-- mezclados y fusionarlos romperia uno de los dos:
+--
+--   IDENTIDAD CANONICA: que se guarda en normalized_name y contra que compara
+--   upsert_company. Tiene que ser una sola funcion. Es company_core_name.
+--
+--   COMPARACION DIFUSA: si el nombre que trajo el scraper se parece al de la
+--   fila que ya se resolvio. Puede y debe ser mas laxa: la de apify-job-ingest
+--   descarta hasta "argentina", justamente porque compara en vez de
+--   identificar. Unificarla con la canonica la volveria inutil para su trabajo.
+--
+-- Este script cierra la parte de identidad:
+--
+--   1. Se borra public.normalize_company_name. Verificado antes de tocarla: no
+--      la llama ninguna funcion, vista, indice, constraint, default ni trigger,
+--      y tampoco el codigo TypeScript. Era codigo muerto; su unica huella son
+--      las ~10.000 filas cuyo normalized_name escribio en su momento.
+--
+--   2. createCompany (lib/v3/services/company-resolver.ts) pasa a llamar a
+--      upsert_company en vez de insertar directo, y se renombra a
+--      resolveOrCreateCompany porque ahora puede devolver una empresa que ya
+--      existia. Era la unica via de creacion que se saltaba las tres pruebas
+--      anti-duplicado, y encima la que menos informacion tiene: su `name` es
+--      texto libre tipeado por alguien en el chat, sin URL ni website. Al pasar
+--      por upsert_company deja ademas de escribir normalized_name con la
+--      normalizacion de TS, asi que la canonica queda escrita en un solo lugar.
+--
+-- LO QUE QUEDA SIN AUTOMATIZAR, A PROPOSITO
+--
+-- La deteccion de duplicados y el auto-merge siguen disparandose a mano desde
+-- /admin/companies/duplicates. Las RPC de abajo ya tienen GRANT a service_role
+-- y un pg_cron nocturno las podria encadenar despues del sync del indice:
+--
+--     v3.refresh_company_dup_candidates
+--     v3.auto_merge_safe_candidates
+--
+-- Se decidio no hacerlo: un auto-merge que corre de noche y falla en silencio
+-- es peor que uno que no corre. Queda como decision explicita, no como olvido.
+-- =============================================================================
+
+DROP FUNCTION IF EXISTS public.normalize_company_name(text);

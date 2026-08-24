@@ -1,5 +1,5 @@
 import { createAdminClient } from "@/lib/supabase/admin"
-import { resolveCompany, createCompany } from "./company-resolver"
+import { resolveCompany, resolveOrCreateCompany } from "./company-resolver"
 import { runMicroAgents, isRadarCacheFresh } from "./radar"
 import { selectMicroAgentsForWorkspace } from "./agent-selection"
 import { interpretJobPostings } from "./jobs-interpreter"
@@ -225,9 +225,11 @@ export async function runResearchJob(jobId: string): Promise<ResearchJob | null>
       country = resolution.country
       industry = resolution.industry
     } else if (!companyId) {
-      const created = await createCompany({ name: job.company_input })
-      if ("error" in created) throw new Error(created.error)
-      companyId = created.companyId
+      // [455] Puede devolver una empresa existente: upsert_company matchea por
+      // nucleo del nombre, que es mas laxo que resolveCompany.
+      const resuelta = await resolveOrCreateCompany({ name: job.company_input })
+      if ("error" in resuelta) throw new Error(resuelta.error)
+      companyId = resuelta.companyId
     } else {
       const { data: company } = await admin.from("companies").select("name,website,country,industry").eq("id", companyId).maybeSingle()
       if (company) {

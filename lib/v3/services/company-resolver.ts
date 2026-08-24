@@ -192,15 +192,51 @@ export async function resolveCompany(input: string, workspaceId: string): Promis
   }
 }
 
-export async function createCompany(params: { name: string; website?: string | null; country?: string | null; industry?: string | null }): Promise<{ companyId: string } | { error: string }> {
+/**
+ * [455] Resuelve el nombre contra el catalogo global y, solo si no existe, crea.
+ *
+ * POR QUE NO ES UN INSERT
+ *
+ * Antes esto insertaba directo en public.companies, con dos consecuencias.
+ *
+ * La primera es que era la unica via de creacion que NO pasaba por
+ * upsert_company, asi que se saltaba las tres pruebas que evitan duplicados
+ * (URL de LinkedIn canonizada, nombre exacto, nucleo con guardas). Y es
+ * justamente la via con MENOS informacion: `name` es texto libre que alguien
+ * tipeo en el chat, sin URL ni website. La que menos datos tiene era la que
+ * menos se defendia.
+ *
+ * La segunda es que escribia `normalized_name` con normalizeCompanyName(), que
+ * no es la misma normalizacion que usa el resto del sistema: quita sufijos en
+ * cualquier posicion, no quita prefijos y no corta en la barra. Para "Grupo
+ * Eolo" daba "grupo eolo" donde company_core_name() da "eolo", y esas filas
+ * quedaban invisibles para el match por nucleo de la ingesta.
+ *
+ * Llamar a upsert_company arregla las dos cosas de una: aplica las mismas
+ * pruebas que el ETL y deja que la normalizacion canonica la escriba una sola
+ * funcion, en SQL.
+ *
+ * Cambia la semantica y por eso cambia el nombre: puede devolver una empresa
+ * que YA EXISTIA. Es deseable — resolveCompany ya corrio antes y no la
+ * encontro, asi que un match aca significa que upsert_company la reconocio por
+ * nucleo, que es exactamente lo que se quiere.
+ */
+export async function resolveOrCreateCompany(params: {
+  name: string
+  website?: string | null
+  country?: string | null
+  industry?: string | null
+}): Promise<{ companyId: string } | { error: string }> {
   const admin = createAdminClient()
-  const { data, error } = await admin.from("companies").insert({
-    name: params.name.trim(), normalized_name: normalizeCompanyName(params.name), website: params.website ?? null,
-    country: params.country ?? null, industry: params.industry ?? null,
-  }).select("id").single()
+  const { data, error } = await admin.rpc("upsert_company", {
+    p_name: params.name.trim(),
+    p_website: params.website ?? null,
+    p_country: params.country ?? null,
+    p_industry: params.industry ?? null,
+  })
   if (error || !data) {
-    console.error("[v3] Error creando empresa:", error?.message)
+    console.error("[v3] Error resolviendo o creando empresa:", error?.message)
     return { error: "No se pudo crear la empresa" }
   }
-  return { companyId: data.id }
+  return { companyId: data as string }
 }
