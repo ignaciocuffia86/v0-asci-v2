@@ -102,6 +102,7 @@ export async function GET(request: Request) {
             // revision y no se les escribio ninguna columna.
             identity_mismatch: result.identityMismatch,
             filled: result.filled,
+            renamed: result.renamed,
             skipped_for_quota: result.skippedForQuota,
             stopped_for_budget: result.stoppedForBudget,
             quota: result.quota,
