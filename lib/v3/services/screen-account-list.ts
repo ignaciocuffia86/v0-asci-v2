@@ -2,6 +2,7 @@ import "server-only"
 
 import { createAdminClient } from "@/lib/supabase/admin"
 import { resolveCapabilityTerms, type CapabilityTerm } from "./capability-search"
+import { principalColumns, type McpPrincipal } from "@/lib/v3/mcp-usage"
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Cruce de una LISTA DEL CLIENTE contra uno o varios términos.
@@ -36,6 +37,9 @@ export type ScreenAccountInput = {
   /** Dominio del cliente, si lo tiene. Es la prueba de identidad más fuerte. */
   domain?: string
 }
+
+/** Cuánto vive un screening guardado antes de que haya que rehacerlo. */
+const SCREENING_TTL_HOURS = 72
 
 export type ScreenAccountListParams = {
   accounts: ScreenAccountInput[]
@@ -88,7 +92,7 @@ export function prepareAccounts(accounts: ScreenAccountInput[]) {
   return prepared
 }
 
-export async function screenAccountList(params: ScreenAccountListParams) {
+export async function screenAccountList(params: ScreenAccountListParams, principal?: McpPrincipal) {
   const accounts = prepareAccounts(params.accounts)
   if (!accounts.length) throw new Error("SCREEN_LIST_EMPTY:La lista no tiene ningún nombre utilizable.")
   if (accounts.length > MAX_ACCOUNTS_PER_CALL) {
@@ -136,8 +140,45 @@ export async function screenAccountList(params: ScreenAccountListParams) {
   const payload = data as ScreenPayload
   const ambiguous = payload.rows.filter((row) => row.status === "matched_ambiguous")
 
+  // Se guarda el resultado para poder exportarlo por HANDLE. La alternativa era
+  // que create_export recibiera las filas de vuelta, y eso hace viajar la tabla
+  // dos veces por la conversación: justo el costo que el export viene a eliminar.
+  // Guardar una lectura no consume cupo ni ocupa lugares del plan.
+  let screeningId: string | null = null
+  if (principal) {
+    const cols = principalColumns(principal)
+    const { data: saved } = await admin
+      .schema("v3")
+      .from("mcp_screenings")
+      .insert({
+        workspace_id: principal.workspaceId,
+        user_id: principal.userId,
+        api_key_id: cols.api_key_id,
+        oauth_token_id: cols.oauth_token_id,
+        params: {
+          label: requestedTerms.join(" + ") || "reconciliacion",
+          terms: requestedTerms,
+          resolvedTerms: matched.map((term) => term.name),
+          countries: params.countries ?? null,
+          minSignals: params.minSignals ?? 2,
+          matchThreshold: params.matchThreshold ?? 0.75,
+          accounts: accounts.length,
+        },
+        rows: payload.rows,
+        summary: payload.summary,
+        row_count: payload.rows.length,
+        expires_at: new Date(Date.now() + SCREENING_TTL_HOURS * 3600_000).toISOString(),
+      })
+      .select("id")
+      .maybeSingle()
+    screeningId = saved?.id ?? null
+  }
+
   return {
     ...payload,
+    // El handle para create_export. Si es null, el screening corrió pero no se
+    // pudo guardar: el resultado sirve igual, solo que no se puede exportar.
+    screeningId,
     resolvedTerms: matched,
     unresolvedTerms: unresolved,
     inputDeduped: params.accounts.length - accounts.length,
@@ -152,6 +193,7 @@ export async function screenAccountList(params: ScreenAccountListParams) {
       "`signalStrength` en \"weak\" significa menos señales que el mínimo pedido: una mención suelta en un solo perfil no es una oportunidad. Marcalo o filtralo, no lo mezcles con las sólidas.",
       "`signalsForTerms` es el total de la EMPRESA, sumando las entidades duplicadas que el catálogo tiene con el mismo nombre canónico. `signalsOwn` es solo de la entidad que se devuelve, y `duplicateEntities` dice cuántas se consolidaron. Si las dos cifras difieren, la cuenta está fragmentada: usá el total y mencionalo.",
       "Para la cita textual de una cuenta, seguí con get_company_signal_summary detail=\"evidence\" y el `term`: no consume cupo ni necesita research previo.",
+      "Si el usuario quiere la tabla como archivo, NO la transcribas al chat: llamá create_export con el `screeningId` y pasale la URL firmada.",
     ].join("\n"),
   }
 }

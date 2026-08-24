@@ -25,6 +25,7 @@ import { searchCompaniesByCapability } from "@/lib/v3/services/capability-search
 import { screenAccountList, MAX_ACCOUNTS_PER_CALL } from "@/lib/v3/services/screen-account-list"
 import { estimateBatch, MAX_ACCOUNTS_PER_BATCH } from "@/lib/v3/services/mcp-batch-estimate"
 import { generateDeterministicIcebreaker } from "@/lib/v3/services/icebreaker-deterministic"
+import { createScreeningExport } from "@/lib/v3/services/mcp-export"
 
 export const maxDuration = 120
 
@@ -262,7 +263,7 @@ const handler = createMcpHandler((rawServer) => {
     async (args, extra) => safely(async () => {
       const auth = authOf(extra)
       await requirePaidMcp(auth, "companies:read", "read")
-      return screenAccountList({ accounts: args.accounts.map((a) => ({ name: a.name, domain: a.domain })), terms: args.terms, countries: args.countries, minSignals: args.minSignals, matchThreshold: args.matchThreshold, maxCandidates: args.maxCandidates })
+      return screenAccountList({ accounts: args.accounts.map((a) => ({ name: a.name, domain: a.domain })), terms: args.terms, countries: args.countries, minSignals: args.minSignals, matchThreshold: args.matchThreshold, maxCandidates: args.maxCandidates }, auth)
     }),
   )
   server.tool("get_company_profile", "Identidad, datos firmográficos y cobertura global de señales de una empresa. Solo lectura. Devuelve siempre un bloque `firmographics` con linkedinUrl, domain, employeesApollo (dotación según Apollo), isPublic, ticker y stockExchange. IMPORTANTE: employeesApollo en null significa que NO tenemos el dato —la cobertura es baja—, no que la empresa sea chica; decilo así en vez de estimar. Usala cuando el usuario pregunte quién es la empresa, de qué tamaño es, si cotiza o cuál es su LinkedIn.", { companyId: z.string().uuid() }, async ({ companyId }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "companies:read", "read"); return getCompanyProfile(companyId) }))
@@ -439,6 +440,19 @@ const handler = createMcpHandler((rawServer) => {
       return estimateBatch(auth, args)
     }),
   )
+  server.tool(
+    "create_export",
+    "Convierte el resultado de un screening en un ARCHIVO (xlsx o csv) y devuelve una URL firmada. Es la única tool que entrega un archivo.\n\nUSALA CUANDO EL USUARIO QUIERA LA TABLA. Hasta ahora la única forma de darle un reporte de 61 cuentas era transcribirlo al chat, que es caro y frágil; acá lo único que vuelve es un enlace.\n\nPASÁ EL `screeningId` que devolvió screen_account_list. No hace falta que le reenvíes las filas: ya están guardadas. Si le pasás las filas de vuelta, la tabla viaja dos veces por la conversación y se pierde todo el punto.\n\nCUANDO TENGAS LA URL, PASÁSELA AL USUARIO TAL CUAL y NO transcribas la tabla igual: el archivo existe para que los datos no pasen por el chat.\n\nEl enlace vence en 24 horas; si vence, volvé a llamar esta tool con el mismo screeningId, que no cuesta nada. El archivo lleva la lista de cuentas de un cliente: es privado y firmado, no lo publiques.\n\nNo consume cupo ni créditos.",
+    {
+      screeningId: z.string().uuid().describe("El screeningId que devolvió screen_account_list."),
+      format: z.enum(["xlsx", "csv"]).default("xlsx").describe("xlsx trae además una hoja \"Método\" con los parámetros de la búsqueda."),
+    },
+    async (args, extra) => safely(async () => {
+      const auth = authOf(extra)
+      await requirePaidMcp(auth, "accounts:read", "read")
+      return createScreeningExport(auth, args)
+    }),
+  )
   server.tool("get_ai_usage", "Devuelve los TRES medidores mensuales del workspace: monthlyServerResearch (research con tokens de ASCI), monthlyClientResearch (research con tus tokens, que igual ocupa cupo del plan) y monthlyApolloCredits (créditos de contactos, 1 crédito = 1 contacto). Suma tokens y costo verificado del AI Gateway. Son independientes entre sí.\n\nCUIDADO CON EL ALCANCE al citar cifras: `workspaceAi` es del WORKSPACE desde el 1° del mes y es la que hay que usar para decir cuánto consume la cuenta. `verifiedAi` y `lastSevenDays` son de QUIEN LLAMA y de los últimos 7 días: con varios miembros en el workspace, sub-reportan. Cada bloque declara su `scope`.\n\nPara saber cuánto cuesta un LOTE concreto antes de correrlo, usá estimate_batch.", {}, async (_args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "usage:read", "read"); return getMcpUsage(auth) }))
 }, {
   serverInfo: { name: "asci-v3", version: "2.0.0" },
@@ -463,6 +477,7 @@ const handler = createMcpHandler((rawServer) => {
     "Si el usuario trae una LISTA de empresas (pegada, de un CSV, de su CRM) y pregunta cuáles tienen cierta tecnología o proceso, usá screen_account_list en UNA llamada. No pagines search_companies_by_capability para cruzarla a mano, y no llames search_companies una vez por cuenta.",
     "Nunca afirmes que una empresa NO tiene una señal por no haberla encontrado en un listado: eso se responde con el estado matched_no_signal de screen_account_list. \"No aparece en lo que miré\" y \"no tiene\" no son lo mismo, y la diferencia con \"no está en ASCI\" tampoco.",
     "Leer evidencia NO exige guardar la cuenta ni correr research: get_company_signal_summary (incluido detail=\"evidence\") y get_account_evidence_detail leen el catálogo global sin consumir cupo. Guardar una cuenta ocupa un lugar del plan y sirve para TRABAJARLA (research, contactos, seguimiento), no para consultarla.",
+    "Si el usuario quiere una TABLA o un archivo, usá create_export con el screeningId y pasale la URL: no transcribas la tabla al chat. Ya no es cierto que ASCI no tenga export por MCP.",
     "Las tools indican en su descripción si consumen cuota. Antes de una que consuma cuota server-managed, confirmá con el usuario.",
   ].join("\n"),
 }, { basePath: "/api/v3/mcp/server", maxDuration: 120, verboseLogs: false })
