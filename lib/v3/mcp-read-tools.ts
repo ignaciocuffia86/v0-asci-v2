@@ -3,6 +3,7 @@ import "server-only"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { getLegacySignals } from "./services/legacy-signal-provider"
 import { getAccountEvidenceDetail } from "./services/internal-account-snapshot"
+import { getCompanySignalSummary } from "./services/company-signal-summary"
 import type { McpPrincipal } from "./mcp-usage"
 
 type RankedCompany = {
@@ -173,28 +174,51 @@ export async function getCompanySignals(companyId: string, limit = 50) {
  * persona cuando la señal sale de un perfil. Lee de lo ya persistido, así que no
  * consume cuota ni re-investiga.
  */
+/**
+ * Detalle de evidencia de un término, con fallback a la evidencia GLOBAL.
+ *
+ * POR QUÉ EL FALLBACK. Esta tool lee `v3.account_evidence_details`, que es una
+ * tabla scopeada por workspace y la MATERIALIZA el research. O sea que la cadena
+ * real era: save_account (ocupa 1 de 60 lugares del plan) → run_account_research
+ * (consume cuota) → recién ahí esto devuelve algo. Ninguno de los dos pasos era
+ * descubrible antes de chocarse con el error, y la descripción de la tool decía
+ * "lee evidencia ya persistida: NO consume cuota" —cierto pero incompleto: omitía
+ * que sin snapshot no hay nada que leer.
+ *
+ * Sacar el guard no alcanzaba: habría devuelto una lista vacía, que es peor,
+ * porque un vacío mudo se lee como "esta cuenta no tiene evidencia". La evidencia
+ * cruda SÍ existe, global y sin workspace, en `public.signals`. El fallback la
+ * usa y lo dice en `source`, para que quien lee sepa qué está mirando:
+ *   workspace_snapshot  evidencia clasificada por el research de ESTE workspace
+ *   global_signals      evidencia cruda del catálogo, sin research previo
+ */
 export async function getAccountEvidenceDetailTool(
   principal: McpPrincipal,
   params: { companyId: string; term?: string; termIds?: string[] }
 ) {
-  await assertWorkspaceAccount(principal, params.companyId)
-  const details = await getAccountEvidenceDetail({
-    workspaceId: principal.workspaceId,
-    companyId: params.companyId,
-    termIds: params.termIds,
-    termQuery: params.term,
-  })
+  const hasWorkspaceAccount = await hasAccountInWorkspace(principal, params.companyId)
+  const details = hasWorkspaceAccount
+    ? await getAccountEvidenceDetail({
+        workspaceId: principal.workspaceId,
+        companyId: params.companyId,
+        termIds: params.termIds,
+        termQuery: params.term,
+      })
+    : []
 
   if (!details.length) {
+    const global = await getCompanySignalSummary(params.companyId, "evidence", { term: params.term })
     return {
-      terms: [],
-      note: params.term
-        ? `No hay evidencia detallada para "${params.term}". Puede que el término no esté en el panorama o que el snapshot no se haya generado todavía (corré prepare_account_research).`
-        : "No hay evidencia detallada persistida para esta cuenta todavía.",
+      source: "global_signals" as const,
+      ...global,
+      note: hasWorkspaceAccount
+        ? "La cuenta está en el workspace pero todavía no tiene snapshot de research, así que esto es la evidencia CRUDA global. Para la versión clasificada y puntuada, corré el research."
+        : "La cuenta no está guardada en este workspace. Esto es la evidencia CRUDA global del catálogo: no consumió cupo ni research. Guardarla solo hace falta para trabajarla (research, contactos, seguimiento).",
     }
   }
 
   return {
+    source: "workspace_snapshot" as const,
     terms: details.map((detail) => ({
       term: detail.term,
       termId: detail.termId,
@@ -228,13 +252,17 @@ export async function getAccountEvidenceDetailTool(
   }
 }
 
-async function assertWorkspaceAccount(principal: McpPrincipal, companyId: string) {
+async function hasAccountInWorkspace(principal: McpPrincipal, companyId: string) {
   const admin = createAdminClient()
   const [{ count: jobs }, { count: followed }] = await Promise.all([
     admin.schema("v3").from("research_jobs").select("id", { count: "exact", head: true }).eq("workspace_id", principal.workspaceId).eq("company_id", companyId),
     admin.schema("v3").from("followed_accounts").select("id", { count: "exact", head: true }).eq("workspace_id", principal.workspaceId).eq("company_id", companyId).eq("is_active", true),
   ])
-  if (!(jobs || followed)) throw new Error("ACCOUNT_NOT_AVAILABLE_IN_WORKSPACE")
+  return Boolean(jobs || followed)
+}
+
+async function assertWorkspaceAccount(principal: McpPrincipal, companyId: string) {
+  if (!(await hasAccountInWorkspace(principal, companyId))) throw new Error("ACCOUNT_NOT_AVAILABLE_IN_WORKSPACE")
 }
 
 export async function listWorkspaceAccounts(principal: McpPrincipal, limit = 50) {
