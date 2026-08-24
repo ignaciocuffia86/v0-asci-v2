@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
   canonicalizeSignals,
-  canonicalLinkedinSlug,
   countPeople,
   groupBySignal,
   personKeyOf,
@@ -32,37 +31,6 @@ const persona = (over: Partial<NonNullable<Row["person"]>> = {}) => ({
   linkedinUrl: "https://www.linkedin.com/in/matias-ezequiel-merino",
   email: "matiasmerino.mm@gmail.com",
   ...over,
-})
-
-describe("canonicalLinkedinSlug", () => {
-  it("saca el sufijo autogenerado de LinkedIn", () => {
-    expect(canonicalLinkedinSlug("https://www.linkedin.com/in/matias-ezequiel-merino-b36b54260")).toBe(
-      "matias-ezequiel-merino",
-    )
-  })
-
-  it("deja intacta la vanity URL", () => {
-    expect(canonicalLinkedinSlug("https://www.linkedin.com/in/matias-ezequiel-merino")).toBe("matias-ezequiel-merino")
-  })
-
-  it("normaliza dominio regional, query, hash y barra final", () => {
-    expect(canonicalLinkedinSlug("http://ar.linkedin.com/in/Juan-Perez/?trk=x#top")).toBe("juan-perez")
-  })
-
-  it("no mutila un apellido que termina en letras hexadecimales", () => {
-    // "abbaca" es [a-f]{6} pero no tiene ningún dígito: es parte del nombre.
-    expect(canonicalLinkedinSlug("https://www.linkedin.com/in/ana-abbaca")).toBe("ana-abbaca")
-  })
-
-  it("no toca sufijos numéricos cortos de vanity URLs", () => {
-    expect(canonicalLinkedinSlug("https://www.linkedin.com/in/matias-merino-1")).toBe("matias-merino-1")
-  })
-
-  it("ignora urls que no son de perfil o son placeholders", () => {
-    expect(canonicalLinkedinSlug("https://www.linkedin.com/company/molinos-agro")).toBeNull()
-    expect(canonicalLinkedinSlug("https://www.linkedin.com/in/placeholder-123456")).toBeNull()
-    expect(canonicalLinkedinSlug(null)).toBeNull()
-  })
 })
 
 describe("personKeyOf", () => {

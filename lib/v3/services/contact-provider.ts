@@ -1,5 +1,7 @@
 import "server-only"
 
+import { linkedinProfileBase } from "@/lib/shared/linkedin-profile"
+
 import { createAdminClient } from "@/lib/supabase/admin"
 import { normalizeDomain } from "@/lib/apollo/domain"
 
@@ -31,8 +33,19 @@ const SENIORITY_WEIGHT: Record<string, number> = {
   manager: 12,
 }
 
+/**
+ * Clave de identidad para unir las dos fuentes.
+ *
+ * `contacts` y `apollo_contacts_cache` son tablas distintas con la misma
+ * persona adentro, y Apollo no comparte el id de v2: lo único que las cruza es
+ * el perfil de LinkedIn. La normalización floja de antes —bajar a minúsculas y
+ * sacar el https— dejaba pasar como dos personas distintas al mismo perfil
+ * scrapeado con la vanity URL y con el slug autogenerado, que es el mismo caso
+ * que duplicaba filas en `contacts`. Se usa la base del slug para que las dos
+ * formas caigan en la misma clave.
+ */
 function normalizeLinkedin(value: string | null | undefined) {
-  return value?.toLowerCase().replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "") ?? null
+  return linkedinProfileBase(value)
 }
 
 function rank(contact: Omit<CanonicalContact, "rank">, recommendedTitles: string[]) {

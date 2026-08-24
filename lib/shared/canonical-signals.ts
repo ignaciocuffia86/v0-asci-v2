@@ -40,6 +40,8 @@
 // empresas (`merge_companies` + `v3.company_merges` reversible).
 // ═══════════════════════════════════════════════════════════
 
+import { linkedinProfileBase } from "@/lib/shared/linkedin-profile"
+
 /** Persona de la que se desprende una señal, en lo mínimo que hace falta para identificarla. */
 export interface CanonicalPerson {
   contactId: string
@@ -154,33 +156,6 @@ function normalizeText(value: string | null | undefined): string {
 }
 
 /**
- * Slug de un perfil de LinkedIn, sin el sufijo autogenerado.
- *
- * LinkedIn sirve el mismo perfil bajo el slug automático (`nombre-apellido-b36b54260`)
- * y bajo la vanity URL que la persona elige después (`nombre-apellido`). Scrapear
- * antes y después del cambio deja dos filas en `contacts` para el mismo humano:
- * ese es exactamente el caso Merino.
- *
- * El sufijo se saca solo si tiene un dígito y entre 6 y 12 caracteres hex. Sin
- * el dígito, un apellido real que termina en letras a–f ("...-abbaca") se
- * mutilaría y dos personas distintas caerían en la misma clave.
- */
-export function canonicalLinkedinSlug(url: string | null | undefined): string | null {
-  if (!url) return null
-  const match = url
-    .trim()
-    .toLowerCase()
-    .replace(/\?.*$/, "")
-    .replace(/#.*$/, "")
-    .match(/linkedin\.com\/in\/([^/?#]+)/)
-  if (!match) return null
-  const slug = decodeURIComponent(match[1]).replace(/\/+$/, "")
-  if (!slug || slug.includes("placeholder")) return null
-  const withoutHash = slug.replace(/-(?=[0-9a-z]*[0-9])[0-9a-f]{6,12}$/, "")
-  return withoutHash || slug
-}
-
-/**
  * Identidad de una persona a través de filas duplicadas de `contacts`.
  *
  * Prioridad: slug de LinkedIn > email > el propio contact_id (que nunca fusiona).
@@ -193,7 +168,7 @@ export function canonicalLinkedinSlug(url: string | null | undefined): string | 
 export function personKeyOf(person: CanonicalPerson | null | undefined): string | null {
   if (!person) return null
   const identity =
-    canonicalLinkedinSlug(person.linkedinUrl) ||
+    linkedinProfileBase(person.linkedinUrl) ||
     (person.email ? person.email.trim().toLowerCase() : null) ||
     `id:${person.contactId}`
   return `${normalizeText(person.fullName)}|${identity}`
