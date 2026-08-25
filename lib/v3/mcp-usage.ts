@@ -2,7 +2,7 @@ import "server-only"
 
 import crypto from "crypto"
 import { createAdminClient } from "@/lib/supabase/admin"
-import { getWorkspacePlan, getWorkspaceUsage } from "@/lib/v3/plans"
+import { getWorkspacePlan, getWorkspaceUsage, getContactEnrichmentLimits } from "@/lib/v3/plans"
 
 export type McpUsagePool =
   | "research_server"
@@ -329,26 +329,40 @@ export async function getMcpUsage(principal: McpPrincipal) {
     reclaimAbandonedClientResearch(principal.workspaceId).catch(() => 0),
     reclaimAbandonedContactEnrichment(principal.workspaceId).catch(() => 0),
   ])
-  const [planUsage, reservations, aiUsage] = await Promise.all([
+  const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString()
+  const monthStartIso = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString()
+  const [planUsage, reservations, aiUsage, workspaceAiRows] = await Promise.all([
     getWorkspaceUsage(principal.workspaceId),
     admin.schema("v3").from("mcp_usage_reservations")
       .select("pool,units,status,created_at")
       .eq("workspace_id", principal.workspaceId)
       .eq("user_id", principal.userId)
-      .gte("created_at", new Date(Date.now() - 7 * 86400000).toISOString()),
+      .gte("created_at", sevenDaysAgo),
     admin.schema("v3").from("ai_usage_log")
       .select("input_tokens,output_tokens,cost_usd,generation_mode,created_at")
       .eq("workspace_id", principal.workspaceId)
       .eq("user_id", principal.userId)
-      .gte("created_at", new Date(Date.now() - 7 * 86400000).toISOString()),
+      .gte("created_at", sevenDaysAgo),
+    // Del WORKSPACE y desde el 1° del mes. Es la cifra que hace falta para saber
+    // cuánto consume una cuenta de cliente, y la que no existía: ver la nota de
+    // `verifiedAi` más abajo.
+    admin.schema("v3").from("ai_usage_log")
+      .select("input_tokens,output_tokens,cost_usd,created_at")
+      .eq("workspace_id", principal.workspaceId)
+      .eq("generation_mode", "server_managed")
+      .gte("created_at", monthStartIso),
   ])
   const byPool: Record<string, { reserved: number; committed: number; released: number }> = {}
   for (const row of reservations.data ?? []) {
     byPool[row.pool] ??= { reserved: 0, committed: 0, released: 0 }
     byPool[row.pool][row.status as "reserved" | "committed" | "released"] += row.units
   }
-  const monthStart = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString()
-  const clientResearchUsed = await getMonthlyPoolUsage(principal.workspaceId, "research_client")
+  const monthStart = monthStartIso
+  const [clientResearchUsed, apolloUsed, enrichmentLimits] = await Promise.all([
+    getMonthlyPoolUsage(principal.workspaceId, "research_client"),
+    getMonthlyPoolUsage(principal.workspaceId, "apollo_enrichment"),
+    getContactEnrichmentLimits(principal.workspaceId),
+  ])
 
   return {
     plan: planUsage.plan,
@@ -370,14 +384,52 @@ export async function getMcpUsage(principal: McpPrincipal) {
     // Alias del pool server-managed. Se mantiene para no romper a ningún cliente
     // que ya lea esta clave; usar los dos campos de arriba, que son explícitos.
     monthlyResearch: { used: planUsage.monthlyResearchCount, limit: planUsage.config.monthlyResearchCap },
+    // Cuarto medidor. Existía y era el único que NO se podía consultar a priori:
+    // vivía adentro de prepare_contact_enrichment, así que para saber cuántos
+    // créditos quedaban había que pedir el preview de una cuenta concreta. Con un
+    // lote de 42 eso significa descubrir el presupuesto gastando llamadas.
+    monthlyApolloCredits: {
+      used: apolloUsed,
+      limit: enrichmentLimits.monthlyUnits,
+      remaining: Math.max(0, enrichmentLimits.monthlyUnits - apolloUsed),
+      allowed: enrichmentLimits.allowed,
+      reason: enrichmentLimits.reason,
+      note: "1 crédito = 1 contacto. Son créditos de Apollo que absorbe ASCI, NO tokens: se cuentan aparte de los dos pools de research.",
+    },
     poolsNote:
-      "Los dos pools son independientes: un research client-assisted no mueve monthlyServerResearch, y viceversa. Si preparaste research con tu modelo, mirá monthlyClientResearch.",
+      "Son TRES medidores independientes: monthlyServerResearch (tokens de ASCI), monthlyClientResearch (tus tokens, cupo del plan) y monthlyApolloCredits (créditos de terceros). Un research client-assisted no mueve monthlyServerResearch, y ninguno de los dos mueve los créditos de Apollo.",
     monthStart,
-    lastSevenDays: byPool,
-    verifiedAi: (aiUsage.data ?? []).reduce((acc, row) => ({
-      inputTokens: acc.inputTokens + row.input_tokens,
-      outputTokens: acc.outputTokens + row.output_tokens,
-      costUsd: acc.costUsd + Number(row.cost_usd),
-    }), { inputTokens: 0, outputTokens: 0, costUsd: 0 }),
+    // También de ESTE usuario, no del workspace.
+    lastSevenDays: { scope: "current_user" as const, byPool },
+    /**
+     * OJO CON EL ALCANCE. Este bloque es de ESTE USUARIO y de los ÚLTIMOS 7 DÍAS,
+     * no del workspace ni del mes. La ambigüedad ya causó un error real: un
+     * análisis de costos leyó `verifiedAi.costUsd` como "lo que va del mes" del
+     * workspace y derivó de ahí el costo por cuenta investigada. Estaba
+     * sub-reportado en los dos ejes, y con varios miembros el error crece.
+     *
+     * Se mantiene la clave por compatibilidad, pero ahora declara su alcance y
+     * al lado va `workspaceAi`, que es lo que hay que mirar para saber cuánto
+     * consume una cuenta de cliente.
+     */
+    verifiedAi: {
+      ...(aiUsage.data ?? []).reduce((acc, row) => ({
+        inputTokens: acc.inputTokens + row.input_tokens,
+        outputTokens: acc.outputTokens + row.output_tokens,
+        costUsd: acc.costUsd + Number(row.cost_usd),
+      }), { inputTokens: 0, outputTokens: 0, costUsd: 0 }),
+      scope: "current_user" as const,
+      windowDays: 7,
+    },
+    workspaceAi: {
+      ...(workspaceAiRows.data ?? []).reduce((acc, row) => ({
+        inputTokens: acc.inputTokens + row.input_tokens,
+        outputTokens: acc.outputTokens + row.output_tokens,
+        costUsd: acc.costUsd + Number(row.cost_usd),
+      }), { inputTokens: 0, outputTokens: 0, costUsd: 0 }),
+      scope: "workspace" as const,
+      since: monthStart,
+      note: "Tokens y costo REAL del AI Gateway de ASCI para todo el workspace desde el 1° del mes, solo server-managed (el client-assisted no consume tokens de ASCI). Es la cifra a usar para hablar de cuánto cuesta la cuenta; `verifiedAi` es solo de quien llama y de 7 días.",
+    },
   }
 }

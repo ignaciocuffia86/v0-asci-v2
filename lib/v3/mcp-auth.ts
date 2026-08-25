@@ -1,6 +1,7 @@
 import crypto from "crypto"
 import { NextRequest } from "next/server"
 import { createAdminClient } from "@/lib/supabase/admin"
+import { effectiveApiKeyScopes } from "./mcp-key-scopes"
 import { hashOAuthValue } from "@/lib/v3/mcp-oauth"
 import { principalColumns, type McpPrincipal } from "./mcp-usage"
 
@@ -81,10 +82,11 @@ export async function validateMcpRequest(req: NextRequest): Promise<McpAuthResul
   if ((count ?? 0) >= (key.rate_limit_per_minute ?? 60)) return failure("RATE_LIMITED", "Se excedió el límite general de requests por minuto", 429)
   await admin.schema("v3").from("mcp_api_keys").update({ last_used_at: new Date().toISOString(), request_count: (key.request_count ?? 0) + 1 }).eq("id", key.id)
   const storedScopes: string[] = key.scopes ?? []
-  const readScopes = ["companies:read", "signals:read", "accounts:read", "usage:read"]
-  const aiScopes = ["research:run", "research:prepare", "research:submit", "icebreakers:generate", "icebreakers:prepare", "icebreakers:submit", "accounts:write"]
-  const scopes = storedScopes.includes("read") ? [...new Set([...storedScopes, ...readScopes])] : storedScopes
-  if (storedScopes.includes("write")) scopes.push(...aiScopes)
+  // La expansión vive en lib/v3/mcp-key-scopes.ts, que es la MISMA fuente que usa
+  // la creación de la key. Antes estaba duplicada acá con su propia lista, y esa
+  // duplicación es la que dejó nueve tools del server standard inalcanzables: se
+  // agregaron scopes nuevos al set de creación y esta copia nunca se enteró.
+  const scopes = effectiveApiKeyScopes(storedScopes)
   const allowedModes = key.allowed_modes?.length === 1 && key.allowed_modes[0] === "read" && storedScopes.includes("write")
     ? ["read", "server_managed", "client_assisted"]
     : (key.allowed_modes ?? ["read"])
@@ -94,7 +96,7 @@ export async function validateMcpRequest(req: NextRequest): Promise<McpAuthResul
     userId: key.owner_user_id,
     keyId: key.id,
     keyType: "api_key",
-    scopes: [...new Set(scopes.length ? scopes : readScopes)],
+    scopes,
     allowedModes,
   }
 }
