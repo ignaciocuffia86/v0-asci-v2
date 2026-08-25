@@ -132,9 +132,22 @@ type CompanyDrawerProps = {
   onClose: () => void
   filterSignalIds?: string[]
   filterType?: "process" | "technology"
+  /**
+   * Contador de búsquedas del listado de resultados (histórico completo, sin ventana de fecha).
+   * El drawer solo muestra las publicadas en los últimos 6 meses, así que sirve para explicar
+   * la diferencia en vez de dejar al usuario con dos números que no cierran.
+   */
+  jobPostingsTotal?: number
 }
 
-export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, filterType }: CompanyDrawerProps) {
+export function CompanyDrawer({
+  companyId,
+  isOpen,
+  onClose,
+  filterSignalIds,
+  filterType,
+  jobPostingsTotal,
+}: CompanyDrawerProps) {
   const [isBookmarked, setIsBookmarked] = useState(false)
   const [userId, setUserId] = useState<string | null>(null)
   const [bookmarkState, setBookmarkState] = useState<{
@@ -224,6 +237,11 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
 
     return Object.values(grouped).sort((a, b) => new Date(b.posted_at).getTime() - new Date(a.posted_at).getTime())
   }, [drawerData?.job_postings])
+
+  // El listado cuenta todas las vacantes con señal; acá solo entran las de los últimos 6 meses.
+  const historicJobPostings = Math.max(jobPostingsTotal ?? 0, jobPostings.length)
+  const olderJobPostings = historicJobPostings - jobPostings.length
+  const showJobPostingsTab = jobPostings.length > 0 || historicJobPostings > 0
 
   useEffect(() => {
     if (isOpen && companyId) {
@@ -571,6 +589,9 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
                       <h4 className="text-xs font-medium text-orange-600 dark:text-orange-500 mb-3 uppercase tracking-wider flex items-center gap-1.5">
                         <Flame className="h-3.5 w-3.5" />
                         Ahora Buscando
+                        <span className="normal-case tracking-normal text-muted-foreground font-normal">
+                          · últimos 6 meses
+                        </span>
                       </h4>
                       <div className="flex flex-wrap gap-2">
                         {getJobPostingTags().map(([keyword, count]) => (
@@ -631,7 +652,7 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
                   {uniqueAlumniSignals.length}
                 </Badge>
               </TabsTrigger>
-              {jobPostings.length > 0 && (
+              {showJobPostingsTab && (
                 <TabsTrigger
                   value="jobpostings"
                   className="h-full rounded-none border-b-2 border-transparent px-0 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none font-medium"
@@ -674,11 +695,36 @@ export function CompanyDrawer({ companyId, isOpen, onClose, filterSignalIds, fil
               )}
             </TabsContent>
 
-            {jobPostings.length > 0 && (
+            {showJobPostingsTab && (
               <TabsContent value="jobpostings" className="p-6 space-y-4 m-0">
-                {jobPostings.map((jp) => (
-                  <JobPostingCard key={jp.id} jobPosting={jp} />
-                ))}
+                <p className="text-xs text-muted-foreground">
+                  Búsquedas publicadas en los <span className="font-medium">últimos 6 meses</span> con señales
+                  detectadas.
+                  {olderJobPostings > 0 && (
+                    <>
+                      {" "}
+                      El contador del listado ({historicJobPostings}) incluye todo el histórico:{" "}
+                      {olderJobPostings === 1
+                        ? "1 búsqueda es más antigua"
+                        : `${olderJobPostings} búsquedas son más antiguas`}{" "}
+                      y no se muestra acá.
+                    </>
+                  )}
+                </p>
+
+                {jobPostings.length > 0 ? (
+                  jobPostings.map((jp) => <JobPostingCard key={jp.id} jobPosting={jp} />)
+                ) : (
+                  <div className="text-center py-12 text-muted-foreground bg-white dark:bg-slate-900 rounded-xl border border-dashed">
+                    Sin búsquedas publicadas en los últimos 6 meses.
+                    {historicJobPostings > 0 && (
+                      <>
+                        <br />
+                        Las {historicJobPostings} del listado corresponden a vacantes más antiguas.
+                      </>
+                    )}
+                  </div>
+                )}
               </TabsContent>
             )}
           </div>

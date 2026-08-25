@@ -1,8 +1,9 @@
 "use client"
 
 import React from "react"
-import { Building2, MapPin, Users, GraduationCap, Flame } from "lucide-react"
+import { Building2, MapPin, Users, GraduationCap, Flame, Info } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { ScoreTooltip } from "@/components/search/score-tooltip"
 import type { ProcessSearchResult, TechnologySearchResult } from "@/app/actions/search-v2"
 
@@ -100,13 +101,33 @@ export const ResultItem = React.memo(
             <div className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Alumni</div>
           </div>
           {company.job_postings_count > 0 && (
-            <div className="text-center">
-              <div className="flex items-center justify-center gap-1 text-orange-600 font-bold text-2xl">
-                <Flame className="h-5 w-5" />
-                {company.job_postings_count}
-              </div>
-              <div className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Búsquedas</div>
-            </div>
+            <TooltipProvider>
+              <Tooltip delayDuration={200}>
+                <TooltipTrigger asChild>
+                  <div className="text-center cursor-help">
+                    <div className="flex items-center justify-center gap-1 text-orange-600 font-bold text-2xl">
+                      <Flame className="h-5 w-5" />
+                      {company.job_postings_count}
+                    </div>
+                    <div className="flex items-center justify-center gap-1 text-xs text-muted-foreground font-medium uppercase tracking-wider">
+                      Búsquedas
+                      <Info className="h-3 w-3" />
+                    </div>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" align="end" className="w-72 p-3">
+                  <p className="font-semibold text-sm mb-1">Búsquedas laborales con la señal</p>
+                  <p className="text-xs text-muted-foreground">
+                    Total histórico: todas las vacantes de la empresa donde se detectó la señal buscada, sin límite de
+                    antigüedad.
+                  </p>
+                  <p className="text-xs text-muted-foreground border-t pt-2 mt-2">
+                    Al abrir la empresa, la solapa <span className="font-medium">Búsquedas Laborales</span> muestra solo
+                    las publicadas en los últimos 6 meses, así que ese número puede ser menor.
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           )}
         </div>
       </div>
