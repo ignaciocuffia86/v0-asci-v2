@@ -24,6 +24,9 @@ import { recommendAccountsForValueProposition } from "@/lib/v3/services/value-pr
 import { searchCompaniesByCapability } from "@/lib/v3/services/capability-search"
 import { screenAccountList, MAX_ACCOUNTS_PER_CALL } from "@/lib/v3/services/screen-account-list"
 import { estimateBatch, MAX_ACCOUNTS_PER_BATCH } from "@/lib/v3/services/mcp-batch-estimate"
+import { generateDeterministicIcebreaker } from "@/lib/v3/services/icebreaker-deterministic"
+import { createScreeningExport } from "@/lib/v3/services/mcp-export"
+import { createBatchJob, getBatchJob } from "@/lib/v3/services/mcp-batch-job"
 
 export const maxDuration = 120
 
@@ -261,7 +264,7 @@ const handler = createMcpHandler((rawServer) => {
     async (args, extra) => safely(async () => {
       const auth = authOf(extra)
       await requirePaidMcp(auth, "companies:read", "read")
-      return screenAccountList({ accounts: args.accounts.map((a) => ({ name: a.name, domain: a.domain })), terms: args.terms, countries: args.countries, minSignals: args.minSignals, matchThreshold: args.matchThreshold, maxCandidates: args.maxCandidates })
+      return screenAccountList({ accounts: args.accounts.map((a) => ({ name: a.name, domain: a.domain })), terms: args.terms, countries: args.countries, minSignals: args.minSignals, matchThreshold: args.matchThreshold, maxCandidates: args.maxCandidates }, auth)
     }),
   )
   server.tool("get_company_profile", "Identidad, datos firmográficos y cobertura global de señales de una empresa. Solo lectura. Devuelve siempre un bloque `firmographics` con linkedinUrl, domain, employeesApollo (dotación según Apollo), isPublic, ticker y stockExchange. IMPORTANTE: employeesApollo en null significa que NO tenemos el dato —la cobertura es baja—, no que la empresa sea chica; decilo así en vez de estimar. Usala cuando el usuario pregunte quién es la empresa, de qué tamaño es, si cotiza o cuál es su LinkedIn.", { companyId: z.string().uuid() }, async ({ companyId }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "companies:read", "read"); return getCompanyProfile(companyId) }))
@@ -383,7 +386,7 @@ const handler = createMcpHandler((rawServer) => {
   server.tool("refresh_prompt_package", "Reemite el prompt package de una ejecución client-assisted cuya vigencia venció, SIN consumir cuota ni volver a investigar. Usala cuando un submit falle con CLIENT_PACKAGE_EXPIRED: la cuota ya se consumió al preparar, así que no hay que llamar de nuevo a prepare_account_research. Devuelve el packageHash nuevo con el que hay que reintentar el submit. Tiene un máximo de refrescos por ejecución.", { executionId: z.string().uuid() }, async ({ executionId }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "accounts:read", "read"); return refreshPromptPackage(auth, executionId) }))
   server.tool("get_client_research_status", "Consulta estado y próximo package del research client-assisted.", { executionId: z.string().uuid() }, async ({ executionId }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "accounts:read", "read"); return getClientResearchStatus(auth, executionId) }))
 
-  server.tool("generate_account_icebreaker", "Genera un icebreaker server-managed con AI Gateway de ASCI y límites separados.", { companyId: z.string().uuid(), contactName: z.string().min(2), contactTitle: z.string().optional(), contactCountry: z.string().optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, contactName, contactTitle, contactCountry, idempotencyKey }, extra) => safely(async () => {
+  server.tool("generate_account_icebreaker", "Genera un icebreaker con el AI Gateway de ASCI. CONSUME CUPO. Antes de llamarla, preguntate si alcanza con build_evidence_icebreaker, que cita la misma evidencia sin IA, sin cupo y sin riesgo de alucinación: para trabajar una lista, alcanza. Usá esta cuando el usuario pida tono propio, personalización por industria o síntesis de varias señales.", { companyId: z.string().uuid(), contactName: z.string().min(2), contactTitle: z.string().optional(), contactCountry: z.string().optional(), idempotencyKey: z.string().min(8).max(200) }, async ({ companyId, contactName, contactTitle, contactCountry, idempotencyKey }, extra) => safely(async () => {
     const auth = authOf(extra); await requirePaidMcp(auth, "icebreakers:generate", "server_managed"); await getAccountIntelligence(auth, companyId)
     const reservation = await reserveMcpUsage({ principal: auth, pool: "icebreaker_server", units: 1, idempotencyKey, metadata: { companyId } }); if (!reservation.allowed || !reservation.reservationId) return reservation
     if (reservation.idempotent && reservation.status === "committed" && reservation.metadata?.icebreakerId) {
@@ -398,6 +401,24 @@ const handler = createMcpHandler((rawServer) => {
       await setReservationStatus(reservation.reservationId, "released"); throw error
     }
   }))
+  server.tool(
+    "build_evidence_icebreaker",
+    "Arma un icebreaker que CITA LA EVIDENCIA, sin IA. Es la tool para \"un mensaje que nombre lo que vimos, no el producto\".\n\nNO consume cupo, NO llama a ningún modelo y NO exige que la cuenta esté guardada: lee la evidencia ya persistida y la escribe con un template. Como no hay modelo, no puede inventar una tecnología que la cuenta no tenga — que es el peor error posible frente a un cliente. Es determinístico: dos llamadas iguales dan el mismo texto.\n\nUSALA POR DEFAULT para trabajar una lista. Dejá `generate_account_icebreaker` (que sí consume cupo de IA) para cuando el usuario pida tono, personalización por industria o síntesis de varias señales.\n\nPOR DEFAULT NO NOMBRA A NINGUNA PERSONA: dice \"en el equipo varios perfiles mencionan X\", que transmite la misma señal sin exponer a nadie. `nameIndividuals` existe para que un vendedor lo active a conciencia, y cuando lo activa la respuesta trae un aviso legal: nombrar a alguien a partir de su perfil para venderle a su empleador cae bajo la Ley 19.628 y su reforma 21.719 en Chile, y bajo GDPR si hay matriz europea.\n\nSI TODA LA EVIDENCIA ES DE EX-EMPLEADOS, NO ESCRIBE EL MENSAJE y te dice por qué: que alguien haya usado una tecnología no prueba que la cuenta la use hoy. No lo rodees generando el icebreaker por otra vía.",
+    {
+      companyId: z.string().uuid(),
+      term: z.string().min(2).max(120).optional().describe("El término a citar. Sin él usa los de más señales de la cuenta."),
+      contactName: z.string().max(200).optional().describe("Solo se usa en el texto si nameIndividuals es true."),
+      contactTitle: z.string().max(200).optional(),
+      contactCountry: z.string().max(120).optional().describe("Ajusta el registro (voseo, tuteo, inglés)."),
+      nameIndividuals: z.boolean().default(false).describe("Nombrar a la persona en el mensaje. Dejalo en false salvo que el usuario lo pida explícitamente."),
+      includeQuote: z.boolean().default(false).describe("Sumar una cita textual corta del perfil."),
+    },
+    async (args, extra) => safely(async () => {
+      const auth = authOf(extra)
+      await requirePaidMcp(auth, "icebreakers:generate", "read")
+      return generateDeterministicIcebreaker(auth, args)
+    }),
+  )
   server.tool("prepare_account_icebreaker", "Prepara un icebreaker para ejecutar con tokens del cliente. Requiere que la cuenta esté guardada en el workspace.", { companyId: z.string().uuid(), contactName: z.string().min(2), contactTitle: z.string().optional(), contactCountry: z.string().optional(), idempotencyKey: z.string().min(8).max(200) }, async (args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "icebreakers:prepare", "client_assisted"); return prepareAccountIcebreaker(auth, args) }))
   server.tool("submit_account_icebreaker", "Valida y guarda un icebreaker generado por el modelo del cliente.", { executionId: z.string().uuid(), packageHash: z.string().length(64), result: z.unknown(), clientModel: z.string().max(200).optional(), idempotencyKey: z.string().min(8).max(200) }, async (args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "icebreakers:submit", "client_assisted"); return submitAccountIcebreaker(auth, args) }))
   server.tool("create_document_draft", "Inicia un documento compartido desde texto, URL HTTPS pública/Google Drive público o una carga temporal. Para upload devuelve un enlace de un solo uso por 15 minutos.", { title: z.string().min(2).max(240), sourceType: z.enum(["text", "url", "upload"]), text: z.string().max(2_000_000).optional(), url: z.string().url().optional() }, async ({ title, sourceType, text: sourceText, url }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "documents:write", "client_assisted"); if (sourceType === "text" && !sourceText) throw new Error("TEXT_REQUIRED"); if (sourceType === "url" && !url) throw new Error("URL_REQUIRED"); const source = sourceType === "text" ? { type: "text" as const, text: sourceText! } : sourceType === "url" ? { type: "url" as const, url: url! } : { type: "upload" as const }; return createDocumentDraft({ workspaceId: auth.workspaceId, userId: auth.userId, title, source }) }))
@@ -418,6 +439,39 @@ const handler = createMcpHandler((rawServer) => {
       const auth = authOf(extra)
       await requirePaidMcp(auth, "usage:read", "read")
       return estimateBatch(auth, args)
+    }),
+  )
+  server.tool(
+    "create_batch_job",
+    "Ejecuta un lote ya cotizado por estimate_batch. Toma el `batchPlanHash` y hace de una sola vez lo que antes eran 42 llamadas sueltas: guarda las cuentas y lanza el research de todas.\n\nREQUIERE CONFIRMACIÓN porque ocupa lugares del plan y consume unidades de research. Mostrale primero al usuario los números que devolvió estimate_batch.\n\nES IDEMPOTENTE por batchPlanHash: si reintentás, devuelve el lote que ya existe en vez de volver a ocupar cupo. El cupo de cuentas no se recupera solo, así que un reintento por timeout no puede gastarlo dos veces.\n\nSE REANUDA SOLO: si un research queda colgado, el watchdog lo recupera cada 5 minutos. No relances el lote por eso; consultá get_batch_job.\n\nEL GASTO EN APOLLO NO VA INCLUIDO. El batchPlanHash autoriza el research y los lugares del plan, no el crédito de un tercero, que es irreversible. Las cuentas quedan marcadas como listas y el enrichment se confirma por cuenta.",
+    { batchPlanHash: z.string().min(16).max(64), userConfirmed: z.literal(true) },
+    async (args, extra) => safely(async () => {
+      const auth = authOf(extra)
+      await requirePaidMcp(auth, "research:run", "server_managed")
+      return createBatchJob(auth, args)
+    }),
+  )
+  server.tool(
+    "get_batch_job",
+    "Estado de un lote: cuántas cuentas terminaron el research, cuántas siguen en curso, cuáles fallaron y cuáles ya están listas para buscar contactos.\n\nNO consume cupo: consultá las veces que haga falta.\n\nMientras haya cuentas en curso NO hay nada que hacer: el research se recupera solo. `research: \"failed\"` sí es terminal para esa cuenta.",
+    { jobId: z.string().uuid() },
+    async ({ jobId }, extra) => safely(async () => {
+      const auth = authOf(extra)
+      await requirePaidMcp(auth, "accounts:read", "read")
+      return getBatchJob(auth, jobId)
+    }),
+  )
+  server.tool(
+    "create_export",
+    "Convierte el resultado de un screening en un ARCHIVO (xlsx o csv) y devuelve una URL firmada. Es la única tool que entrega un archivo.\n\nUSALA CUANDO EL USUARIO QUIERA LA TABLA. Hasta ahora la única forma de darle un reporte de 61 cuentas era transcribirlo al chat, que es caro y frágil; acá lo único que vuelve es un enlace.\n\nPASÁ EL `screeningId` que devolvió screen_account_list. No hace falta que le reenvíes las filas: ya están guardadas. Si le pasás las filas de vuelta, la tabla viaja dos veces por la conversación y se pierde todo el punto.\n\nCUANDO TENGAS LA URL, PASÁSELA AL USUARIO TAL CUAL y NO transcribas la tabla igual: el archivo existe para que los datos no pasen por el chat.\n\nEl enlace vence en 24 horas; si vence, volvé a llamar esta tool con el mismo screeningId, que no cuesta nada. El archivo lleva la lista de cuentas de un cliente: es privado y firmado, no lo publiques.\n\nNo consume cupo ni créditos.",
+    {
+      screeningId: z.string().uuid().describe("El screeningId que devolvió screen_account_list."),
+      format: z.enum(["xlsx", "csv"]).default("xlsx").describe("xlsx trae además una hoja \"Método\" con los parámetros de la búsqueda."),
+    },
+    async (args, extra) => safely(async () => {
+      const auth = authOf(extra)
+      await requirePaidMcp(auth, "accounts:read", "read")
+      return createScreeningExport(auth, args)
     }),
   )
   server.tool("get_ai_usage", "Devuelve los TRES medidores mensuales del workspace: monthlyServerResearch (research con tokens de ASCI), monthlyClientResearch (research con tus tokens, que igual ocupa cupo del plan) y monthlyApolloCredits (créditos de contactos, 1 crédito = 1 contacto). Suma tokens y costo verificado del AI Gateway. Son independientes entre sí.\n\nCUIDADO CON EL ALCANCE al citar cifras: `workspaceAi` es del WORKSPACE desde el 1° del mes y es la que hay que usar para decir cuánto consume la cuenta. `verifiedAi` y `lastSevenDays` son de QUIEN LLAMA y de los últimos 7 días: con varios miembros en el workspace, sub-reportan. Cada bloque declara su `scope`.\n\nPara saber cuánto cuesta un LOTE concreto antes de correrlo, usá estimate_batch.", {}, async (_args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "usage:read", "read"); return getMcpUsage(auth) }))
@@ -444,6 +498,7 @@ const handler = createMcpHandler((rawServer) => {
     "Si el usuario trae una LISTA de empresas (pegada, de un CSV, de su CRM) y pregunta cuáles tienen cierta tecnología o proceso, usá screen_account_list en UNA llamada. No pagines search_companies_by_capability para cruzarla a mano, y no llames search_companies una vez por cuenta.",
     "Nunca afirmes que una empresa NO tiene una señal por no haberla encontrado en un listado: eso se responde con el estado matched_no_signal de screen_account_list. \"No aparece en lo que miré\" y \"no tiene\" no son lo mismo, y la diferencia con \"no está en ASCI\" tampoco.",
     "Leer evidencia NO exige guardar la cuenta ni correr research: get_company_signal_summary (incluido detail=\"evidence\") y get_account_evidence_detail leen el catálogo global sin consumir cupo. Guardar una cuenta ocupa un lugar del plan y sirve para TRABAJARLA (research, contactos, seguimiento), no para consultarla.",
+    "Si el usuario quiere una TABLA o un archivo, usá create_export con el screeningId y pasale la URL: no transcribas la tabla al chat. Ya no es cierto que ASCI no tenga export por MCP.",
     "Las tools indican en su descripción si consumen cuota. Antes de una que consuma cuota server-managed, confirmá con el usuario.",
   ].join("\n"),
 }, { basePath: "/api/v3/mcp/server", maxDuration: 120, verboseLogs: false })

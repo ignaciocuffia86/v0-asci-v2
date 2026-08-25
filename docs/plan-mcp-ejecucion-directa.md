@@ -1,6 +1,6 @@
 # Plan de implementación — MCP para ejecución directa sobre listas
 
-**Estado:** Fases 0 y 1 completas · Fase 2 en curso (`estimate_batch` hecho, falta el presupuesto en USD) · Fases 3-4 pendientes
+**Estado:** Fases 0, 1 y 3 completas · Fase 2 completa salvo el tope en USD, descartado por decisión de producto · Fase 4 pendiente
 **Insumo:** `ASCI MCP — Diseño para ejecución directa` (sesión 24-ago-2026, screening Power BI / 61 cuentas Chile)
 **Alcance:** MCP `asci-v3` (`app/api/v3/mcp/server/[transport]/route.ts` + `lib/v3/**`)
 
@@ -129,14 +129,23 @@ Un detalle que apareció implementando: `checkResearchQuota` devuelve `allowed: 
 
 **Esfuerzo:** ~2-3 días.
 
-### Fase 3 — Escala
+### Fase 3 — Escala ✅ (24-ago-2026)
 
-- `create_batch_job(batchPlanHash)` / `get_batch_job(jobId)` con estado por cuenta y reanudación, reusando `research-pipeline.ts` (`createResearchBatch` / `runResearchJob`) más una tabla de estado por lote.
-- `create_export(jobId)` → `exceljs` (ya es dependencia) → bucket `workspace-exports` → `createSignedUrl` TTL 24 h (patrón de `app/actions/v3/documents.ts:383`). Resuelve el límite de 200 y el costo de transportar tablas por la conversación.
-- Icebreaker `mode: "evidence_quote"` — template determinístico, Tier 0, sin IA y sin riesgo de alucinación. **Por default agrega en vez de individualizar** ("el equipo de TI reporta Power BI a nivel alto en varios perfiles"), con el nombre propio como opción explícita. Es la recomendación §7.3 del `.md` y la comparto: Ley 19.628 / 21.719 en Chile, GDPR si hay matriz europea, y además es incómodo de recibir.
-- Sanitizar fragmentos antes de pasarlos a un modelo (§7.2): la evidencia sale de perfiles y vacantes escritos por terceros; es superficie de inyección directa. Se tratan como datos, nunca como instrucciones.
+**`build_evidence_icebreaker`** — icebreaker sin IA, Tier 0. Cita la evidencia, cuesta cero y no puede alucinar una tecnología que la cuenta no tenga. Es determinístico: dos corridas dan el mismo texto. Dos reglas que no negocia: **agrega en vez de individualizar** (§7.3) y **se niega a escribir si toda la evidencia es de ex-empleados** (§7.4) — una vacante sí vale, porque la publica la empresa.
 
-**Esfuerzo:** ~4-5 días.
+**Contención del texto de terceros** (§7.2) — `generateIcebreaker` interpolaba los hallazgos directo en el prompt. Ahora van en un bloque de datos con la regla por delante. No intenta detectar intención (un blocklist de frases es una carrera que se pierde): garantiza que el texto no se salga de su bloque, no esconda nada de quien audite el prompt y no desborde el contexto.
+
+**`create_export`** — el entregable deja de viajar por la conversación. Va por **handle**, no por reenvío: `screen_account_list` persiste su resultado y devuelve un `screeningId`. La alternativa —que quien llama reenvíe las filas— duplicaba el costo que el export venía a eliminar.
+
+**`create_batch_job` / `get_batch_job`** — ejecuta un lote cotizado. Idempotente por `batchPlanHash`, porque el cupo de cuentas no se recupera solo y un reintento por timeout no puede gastarlo dos veces.
+
+Tres cosas que el diseño original pedía y **no** hubo que construir o se resolvieron distinto:
+
+| Lo que pedía el plan | Qué pasó |
+|---|---|
+| Reanudación con estado por cuenta | Ya existía. `v3.research_jobs` tiene lease, heartbeat y reintentos, y `v3-research-watchdog` recupera lo colgado cada 5 min. Construir una segunda máquina de estados la habría desincronizado de la primera |
+| El lote corre research + digest + Apollo | El gasto en Apollo **no** va en el lote. Es Tier 3 e irreversible: el `batchPlanHash` autoriza el research y los lugares del plan, no el crédito de un tercero |
+| Dejar los enrichments preparados | **No sirve, y lo decide un número**: una preparación vive 30 minutos (`PREPARE_TTL_MINUTES`) y el research de 42 cuentas tarda más. Todas vencerían, y mientras tanto dejarían 42 × N créditos de Apollo reservados sin gastarse. El lote guarda la intención y `get_batch_job` avisa qué cuentas ya están listas |
 
 ### Fase 4 — Precisión y modelo de negocio
 

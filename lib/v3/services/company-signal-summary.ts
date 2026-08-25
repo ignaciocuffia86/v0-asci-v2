@@ -385,6 +385,14 @@ async function evidenceDetail(params: {
       kind: termRows[0].signal_type,
       signalsOwn: termRows.filter((row) => row.company_id === params.canonical.id).length,
       signalsConsolidated: termRows.length,
+      // Desglose por ORIGEN sobre TODAS las filas del término, no sobre los dos
+      // fragmentos que se muestran. Un icebreaker se decide con estos números:
+      // un ex-empleado no prueba uso actual, y una vacante la publica la empresa.
+      // Con solo las muestras, una cuenta con 9 señales de empleados actuales y 2
+      // fragmentos de ex-empleados se leería como si no tuviera evidencia viva.
+      fromCurrentEmployees: termRows.filter((row) => row.is_current_employee === true).length,
+      fromFormerEmployees: termRows.filter((row) => row.contact_id && row.is_current_employee !== true).length,
+      fromJobPostings: termRows.filter((row) => !row.contact_id).length,
       latestAt: termRows.reduce<string | null>((latest, row) => {
         const occurredAt = row.job_posted_at ?? row.created_at
         return occurredAt && (!latest || occurredAt > latest) ? occurredAt : latest

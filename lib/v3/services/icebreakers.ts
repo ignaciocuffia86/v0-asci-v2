@@ -4,6 +4,8 @@ import { getRadarFindings } from "./radar"
 import { MODELS, type Icebreaker } from "./types"
 import { logAiUsage } from "@/lib/v3/usage"
 import { renderPrompt } from "@/lib/v3/prompts"
+import { registerForCountry } from "./icebreaker-register"
+import { fenceUntrustedEvidence } from "./untrusted-text"
 
 // ═══════════════════════════════════════════════════════════
 // Icebreakers por contacto, regionalizados por país:
@@ -14,40 +16,6 @@ import { renderPrompt } from "@/lib/v3/prompts"
 //    versiones vía regenerated_from.
 //  - Feedback 👍/👎 persistido para mejorar prompts futuros.
 // ═══════════════════════════════════════════════════════════
-
-function registerForCountry(country: string | null): { register: string; instructions: string } {
-  const c = (country ?? "").toLowerCase()
-  if (["argentina", "uruguay"].some((x) => c.includes(x))) {
-    return {
-      register: "es-rioplatense",
-      instructions:
-        "Usá voseo rioplatense (vos, tenés, querés). Tono profesional pero cercano, directo, sin formalidad excesiva.",
-    }
-  }
-  if (["mexico", "méxico", "colombia", "chile", "peru", "perú", "ecuador"].some((x) => c.includes(x))) {
-    return {
-      register: "es-tuteo",
-      instructions:
-        "Usa tuteo (tú, tienes, quieres). Tono profesional y cordial, ligeramente más formal que el rioplatense.",
-    }
-  }
-  if (["spain", "españa"].some((x) => c.includes(x))) {
-    return {
-      register: "es-espana",
-      instructions: "Usa tuteo peninsular. Tono profesional directo, sin rodeos.",
-    }
-  }
-  if (["united states", "usa", "canada", "united kingdom", "brazil", "brasil"].some((x) => c.includes(x))) {
-    return {
-      register: "en",
-      instructions: "Write in professional English. Direct, concise, no fluff.",
-    }
-  }
-  return {
-    register: "es-neutral",
-    instructions: "Usa español neutro profesional (tú/usted según convenga, evita regionalismos).",
-  }
-}
 
 export interface IcebreakerRequest {
   workspaceId: string
@@ -91,10 +59,16 @@ export async function generateIcebreaker(req: IcebreakerRequest): Promise<Icebre
   const profile = profileRes.data
   const previous = previousRes.data as { content: string; version: number } | null
 
-  const evidenceLines = findings
-    .slice(0, 8)
-    .map((f) => `- [${f.evidence_level}${f.source_name ? `, ${f.source_name}` : ""}] ${f.title}: ${f.summary ?? ""}`)
-    .join("\n")
+  // Los hallazgos salen de perfiles de LinkedIn y avisos de empleo: TEXTO DE
+  // TERCEROS. Interpolarlos sueltos en el prompt, que es lo que se hacía acá,
+  // deja que cualquiera le hable al modelo desde su campo `about`. Ahora van
+  // encerrados en un bloque de datos con la regla por delante.
+  const evidenceLines = fenceUntrustedEvidence(
+    findings.slice(0, 8).map((f) => ({
+      label: `${f.evidence_level}${f.source_name ? `, ${f.source_name}` : ""}`,
+      text: `${f.title}: ${f.summary ?? ""}`,
+    })),
+  )
 
   const regenerationBlock = req.regenerateFrom && previous
     ? `\nVERSIÓN ANTERIOR (el usuario pidió cambiarla):
