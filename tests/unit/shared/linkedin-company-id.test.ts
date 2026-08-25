@@ -42,3 +42,18 @@ describe("extractConsistentLinkedinCompanyId", () => {
     expect(extractConsistentLinkedinCompanyId([{ title: "x" }])).toEqual({ id: null, mixed: false })
   })
 })
+
+describe("[459] el `id` del payload del actor de enrichment", () => {
+  // El enrichment lee item.id y lo escribe en companies.linkedin_company_id.
+  // harvestapi lo manda como STRING, no como número: si eso cambiara, el
+  // backfill y el cron dejarían de aprender el ID en silencio.
+  it("parsea el id tal como viene en el payload guardado", () => {
+    const item = { id: "9425834", name: "Laminadora Los Angeles S.A." }
+    expect(parseLinkedinCompanyId(item.id)).toBe(9425834)
+  })
+
+  it("no aprende nada de un payload sin id o con id basura", () => {
+    expect(parseLinkedinCompanyId(undefined)).toBeNull()
+    expect(parseLinkedinCompanyId("urn:li:fsd_company:9425834")).toBeNull()
+  })
+})

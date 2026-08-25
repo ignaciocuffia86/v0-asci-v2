@@ -1,6 +1,7 @@
 import { put } from "@vercel/blob"
 import type { Client } from "pg"
 import { conConexionDirecta } from "@/lib/db/direct"
+import { parseLinkedinCompanyId } from "./linkedin-company-id"
 
 /**
  * ENRICHMENT DE public.companies VIA LINKEDIN (Apify)
@@ -29,6 +30,8 @@ import { conConexionDirecta } from "@/lib/db/direct"
  * - No se tocan las columnas apollo_* (semantica de otra fuente).
  * - [458] Cuando `locations` viene vacio, `country` se puede completar desde
  *   `peopleStats`, pero `hq_country_iso` NO: ver pickCountryFromPeopleStats.
+ * - [459] `linkedin_company_id` es write-once y tiene un UNIQUE parcial: se
+ *   escribe con NOT EXISTS, nunca con setIfEmpty. Ver mas abajo.
  */
 
 const ACTOR = "harvestapi~linkedin-company"
@@ -55,6 +58,8 @@ export interface EnrichmentResult {
   renamed: number
   /** [458] Filas sin HQ que igual recuperaron `country` desde peopleStats. */
   countryFromPeopleStats: number
+  /** [459] Filas que aprendieron su `linkedin_company_id` del payload. */
+  linkedinIdFilled: number
   filled: Record<string, number>
   skippedForQuota: boolean
   quota: QuotaStatus | null
@@ -505,6 +510,7 @@ export async function runLinkedInEnrichment(options: RunOptions = {}): Promise<E
     identityMismatch: 0,
     renamed: 0,
     countryFromPeopleStats: 0,
+    linkedinIdFilled: 0,
     filled: {},
     skippedForQuota: false,
     quota: null,
@@ -665,6 +671,51 @@ export async function runLinkedInEnrichment(options: RunOptions = {}): Promise<E
             if (rowCount && rowCount > 0) result.renamed++
           }
 
+          // [459] El LinkedIn company ID, que el payload trae SIEMPRE y hasta
+          // ahora tirabamos.
+          //
+          // POR QUE IMPORTA MAS QUE UNA COLUMNA MAS
+          // Es el decisor de maxima prioridad de belongsToCompany() en la
+          // ingesta de vacantes: cuando los dos lados lo tienen, resuelve la
+          // pertenencia por identidad y ni mira el slug ni el nombre. Sin el,
+          // la atribucion cae al nombre, que es donde "Grupo Arcor" se llevaba
+          // puestas a "Arcort SRL" y "Arcorp S.A.". Cada ID que falta es una
+          // vacante atribuida por parecido en vez de por identidad.
+          //
+          // POR QUE NO VA POR setIfEmpty
+          // La columna tiene un UNIQUE parcial (companies_linkedin_company_id_key)
+          // y setIfEmpty no lo contempla: si el ID ya es de otra fila, el UPDATE
+          // tira 23505 y se lleva puesto el resto del lote. El NOT EXISTS lo
+          // convierte en un no-op silencioso, que es la respuesta correcta en
+          // los dos casos que producen una colision: o las dos filas son la
+          // misma empresa (duplicado, lo resuelve el pipeline de dedup), o a
+          // una de las dos le escribieron los datos de la otra porque el guard
+          // de identidad la dejo pasar. Las 2 colisiones que hay en produccion
+          // hoy son lo SEGUNDO ("Fundacion Igualar..." se comio los datos de
+          // Uala porque "ig-UALA-r" contiene "uala"), asi que no asumir
+          // duplicado: ver el script 459, que las lista para revisar.
+          //
+          // Y por eso mismo, que el guard de identidad haya dado por buena la
+          // URL hace probable que el ID sea de esta empresa, no seguro.
+          const idLinkedIn = parseLinkedinCompanyId(item.id)
+          if (idLinkedIn !== null) {
+            const { rowCount } = await db.query(
+              `UPDATE public.companies
+                  SET linkedin_company_id = $1, updated_at = now()
+                WHERE id = $2
+                  AND linkedin_company_id IS NULL
+                  AND NOT EXISTS (
+                    SELECT 1 FROM public.companies o
+                     WHERE o.linkedin_company_id = $1 AND o.id <> $2)`,
+              [idLinkedIn, c.id],
+            )
+            if (rowCount && rowCount > 0) {
+              result.linkedinIdFilled++
+              filled.push("linkedin_company_id")
+              bump("linkedin_company_id")
+            }
+          }
+
           // Un UPDATE por columna, cada uno condicionado a que este vacia. Asi
           // nunca se sobrescribe y cada trigger se dispara donde corresponde.
           const setIfEmpty = async (col: string, value: unknown) => {
@@ -763,6 +814,7 @@ export async function runLinkedInEnrichment(options: RunOptions = {}): Promise<E
     console.log(
       `[v3-enrich] ok=${result.ok} no_hq=${result.noHq} no_result=${result.noResult} ` +
         `pais_por_empleados=${result.countryFromPeopleStats} ` +
+        `linkedin_id=${result.linkedinIdFilled} ` +
         `identidad_dudosa=${result.identityMismatch} err=${result.errors} ` +
         `filled=${JSON.stringify(result.filled)}`,
     )

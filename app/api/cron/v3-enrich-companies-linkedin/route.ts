@@ -105,6 +105,8 @@ export async function GET(request: Request) {
             renamed: result.renamed,
             // [458] Filas sin HQ que igual recuperaron el pais de operacion.
             country_from_people_stats: result.countryFromPeopleStats,
+            // [459] Filas que aprendieron su LinkedIn company ID del payload.
+            linkedin_id_filled: result.linkedinIdFilled,
             skipped_for_quota: result.skippedForQuota,
             stopped_for_budget: result.stoppedForBudget,
             quota: result.quota,
