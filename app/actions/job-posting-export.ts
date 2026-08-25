@@ -34,7 +34,6 @@ export interface JobExportRow {
   industry: string | null
   location: string | null
   posted_at: string | null
-  is_active: boolean | null
   job_url: string | null
   apply_url: string | null
   signal_count: number
@@ -50,7 +49,6 @@ export interface DictionaryEntry {
 
 export interface JobExportStats {
   total_jobs: number
-  active_jobs: number
   with_signals: number
   with_country: number
   companies: number

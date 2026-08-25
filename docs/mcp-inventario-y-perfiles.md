@@ -59,8 +59,8 @@ Costo: **T0** determinístico (sin costo marginal) · **T1** scraping · **T2** 
 
 | Tool | Qué hace | Qué **NO** permite | Scope / costo |
 |---|---|---|---|
-| `search_companies` | Un nombre → empresas rankeadas por evidencia, con `likelyCanonical` y `duplicateWarning` | No filtra por país ni industria · no devuelve señales por término · un nombre por llamada | `companies:read` · T0 |
-| `search_companies_by_capability` | Búsqueda **inversa**: término → empresas. Dos pasos (`screening` → `detail`) | No acepta lista de nombres · máx 50 por página y techo práctico de ~200 paginando · máx 2 procesos / 20 productos · **no consolida homónimos** (cuenta por entidad) | `companies:read` · T0 |
+| `search_companies` | Un nombre → empresas rankeadas por evidencia, con `likelyCanonical` y `duplicateWarning` | No filtra por país ni industria · no devuelve señales por término · un nombre por llamada · `evidence.jobPostings` es el histórico de la entidad **sin ventana de fecha** y sin exigir señal detectada | `companies:read` · T0 |
+| `search_companies_by_capability` | Búsqueda **inversa**: término → empresas. Dos pasos (`screening` → `detail`) | No acepta lista de nombres · máx 50 por página y techo práctico de ~200 paginando · máx 2 procesos / 20 productos · **no consolida homónimos** (cuenta por entidad) · `jobPostings` **no filtra por fecha** (ver §5.4) | `companies:read` · T0 |
 | `screen_account_list` ⭐ | **Lista del cliente × términos** → una fila por nombre, cuatro estados. Consolida las entidades duplicadas del catálogo y separa `signalsOwn` de `signalsForTerms` | No resuelve la ambigüedad sola (devuelve candidatos) · no trae firmográficos · **máx 100 nombres** (medido: 100 difusos = 5,7 s contra el techo de 8 s) · acrónimos <4 letras solo matchean por nombre canónico exacto | `companies:read` · T0 |
 | `recommend_accounts_for_value_proposition` | Prefiltra hasta 20 cuentas contra la documentación del workspace | Máx 20 · exige países ISO-2 · no explica el descarte | `recommendations:read` · T2b |
 
@@ -70,7 +70,7 @@ Costo: **T0** determinístico (sin costo marginal) · **T1** scraping · **T2** 
 |---|---|---|---|
 | `get_company_profile` | Identidad + firmográficos + cobertura de señales | `employeesApollo: null` = no lo sabemos, no "empresa chica" | `companies:read` · T0 |
 | `get_company_signals` | Señales de **perfiles y documentos** (excluye vacantes), fila por fila, con el aviso agregado de cuántas son de ex-empleados | Máx 100 · sin consolidación de alias · sin agrupar por término · no incluye vacantes | `signals:read` · T0 |
-| `get_company_signal_summary` | Panorama consolidado. `compact` \| `evidence` \| `full` | Máx 100 señales / 30 implementaciones / 30 vacantes · no filtra por fecha · `full` pesa ~15k tokens | `signals:read` · T0 |
+| `get_company_signal_summary` | Panorama consolidado. `compact` \| `evidence` \| `full` | Máx 100 señales / 30 implementaciones / 30 vacantes · **no filtra por fecha** y no informa si una vacante sigue abierta (§5.4) · `full` pesa ~15k tokens | `signals:read` · T0 |
 | `get_account_evidence_detail` | Un término → fuentes con cita textual, fecha, link, persona y si sigue en la empresa | Máx 10 términos · con snapshot da la versión clasificada, sin snapshot la cruda (`source` lo declara) | `signals:read` · T0 |
 | `get_account_intelligence` | Snapshot, scorecard, brief e icebreakers **ya materializados** | **Exige cuenta en el workspace** · no genera nada: si no hay research, no hay nada | `accounts:read` · T0 |
 
@@ -178,6 +178,46 @@ Las dos capas pagas son las mismas del server standard, con otro nombre: `explor
 5. **No hay teléfono.** `get_company_contacts` evalúa frescura de teléfono, pero el enrichment escribe `phone_status: "not_requested"`. El dato existe en el modelo y no hay camino para obtenerlo.
 
 6. **El cupo del plan no distingue consultar de seguir.** `followedCap` cubre las dos cosas, así que un solo reporte de screening puede agotar el plan (42 cuentas de 60 en el caso real; 139 en el de Legrand).
+
+### 5.4 Los conteos de vacantes son históricos (y `is_active` no significa nada)
+
+Relevado el 25-ago-2026 contra el catálogo real, a partir de una diferencia que se veía en la
+aplicación web: el listado de resultados marcaba 5 búsquedas para Ualá + AWS y el detalle mostraba 2.
+
+**El criterio es deliberado y son dos cosas distintas**, pero hay que decirlo en cada superficie:
+
+| Superficie | Qué cuenta |
+|---|---|
+| Listado de resultados y score de la web (`search_companies_by_*_v2`) | Vacantes con la señal, **todo el histórico** |
+| Detalle de una empresa en la web (`get_company_drawer_data`) y workspace (`get_company_job_postings`) | Solo las de los **últimos 6 meses** |
+| MCP: `search_companies`, `search_companies_by_capability`, `get_company_signal_summary`, `explore_*`, exports | **Todo el histórico**, sin ventana |
+
+O sea que el MCP coincide con el listado de la web, y el que recorta es el detalle. Los números que
+hay detrás, medidos sobre el catálogo:
+
+- 43.052 vacantes en total, de las cuales **19.692 (46%) son de los últimos 6 meses**.
+- De 45.135 pares (empresa, señal) con vacantes, **25.636 (57%) dan distinto** según qué criterio se
+  aplique, y en 18.471 el corte de 6 meses deja el detalle en cero.
+- Naranja X tiene 56 vacantes con señal de AWS y **una sola** es de este semestre.
+
+**No hay dato de "sigue abierta".** Había una columna `job_postings.is_active`, pero venía en `true`
+en las 43.052 filas del catálogo —incluida una de 2023— porque se escribe con el DEFAULT de la
+ingesta y ningún proceso la vuelve a tocar. Seis funciones la leían (dos de ellas con un `WHERE
+is_active = true` que no descartaba una sola fila) y `get_company_signal_summary` devolvía un
+`activeCount` que siempre era igual a `count`. **Se dejó de leer** (migración
+`20260825141319`): la columna sigue existiendo, comentada como no mantenida, y `activeCount`
+desapareció de la respuesta del MCP.
+
+Tampoco puede volverse cierta sin cambiar el pipeline: el único proceso que revisita vacantes es el
+cron `v3-scrape-job-postings`, que corre sobre **cuentas seguidas** (14 empresas, contra 6.822 con
+vacantes en el catálogo) y en el refresh mensual va con `windowDays: 30` — trae novedades y nunca
+vuelve a mirar una vacante vieja, así que "no apareció en la última corrida" no prueba que se cerró.
+
+Lo que está abierto **hoy** se averigua con `scrape_company_job_postings` (o `explore_scrape_jobs`),
+que es lo único que va a LinkedIn en el momento.
+
+Por eso ninguna de estas tools puede presentar su conteo como "está contratando": la formulación
+correcta es "vacantes con esta señal en el catálogo", y la fecha de cada una es parte de la respuesta.
 
 ---
 

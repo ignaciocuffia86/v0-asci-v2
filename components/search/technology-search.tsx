@@ -91,6 +91,12 @@ export function TechnologySearch() {
     setSelectedCompanyId(companyId)
   }, [])
 
+  // Contador histórico del listado, para explicar en el drawer la ventana de 6 meses
+  const selectedCompanyJobPostings = useMemo(
+    () => results.find((r) => r.company_id === selectedCompanyId)?.job_postings_count,
+    [results, selectedCompanyId],
+  )
+
   const searchContext = {
     filterSignalIds: selectedTech ? [selectedTech] : [],
     filterType: "technology",
@@ -305,6 +311,7 @@ export function TechnologySearch() {
         onClose={() => setSelectedCompanyId(null)}
         filterSignalIds={selectedTech ? [selectedTech] : undefined}
         filterType="technology"
+        jobPostingsTotal={selectedCompanyJobPostings}
       />
     </div>
   )
