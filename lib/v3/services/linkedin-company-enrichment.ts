@@ -27,6 +27,8 @@ import { conConexionDirecta } from "@/lib/db/direct"
  * - `industry` recibe industries[0].name, que ya viene en la misma taxonomia
  *   que los valores existentes de la tabla.
  * - No se tocan las columnas apollo_* (semantica de otra fuente).
+ * - [458] Cuando `locations` viene vacio, `country` se puede completar desde
+ *   `peopleStats`, pero `hq_country_iso` NO: ver pickCountryFromPeopleStats.
  */
 
 const ACTOR = "harvestapi~linkedin-company"
@@ -51,6 +53,8 @@ export interface EnrichmentResult {
   identityMismatch: number
   /** [454] Filas que venian bautizadas con el slug y adoptaron su nombre real. */
   renamed: number
+  /** [458] Filas sin HQ que igual recuperaron `country` desde peopleStats. */
+  countryFromPeopleStats: number
   filled: Record<string, number>
   skippedForQuota: boolean
   quota: QuotaStatus | null
@@ -117,6 +121,65 @@ export function pickHq(locations: unknown): HqPick | null {
   }
 
   return null
+}
+
+/**
+ * [458] Pais de OPERACION cuando el actor no da ubicaciones.
+ *
+ * EL BUG QUE ARREGLA
+ * `pickHq` solo mira `payload.locations`, y ese array viene VACIO en el 98,6%
+ * de las respuestas que quedaron en estado `no_hq` (3.994 de 4.050 medidas en
+ * produccion). Resultado: 3.575 empresas quedaron sin `country` aunque el
+ * payload que ya pagamos traia el pais, en otro lado.
+ *
+ * DONDE ESTA EL DATO
+ * El actor devuelve `peopleStats`, un corte de la pestaña de gente, y una de
+ * sus entradas es `statTitle: "Locations"` con los valores ordenados de mayor
+ * a menor. El primero es, casi siempre, el pais limpio: sobre las 3.459 filas
+ * recuperables medidas daba "Argentina" (1.025), "Chile" (425), "Peru" (233),
+ * "Mexico" (208), "Colombia" (201)...
+ *
+ * POR QUE NO SE ESCRIBE hq_country_iso
+ * Esto es donde estan los EMPLEADOS, no donde esta la casa matriz. Encaja con
+ * `country` —el pais de operacion, que es lo que filtran los exports de admin
+ * de v2 via country_normalized— y no con `hq_country_iso`, que la tabla usa
+ * para el HQ confirmado por LinkedIn. Mezclarlos meteria evidencia debil en la
+ * columna que hoy solo guarda HQ duro. Por eso el status sigue siendo `no_hq`:
+ * la casa matriz sigue sin saberse.
+ *
+ * SOLO EL VALOR MAS ALTO, Y SOLO CONTRA EL VOCABULARIO REAL
+ * Se mira unicamente el primer valor, no la lista entera. Bajar por la lista
+ * recuperaria ~150 filas mas cuyo tope es una ciudad suelta ("Lima", "Buenos
+ * Aires"), pero al costo de poder agarrar el pais de una minoria de empleados
+ * y escribir Estados Unidos en una empresa argentina. Escribir el pais
+ * equivocado es peor que no escribirlo: `country` alimenta los filtros de v2.
+ *
+ * El valor se acepta solo si ya existe en `country_normalized` (79 nombres
+ * limpios en la tabla). Asi nunca se inventa un nombre de pais que los filtros
+ * de v2 no conozcan, y no hace falta mantener otro diccionario. Como siempre
+ * devuelve un valor que ya estaba en el vocabulario, tampoco puede hacerlo
+ * crecer solo.
+ */
+export function pickCountryFromPeopleStats(
+  item: unknown,
+  vocabulario: ReadonlyMap<string, string>,
+): string | null {
+  const stats = (item as any)?.peopleStats
+  if (!Array.isArray(stats)) return null
+
+  const locations = stats.find((s: any) => s?.statTitle === "Locations")
+  const top = (Array.isArray(locations?.values) ? locations.values : [])[0]
+  const titulo = typeof top?.title === "string" ? top.title.trim() : ""
+  if (!titulo) return null
+
+  // "Argentina" directo.
+  const exacto = vocabulario.get(titulo.toLowerCase())
+  if (exacto) return exacto
+
+  // "Santiago Metropolitan Region, Chile" -> "Chile".
+  const partes = titulo.split(",")
+  if (partes.length < 2) return null
+  return vocabulario.get(partes[partes.length - 1].trim().toLowerCase()) ?? null
 }
 
 /** El slug es el segmento de /company/<slug>. Es la clave para matchear la respuesta. */
@@ -382,6 +445,29 @@ async function fetchCandidates(
   return rows
 }
 
+/**
+ * [458] Los nombres de pais que la tabla ya reconoce.
+ *
+ * `country_normalized` lo deriva el trigger a partir de `country` y tiene 79
+ * valores limpios, contra los 1.287 de `country` (que arrastra la basura de
+ * los imports viejos). Por eso el vocabulario sale de ahi y no de `country`.
+ *
+ * Se indexa en minusculas y se devuelve la grafia canonica, que es la que se
+ * escribe: la comparacion es laxa, lo que se guarda no.
+ *
+ * Cuesta 58ms contra las 514.270 filas reales (index-only scan por
+ * idx_companies_country_normalized), asi que no compite con el presupuesto de
+ * 45s de la corrida. Medido, no estimado.
+ */
+async function fetchCountryVocabulary(db: Client): Promise<Map<string, string>> {
+  const { rows } = await db.query<{ country_normalized: string }>(
+    `SELECT DISTINCT country_normalized
+       FROM public.companies
+      WHERE country_normalized IS NOT NULL AND btrim(country_normalized) <> ''`,
+  )
+  return new Map(rows.map((r) => [r.country_normalized.trim().toLowerCase(), r.country_normalized.trim()]))
+}
+
 // ---------------------------------------------------------------------- main
 
 export interface RunOptions {
@@ -418,6 +504,7 @@ export async function runLinkedInEnrichment(options: RunOptions = {}): Promise<E
     errors: 0,
     identityMismatch: 0,
     renamed: 0,
+    countryFromPeopleStats: 0,
     filled: {},
     skippedForQuota: false,
     quota: null,
@@ -443,6 +530,9 @@ export async function runLinkedInEnrichment(options: RunOptions = {}): Promise<E
     const candidates = await fetchCandidates(db, limit, newCompanyWindowDays)
     console.log(`[v3-enrich] candidatas=${candidates.length} dryRun=${dryRun}`)
     if (candidates.length === 0) return result
+
+    // [458] Una sola consulta por corrida: son 79 filas y no cambian a mitad.
+    const vocabularioPaises = await fetchCountryVocabulary(db)
 
     for (let i = 0; i < candidates.length; i += batchSize) {
       // Presupuesto de tiempo: se corta ANTES de arrancar un lote que no llega.
@@ -544,6 +634,8 @@ export async function runLinkedInEnrichment(options: RunOptions = {}): Promise<E
         }
 
         const hq = pickHq(item.locations)
+        // [458] Solo si el actor no dio ubicaciones: el HQ manda cuando existe.
+        const paisPorEmpleados = hq ? null : pickCountryFromPeopleStats(item, vocabularioPaises)
         const filled: string[] = []
 
         if (!dryRun) {
@@ -594,6 +686,9 @@ export async function runLinkedInEnrichment(options: RunOptions = {}): Promise<E
             // country primero: su trigger deriva country_normalized (contrato v2).
             await setIfEmpty("country", hq.country)
             await setIfEmpty("hq_country_iso", hq.iso)
+          } else if (paisPorEmpleados) {
+            // [458] Pais de operacion, sin ISO: no es evidencia de casa matriz.
+            await setIfEmpty("country", paisPorEmpleados)
           }
           await setIfEmpty("website", normalizeWebsite(item.website))
           await setIfEmpty("industry", item.industries?.[0]?.name ?? null)
@@ -627,9 +722,12 @@ export async function runLinkedInEnrichment(options: RunOptions = {}): Promise<E
           }
         }
 
+        // El status sigue mirando el HQ: con el fallback sabemos donde OPERA la
+        // empresa, no donde tiene la casa matriz, y eso ultimo sigue sin saberse.
         const status = hq ? "ok" : "no_hq"
         if (hq) result.ok++
         else result.noHq++
+        if (paisPorEmpleados) result.countryFromPeopleStats++
 
         if (!dryRun) {
           await db.query(
@@ -648,9 +746,12 @@ export async function runLinkedInEnrichment(options: RunOptions = {}): Promise<E
               c.id,
               c.linkedin_url,
               status,
+              // [458] hq_iso queda NULL con el fallback: hq_source dice de donde
+              // salio hq_country y es lo que distingue un pais de operacion de
+              // una casa matriz confirmada, para auditarlo o revertirlo despues.
               hq?.iso ?? null,
-              hq?.country ?? null,
-              hq?.source ?? null,
+              hq?.country ?? paisPorEmpleados ?? null,
+              hq?.source ?? (paisPorEmpleados ? "people_stats_country" : null),
               item,
               filled,
             ],
@@ -661,6 +762,7 @@ export async function runLinkedInEnrichment(options: RunOptions = {}): Promise<E
 
     console.log(
       `[v3-enrich] ok=${result.ok} no_hq=${result.noHq} no_result=${result.noResult} ` +
+        `pais_por_empleados=${result.countryFromPeopleStats} ` +
         `identidad_dudosa=${result.identityMismatch} err=${result.errors} ` +
         `filled=${JSON.stringify(result.filled)}`,
     )

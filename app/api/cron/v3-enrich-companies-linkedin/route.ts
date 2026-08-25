@@ -103,6 +103,8 @@ export async function GET(request: Request) {
             identity_mismatch: result.identityMismatch,
             filled: result.filled,
             renamed: result.renamed,
+            // [458] Filas sin HQ que igual recuperaron el pais de operacion.
+            country_from_people_stats: result.countryFromPeopleStats,
             skipped_for_quota: result.skippedForQuota,
             stopped_for_budget: result.stoppedForBudget,
             quota: result.quota,
