@@ -64,11 +64,31 @@
 -- las 150 restantes, pero permitiria que una minoria de empleados en otro pais
 -- le gane al pais real: escribir el pais equivocado es peor que no escribirlo.
 --
--- COMO CORRERLO
+-- APLICADO EN asciv2-database EL 2026-08-25 20:54 UTC
 --
--- Arranca en DRY RUN. Deja la auditoria completa en `tmp_backfill_458` y NO
--- escribe nada hasta que se descomente el COMMIT del final. Revisar primero
--- los reportes que imprime, sobre todo el de la muestra.
+-- Corrido primero en DRY RUN y despues con COMMIT. Medido antes y despues:
+--
+--     companies sin country ......... 453.098  ->  449.789   (-3.309)
+--     companies con country_normalized 60.069  ->   63.378   (+3.309)
+--     filas tocadas .................              3.309   (sin colaterales)
+--     checkpoints marcados ..........              3.309
+--     escritas sin normalized .......                  0
+--     no_hq sin country que quedan ..                266   (150 + 116 sin stat)
+--
+-- LOS DOS CONTROLES QUE IMPORTAN, LOS DOS EN VERDE
+--
+--   1. country_normalized se derivo en las 3.309, sin una sola falla. Ese es el
+--      contrato con v2: si el trigger no dispara, el dato no sirve para los
+--      exports de admin.
+--
+--   2. El vocabulario de country_normalized quedo en 79 valores distintos, los
+--      MISMOS de antes. No entro ni un nombre de pais nuevo, que es exactamente
+--      lo que la restriccion contra el vocabulario venia a impedir.
+--
+-- El reparto quedo donde tenia que quedar: Argentina 1.025, Chile 584, Peru 236,
+-- Mexico 225, Colombia 201, United States 181.
+--
+-- PARA REVERTIR: ver el bloque del final.
 --
 -- El cambio equivalente para las corridas FUTURAS ya esta en el codigo
 -- (pickCountryFromPeopleStats en lib/v3/services/linkedin-company-enrichment.ts).
@@ -200,10 +220,11 @@ BEGIN
   RAISE NOTICE 'Filas con country escrito tras el UPDATE: %', v_ok;
 END $$;
 
--- DRY RUN: el ROLLBACK deshace todo. Para aplicar de verdad, comentar el
--- ROLLBACK y descomentar el COMMIT.
-ROLLBACK;
--- COMMIT;
+-- Aplicado el 2026-08-25 (ver cabecera). Queda en COMMIT porque es lo que se
+-- corrio. Es idempotente: las candidatas exigen country vacio y el marcado del
+-- checkpoint exige que 'country' no este ya en filled_columns, asi que volver a
+-- correrlo no hace nada. Para ensayar un cambio, cambiar COMMIT por ROLLBACK.
+COMMIT;
 
 -- -----------------------------------------------------------------------------
 -- REVERTIR (si hiciera falta despues de aplicar): las filas que escribio este
