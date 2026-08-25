@@ -82,11 +82,23 @@
 -- riesgo. Corregir el ID detiene la sangria hacia adelante; lo ya atribuido se
 -- revisa aparte.
 --
--- COMO CORRERLO
+-- APLICADO EN asciv2-database EL 2026-08-25 20:50 UTC
 --
--- Arranca en DRY RUN. Revisar los reportes -- sobre todo el de la Parte 2, que
--- es el unico que SOBRESCRIBE un valor existente -- y recien ahi cambiar el
--- ROLLBACK del final por el COMMIT.
+-- Se corrio primero en DRY RUN y despues con COMMIT. Lo que dio, medido antes
+-- y despues:
+--
+--     companies con linkedin_company_id ....  3.955  ->  14.481
+--     IDs distintos ........................            14.481  (0 colisiones)
+--     filas tocadas en la ventana ..........            10.531  (10.526 + 5)
+--     candidatas que quedan sin escribir ...                 2  (las contaminadas)
+--     contradicciones restantes ............                 0
+--
+-- Los numeros del COMMIT dieron identicos a los del DRY RUN.
+--
+-- PARA REVERTIR
+-- Parte 1: las filas que escribio son las que tienen updated_at >= 2026-08-25
+-- 20:50:00.225719+00 y linkedin_company_id igual al `id` de su payload.
+-- Parte 2: los 5 IDs viejos estan en la tabla de aca abajo; volver a ponerlos.
 --
 -- Para las corridas futuras el cron ya lo escribe solo
 -- (lib/v3/services/linkedin-company-enrichment.ts, marca [459]).
@@ -185,7 +197,8 @@ BEGIN
   RAISE NOTICE '=== 459: companies con linkedin_company_id: % ===', v_ahora;
 END $$;
 
--- DRY RUN: el ROLLBACK deshace todo. Para aplicar, comentar el ROLLBACK y
--- descomentar el COMMIT.
-ROLLBACK;
--- COMMIT;
+-- Aplicado el 2026-08-25 (ver cabecera). Se deja en COMMIT porque es lo que se
+-- corrio; el script es idempotente -- Parte 1 exige linkedin_company_id IS NULL
+-- y Parte 2 exige que el ID siga siendo el viejo -- asi que volver a correrlo
+-- no hace nada. Para ensayar un cambio, cambiar COMMIT por ROLLBACK.
+COMMIT;
