@@ -194,6 +194,10 @@ uso del verificador IA existente, que hoy solo recibe candidatos por núcleo exa
 ## 6. Plan de optimización
 
 **Fase 0 — Higiene antes de mergear masivamente**
+*Implementada en las migraciones `20260825160000` a `20260825163000` (pendientes de
+aplicar: decisión del dueño del proyecto). Cada una fue validada contra la base de
+producción dentro de una transacción con ROLLBACK, incluyendo tests end-to-end de
+ingesta y de merge.*
 1. Agregar `linkedin_company_id`, `hq_country_iso` y `apollo_*` al coalesce de
    `merge_companies` (manejando el UNIQUE parcial).
 2. Cortar `companyUrl→website` y `location→country` en el ETL de vacantes.
