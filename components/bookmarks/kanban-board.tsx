@@ -10,6 +10,7 @@ import {
   Globe, 
   Linkedin,
   Eye,
+  Trash2,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { 
@@ -42,6 +43,8 @@ interface KanbanBoardProps {
   bookmarks: BookmarkItem[]
   userId: string
   onStatusChange?: (bookmarkId: string, newStatus: BookmarkStatus) => void
+  /** Abre la confirmacion de borrado; el dialog y el refetch viven en el padre. */
+  onDeleteRequest?: (bookmark: BookmarkItem) => void
 }
 
 const PRIORITY_COLORS: Record<string, string> = {
@@ -55,11 +58,13 @@ function KanbanCard({
   isDragging,
   onDragStart,
   onDragEnd,
+  onDeleteRequest,
 }: { 
   bookmark: BookmarkItem
   isDragging?: boolean
   onDragStart: (e: React.DragEvent, bookmarkId: string) => void
   onDragEnd: () => void
+  onDeleteRequest?: (bookmark: BookmarkItem) => void
 }) {
   const company = bookmark.company
 
@@ -192,6 +197,22 @@ function KanbanCard({
                 <Eye className="h-3 w-3" />
               </Link>
             </Button>
+            {onDeleteRequest && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 text-muted-foreground hover:text-destructive"
+                title="Sacar de mis bookmarks"
+                aria-label={`Sacar ${company?.name ?? "esta cuenta"} de mis bookmarks`}
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  onDeleteRequest(bookmark)
+                }}
+              >
+                <Trash2 className="h-3 w-3" />
+              </Button>
+            )}
           </div>
         </div>
       </CardContent>
@@ -208,6 +229,7 @@ function KanbanColumn({
   onDragStart,
   onDragEnd,
   onDrop,
+  onDeleteRequest,
 }: { 
   status: BookmarkStatus
   bookmarks: BookmarkItem[]
@@ -217,6 +239,7 @@ function KanbanColumn({
   onDragStart: (e: React.DragEvent, bookmarkId: string) => void
   onDragEnd: () => void
   onDrop: (status: BookmarkStatus) => void
+  onDeleteRequest?: (bookmark: BookmarkItem) => void
 }) {
   const config = BOOKMARK_STATUS_CONFIG[status]
   const [isDragOver, setIsDragOver] = useState(false)
@@ -281,6 +304,7 @@ function KanbanColumn({
                 isDragging={draggingId === bookmark.id}
                 onDragStart={onDragStart}
                 onDragEnd={onDragEnd}
+                onDeleteRequest={onDeleteRequest}
               />
             ))}
             {bookmarks.length > visibleCount && (
@@ -300,7 +324,7 @@ function KanbanColumn({
   )
 }
 
-export function KanbanBoard({ bookmarks, userId, onStatusChange }: KanbanBoardProps) {
+export function KanbanBoard({ bookmarks, userId, onStatusChange, onDeleteRequest }: KanbanBoardProps) {
   const statusKeys = Object.keys(BOOKMARK_STATUS_CONFIG) as BookmarkStatus[]
   const [draggingId, setDraggingId] = useState<string | null>(null)
 
@@ -368,6 +392,7 @@ export function KanbanBoard({ bookmarks, userId, onStatusChange }: KanbanBoardPr
             onDragStart={handleDragStart}
             onDragEnd={handleDragEnd}
             onDrop={handleDrop}
+            onDeleteRequest={onDeleteRequest}
           />
         ))}
       </div>

@@ -486,3 +486,50 @@ export async function bookmarkCompanyBatch(userId: string, companyIds: string[],
     }
   }
 }
+
+/**
+ * Borra un bookmark del usuario.
+ *
+ * Es un delete duro, y esa es la semantica que ya tenian pensada las FKs contra
+ * `bookmarks`: lo que es derivado y privado del bookmark se va con el
+ * (`ON DELETE CASCADE` en bookmark_summaries, user_company_signals,
+ * user_company_strategies, user_icebreakers) y lo que es reutilizable por otros
+ * usuarios sobrevive con `bookmark_id = NULL` (`ON DELETE SET NULL` en
+ * company_news, company_implementations, company_public_docs,
+ * user_company_contacts).
+ *
+ * No hay soft-delete estilo v3 (`is_active = false`): el UNIQUE
+ * (user_id, company_id, context_key) haria que la fila inactiva bloquee volver a
+ * guardar la misma empresa con el mismo contexto, y `create_bookmarks` no sabe
+ * reactivar. Cambiar eso pide migracion.
+ *
+ * El `.eq("user_id", ...)` es redundante con RLS ("Users can manage own
+ * bookmarks") pero deja el guard explicito en el codigo y permite distinguir
+ * "no era tuyo" de "se borro" mirando las filas devueltas.
+ */
+export async function deleteBookmark(
+  userId: string,
+  bookmarkId: string,
+): Promise<{ success: boolean; error?: string }> {
+  const supabase = await createClient()
+
+  try {
+    const { data, error } = await supabase
+      .from("bookmarks")
+      .delete()
+      .eq("id", bookmarkId)
+      .eq("user_id", userId)
+      .select("id")
+
+    if (error) throw error
+
+    if (!data || data.length === 0) {
+      return { success: false, error: "El bookmark ya no existe o no es tuyo" }
+    }
+
+    return { success: true }
+  } catch (error) {
+    console.error("Error deleting bookmark:", error)
+    return { success: false, error: "No se pudo eliminar el bookmark" }
+  }
+}

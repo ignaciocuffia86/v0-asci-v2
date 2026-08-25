@@ -19,6 +19,7 @@ import {
   MapPin,
   Download,
   Loader2,
+  Trash2,
 } from "lucide-react"
 import { toast } from "sonner"
 import { Input } from "@/components/ui/input"
@@ -45,6 +46,10 @@ import { BookmarkStrategy } from "./_components/strategy-tab"
 import { ProspectsTab } from "./_components/prospects-tab"
 import { SummaryTab } from "./_components/summary-tab"
 import { BookmarkScopeEditor } from "@/components/bookmarks/bookmark-scope-editor"
+import {
+  DeleteBookmarkDialog,
+  type DeleteBookmarkTarget,
+} from "@/components/bookmarks/delete-bookmark-dialog"
 import { SlidersHorizontal, Filter } from "lucide-react"
 
 export default function BookmarkWorkspacePage() {
@@ -77,6 +82,7 @@ export default function BookmarkWorkspacePage() {
   const [availableCountries, setAvailableCountries] = useState<string[]>([])
   const [isExporting, setIsExporting] = useState(false)
   const [userId, setUserId] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<DeleteBookmarkTarget | null>(null)
   const [scopeVersion, setScopeVersion] = useState(0)
   const supabase = createClient()
 
@@ -328,6 +334,19 @@ export default function BookmarkWorkspacePage() {
                   )}
                   {hasFilterApplied ? "Exportar" : "Exportar (sin filtro)"}
                 </Button>
+                {userId && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs px-3 bg-transparent text-destructive hover:text-destructive"
+                    onClick={() =>
+                      setDeleteTarget({ id: bookmarkId, companyName: company.name ?? null })
+                    }
+                  >
+                    <Trash2 className="h-3 w-3 mr-1.5" />
+                    Sacar de mis bookmarks
+                  </Button>
+                )}
               </div>
             </div>
           </div>
@@ -547,6 +566,13 @@ export default function BookmarkWorkspacePage() {
           </TabsContent>
         </Tabs>
       </main>
+
+      <DeleteBookmarkDialog
+        target={deleteTarget}
+        userId={userId || ""}
+        onClose={() => setDeleteTarget(null)}
+        onDeleted={() => router.push("/bookmarks")}
+      />
     </div>
   )
 }

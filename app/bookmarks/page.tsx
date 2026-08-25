@@ -24,6 +24,10 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
 import { KanbanBoard } from "@/components/bookmarks/kanban-board"
+import {
+  DeleteBookmarkDialog,
+  type DeleteBookmarkTarget,
+} from "@/components/bookmarks/delete-bookmark-dialog"
 import { 
   BOOKMARK_STATUS_CONFIG, 
   PRIORITY_CONFIG,
@@ -65,6 +69,7 @@ export default function BookmarksPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [viewMode, setViewMode] = useState<ViewMode>("kanban")
   const [userId, setUserId] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<DeleteBookmarkTarget | null>(null)
   
   // Filters
   const [selectedPriorities, setSelectedPriorities] = useState<string[]>([])
@@ -194,11 +199,10 @@ export default function BookmarksPage() {
     // Don't refetch - we use optimistic updates
   }
 
-  const deleteBookmark = async (id: string) => {
-    if (confirm("Eliminar este bookmark?\n\nSe eliminan: estrategia, icebreakers, brief y senales privadas.\nSe conservan: noticias, implementaciones y contactos (reutilizables por otros usuarios).")) {
-      await supabase.from("bookmarks").delete().eq("id", id)
-      fetchBookmarks()
-    }
+  // El borrado en si lo hace DeleteBookmarkDialog contra el server action; aca
+  // solo sacamos la fila de la lista para no esperar un refetch.
+  const handleDeleted = (id: string) => {
+    setBookmarks((prev) => prev.filter((b) => b.id !== id))
   }
 
   const togglePriorityFilter = (priority: string) => {
@@ -382,6 +386,9 @@ export default function BookmarksPage() {
           bookmarks={filteredBookmarks as any} 
           userId={userId || ""} 
           onStatusChange={handleStatusChange}
+          onDeleteRequest={(bookmark) =>
+            setDeleteTarget({ id: bookmark.id, companyName: bookmark.company?.name ?? null })
+          }
         />
       ) : (
         <div className="rounded-md border bg-card">
@@ -492,7 +499,14 @@ export default function BookmarksPage() {
                         variant="ghost"
                         size="sm"
                         className="text-destructive hover:text-destructive"
-                        onClick={() => deleteBookmark(bookmark.id)}
+                        title="Sacar de mis bookmarks"
+                        aria-label={`Sacar ${bookmark.company?.name ?? "esta cuenta"} de mis bookmarks`}
+                        onClick={() =>
+                          setDeleteTarget({
+                            id: bookmark.id,
+                            companyName: bookmark.company?.name ?? null,
+                          })
+                        }
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
@@ -514,6 +528,12 @@ export default function BookmarksPage() {
         </div>
       )}
 
+      <DeleteBookmarkDialog
+        target={deleteTarget}
+        userId={userId || ""}
+        onClose={() => setDeleteTarget(null)}
+        onDeleted={handleDeleted}
+      />
     </div>
   )
 }
