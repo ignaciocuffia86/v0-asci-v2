@@ -205,7 +205,7 @@ en las 43.052 filas del catálogo —incluida una de 2023— porque se escribe c
 ingesta y ningún proceso la vuelve a tocar. Seis funciones la leían (dos de ellas con un `WHERE
 is_active = true` que no descartaba una sola fila) y `get_company_signal_summary` devolvía un
 `activeCount` que siempre era igual a `count`. **Se dejó de leer** (migración
-`20260825160000`): la columna sigue existiendo, comentada como no mantenida, y `activeCount`
+`20260825141319`): la columna sigue existiendo, comentada como no mantenida, y `activeCount`
 desapareció de la respuesta del MCP.
 
 Tampoco puede volverse cierta sin cambiar el pipeline: el único proceso que revisita vacantes es el
