@@ -147,6 +147,8 @@ Tres cosas que el diseño original pedía y **no** hubo que construir o se resol
 | El lote corre research + digest + Apollo | El gasto en Apollo **no** va en el lote. Es Tier 3 e irreversible: el `batchPlanHash` autoriza el research y los lugares del plan, no el crédito de un tercero |
 | Dejar los enrichments preparados | **No sirve, y lo decide un número**: una preparación vive 30 minutos (`PREPARE_TTL_MINUTES`) y el research de 42 cuentas tarda más. Todas vencerían, y mientras tanto dejarían 42 × N créditos de Apollo reservados sin gastarse. El lote guarda la intención y `get_batch_job` avisa qué cuentas ya están listas |
 
+**Desplegado (25-ago-2026).** Las dos migraciones de esta fase están aplicadas en `asciv2-database`: `20260825015932_mcp_screenings_and_exports` (tablas `v3.mcp_screenings` y `v3.mcp_exports`, más el bucket privado `workspace-exports`) y `20260825020834_mcp_batch_jobs` (`v3.mcp_batch_jobs` y `v3.mcp_batch_job_items`). Las cuatro tablas quedaron con RLS activo y el índice único `(workspace_id, batch_plan_hash)` verificado en la base. Los archivos llevan la versión que la base registró al aplicarlas, no la del momento en que se escribieron.
+
 ### Fase 4 — Precisión y modelo de negocio
 
 No es código en su mayoría, son decisiones:
