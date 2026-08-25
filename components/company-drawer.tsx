@@ -123,6 +123,8 @@ type DrawerData = {
   signals: Signal[]
   contacts: Contact[]
   job_postings: any[]
+  /** Total de vacantes en la ventana de 6 meses, sin el cupo del detalle. Ausente hasta que se aplique la migración. */
+  job_postings_window_count?: number
   alumni_signals: Signal[]
 }
 
@@ -238,9 +240,14 @@ export function CompanyDrawer({
     return Object.values(grouped).sort((a, b) => new Date(b.posted_at).getTime() - new Date(a.posted_at).getTime())
   }, [drawerData?.job_postings])
 
-  // El listado cuenta todas las vacantes con señal; acá solo entran las de los últimos 6 meses.
-  const historicJobPostings = Math.max(jobPostingsTotal ?? 0, jobPostings.length)
-  const olderJobPostings = historicJobPostings - jobPostings.length
+  // Tres números distintos, y conviene no confundirlos:
+  // - historicJobPostings: lo que cuenta el listado de resultados (histórico completo, sin ventana)
+  // - windowJobPostings: las publicadas en los últimos 6 meses (lo que mide esta solapa)
+  // - jobPostings.length: las que realmente llegaron, que el RPC capea en las 100 más recientes
+  const windowJobPostings = drawerData?.job_postings_window_count ?? jobPostings.length
+  const historicJobPostings = Math.max(jobPostingsTotal ?? 0, windowJobPostings)
+  const olderJobPostings = historicJobPostings - windowJobPostings
+  const truncatedJobPostings = windowJobPostings - jobPostings.length
   const showJobPostingsTab = jobPostings.length > 0 || historicJobPostings > 0
 
   useEffect(() => {
@@ -663,7 +670,7 @@ export function CompanyDrawer({
                     variant="secondary"
                     className="ml-2 bg-orange-100 text-orange-700 dark:bg-orange-950/30 dark:text-orange-300 text-xs hover:bg-orange-200"
                   >
-                    {jobPostings.length}
+                    {windowJobPostings}
                   </Badge>
                 </TabsTrigger>
               )}
@@ -708,6 +715,13 @@ export function CompanyDrawer({
                         ? "1 búsqueda es más antigua"
                         : `${olderJobPostings} búsquedas son más antiguas`}{" "}
                       y no se muestra acá.
+                    </>
+                  )}
+                  {truncatedJobPostings > 0 && (
+                    <>
+                      {" "}
+                      Se listan las <span className="font-medium">{jobPostings.length} más recientes</span> de las{" "}
+                      {windowJobPostings} de la ventana.
                     </>
                   )}
                 </p>
