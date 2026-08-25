@@ -2,18 +2,20 @@
 -- Fusión reversible de contactos duplicados
 --
 -- La migración anterior deja de CREAR duplicados. Esta fusiona los que ya
--- están. Dry run sobre producción, con el tope de identidad compartida en 5:
+-- están. Dry run sobre producción:
 --
---     email 2.857 grupos   phone 477   slug 126   suffix 106
---     3.566 grupos, 3.577 fusiones, 4.266 filas de `contacts` distintas.
+--     email 1.554 grupos   phone 312   slug 126   suffix 106
+--     2.098 grupos, 2.099 fusiones. Cero errores.
 --
--- Sin el tope, la regla del teléfono sube a 2.427 grupos, pero muchos salen de
--- conmutadores: 1.676 números están en más de 20 contactos y hay uno en 4.941.
+-- El universo bajó de 3.566 grupos a 2.098 al exigirle calidad a la identidad
+-- (mail verificado, teléfono personal) y vetar los sufijos de perfil
+-- discordantes. Lo que se cayó eran falsos positivos: dos personas distintas
+-- que comparten un mail que el proveedor adivinó.
 --
 -- Es el gemelo de merge_companies() / v3.company_merges, con las mismas
 -- garantías: snapshot de la fila que desaparece, registro de qué se movió,
 -- dry_run, y reversión. Un merge que no se puede deshacer no se ejecuta en
--- masa sobre 4.266 filas.
+-- masa sobre miles de filas.
 --
 -- La diferencia con empresas es que contacts tiene solo dos hijos por FK
 -- (signals y pending_signals, ambos ON DELETE CASCADE) y tres referencias
@@ -394,7 +396,9 @@ as $function$
        AND (ci.kind = 'linkedin_slug' OR count(DISTINCT ci.contact_id) <= p_max_compartido)
   ),
   expandido AS (
-    SELECT r.kind, r.value, cid, public.normalize_person_name(c.full_name) AS nombre
+    SELECT r.kind, r.value, cid,
+           public.normalize_person_name(c.full_name) AS nombre,
+           public.contact_profile_suffix(c.linkedin_url) AS sufijo
     FROM repetidos r
     CROSS JOIN LATERAL unnest(r.ids) AS cid
     JOIN public.contacts c ON c.id = cid
@@ -406,8 +410,15 @@ as $function$
            value, nombre, array_agg(DISTINCT cid) AS ids
     FROM expandido
     WHERE nombre IS NOT NULL
-    GROUP BY 1, value, nombre
+    GROUP BY kind, value, nombre
     HAVING count(DISTINCT cid) > 1
+       -- Veto del sufijo: dos sufijos autogenerados distintos son dos cuentas
+       -- de LinkedIn distintas, y entonces la evidencia indirecta (mail o
+       -- teléfono compartido) no alcanza. Es el caso de los dos "Alejandro
+       -- Álvarez" del grupo Falabella. No aplica a las reglas que YA se apoyan
+       -- en el perfil: por slug o por sufijo el veto se contradiría solo.
+       AND (kind IN ('linkedin_slug', 'linkedin_suffix')
+            OR count(DISTINCT sufijo) FILTER (WHERE sufijo IS NOT NULL) <= 1)
   )
   SELECT g.rule,
          g.value,

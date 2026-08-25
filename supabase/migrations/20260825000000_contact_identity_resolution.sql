@@ -180,12 +180,25 @@ $function$;
 -- 2. El índice de identidades
 -- ───────────────────────────────────────────────────────────────────
 
+-- Solo entra acá lo que IDENTIFICA a una persona. El proveedor de datos ya nos
+-- dice qué dato es real y cuál adivinó, y hay que creerle:
+--
+--   email    solo con `status = 'valid'`. Los 289.171 restantes son en su
+--            mayoría `accept_all_unverifiable`: el dominio es catch-all y el
+--            proveedor construyó la dirección con el patrón inicial+apellido.
+--            Dos homónimos de la misma empresa reciben el MISMO mail adivinado.
+--            Caso real: aalvarez@falabella.com aparece en dos "Alejandro
+--            Álvarez" distintos —uno fotógrafo en Falabella, otro subgerente en
+--            Sodimac, ambas del grupo Falabella— y son dos personas.
+--
+--   phone    solo con `type = 'personal'`. El 78% de los teléfonos están
+--            tipados `company`: son el conmutador. Por eso un mismo número
+--            aparece en 4.941 contactos.
+--
+-- El filtro no es cosmético: baja los candidatos a fusión de 3.566 grupos a
+-- ~2.100, y los que se caen son justamente los falsos positivos.
 create table if not exists public.contact_identities (
   contact_id uuid not null references public.contacts(id) on delete cascade,
-  -- linkedin_slug  identifica solo. El resto NO: un email corporativo genérico
-  --                (info@, ventas@) y un conmutador los comparte gente distinta
-  --                — 2.325 de los 3.744 emails repetidos son eso. Por eso
-  --                resolve_contact_id() les exige además el nombre.
   kind text not null check (kind in ('linkedin_slug', 'linkedin_suffix', 'email', 'phone')),
   value text not null,
   first_seen_at timestamptz not null default now(),
@@ -224,11 +237,14 @@ BEGIN
     UNION ALL
     SELECT 'linkedin_suffix', public.contact_profile_suffix(NEW.linkedin_url)
     UNION ALL
-    SELECT 'email', lower(trim(e))
-    FROM unnest(ARRAY[NEW.email1, NEW.email2, NEW.email3, NEW.email4]) e
+    SELECT 'email', lower(trim(e.v))
+    FROM (VALUES (NEW.email1, NEW.email1_status), (NEW.email2, NEW.email2_status),
+                 (NEW.email3, NEW.email3_status), (NEW.email4, NEW.email4_status)) AS e(v, st)
+    WHERE e.st = 'valid'
     UNION ALL
-    SELECT 'phone', public.normalize_phone_digits(p)
-    FROM unnest(ARRAY[NEW.phone1, NEW.phone2]) p
+    SELECT 'phone', public.normalize_phone_digits(p.v)
+    FROM (VALUES (NEW.phone1, NEW.phone1_type), (NEW.phone2, NEW.phone2_type)) AS p(v, tp)
+    WHERE p.tp = 'personal'
   ) t
   WHERE value IS NOT NULL AND value <> ''
   ON CONFLICT DO NOTHING;
@@ -253,9 +269,14 @@ cross join lateral (
   union all
   select 'linkedin_suffix', public.contact_profile_suffix(c.linkedin_url)
   union all
-  select 'email', lower(trim(e)) from unnest(array[c.email1, c.email2, c.email3, c.email4]) e
+  select 'email', lower(trim(e.v))
+  from (values (c.email1, c.email1_status), (c.email2, c.email2_status),
+               (c.email3, c.email3_status), (c.email4, c.email4_status)) as e(v, st)
+  where e.st = 'valid'
   union all
-  select 'phone', public.normalize_phone_digits(p) from unnest(array[c.phone1, c.phone2]) p
+  select 'phone', public.normalize_phone_digits(p.v)
+  from (values (c.phone1, c.phone1_type), (c.phone2, c.phone2_type)) as p(v, tp)
+  where p.tp = 'personal'
 ) t
 where t.value is not null and t.value <> ''
 on conflict do nothing;
@@ -304,6 +325,25 @@ $function$;
 --
 -- El nombre es obligatorio de 2 a 4 porque email y teléfono se comparten
 -- (casillas genéricas, conmutadores) y el sufijo colisiona.
+--
+-- Y en 3 y 4 hay además un VETO: si las dos filas tienen sufijo autogenerado y
+-- son DISTINTOS, son dos cuentas de LinkedIn distintas y no se fusionan por
+-- evidencia indirecta. El sufijo es el id del perfil, así que dos sufijos
+-- distintos no pueden ser el mismo perfil:
+--
+--   alejandro-alvarez-03aa2b32  vs  alejandro-alvarez-1457832ab
+--     → dos personas distintas que comparten un mail adivinado. VETO.
+--
+--   matias-ezequiel-merino-b36b54260  vs  matias-ezequiel-merino
+--     → uno tiene sufijo y el otro es la vanity URL: es el mismo perfil
+--       scrapeado antes y después del cambio. NO hay veto.
+--
+--   adrian-gabriel-cavaiuolo-94541727  vs  adrian-gabriel-c-94541727
+--     → mismo sufijo, cambió el nombre visible. NO hay veto.
+--
+-- Cuesta 123 grupos de los 1.683 que pasan el filtro de email verificado. Es
+-- deliberado: una persona con dos cuentas reales de LinkedIn queda sin fusionar,
+-- y eso es preferible a mezclar a dos homónimos.
 create or replace function public.resolve_contact_id(
   p_linkedin_url text,
   p_full_name text,
@@ -345,13 +385,20 @@ BEGIN
     IF array_length(v_ids, 1) = 1 THEN RETURN v_ids[1]; END IF;
   END IF;
 
+  -- De acá en adelante la evidencia es indirecta y aplica el veto del sufijo:
+  -- `contact_profile_suffix(c.linkedin_url) IS DISTINCT FROM v_suffix` descarta
+  -- al candidato solo cuando LOS DOS tienen sufijo y no coinciden. Si alguno es
+  -- NULL (vanity URL o URN ofuscado) no hay con qué contradecir y pasa.
   IF p_emails IS NOT NULL THEN
     SELECT array_agg(DISTINCT ci.contact_id) INTO v_ids
     FROM public.contact_identities ci
     JOIN public.contacts c ON c.id = ci.contact_id
     WHERE ci.kind = 'email'
       AND ci.value = ANY (SELECT lower(trim(e)) FROM unnest(p_emails) e WHERE e IS NOT NULL AND trim(e) <> '')
-      AND public.normalize_person_name(c.full_name) = v_name;
+      AND public.normalize_person_name(c.full_name) = v_name
+      AND NOT (v_suffix IS NOT NULL
+               AND public.contact_profile_suffix(c.linkedin_url) IS NOT NULL
+               AND public.contact_profile_suffix(c.linkedin_url) <> v_suffix);
 
     IF array_length(v_ids, 1) = 1 THEN RETURN v_ids[1]; END IF;
   END IF;
@@ -362,7 +409,10 @@ BEGIN
     JOIN public.contacts c ON c.id = ci.contact_id
     WHERE ci.kind = 'phone'
       AND ci.value = ANY (SELECT public.normalize_phone_digits(p) FROM unnest(p_phones) p WHERE p IS NOT NULL)
-      AND public.normalize_person_name(c.full_name) = v_name;
+      AND public.normalize_person_name(c.full_name) = v_name
+      AND NOT (v_suffix IS NOT NULL
+               AND public.contact_profile_suffix(c.linkedin_url) IS NOT NULL
+               AND public.contact_profile_suffix(c.linkedin_url) <> v_suffix);
 
     IF array_length(v_ids, 1) = 1 THEN RETURN v_ids[1]; END IF;
   END IF;
