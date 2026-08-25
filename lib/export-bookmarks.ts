@@ -58,7 +58,6 @@ export interface BookmarkExportData {
     url: string | null
     location: string | null
     posted_at: string | null
-    is_active: boolean
     signals: Array<{
       signal_type: string
       signal_name: string

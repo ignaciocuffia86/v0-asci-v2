@@ -70,7 +70,7 @@ Costo: **T0** determinístico (sin costo marginal) · **T1** scraping · **T2** 
 |---|---|---|---|
 | `get_company_profile` | Identidad + firmográficos + cobertura de señales | `employeesApollo: null` = no lo sabemos, no "empresa chica" | `companies:read` · T0 |
 | `get_company_signals` | Señales de **perfiles y documentos** (excluye vacantes), fila por fila, con el aviso agregado de cuántas son de ex-empleados | Máx 100 · sin consolidación de alias · sin agrupar por término · no incluye vacantes | `signals:read` · T0 |
-| `get_company_signal_summary` | Panorama consolidado. `compact` \| `evidence` \| `full` | Máx 100 señales / 30 implementaciones / 30 vacantes · **no filtra por fecha** y `activeCount` no distingue vacantes abiertas (§5.4) · `full` pesa ~15k tokens | `signals:read` · T0 |
+| `get_company_signal_summary` | Panorama consolidado. `compact` \| `evidence` \| `full` | Máx 100 señales / 30 implementaciones / 30 vacantes · **no filtra por fecha** y no informa si una vacante sigue abierta (§5.4) · `full` pesa ~15k tokens | `signals:read` · T0 |
 | `get_account_evidence_detail` | Un término → fuentes con cita textual, fecha, link, persona y si sigue en la empresa | Máx 10 términos · con snapshot da la versión clasificada, sin snapshot la cruda (`source` lo declara) | `signals:read` · T0 |
 | `get_account_intelligence` | Snapshot, scorecard, brief e icebreakers **ya materializados** | **Exige cuenta en el workspace** · no genera nada: si no hay research, no hay nada | `accounts:read` · T0 |
 
@@ -200,11 +200,21 @@ hay detrás, medidos sobre el catálogo:
   aplique, y en 18.471 el corte de 6 meses deja el detalle en cero.
 - Naranja X tiene 56 vacantes con señal de AWS y **una sola** es de este semestre.
 
-**`is_active` no sirve para filtrar**: viene en `true` en las 43.052 filas del catálogo, incluida una
-de 2023, porque el scraper lo escribe y nadie lo apaga. Ni `activeCount` de
-`get_company_signal_summary` ni el `j.is_active` de `explore_search_companies` distinguen nada. Lo que
-está abierto **hoy** se averigua con `scrape_company_job_postings` (o `explore_scrape_jobs`), que es
-lo único que va a LinkedIn en el momento.
+**No hay dato de "sigue abierta".** Había una columna `job_postings.is_active`, pero venía en `true`
+en las 43.052 filas del catálogo —incluida una de 2023— porque se escribe con el DEFAULT de la
+ingesta y ningún proceso la vuelve a tocar. Seis funciones la leían (dos de ellas con un `WHERE
+is_active = true` que no descartaba una sola fila) y `get_company_signal_summary` devolvía un
+`activeCount` que siempre era igual a `count`. **Se dejó de leer** (migración
+`20260825160000`): la columna sigue existiendo, comentada como no mantenida, y `activeCount`
+desapareció de la respuesta del MCP.
+
+Tampoco puede volverse cierta sin cambiar el pipeline: el único proceso que revisita vacantes es el
+cron `v3-scrape-job-postings`, que corre sobre **cuentas seguidas** (14 empresas, contra 6.822 con
+vacantes en el catálogo) y en el refresh mensual va con `windowDays: 30` — trae novedades y nunca
+vuelve a mirar una vacante vieja, así que "no apareció en la última corrida" no prueba que se cerró.
+
+Lo que está abierto **hoy** se averigua con `scrape_company_job_postings` (o `explore_scrape_jobs`),
+que es lo único que va a LinkedIn en el momento.
 
 Por eso ninguna de estas tools puede presentar su conteo como "está contratando": la formulación
 correcta es "vacantes con esta señal en el catálogo", y la fecha de cada una es parte de la respuesta.

@@ -245,7 +245,7 @@ export async function getCompanySignalSummary(
   const [signalsResult, implementationsResult, jobsResult] = await Promise.all([
     admin.from("signals").select("id,company_id,signal_type,signal_id,keyword_matched,source_field,snippet,source_url,job_posting_id,job_posted_at,created_at").in("company_id", companyIds).order("created_at", { ascending: false }).limit(MAX_SIGNALS),
     admin.from("company_implementations").select("id,company_id,title,provider_name,technology,summary,area,evidence_level,relevance_snippet,source_url,source_name,published_at,created_at").in("company_id", companyIds).order("created_at", { ascending: false }).limit(MAX_IMPLEMENTATIONS),
-    admin.from("job_postings").select("id,company_id,title,description,location,posted_at,is_active,job_url,created_at").in("company_id", companyIds).order("posted_at", { ascending: false, nullsFirst: false }).limit(MAX_JOBS),
+    admin.from("job_postings").select("id,company_id,title,description,location,posted_at,job_url,created_at").in("company_id", companyIds).order("posted_at", { ascending: false, nullsFirst: false }).limit(MAX_JOBS),
   ])
   if (signalsResult.error) throw new Error(`SIGNALS_READ_FAILED:${signalsResult.error.message}`)
   if (implementationsResult.error) throw new Error(`IMPLEMENTATIONS_READ_FAILED:${implementationsResult.error.message}`)
@@ -254,7 +254,7 @@ export async function getCompanySignalSummary(
   const signals = (signalsResult.data ?? []).map((row) => ({ ...row, company_name: aliasNames.get(row.company_id) }))
   const linkedSignalIds = new Map<string, string[]>()
   for (const signal of signals) if (signal.job_posting_id) linkedSignalIds.set(signal.job_posting_id, [...(linkedSignalIds.get(signal.job_posting_id) ?? []), signal.id])
-  const jobs = (jobsResult.data ?? []).map((job) => ({ id: job.id, companyId: job.company_id, companyName: aliasNames.get(job.company_id), title: job.title, location: job.location, postedAt: job.posted_at ?? job.created_at, isActive: job.is_active, jobUrl: job.job_url, descriptionSnippet: job.description?.slice(0, 500) ?? null, linkedSignalIds: linkedSignalIds.get(job.id) ?? [], interpretationStatus: linkedSignalIds.has(job.id) ? "classified_signal_available" : "raw_evidence_only" }))
+  const jobs = (jobsResult.data ?? []).map((job) => ({ id: job.id, companyId: job.company_id, companyName: aliasNames.get(job.company_id), title: job.title, location: job.location, postedAt: job.posted_at ?? job.created_at, jobUrl: job.job_url, descriptionSnippet: job.description?.slice(0, 500) ?? null, linkedSignalIds: linkedSignalIds.get(job.id) ?? [], interpretationStatus: linkedSignalIds.has(job.id) ? "classified_signal_available" : "raw_evidence_only" }))
   const grouped = groupSignals(signals, canonical.id)
 
   const implementations = implementationsResult.data ?? []
@@ -290,7 +290,10 @@ export async function getCompanySignalSummary(
       implementations: implementations.map((item) => ({ id: item.id, title: item.title, technology: item.technology, area: item.area, evidenceLevel: item.evidence_level, publishedAt: item.published_at ?? item.created_at })),
       // Las vacantes NO se listan: son 30 filas con 500 caracteres de
       // descripción cada una y no cambian la decisión de descartar la cuenta.
-      jobPostings: { count: jobs.length, activeCount: jobs.filter((job) => job.isActive).length, latestPostedAt: jobs[0]?.postedAt ?? null },
+      // Sin activeCount: salía de job_postings.is_active, que está en true en TODAS las filas
+      // del catálogo (incluidas vacantes de 2023) porque nadie la apaga. Informaba una vacante
+      // abierta que nadie verificó. La fecha es lo único real que tenemos acá.
+      jobPostings: { count: jobs.length, latestPostedAt: jobs[0]?.postedAt ?? null },
       interpretationGuidance:
         "Vista COMPACTA: hay conteos y fechas, no citas textuales. Sirve para decidir si la cuenta es relevante. " +
         "Para la cita textual de UN término (fragmento, fecha, link, y si la persona sigue en la empresa) usá detail=\"evidence\" con ese `term`: cuesta <600 tokens y NO necesita research previo. " +
