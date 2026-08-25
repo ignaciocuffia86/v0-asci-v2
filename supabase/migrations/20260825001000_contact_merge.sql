@@ -4,10 +4,10 @@
 -- La migración anterior deja de CREAR duplicados. Esta fusiona los que ya
 -- están. Dry run sobre producción:
 --
---     email 1.554 grupos   phone 312   slug 126   suffix 106
---     2.098 grupos, 2.099 fusiones. Cero errores.
+--     email 1.625 grupos   phone 312   slug 126   suffix 106
+--     2.169 grupos, 2.170 fusiones. Cero errores.
 --
--- El universo bajó de 3.566 grupos a 2.098 al exigirle calidad a la identidad
+-- El universo bajó de 3.566 grupos a 2.169 al exigirle calidad a la identidad
 -- (mail verificado, teléfono personal) y vetar los sufijos de perfil
 -- discordantes. Lo que se cayó eran falsos positivos: dos personas distintas
 -- que comparten un mail que el proveedor adivinó.

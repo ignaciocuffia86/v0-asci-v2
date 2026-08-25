@@ -191,9 +191,22 @@ $function$;
 --            Álvarez" distintos —uno fotógrafo en Falabella, otro subgerente en
 --            Sodimac, ambas del grupo Falabella— y son dos personas.
 --
+--            EXCEPCIÓN: si el export no trajo `status` —la columna no vino, o
+--            la lista se armó a mano— y el dominio es personal
+--            (gmail/hotmail/...), el mail entra igual. Un mail adivinado es
+--            SIEMPRE corporativo: el patrón necesita el dominio de la empresa,
+--            y nadie puede deducir alejandroa3r@gmail.com de un nombre. O sea,
+--            el riesgo que motiva todo este filtro no existe en dominios
+--            personales. Hoy son 7.744 contactos que si no quedarían mudos.
+--            Si el proveedor SÍ opinó y dijo que no pudo verificar, le creemos:
+--            la excepción es para cuando no hay opinión, no para discutirla.
+--
 --   phone    solo con `type = 'personal'`. El 78% de los teléfonos están
 --            tipados `company`: son el conmutador. Por eso un mismo número
---            aparece en 4.941 contactos.
+--            aparece en 4.941 contactos. Acá no hay excepción posible: no se
+--            puede saber si un número es celular o central mirándolo, así que
+--            sin `type` el teléfono no identifica. Lo cubre la alarma de
+--            finalize_batch_upload().
 --
 -- El filtro no es cosmético: baja los candidatos a fusión de 3.566 grupos a
 -- ~2.100, y los que se caen son justamente los falsos positivos.
@@ -241,6 +254,7 @@ BEGIN
     FROM (VALUES (NEW.email1, NEW.email1_status), (NEW.email2, NEW.email2_status),
                  (NEW.email3, NEW.email3_status), (NEW.email4, NEW.email4_status)) AS e(v, st)
     WHERE e.st = 'valid'
+       OR (coalesce(e.st, '') = '' AND public.is_personal_email(e.v))
     UNION ALL
     SELECT 'phone', public.normalize_phone_digits(p.v)
     FROM (VALUES (NEW.phone1, NEW.phone1_type), (NEW.phone2, NEW.phone2_type)) AS p(v, tp)
@@ -273,6 +287,7 @@ cross join lateral (
   from (values (c.email1, c.email1_status), (c.email2, c.email2_status),
                (c.email3, c.email3_status), (c.email4, c.email4_status)) as e(v, st)
   where e.st = 'valid'
+     or (coalesce(e.st, '') = '' and public.is_personal_email(e.v))
   union all
   select 'phone', public.normalize_phone_digits(p.v)
   from (values (c.phone1, c.phone1_type), (c.phone2, c.phone2_type)) as p(v, tp)
@@ -649,3 +664,73 @@ BEGIN
   RETURN v_processed_count;
 END;
 $function$;
+
+-- ───────────────────────────────────────────────────────────────────
+-- 5. Alarma: avisar cuando el export llega sin los campos de identidad
+--
+-- El mapeo de columnas del upload es literal (`email1_status: row.email1_status`
+-- en app/actions/ingest.ts): si el proveedor renombra la columna, o alguien
+-- sube una lista armada a mano, el campo llega NULL y el mail deja de
+-- identificar. El import termina "OK" y el efecto —volver a crear duplicados—
+-- recién se nota meses después.
+--
+-- Hoy ya hay 10.716 contactos con mail sin `status` y 8.833 con teléfono sin
+-- `type`. Esto no los arregla; hace que la próxima vez se vea en la primera
+-- corrida, en la respuesta del upload y en debug_events.
+-- ───────────────────────────────────────────────────────────────────
+
+CREATE OR REPLACE FUNCTION public.finalize_batch_upload(p_batch_id uuid, p_total_rows integer)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE
+  v_actual_rows INTEGER;
+  v_batch_type  TEXT;
+  v_cobertura   JSONB := NULL;
+BEGIN
+  SELECT COUNT(*) INTO v_actual_rows FROM public.import_rows WHERE batch_id = p_batch_id;
+
+  IF v_actual_rows <> p_total_rows THEN
+    UPDATE public.import_batches
+    SET status = 'failed',
+        error_message = format('Row count mismatch on upload: expected %s, found %s', p_total_rows, v_actual_rows),
+        total_rows = v_actual_rows, updated_at = timezone('utc', now())
+    WHERE id = p_batch_id;
+    RETURN jsonb_build_object('status','failed','expected',p_total_rows,'found',v_actual_rows);
+  END IF;
+
+  UPDATE public.import_batches
+  SET status = 'pending', total_rows = v_actual_rows, updated_at = timezone('utc', now())
+  WHERE id = p_batch_id;
+
+  SELECT batch_type INTO v_batch_type FROM public.import_batches WHERE id = p_batch_id;
+
+  IF coalesce(v_batch_type, 'contacts') = 'contacts' THEN
+    SELECT jsonb_build_object(
+      'filas_con_email',    count(*) FILTER (WHERE nullif(trim(row_data->>'email1'), '') IS NOT NULL),
+      'email_sin_status',   count(*) FILTER (WHERE nullif(trim(row_data->>'email1'), '') IS NOT NULL
+                                               AND coalesce(row_data->>'email1_status', '') = ''),
+      'filas_con_telefono', count(*) FILTER (WHERE nullif(trim(row_data->>'phone1'), '') IS NOT NULL),
+      'telefono_sin_type',  count(*) FILTER (WHERE nullif(trim(row_data->>'phone1'), '') IS NOT NULL
+                                               AND coalesce(row_data->>'phone1_type', '') = '')
+    ) INTO v_cobertura
+    FROM public.import_rows WHERE batch_id = p_batch_id;
+
+    IF (v_cobertura->>'email_sin_status')::int > 0 OR (v_cobertura->>'telefono_sin_type')::int > 0 THEN
+      INSERT INTO public.debug_events (batch_id, event_type, message, details)
+      VALUES (p_batch_id, 'identity_fields_missing',
+              'El export no trae email1_status y/o phone1_type: esas filas no se van a poder deduplicar por mail ni por teléfono',
+              v_cobertura);
+    END IF;
+  END IF;
+
+  INSERT INTO public.debug_events (batch_id, event_type, message, details)
+  VALUES (p_batch_id, 'upload_finalized', 'All rows inserted, batch queued',
+          jsonb_build_object('total_rows', v_actual_rows));
+
+  RETURN jsonb_build_object('status','pending','total_rows',v_actual_rows)
+         || CASE WHEN v_cobertura IS NULL THEN '{}'::jsonb
+                 ELSE jsonb_build_object('identity_coverage', v_cobertura) END;
+END; $function$;
