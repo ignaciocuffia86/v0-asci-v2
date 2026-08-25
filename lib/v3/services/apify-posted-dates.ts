@@ -7,9 +7,18 @@
 // fila moría con "invalid input syntax for type timestamp with time zone" y el
 // batch quedaba clavado en processing con 0 vacantes visibles.
 //
-// Se normaliza acá, en el adaptador, y no en el PL/pgSQL: el RPC es compartido
-// con la ingesta CSV histórica (que siempre trajo fechas absolutas) y tocarlo
-// arriesga a todo el ETL; el row_data de Apify, en cambio, lo armamos nosotros.
+// Se normaliza acá, en el adaptador, porque el row_data de Apify lo armamos
+// nosotros y es el camino más corto.
+//
+// OJO con el supuesto que tenía este comentario antes: decía que el RPC era
+// compartido "con la ingesta CSV histórica, que siempre trajo fechas
+// absolutas". Era falso, y ocultó un bug durante meses: los dos caminos de
+// upload de CSV renombran la fecha a `posted_at`, así que las tres claves de
+// POSTED_DATE_KEYS nunca llegaban desde un CSV y el COALESCE del RPC caía
+// siempre en `now()` — el 58% de las vacantes quedó fechada con su fecha de
+// carga. Desde 20260825002000_job_posted_at.sql el RPC lee `posted_at` y
+// parsea las relativas con parse_job_posted_at(), que es el gemelo SQL de
+// normalizePostedDate(). Si cambia el criterio de una, cambiar la otra.
 //
 // Sin "server-only" para poder testearlo directo; es puro.
 

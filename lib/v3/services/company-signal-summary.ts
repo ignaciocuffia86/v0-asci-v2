@@ -1,6 +1,7 @@
 import "server-only"
 
 import { createAdminClient } from "@/lib/supabase/admin"
+import { canonicalizeSignals, groupBySignal } from "@/lib/shared/canonical-signals"
 
 const GENERIC_TOKENS = new Set(["banco", "bank", "argentina", "grupo", "group", "sa", "srl", "inc", "the", "de", "del", "y"])
 const MAX_ALIASES = 15
@@ -150,6 +151,37 @@ export function selectAliases(canonical: AliasCandidate, candidates: AliasCandid
   ]
 }
 
+/**
+ * Nombres de diccionario para los `signal_id` presentes, en dos consultas.
+ *
+ * Si el diccionario no responde se sigue igual: el término se muestra por su
+ * keyword literal. Perder el nombre canónico degrada el agrupamiento, no la
+ * lectura, y no vale romper el panorama entero de la cuenta por eso.
+ */
+async function resolveDictionaryNames(
+  admin: ReturnType<typeof createAdminClient>,
+  rows: Array<{ signal_type: string; signal_id: string | null }>,
+): Promise<Map<string, string>> {
+  const idsByType = { technology: new Set<string>(), process: new Set<string>() }
+  for (const row of rows) {
+    if (!row.signal_id) continue
+    if (row.signal_type === "technology") idsByType.technology.add(row.signal_id)
+    else if (row.signal_type === "process") idsByType.process.add(row.signal_id)
+  }
+
+  const names = new Map<string, string>()
+  const [products, processes] = await Promise.all([
+    idsByType.technology.size
+      ? admin.from("dictionary_products").select("id,name").in("id", [...idsByType.technology])
+      : Promise.resolve({ data: [], error: null }),
+    idsByType.process.size
+      ? admin.from("dictionary_processes").select("id,name").in("id", [...idsByType.process])
+      : Promise.resolve({ data: [], error: null }),
+  ])
+  for (const entry of [...(products.data ?? []), ...(processes.data ?? [])]) names.set(entry.id, entry.name)
+  return names
+}
+
 type SignalRow = {
   id: string
   company_id: string
@@ -163,24 +195,78 @@ type SignalRow = {
   job_posted_at: string | null
   created_at: string
   company_name?: string
+  dictionary_name?: string | null
+  contact?: { id: string; full_name: string | null; linkedin_url: string | null; email1: string | null; updated_at: string | null } | null
 }
 
+/**
+ * Agrupa por TÉRMINO DE DICCIONARIO y cuenta ENTIDADES distintas.
+ *
+ * Antes agrupaba por `keyword_matched` y sumaba una por fila. Las dos cosas
+ * inflaban: "Microsoft Intune" e "Intune" son la misma entrada de diccionario y
+ * se contaban por separado, y una persona con dos filas en `contacts` (el mismo
+ * perfil scrapeado con la vanity URL y con el slug autogenerado) contaba dos
+ * veces. `count` es ahora personas + vacantes distintas, que es lo que el
+ * vendedor cree que está leyendo.
+ *
+ * `countOwn` es de la Fase 3 y se conserva: cuántas de esas entidades son de la
+ * empresa que se preguntó y no de un homónimo consolidado.
+ */
 function groupSignals(rows: Array<SignalRow & Record<string, unknown>>, canonicalId: string) {
-  const grouped = new Map<string, { label: string; count: number; countOwn: number; lastSeen: string | null; evidence: unknown[] }>()
-  for (const row of rows) {
-    const label = String(row.keyword_matched || row.signal_id || "Sin clasificar")
-    const key = `${row.signal_type}:${normalize(label)}`
-    const current = grouped.get(key) ?? { label, count: 0, countOwn: 0, lastSeen: null, evidence: [] }
-    current.count += 1
-    if (row.company_id === canonicalId) current.countOwn += 1
-    const occurredAt = (row.job_posted_at || row.created_at) as string | null
+  const units = canonicalizeSignals(rows, (row) => ({
+    rowId: row.id,
+    signalType: row.signal_type,
+    signalId: row.signal_id ?? null,
+    label: row.dictionary_name ?? null,
+    keyword: row.keyword_matched ?? null,
+    sourceField: row.source_field ?? null,
+    snippet: row.snippet ?? null,
+    sourceUrl: row.source_url ?? null,
     // `lastSeen` es lo que separa una tecnología viva de una que aparece por un
     // perfil de 2019. En el modo compacto es la única señal de frescura que hay.
-    if (occurredAt && (!current.lastSeen || occurredAt > current.lastSeen)) current.lastSeen = occurredAt
-    if (current.evidence.length < 3) current.evidence.push({ signalId: row.id, companyId: row.company_id, companyName: row.company_name, sourceField: row.source_field, jobPostingId: row.job_posting_id, snippet: row.snippet, sourceUrl: row.source_url, occurredAt })
-    grouped.set(key, current)
-  }
-  return [...grouped.entries()].map(([key, value]) => ({ type: key.split(":")[0], ...value })).sort((a, b) => b.count - a.count)
+    occurredAt: row.job_posted_at ?? row.created_at ?? null,
+    companyId: row.company_id ?? null,
+    companyName: row.company_name ?? null,
+    jobPostingId: row.job_posting_id ?? null,
+    person: row.contact
+      ? {
+          contactId: row.contact.id,
+          fullName: row.contact.full_name,
+          linkedinUrl: row.contact.linkedin_url,
+          email: row.contact.email1,
+          updatedAt: row.contact.updated_at,
+        }
+      : null,
+  }))
+
+  return groupBySignal(units)
+    .map((group) => ({
+      type: group.signalType,
+      label: group.label,
+      count: group.entities,
+      // Una entidad es "propia" si alguna de sus menciones viene de la empresa
+      // canónica. La entidad es la unidad, así que se cuenta una vez aunque
+      // aparezca mencionada en varios homónimos.
+      countOwn: group.units.filter((unit) => unit.mentions.some((m) => m.companyId === canonicalId)).length,
+      people: group.people,
+      jobPostings: group.jobPostings,
+      lastSeen: group.lastSeen,
+      evidence: group.units
+        .flatMap((unit) => unit.mentions)
+        .slice(0, 3)
+        .map((mention) => ({
+          signalId: mention.rowId,
+          companyId: mention.companyId,
+          companyName: mention.row.company_name,
+          contactId: mention.contactId,
+          sourceField: mention.sourceField,
+          jobPostingId: mention.row.job_posting_id,
+          snippet: mention.snippet,
+          sourceUrl: mention.sourceUrl,
+          occurredAt: mention.occurredAt,
+        })),
+    }))
+    .sort((a, b) => b.count - a.count)
 }
 
 export type SignalSummaryDetail = "compact" | "evidence" | "full"
@@ -243,7 +329,7 @@ export async function getCompanySignalSummary(
   }
 
   const [signalsResult, implementationsResult, jobsResult] = await Promise.all([
-    admin.from("signals").select("id,company_id,signal_type,signal_id,keyword_matched,source_field,snippet,source_url,job_posting_id,job_posted_at,created_at").in("company_id", companyIds).order("created_at", { ascending: false }).limit(MAX_SIGNALS),
+    admin.from("signals").select("id,company_id,signal_type,signal_id,keyword_matched,source_field,snippet,source_url,job_posting_id,job_posted_at,created_at,contacts:contact_id ( id, full_name, linkedin_url, email1, updated_at )").in("company_id", companyIds).order("created_at", { ascending: false }).limit(MAX_SIGNALS),
     admin.from("company_implementations").select("id,company_id,title,provider_name,technology,summary,area,evidence_level,relevance_snippet,source_url,source_name,published_at,created_at").in("company_id", companyIds).order("created_at", { ascending: false }).limit(MAX_IMPLEMENTATIONS),
     admin.from("job_postings").select("id,company_id,title,description,location,posted_at,job_url,created_at").in("company_id", companyIds).order("posted_at", { ascending: false, nullsFirst: false }).limit(MAX_JOBS),
   ])
@@ -251,7 +337,23 @@ export async function getCompanySignalSummary(
   if (implementationsResult.error) throw new Error(`IMPLEMENTATIONS_READ_FAILED:${implementationsResult.error.message}`)
   if (jobsResult.error) throw new Error(`JOBS_READ_FAILED:${jobsResult.error.message}`)
 
-  const signals = (signalsResult.data ?? []).map((row) => ({ ...row, company_name: aliasNames.get(row.company_id) }))
+  // El nombre de diccionario NO se puede traer con un embed: `signal_id` es
+  // polimórfico (apunta a dictionary_products o a dictionary_processes según el
+  // tipo) y no tiene FK. Sin él habría que agrupar por la keyword literal, que
+  // es exactamente lo que duplicaba las señales.
+  const dictionaryNames = await resolveDictionaryNames(admin, signalsResult.data ?? [])
+  const signals: Array<SignalRow & Record<string, unknown>> = (signalsResult.data ?? []).map((row) => {
+    // El embed llega como array o como objeto según cómo infiera el tipo el
+    // cliente; se normaliza acá y no en el consumidor.
+    const joined = (row as Record<string, unknown>).contacts
+    const contact = (Array.isArray(joined) ? joined[0] : joined) as SignalRow["contact"]
+    return {
+      ...(row as unknown as SignalRow),
+      company_name: aliasNames.get(row.company_id),
+      dictionary_name: row.signal_id ? (dictionaryNames.get(row.signal_id) ?? null) : null,
+      contact: contact ?? null,
+    }
+  })
   const linkedSignalIds = new Map<string, string[]>()
   for (const signal of signals) if (signal.job_posting_id) linkedSignalIds.set(signal.job_posting_id, [...(linkedSignalIds.get(signal.job_posting_id) ?? []), signal.id])
   const jobs = (jobsResult.data ?? []).map((job) => ({ id: job.id, companyId: job.company_id, companyName: aliasNames.get(job.company_id), title: job.title, location: job.location, postedAt: job.posted_at ?? job.created_at, jobUrl: job.job_url, descriptionSnippet: job.description?.slice(0, 500) ?? null, linkedSignalIds: linkedSignalIds.get(job.id) ?? [], interpretationStatus: linkedSignalIds.has(job.id) ? "classified_signal_available" : "raw_evidence_only" }))
@@ -264,9 +366,10 @@ export async function getCompanySignalSummary(
   // `signalsOwn` vs `signalsConsolidated`: sin esta separación no había forma de
   // saber cuánto del número es de la empresa que se preguntó. Se reportaban 24
   // señales de "Consorcio Seguros" cuando 6 eran suyas y 18 de otras 15 entidades.
+  // Canónicos, no filas: es el mismo criterio que `count` de cada término.
   const signalCounts = {
-    own: signals.filter((signal) => signal.company_id === canonical.id).length,
-    consolidated: signals.length,
+    own: grouped.reduce((total, item) => total + item.countOwn, 0),
+    consolidated: grouped.reduce((total, item) => total + item.count, 0),
   }
 
   if (detail === "compact") {
@@ -281,7 +384,7 @@ export async function getCompanySignalSummary(
         processes: grouped.filter((item) => item.type === "process").map(strip),
         signalsOwn: signalCounts.own,
         signalsConsolidated: signalCounts.consolidated,
-        signalCount: signals.length,
+        signalCount: signalCounts.consolidated,
         implementationCount: implementations.length,
         jobPostingCount: jobs.length,
       },
@@ -306,7 +409,7 @@ export async function getCompanySignalSummary(
     detail: "full" as const,
     company: canonical,
     aliasResolution,
-    summary: { status, technologies: grouped.filter((item) => item.type === "technology"), processes: grouped.filter((item) => item.type === "process"), signalsOwn: signalCounts.own, signalsConsolidated: signalCounts.consolidated, signalCount: signals.length, implementationCount: implementations.length, jobPostingCount: jobs.length },
+    summary: { status, technologies: grouped.filter((item) => item.type === "technology"), processes: grouped.filter((item) => item.type === "process"), signalsOwn: signalCounts.own, signalsConsolidated: signalCounts.consolidated, signalCount: signalCounts.consolidated, implementationCount: implementations.length, jobPostingCount: jobs.length },
     implementations: implementations.map((item) => ({ ...item, companyName: aliasNames.get(item.company_id) })),
     jobPostings: jobs,
     interpretationGuidance: "Resume solo lo observado. Distingue señales clasificadas, implementaciones y evidencia cruda de vacantes. Una vacante sin linkedSignalIds es indicio, no confirmación de tecnología o proceso implementado.",

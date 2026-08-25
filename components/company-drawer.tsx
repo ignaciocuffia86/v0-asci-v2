@@ -24,6 +24,13 @@ import {
   BookmarkCheck,
   SlidersHorizontal,
 } from "lucide-react"
+import {
+  canonicalizeSignals,
+  countPeople,
+  groupBySignal,
+  type CanonicalSignal,
+  type SignalRowInput,
+} from "@/lib/shared/canonical-signals"
 import { bookmarkCompany, unbookmarkCompany, checkBookmarkWithContext } from "@/app/actions/bookmarks"
 import { useToast } from "@/hooks/use-toast"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
@@ -53,6 +60,7 @@ type Signal = {
   job_posting_id: string | null
   signal_id: string
   source_url: string | null
+  created_at?: string | null
   process?: string | null
   contact: {
     id?: string
@@ -78,6 +86,8 @@ type Signal = {
     phone2?: string | null
     phone2_type?: string | null
     company_id?: string
+    created_at?: string | null
+    updated_at?: string | null
   } | null
   job_posting?: {
     id: string
@@ -126,6 +136,35 @@ type DrawerData = {
   /** Total de vacantes en la ventana de 6 meses, sin el cupo del detalle. Ausente hasta que se aplique la migración. */
   job_postings_window_count?: number
   alumni_signals: Signal[]
+}
+
+/** Fila de `signals` tal como la devuelve el RPC, traducida a la unidad canónica. */
+function toSignalInput(signal: Signal): SignalRowInput {
+  return {
+    rowId: signal.id,
+    signalType: signal.signal_type,
+    signalId: signal.signal_id ?? null,
+    // El RPC ya resuelve el nombre de diccionario en `signal_name`. Agrupar por
+    // `keyword_matched` es lo que hacía que "Microsoft Intune" e "Intune"
+    // aparecieran como dos señales distintas de la misma entrada.
+    label: signal.signal_name ?? null,
+    keyword: signal.keyword_matched ?? null,
+    sourceField: signal.source_field ?? null,
+    snippet: signal.snippet ?? null,
+    sourceUrl: signal.source_url ?? null,
+    occurredAt: signal.created_at ?? null,
+    companyId: signal.company_id ?? null,
+    jobPostingId: signal.job_posting_id ?? null,
+    person: signal.contact?.id
+      ? {
+          contactId: signal.contact.id,
+          fullName: signal.contact.full_name ?? null,
+          linkedinUrl: signal.contact.linkedin_url ?? null,
+          email: signal.contact.email1 ?? signal.contact.email2 ?? null,
+          updatedAt: signal.contact.updated_at ?? signal.contact.created_at ?? null,
+        }
+      : null,
+  }
 }
 
 type CompanyDrawerProps = {
@@ -228,17 +267,35 @@ export function CompanyDrawer({
         }
       }
 
-      acc[jp.id].detected_keywords.push({
-        keyword: jp.keyword_matched,
-        signal_name: jp.signal_name,
-        snippet: jp.snippet,
-      })
+      // Una vacante que dice "Intune" y "Microsoft Intune" menciona UNA
+      // tecnología, no dos: se agrupa por término de diccionario.
+      const label = jp.signal_name || jp.keyword_matched
+      if (!acc[jp.id].detected_keywords.some((kw: any) => kw.signal_name === label)) {
+        acc[jp.id].detected_keywords.push({
+          keyword: jp.keyword_matched,
+          signal_name: label,
+          snippet: jp.snippet,
+        })
+      }
 
       return acc
     }, {})
 
     return Object.values(grouped).sort((a, b) => new Date(b.posted_at).getTime() - new Date(a.posted_at).getTime())
   }, [drawerData?.job_postings])
+
+  // ── Unidad canónica de señal ──
+  // Todo lo que se cuenta o se lista abajo sale de acá: una señal es
+  // (entrada de diccionario, persona resuelta), y las menciones en distintos
+  // campos —o en dos filas de `contacts` del mismo perfil— son evidencia de esa
+  // única señal.
+  const signalUnits = useMemo(() => canonicalizeSignals(signals, toSignalInput), [signals])
+  const currentEmployeeUnits = useMemo(
+    () => signalUnits.filter((unit) => unit.person && unit.mentions.some((mention) => mention.row.is_current_employee)),
+    [signalUnits],
+  )
+  const alumniUnits = useMemo(() => canonicalizeSignals(alumniSignalsData, toSignalInput), [alumniSignalsData])
+  const tagCloud = useMemo(() => groupBySignal(signalUnits).slice(0, 10), [signalUnits])
 
   // Tres números distintos, y conviene no confundirlos:
   // - historicJobPostings: lo que cuenta el listado de resultados (histórico completo, sin ventana)
@@ -354,26 +411,6 @@ export function CompanyDrawer({
     router.push(`/bookmarks/${bookmarkId}`)
   }
 
-  const getTagCloud = () => {
-    const tagCounts = new Map<string, Set<string>>()
-    signals.forEach((signal) => {
-      const keyword = signal.keyword_matched
-      if (!tagCounts.has(keyword)) {
-        tagCounts.set(keyword, new Set())
-      }
-      if (signal.contact_id) {
-        tagCounts.get(keyword)!.add(`contact_${signal.contact_id}`)
-      }
-      if (signal.job_posting_id) {
-        tagCounts.get(keyword)!.add(`job_${signal.job_posting_id}`)
-      }
-    })
-    return Array.from(tagCounts.entries())
-      .map(([keyword, itemSet]) => [keyword, itemSet.size] as [string, number])
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10)
-  }
-
   const getJobPostingTags = () => {
     const tagCounts = new Map<string, Set<string>>()
     jobPostings.forEach((jp) => {
@@ -404,28 +441,6 @@ export function CompanyDrawer({
   }
 
   if (!company) return null
-
-  const uniqueSignals = signals.filter(
-    (signal, index, self) =>
-      index ===
-      self.findIndex(
-        (t) =>
-          t.contact?.id === signal.contact?.id &&
-          t.keyword_matched.toLowerCase() === signal.keyword_matched.toLowerCase(),
-      ),
-  )
-
-  const currentEmployeeSignals = uniqueSignals.filter((s) => s.is_current_employee && s.contact_id)
-
-  const uniqueAlumniSignals = alumniSignalsData.filter(
-    (signal, index, self) =>
-      index ===
-      self.findIndex(
-        (t) =>
-          t.contact?.id === signal.contact?.id &&
-          t.keyword_matched.toLowerCase() === signal.keyword_matched.toLowerCase(),
-      ),
-  )
 
   return (
     <Sheet open={isOpen} onOpenChange={onClose}>
@@ -579,14 +594,15 @@ export function CompanyDrawer({
                     Tecnologías y Procesos Principales
                   </h4>
                   <div className="flex flex-wrap gap-2">
-                    {getTagCloud().map(([keyword, count]) => (
+                    {tagCloud.map((group) => (
                       <Badge
-                        key={keyword}
+                        key={group.signalKey}
                         variant="secondary"
                         className="bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border-0 px-2.5 py-1 text-xs"
+                        title={`${group.people} ${group.people === 1 ? "persona" : "personas"}${group.jobPostings ? ` · ${group.jobPostings} ${group.jobPostings === 1 ? "vacante" : "vacantes"}` : ""}`}
                       >
-                        {keyword}
-                        <span className="ml-1.5 text-slate-400 font-normal">{count}</span>
+                        {group.label}
+                        <span className="ml-1.5 text-slate-400 font-normal">{group.entities}</span>
                       </Badge>
                     ))}
                   </div>
@@ -644,7 +660,7 @@ export function CompanyDrawer({
                   variant="secondary"
                   className="ml-2 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 text-xs hover:bg-blue-200"
                 >
-                  {currentEmployeeSignals.length}
+                  {countPeople(currentEmployeeUnits)}
                 </Badge>
               </TabsTrigger>
               <TabsTrigger
@@ -656,7 +672,7 @@ export function CompanyDrawer({
                   variant="secondary"
                   className="ml-2 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 text-xs hover:bg-blue-200"
                 >
-                  {uniqueAlumniSignals.length}
+                  {countPeople(alumniUnits)}
                 </Badge>
               </TabsTrigger>
               {showJobPostingsTab && (
@@ -679,9 +695,9 @@ export function CompanyDrawer({
 
           <div className="flex-1 overflow-y-auto bg-slate-50/30 dark:bg-slate-900">
             <TabsContent value="current" className="p-6 space-y-4 m-0">
-              {currentEmployeeSignals.length > 0 ? (
-                currentEmployeeSignals.map((signal) => (
-                  <SignalCard key={`${signal.id}-current`} signal={signal} company={company} />
+              {currentEmployeeUnits.length > 0 ? (
+                currentEmployeeUnits.map((unit) => (
+                  <SignalCard key={`${unit.key}-current`} unit={unit} company={company} />
                 ))
               ) : (
                 <div className="text-center py-12 text-muted-foreground bg-white dark:bg-slate-900 rounded-xl border border-dashed">
@@ -691,9 +707,9 @@ export function CompanyDrawer({
             </TabsContent>
 
             <TabsContent value="alumni" className="p-6 space-y-4 m-0">
-              {uniqueAlumniSignals.length > 0 ? (
-                uniqueAlumniSignals.map((signal) => (
-                  <SignalCard key={`${signal.id}-alumni`} signal={signal} company={company} />
+              {alumniUnits.length > 0 ? (
+                alumniUnits.map((unit) => (
+                  <SignalCard key={`${unit.key}-alumni`} unit={unit} company={company} />
                 ))
               ) : (
                 <div className="text-center py-12 text-muted-foreground bg-white dark:bg-slate-900 rounded-xl border border-dashed">
@@ -771,8 +787,18 @@ function highlightKeyword(text: string, keyword: string): React.ReactNode {
   )
 }
 
-const SignalCard = ({ signal, company }: { signal: Signal; company: CompanyDetails }) => {
+/**
+ * Una señal de una persona, con TODAS sus menciones plegadas.
+ *
+ * Antes era una card por fila de `signals`, y por eso la misma persona podía
+ * aparecer dos veces con el mismo término. Ahora la card es la unidad canónica
+ * —(persona, entrada de diccionario)— y cada mención es una cita más abajo.
+ */
+const SignalCard = ({ unit, company }: { unit: CanonicalSignal<Signal>; company: CompanyDetails }) => {
   const { toast } = useToast()
+  // Perfil a mostrar: la fila de `contacts` más fresca de esa persona. Cuando el
+  // mismo perfil está duplicado, la vieja trae el cargo desactualizado.
+  const signal = unit.representative
 
   const formatSourceField = (field: string) => {
     const map: Record<string, string> = {
@@ -790,37 +816,17 @@ const SignalCard = ({ signal, company }: { signal: Signal; company: CompanyDetai
     return map[field] || field
   }
 
-  const getPreviousCompanyContext = (signal: Signal) => {
-    if (signal.source_field !== "previous_position") return null
-
-    const positions = signal.contact?.previous_positions || []
-
-    // Find the position that likely generated this signal
-    const matchingPosition = positions.find((pos: any) => {
-      const text = `${pos.title || ""} ${pos.description || ""}`.toLowerCase()
-      return text.includes(signal.keyword_matched.toLowerCase())
-    })
-
-    if (matchingPosition) {
-      // Only show "misma empresa" logic if they are CURRENTLY working there and referring to a previous role there
-      // We check if they are marked as current employee AND the previous role company ID matches current company ID
-      const isInternalPromotion =
-        signal.is_current_employee && matchingPosition.company_id === signal.contact?.current_company_id
-
-      if (isInternalPromotion) {
-        return `en Posición Anterior (misma empresa)`
-      }
-      // For everyone else (including Alumni), explicitly state the company name
-      return `en Posición Anterior en ${matchingPosition.company_name || "otra empresa"}`
+  /** Dónde se dijo: "en Posición Actual en X", "Titular", "Posición Anterior en Y". */
+  const mentionContext = (mention: (typeof unit.mentions)[number]) => {
+    const row = mention.row
+    if (row.contact?.previous_positions?.some((pos: any) => pos.company_id === company.id)) {
+      return `en Posición Anterior en ${company.name}`
     }
-
-    return "en Posición Anterior"
+    if (mention.sourceField === "current_position" || mention.sourceField === "current_position_description") {
+      return `en Posición Actual en ${company.name}`
+    }
+    return formatSourceField(mention.sourceField || "")
   }
-
-  const contactInitials = signal.contact?.full_name
-
-  const prevContext = getPreviousCompanyContext(signal)
-  const sourceLabel = formatSourceField(signal.source_field)
 
   return (
     <div className="rounded-xl border bg-card text-card-foreground shadow-sm overflow-hidden transition-all hover:shadow-md bg-white dark:bg-slate-900">
@@ -998,24 +1004,28 @@ const SignalCard = ({ signal, company }: { signal: Signal; company: CompanyDetai
               variant="outline"
               className="bg-white dark:bg-slate-950 font-semibold shadow-sm text-primary border-primary/20"
             >
-              {signal.keyword_matched}
+              {unit.label}
             </Badge>
-            <span>
-              {signal.contact?.previous_positions &&
-              signal.contact.previous_positions.some((pos: any) => pos.company_id === company.id) ? (
-                <span className="font-medium text-foreground">en Posición Anterior en {company.name}</span>
-              ) : signal.source_field === "current_position" || signal.source_field === "current_position_description" ? (
-                <span className="font-medium text-foreground">en Posición Actual en {company.name}</span>
-              ) : (
-                formatSourceField(signal.source_field)
-              )}
-            </span>
+            {unit.mentions.length > 1 && (
+              <span className="text-xs text-muted-foreground">
+                · {unit.mentions.length} menciones en su perfil
+              </span>
+            )}
           </div>
 
-          <div className="relative pl-3 border-l-2 border-primary/20">
-            <p className="text-sm text-slate-600 dark:text-slate-300 italic leading-relaxed line-clamp-4">
-              {highlightKeyword(signal.snippet, signal.keyword_matched)}
-            </p>
+          <div className="space-y-3">
+            {unit.mentions.map((mention) => (
+              <div key={mention.rowId}>
+                <p className="text-xs text-muted-foreground mb-1 font-medium text-foreground/70">
+                  {mentionContext(mention)}
+                </p>
+                <div className="relative pl-3 border-l-2 border-primary/20">
+                  <p className="text-sm text-slate-600 dark:text-slate-300 italic leading-relaxed line-clamp-4">
+                    {highlightKeyword(mention.snippet || "", mention.keyword || "")}
+                  </p>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       </div>

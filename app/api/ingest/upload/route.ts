@@ -302,11 +302,32 @@ export async function POST(request: Request) {
     // 10. Clean up blob - CSV is now in the database
     await del(blobUrl).catch(() => {})
 
+    // Si el export no trae email1_status / phone1_type, esas filas no se van a
+    // poder deduplicar por mail ni por teléfono: quedan identificadas solo por
+    // la URL de LinkedIn, que cambia cuando la persona se pone una vanity URL.
+    // El import es válido igual, pero tiene que verse ahora y no dentro de seis
+    // meses contando duplicados.
+    const cobertura = finalized?.identity_coverage
+    const warnings: string[] = []
+    if (cobertura?.email_sin_status > 0) {
+      warnings.push(
+        `${cobertura.email_sin_status} de ${cobertura.filas_con_email} filas con email llegaron sin "email1_status". ` +
+          `Solo se van a deduplicar por mail las de dominio personal (gmail, hotmail…).`,
+      )
+    }
+    if (cobertura?.telefono_sin_type > 0) {
+      warnings.push(
+        `${cobertura.telefono_sin_type} de ${cobertura.filas_con_telefono} filas con teléfono llegaron sin "phone1_type", ` +
+          `así que no se pueden deduplicar por teléfono.`,
+      )
+    }
+
     return NextResponse.json({
       success: true,
       batchId,
       totalRows: insertedRows,
       message: `${insertedRows} filas cargadas. El procesamiento comenzará automáticamente.`,
+      ...(warnings.length ? { warnings } : {}),
     })
   } catch (err: any) {
     // Never leave a batch stuck in "uploading": the cron ignores that status,
