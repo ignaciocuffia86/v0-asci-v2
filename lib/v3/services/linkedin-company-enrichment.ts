@@ -797,12 +797,21 @@ export async function runLinkedInEnrichment(options: RunOptions = {}): Promise<E
               c.id,
               c.linkedin_url,
               status,
-              // [458] hq_iso queda NULL con el fallback: hq_source dice de donde
-              // salio hq_country y es lo que distingue un pais de operacion de
-              // una casa matriz confirmada, para auditarlo o revertirlo despues.
+              // [458] Las tres columnas hq_* quedan NULL cuando el pais salio
+              // de peopleStats, y eso es a proposito. Son la CASA MATRIZ:
+              // hq_source tiene un CHECK que solo admite los tres valores de
+              // HqPick (headquarter_flag / single_location / unanimous_country),
+              // asi que el esquema ya dice que ahi no va otra cosa. El intento
+              // de meter 'people_stats_country' murio con un 23514.
+              //
+              // El rastro para auditar o revertir es `filled_columns`: una fila
+              // con status='no_hq' y 'country' adentro solo puede venir de este
+              // fallback. Verificado contra produccion: de las 4.050 filas
+              // no_hq, CERO tenian 'country' en filled_columns, asi que la
+              // firma no es ambigua.
               hq?.iso ?? null,
-              hq?.country ?? paisPorEmpleados ?? null,
-              hq?.source ?? (paisPorEmpleados ? "people_stats_country" : null),
+              hq?.country ?? null,
+              hq?.source ?? null,
               item,
               filled,
             ],

@@ -171,17 +171,23 @@ UPDATE public.companies c
    AND b.pais IS NOT NULL
    AND (c.country IS NULL OR btrim(c.country) = '');
 
--- Rastro en el checkpoint, igual que hace el codigo: hq_iso queda NULL porque
--- esto no es evidencia de casa matriz, y hq_source dice de donde salio. Es lo
--- que permite auditar o revertir despues cuales escribio este backfill.
+-- Rastro en el checkpoint. La primera version de esto escribia
+-- hq_source='people_stats_country' y el DRY RUN la mato con un 23514: hay un
+-- CHECK que solo admite los tres valores de HqPick (headquarter_flag,
+-- single_location, unanimous_country). El esquema tiene razon -- las hq_* son
+-- la CASA MATRIZ, y esto no lo es -- asi que las tres quedan NULL y el rastro
+-- va donde corresponde: `filled_columns`, que es literalmente "que columnas
+-- lleno este enrichment".
+--
+-- La firma no es ambigua: de las 4.050 filas no_hq, CERO tenian 'country' en
+-- filled_columns antes de esto (verificado contra produccion).
 UPDATE v3.linkedin_company_enrichment e
-   SET hq_country = b.pais,
-       hq_source  = 'people_stats_country'
+   SET filled_columns = array_append(coalesce(e.filled_columns, '{}'), 'country')
   FROM tmp_backfill_458 b
  WHERE e.company_id = b.company_id
    AND b.pais IS NOT NULL
    AND e.status = 'no_hq'
-   AND e.hq_source IS NULL;
+   AND NOT ('country' = ANY(coalesce(e.filled_columns, '{}')));
 
 -- Verificacion posterior: cuantas quedaron efectivamente con pais.
 DO $$
@@ -200,13 +206,17 @@ ROLLBACK;
 -- COMMIT;
 
 -- -----------------------------------------------------------------------------
--- REVERTIR (si hiciera falta despues de aplicar): las filas escritas por este
--- backfill son exactamente las que tienen hq_source = 'people_stats_country'.
+-- REVERTIR (si hiciera falta despues de aplicar): las filas que escribio este
+-- backfill son las no_hq con 'country' en filled_columns.
 --
 --   UPDATE public.companies c
 --      SET country = NULL
 --     FROM v3.linkedin_company_enrichment e
 --    WHERE e.company_id = c.id
---      AND e.hq_source = 'people_stats_country'
---      AND c.country = e.hq_country;
+--      AND e.status = 'no_hq'
+--      AND 'country' = ANY(coalesce(e.filled_columns, '{}'));
+--
+--   UPDATE v3.linkedin_company_enrichment
+--      SET filled_columns = array_remove(filled_columns, 'country')
+--    WHERE status = 'no_hq' AND 'country' = ANY(coalesce(filled_columns, '{}'));
 -- -----------------------------------------------------------------------------
