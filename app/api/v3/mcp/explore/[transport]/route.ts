@@ -253,7 +253,7 @@ const handler = createMcpHandler(
     // -------------------------------------------------------------------------
     server.tool(
       "explore_set_industries",
-      "Paso 3 del embudo: fija hasta 3 industrias (o ninguna) y devuelve el RESULTADO: el ranking de empresas que matchean el concepto, con cuántas PERSONAS lo saben y cuántas VACANTES lo piden (cada número marca su origen). `includeUnclassified` (default true) suma las empresas sin industria clasificada; ponelo en false para un corte estricto solo de las clasificadas, sabiendo que dejás fuera la mayoría. Cada empresa trae su companyId (UUID). Próximos pasos por empresa: explore_company_people (quiénes saben, con evidencia), explore_scrape_jobs (traer vacantes frescas de LinkedIn, consume cuota) y explore_prepare_decision_makers (buscar tomadores de decisión en Apollo, consume créditos).",
+      "Paso 3 del embudo: fija hasta 3 industrias (o ninguna) y devuelve el RESULTADO: el ranking de empresas que matchean el concepto, con cuántas PERSONAS lo saben y cuántas VACANTES lo piden (cada número marca su origen). `includeUnclassified` (default true) suma las empresas sin industria clasificada; ponelo en false para un corte estricto solo de las clasificadas, sabiendo que dejás fuera la mayoría. `jobMatches` cuenta vacantes de TODO el histórico del catálogo (más de la mitad tiene más de 6 meses) y no hay dato de si siguen abiertas: nadie revisa una vacante después de ingestarla. Es \"esta empresa pidió esto alguna vez\", no \"está contratando\"; para lo que está abierto hoy, explore_scrape_jobs. Cada empresa trae su companyId (UUID). Próximos pasos por empresa: explore_company_people (quiénes saben, con evidencia), explore_scrape_jobs (traer vacantes frescas de LinkedIn, consume cuota) y explore_prepare_decision_makers (buscar tomadores de decisión en Apollo, consume créditos).",
       {
         sessionId: z.string().uuid(),
         industryIds: z.array(z.string().min(1).max(80)).max(3).describe("Ids de master_industries devueltos por explore_set_country. Vacío = sin corte de industria."),
@@ -295,7 +295,7 @@ const handler = createMcpHandler(
     // -------------------------------------------------------------------------
     server.tool(
       "explore_companies",
-      "Ranking de empresas por concepto, con filtros explícitos y SIN necesitar sesión (para re-consultas o ajustes rápidos). Pasá `terms` (nube expandida) y opcionalmente country, industryIds, includeUnclassified y sources. Devuelve lo mismo que explore_set_industries: empresas con personMatches (gente que sabe) y jobMatches (vacantes que lo piden). Usá explore_start si preferís el embudo guiado paso a paso.",
+      "Ranking de empresas por concepto, con filtros explícitos y SIN necesitar sesión (para re-consultas o ajustes rápidos). Pasá `terms` (nube expandida) y opcionalmente country, industryIds, includeUnclassified y sources. Devuelve lo mismo que explore_set_industries: empresas con personMatches (gente que sabe) y jobMatches (vacantes que lo piden, en todo el histórico y sin dato de si siguen abiertas). Usá explore_start si preferís el embudo guiado paso a paso.",
       {
         terms: z.array(z.string().min(2).max(120)).min(1).max(25),
         country: z.string().min(2).max(80).optional(),

@@ -81,6 +81,12 @@ export function ProcessSearch() {
     setSelectedCompanyId(companyId)
   }, [])
 
+  // Contador histórico del listado, para explicar en el drawer la ventana de 6 meses
+  const selectedCompanyJobPostings = useMemo(
+    () => results.find((r) => r.company_id === selectedCompanyId)?.job_postings_count,
+    [results, selectedCompanyId],
+  )
+
   const searchContext = {
     filterSignalIds: selectedProcesses,
     filterType: "process",
@@ -302,6 +308,7 @@ export function ProcessSearch() {
         onClose={() => setSelectedCompanyId(null)}
         filterSignalIds={selectedProcesses}
         filterType="process"
+        jobPostingsTotal={selectedCompanyJobPostings}
       />
     </div>
   )

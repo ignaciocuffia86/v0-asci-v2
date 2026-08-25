@@ -91,7 +91,7 @@ export function ScoreTooltip({
             {/* Búsquedas Laborales */}
             <div className="space-y-1.5">
               <div className="flex justify-between text-sm">
-                <span>Búsquedas activas</span>
+                <span>Búsquedas laborales</span>
                 <span className="font-medium">
                   {Math.round(jobPostingsScore * 0.3)}/30 ({jobPostingsCount})
                 </span>
@@ -152,13 +152,20 @@ export function ScoringExplanation({ className }: ScoringExplanationProps) {
                 <span className="font-medium text-primary">30%</span>
                 <div>
                   <span className="font-medium">Búsquedas laborales</span>
-                  <p className="text-xs text-muted-foreground">Contratando activamente (últimos 6 meses)</p>
+                  <p className="text-xs text-muted-foreground">
+                    Vacantes donde se detectó la señal, sin límite de antigüedad
+                  </p>
                 </div>
               </li>
             </ul>
 
             <p className="text-xs text-muted-foreground border-t pt-2">
               Un score de 50 es el promedio. Mayor score = más señales detectadas vs otras empresas.
+            </p>
+
+            <p className="text-xs text-muted-foreground">
+              El score cuenta el histórico completo. El detalle de una empresa muestra solo las búsquedas de los últimos
+              6 meses, por eso puede mostrar menos vacantes que el contador del listado.
             </p>
           </div>
         </TooltipContent>
