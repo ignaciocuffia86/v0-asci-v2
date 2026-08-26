@@ -150,7 +150,8 @@ Devuelve, por concepto:
 
 ```
 ai:      { costUsd, inputTokens, outputTokens, jobs }         ← real, del AI Gateway
-apollo:  { credits, costUsd, runs, contactsFound, cacheHits } ← real: créditos × precio
+apollo:  { credits: {emails, phones, firmographics}, costUsd,
+           runs, contactsFound, cacheHits }                   ← estimado hasta §8.3
 apify:   { runs, rowsIngested, costUsd | null }               ← costUsd sujeto a 4.2
 totalUsd
 scope:   "batch" | "period"
@@ -159,10 +160,11 @@ by:      [{ userId, name, ...los mismos conceptos }]          ← si hay groupBy
 
 Tres decisiones de forma:
 
-- **`totalUsd` solo suma lo que es real.** Con el precio de Apollo definido (§6.1), IA
-  y Apollo son cifras firmes. Si Apify no expone su consumo, su USD viaja en `null`,
-  queda fuera del total, y el total se rotula como parcial. Un total que mezcla un
-  número medido con uno inventado es un número inventado.
+- **Cada número dice de qué calidad es.** El de IA es medido (AI Gateway). El de
+  Apollo es **estimado** mientras no se cierre §8.3, y va rotulado como tal. El de
+  Apify es medido o `null`, nunca inventado. `totalUsd` suma lo disponible y declara
+  qué quedó afuera: un total que mezcla un número medido con uno supuesto sin decirlo
+  es un número inventado.
 - **`cacheHits` va aparte** porque es la diferencia entre "buscamos 40 contactos" y
   "pagamos 40 contactos".
 - **Va en el server admin y en el standard.** Saber cuánto se consumió no es un
@@ -198,13 +200,9 @@ lo que se elimina son las 42 repeticiones, no el consentimiento.
 
 ### 6.1 Precio de Apollo: 1.000 créditos = US$ 10
 
-**US$ 0,01 por crédito**, y como `credits_spent` ya se registra por corrida, el costo
-de Apollo pasa a ser una cifra **real**, no una estimación. Va como constante en
-`lib/v3/plan-config.ts` (que es puro y lo leen backend y cliente por igual), no
-hardcodeado en la tool.
-
-Con esto el resumen de costo puede dar un total en USD desde el día uno, sin depender
-de que Apify exponga el suyo.
+**US$ 0,01 por crédito.** Pero el crédito **no es la unidad de consumo**: Apollo cobra
+distinto según el endpoint y según el dato que devuelve. La tabla real está en §8, y
+obliga a corregir tres cosas de cómo contamos hoy.
 
 ### 6.2 El `batchPlanHash` de admin autoriza Apollo: **sí**
 
@@ -236,9 +234,76 @@ Consecuencias que hay que tener presentes:
 | Fase | Qué | Depende de | Tamaño |
 |---|---|---|---|
 | A | Flag `unrestricted` en los 4 guards + tipo de key + emisión gateada | — | Chico. 4 funciones, 1 tipo, 2 chequeos |
+| B0 | Tabla de costos de Apollo + desglose por tipo de crédito (§8) | — | Chico + 1 migración |
 | B1 | Verificar el consumo real de un run de Apify | — | Una corrida |
 | B2 | `get_cost_summary` (con `groupBy`) + atribución por `batchJobId` | A, B1 | Medio |
 | C | Server `admin` con sus descripciones e `instructions` | A | Medio: mucho texto, poca lógica |
 
-Sin migraciones nuevas: `mcp_usage_reservations.metadata` ya es `jsonb`, y la cadena de
-atribución de IA y Apollo ya existe.
+**Una migración**, que el borrador no preveía: `contact_enrichment_runs.credits_spent`
+es un `integer` suelto y no puede representar "3 emails + 2 teléfonos" (§8.2). La
+cadena de atribución de IA y Apollo, en cambio, ya existe, y
+`mcp_usage_reservations.metadata` ya es `jsonb`.
+
+---
+
+## 8. La tabla de costos de Apollo (25-ago-2026)
+
+Precio base: **1.000 créditos = US$ 10 → US$ 0,01 por crédito**.
+
+### 8.1 Lo que consume nuestro código
+
+Solo estos cuatro endpoints se llaman desde el repo. El resto de la tabla de Apollo
+(waterfall, CRM/CSV enrichment, AI research) es de la UI y hoy no nos toca.
+
+| Endpoint | Dónde | Costo publicado | US$ |
+|---|---|---|---|
+| `mixed_people/search` | `lib/apollo/search.ts:89` | **No está en la tabla** (ver 8.3) | ? |
+| `people/match` | `lib/apollo/enrich.ts:49` | 1 créd / email net-new · 1 créd / dato firmográfico o demográfico exportado · **5 créd / teléfono net-new** | 0,01 · 0,01 · **0,05** |
+| `organizations/enrich` | `lib/apollo/organizations.ts:129` | 1 créd / resultado | 0,01 |
+| `organizations/bulk_enrich` | `lib/apollo/bulk-organizations.ts:96` | 1 créd / empresa (máx. 10 por página) | 0,01 |
+
+Para referencia, dos que **no** usamos y podrían tentar: `organizations/{id}/job_postings`
+cuesta 1 créd por resultado —o sea que las vacantes por Apollo se pagan por fila,
+mientras que por Apify se paga la corrida— y `news_articles/search`, 1 créd por página.
+
+### 8.2 Tres correcciones a cómo contamos hoy
+
+**1. El teléfono cuesta 5×, no "un poco más".** Un email es 1 crédito (US$ 0,01) y un
+teléfono son 5 (US$ 0,05). Eso le pone número al `includePhone` con costo diferencial
+que la Fase 4 del otro plan dejó anotado sin cuantificar: no es un detalle de UI, es
+quintuplicar el costo por contacto.
+
+**2. `people/match` cobra por DATO, no por contacto.** Nuestro código hace
+`creditsSpent = contacts.length` (`mcp-contact-enrichment.ts:477`) y
+`creditsEstimated: revealEmail ? 1 : 0` (`enrich.ts:55`): asume 1 crédito por persona.
+Según la tabla, una sola llamada puede cobrar 1 por el email **más** 1 por los datos
+firmográficos/demográficos exportados **más** 5 si aparece un teléfono. Con el
+`revealEmail: true` de hoy la cuenta puede ya estar corta.
+
+**3. Hace falta desglose por tipo.** `contact_enrichment_runs.credits_spent` es un
+`integer`: no puede representar "3 emails + 2 teléfonos", y sin eso no se puede
+valorizar una corrida cuando los tipos cuestan distinto. Migración: pasar a un `jsonb`
+con el desglose (`{emails, phones, firmographics}`) conservando el entero como total,
+o columnas separadas. El total en USD sale de multiplicar cada tipo por su precio.
+
+### 8.3 Dos cosas a verificar contra el ledger de Apollo, antes de dar un número por bueno
+
+Las dos son de la misma clase: **una suposición nuestra que la tabla no confirma.**
+
+- **`mixed_people/search` no figura en la tabla publicada.** La documentación lista
+  `/mixed_people/api_search` como gratuito y `/mixed_companies/search` a 1 crédito por
+  página; el que llamamos no está, y Apollo advierte que los endpoints no documentados
+  **también pueden cobrar**. Lo bookeamos como `creditsEstimated: 0` y la búsqueda
+  **pagina en un loop**, así que si cobra por página el costo silencioso escala con el
+  tamaño de la búsqueda.
+- **Si la cuenta tiene Waterfall Enrichment activo**, un email pasa de 1 crédito a
+  2–10 y un teléfono de 5 a 5–20. Nuestra estimación quedaría corta hasta 10×.
+
+La prueba es la misma para las dos y no requiere escribir código: **comparar el
+consumo real que reporta Apollo para un día contra la suma de nuestros
+`creditsEstimated` de ese día.** Si coinciden, el modelo es correcto; si no, la
+diferencia dice cuál de las dos hipótesis es.
+
+Hasta entonces, `get_cost_summary` tiene que rotular el costo de Apollo como
+**estimado**, no como real. Es la misma regla que aplicamos a Apify: un número medido y
+uno supuesto no se suman sin decirlo.
