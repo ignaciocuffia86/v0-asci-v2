@@ -308,9 +308,23 @@ cupo mensual ahora dejaría un perfil sin techo de Apollo y con una autorizació
 solo existe como texto — y la regla del proyecto es que un tope que importa vive en
 la capa 2, nunca en la 3.
 
-**Queda como el trabajo pendiente que cierra el perfil**: meter los créditos de
-Apollo en el `batchPlanHash` y recién entonces liberar el cupo mensual, las dos cosas
-juntas.
+**Hecho el 26-ago-2026, y las dos cosas juntas como correspondía.** El
+`batchPlanHash` ahora autoriza un presupuesto de créditos
+(`enrichment_credits_authorized`, calculado en el server desde el plan congelado), y
+`prepare_contact_enrichment` con `batchJobId` cobra contra ese presupuesto en vez de
+contra el cupo mensual. El techo se movió del mes calendario al lote que alguien
+cotizó y confirmó.
+
+Dos cosas que el diseño obligó a resolver y no eran obvias:
+
+- **Sin `batchJobId` no cambia nada**: sigue rigiendo el cupo mensual, para todos los
+  perfiles. Es lo que impide que quede un camino al gasto sin ningún techo — que era
+  exactamente el riesgo de liberar el cupo a secas.
+- **Para una credencial CON topes, el presupuesto del lote se recorta al cupo mensual
+  que le queda.** Sin ese recorte, cotizar 60 cuentas × 10 contactos habría autorizado
+  600 créditos en un plan de 150: el presupuesto del lote se convertía en la forma de
+  saltear el cupo. El techo del lote reemplaza al mensual **solo donde no hay tope que
+  respetar**.
 
 ---
 

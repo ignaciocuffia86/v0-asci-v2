@@ -57,6 +57,15 @@ export type PrepareInput = {
   useOrganizationLocation?: boolean
   /** Reintentar con la misma key devuelve la misma preparación. */
   idempotencyKey?: string
+  /**
+   * Lote que AUTORIZA este gasto (`create_batch_job`).
+   *
+   * Con él, el techo deja de ser el cupo mensual del plan y pasa a ser el
+   * presupuesto que ese lote congeló: es lo que permite que un perfil sin topes
+   * gaste Apollo sin quedarse sin ningún techo real. Sin él no cambia nada y
+   * sigue rigiendo el cupo mensual, para todos los perfiles.
+   */
+  batchJobId?: string
 }
 
 /**
@@ -93,7 +102,25 @@ export type PreparedPlan = {
   /** Créditos en el peor caso. El commit real puede ser menor. */
   maxCredits: number
   expiresAt: string
-  monthly: { used: number; limit: number; remaining: number }
+  /**
+   * QUÉ techo rige este gasto, y cuánto queda debajo de él.
+   *
+   * Viaja explícito porque los dos techos son distintos y confundirlos lleva a
+   * mostrarle a alguien un número que no es el que lo va a frenar: `monthly` es
+   * el cupo del plan por mes calendario, `batch` es lo que autorizó UN lote
+   * cotizado. Nunca rigen los dos a la vez.
+   */
+  ceiling:
+    | { source: "monthly"; used: number; limit: number; remaining: number }
+    | { source: "batch"; batchJobId: string; authorized: number; spent: number; remaining: number }
+  /**
+   * El cupo mensual, para no romper a quien ya leía este campo.
+   *
+   * @deprecated Usá `ceiling`: con un lote autorizando el gasto, el cupo mensual
+   * NO es lo que frena, y este campo viaja en null justamente para que no se lo
+   * lea como si lo fuera.
+   */
+  monthly: { used: number; limit: number; remaining: number } | null
   /** true si ya hay datos frescos en caché: la ejecución no gastaría créditos. */
   likelyCacheHit: boolean
   freshnessDays: number
@@ -123,6 +150,64 @@ export class EnrichmentError extends Error {
 // ---------------------------------------------------------------------------
 // prepare_contact_enrichment
 // ---------------------------------------------------------------------------
+
+/**
+ * Presupuesto de Apollo que le queda a un lote, y si esta cuenta está adentro.
+ *
+ * Valida las tres cosas que hacen que la autorización signifique algo:
+ *
+ *  1. El lote es de ESTE workspace. Si no, un id ajeno serviría de autorización.
+ *  2. La empresa está EN el lote. Un lote que autorizó 42 cuentas no autoriza la
+ *     43ª: el hash quedó ligado a esas cuentas y a nada más.
+ *  3. Queda presupuesto. `authorized` es el peor caso que se le mostró a quien
+ *     confirmó, y `spent` lo realmente consumido.
+ */
+async function batchCreditBudget(
+  admin: ReturnType<typeof createAdminClient>,
+  principal: McpPrincipal,
+  batchJobId: string,
+  companyId: string,
+): Promise<{ authorized: number; spent: number; remaining: number }> {
+  const { data: job } = await admin
+    .schema("v3")
+    .from("mcp_batch_jobs")
+    .select("id, enrichment_credits_authorized, enrichment_credits_spent")
+    .eq("id", batchJobId)
+    .eq("workspace_id", principal.workspaceId)
+    .maybeSingle()
+
+  if (!job) {
+    throw new EnrichmentError(
+      "BATCH_JOB_NOT_FOUND",
+      "Ese batchJobId no existe en este workspace. Sacalo de la respuesta de create_batch_job.",
+    )
+  }
+  if (job.enrichment_credits_authorized === null) {
+    throw new EnrichmentError(
+      "BATCH_WITHOUT_ENRICHMENT",
+      "Ese lote no incluye enrichment, así que no autoriza créditos de Apollo. Cotizá uno con operation \"enrichment\" o \"research+enrichment\".",
+    )
+  }
+
+  const { data: item } = await admin
+    .schema("v3")
+    .from("mcp_batch_job_items")
+    .select("id")
+    .eq("batch_job_id", batchJobId)
+    .eq("company_id", companyId)
+    .maybeSingle()
+
+  if (!item) {
+    throw new EnrichmentError(
+      "COMPANY_NOT_IN_BATCH",
+      "Esa empresa no está en el lote, así que el lote no autoriza gastar créditos en ella. El batchPlanHash quedó ligado a las cuentas que se cotizaron.",
+    )
+  }
+
+  const authorized = job.enrichment_credits_authorized as number
+  const spent = (job.enrichment_credits_spent as number) ?? 0
+  return { authorized, spent, remaining: Math.max(0, authorized - spent) }
+}
 
 export async function prepareContactEnrichment(
   principal: McpPrincipal,
@@ -260,18 +345,46 @@ export async function prepareContactEnrichment(
 
   const maxContacts = Math.min(Math.max(1, input.maxContacts ?? limits.maxContacts), limits.maxContacts)
 
-  // 3) Cupo MENSUAL. El RPC solo controla minuto/día/semana, así que sin este
-  //    chequeo el tope por plan sería decorativo.
-  const used = await getMonthlyPoolUsage(principal.workspaceId, POOL)
-  const remaining = Math.max(0, limits.monthlyUnits - used)
-  if (remaining <= 0) {
-    throw new EnrichmentError(
-      "MONTHLY_LIMIT_REACHED",
-      `Agotaste tu cupo mensual de enrichment (${limits.monthlyUnits} contactos en el plan ${limits.plan}). Se renueva el 1° del mes que viene.`,
-    )
+  // 3) EL TECHO. Uno de dos, nunca ninguno.
+  //
+  //    Con `batchJobId`, el gasto se cobra contra el presupuesto que congeló ese
+  //    lote: es la autorización que reemplaza al cupo mensual, y la que permite
+  //    que una credencial sin topes gaste Apollo con un límite real en vez de
+  //    solo una frase en el prompt.
+  //
+  //    Sin `batchJobId` rige el cupo mensual del plan, igual que siempre y para
+  //    todos los perfiles. Esa rama es la que evita el hueco: no hay forma de
+  //    llegar al gasto sin pasar por un techo.
+  //
+  //    El RPC de reservas solo controla minuto/día/semana, así que sin este
+  //    chequeo el tope sería decorativo en los dos casos.
+  const budget = input.batchJobId
+    ? await batchCreditBudget(admin, principal, input.batchJobId, input.companyId)
+    : null
+
+  let remaining: number
+  let monthlyUsed: number | null = null
+  if (budget) {
+    remaining = budget.remaining
+    if (remaining <= 0) {
+      throw new EnrichmentError(
+        "BATCH_BUDGET_EXHAUSTED",
+        `El lote autorizó ${budget.authorized} crédito(s) de Apollo y ya se consumieron ${budget.spent}. Para gastar más hay que cotizar y confirmar un lote nuevo con estimate_batch.`,
+      )
+    }
+  } else {
+    const used = await getMonthlyPoolUsage(principal.workspaceId, POOL)
+    monthlyUsed = used
+    remaining = Math.max(0, limits.monthlyUnits - used)
+    if (remaining <= 0) {
+      throw new EnrichmentError(
+        "MONTHLY_LIMIT_REACHED",
+        `Agotaste tu cupo mensual de enrichment (${limits.monthlyUnits} contactos en el plan ${limits.plan}). Se renueva el 1° del mes que viene.`,
+      )
+    }
   }
 
-  // Nunca reservar más de lo que queda en el mes.
+  // Nunca reservar más de lo que queda en el techo que corresponda.
   const effectiveMax = Math.min(maxContacts, remaining)
 
   const searchParams: SearchParams = {
@@ -325,6 +438,7 @@ export async function prepareContactEnrichment(
         company_id: company.id,
         plan_hash: planHash,
         plan_payload: planPayload,
+        batch_job_id: input.batchJobId ?? null,
         reservation_id: reservation.reservationId ?? null,
         idempotency_key: idempotencyKey,
         status: "prepared",
@@ -351,7 +465,10 @@ export async function prepareContactEnrichment(
     maxContacts: effectiveMax,
     maxCredits: cached.hit ? 0 : effectiveMax,
     expiresAt: expiresAt.toISOString(),
-    monthly: { used, limit: limits.monthlyUnits, remaining },
+    ceiling: budget
+      ? { source: "batch" as const, batchJobId: input.batchJobId as string, authorized: budget.authorized, spent: budget.spent, remaining }
+      : { source: "monthly" as const, used: monthlyUsed ?? 0, limit: limits.monthlyUnits, remaining },
+    monthly: monthlyUsed === null ? null : { used: monthlyUsed, limit: limits.monthlyUnits, remaining },
     likelyCacheHit: cached.hit,
     freshnessDays: limits.freshnessDays,
   }
@@ -532,6 +649,19 @@ export async function runContactEnrichment(
         completed_at: new Date().toISOString(),
       })
       .eq("id", run.id)
+
+    // Descontar del presupuesto del lote lo REALMENTE gastado, no lo reservado.
+    //
+    // Va después de marcar la corrida `completed` y no antes: si la corrida se
+    // cae en el medio, el presupuesto no queda consumido por un gasto que no
+    // ocurrió. Y como `completed` corta la ejecución arriba por idempotencia, un
+    // reintento del mismo planHash no puede descontar dos veces.
+    if (run.batch_job_id && creditsSpent > 0) {
+      await admin.schema("v3").rpc("increment_batch_credits", {
+        p_batch_job_id: run.batch_job_id,
+        p_credits: creditsSpent,
+      })
+    }
 
     return {
       planHash: args.planHash,

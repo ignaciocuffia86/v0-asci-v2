@@ -183,12 +183,17 @@ async function batchSummary(admin: Admin, principal: McpPrincipal, batchJobId: s
           .eq("workspace_id", principal.workspaceId)
           .in("research_job_id", researchJobIds)
       : emptyRows(),
-    planHashes.length
-      ? admin.schema("v3").from("contact_enrichment_runs")
-          .select("credits_spent, contacts_found, cache_hit, user_id")
-          .eq("workspace_id", principal.workspaceId)
-          .in("plan_hash", planHashes)
-      : emptyRows(),
+    // Las corridas de Apollo del lote se buscan por batch_job_id Y por plan_hash.
+    //
+    // No es redundancia: `batch_job_id` lo escribe la preparación cuando el gasto
+    // se autorizó contra el presupuesto del lote, y es el camino bueno. El cruce
+    // por plan_hash cubre las corridas anteriores a eso y las que se prepararon
+    // sueltas y después se anotaron en el item. Se deduplica por id de corrida,
+    // así que una que aparezca por los dos caminos se cuenta una sola vez.
+    admin.schema("v3").from("contact_enrichment_runs")
+      .select("id, credits_spent, contacts_found, cache_hit, user_id")
+      .eq("workspace_id", principal.workspaceId)
+      .or(`batch_job_id.eq.${batchJobId}${planHashes.length ? `,plan_hash.in.(${planHashes.join(",")})` : ""}`),
     admin.schema("v3").from("mcp_usage_reservations")
       .select("metadata, user_id")
       .eq("workspace_id", principal.workspaceId)
@@ -201,10 +206,21 @@ async function batchSummary(admin: Admin, principal: McpPrincipal, batchJobId: s
     scope: "batch" as const,
     context: { batchJobId, operation: job.operation, accounts: job.accounts_total, startedAt: job.created_at, finishedAt: job.finished_at },
     ai: (aiRes.data ?? []) as (AiRow & { user_id: string })[],
-    apollo: (apolloRes.data ?? []) as (ApolloRow & { user_id: string })[],
+    apollo: dedupeById((apolloRes.data ?? []) as Array<ApolloRow & { user_id: string; id?: string }>),
     apify: (apifyRes.data ?? []) as (ApifyRow & { user_id: string })[],
     groupBy,
     admin,
+  })
+}
+
+/** Una corrida que llega por dos caminos se cuenta una sola vez. */
+function dedupeById<T extends { id?: string }>(rows: T[]): T[] {
+  const seen = new Set<string>()
+  return rows.filter((row) => {
+    if (!row.id) return true
+    if (seen.has(row.id)) return false
+    seen.add(row.id)
+    return true
   })
 }
 
