@@ -152,7 +152,7 @@ export async function prepareContactEnrichment(
   //    deriva de `website` con normalizeDomain.
   const { data: company, error: companyError } = await admin
     .from("companies")
-    .select("id, name, website, country, apollo_organization_id, apollo_technologies")
+    .select("id, name, website, country, apollo_organization_id, apollo_technologies, apollo_departmental_head_count, apollo_annual_revenue, apollo_industries")
     .eq("id", input.companyId)
     .maybeSingle()
 

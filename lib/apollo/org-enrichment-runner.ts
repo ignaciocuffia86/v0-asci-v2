@@ -193,7 +193,21 @@ export async function runApolloOrgEnrichment(
 
       if (item.status === "skipped") {
         result.skipped++
-        if (!dryRun) await markError(db, empresa.id, "website sin dominio parseable")
+        // Terminal, no reintentable: un website que no parsea hoy no va a parsear
+        // en 30 minutos. Marcarlo como error lo dejaba volviendo a la cola para
+        // siempre (lo desperto "Autonomo", que tiene basura en website).
+        if (!dryRun) {
+          await db
+            .schema("v3")
+            .from("apollo_company_enrichment")
+            .update({
+              status: "skipped",
+              error_message: "website sin dominio parseable",
+              next_attempt_at: null,
+              processed_at: new Date().toISOString(),
+            })
+            .eq("company_id", empresa.id)
+        }
         continue
       }
 
