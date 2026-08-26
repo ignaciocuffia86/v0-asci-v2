@@ -62,12 +62,16 @@
 
 -- ── 1. La clave de consolidación del screening ────────────────────────────
 --
--- El cuerpo va con tag NOMBRADO (`$screen_key$`) y no con `$$`. No es estilo: con
--- `$$` y comentarios adentro, el runner de migraciones de Supabase cortó el
--- statement en medio del cuerpo y falló con "syntax error at end of input",
--- mientras el mismo archivo parsea limpio en un Postgres 16 local. De las
--- migraciones ya aplicadas, la única con comentarios dentro del cuerpo
--- (20260824205956) usa `$function$`; la que usa `$$` no tiene ninguno.
+-- ¿POR QUÉ LOS COMENTARIOS DE ADENTRO SON /* */ Y NO --?
+--
+-- Porque el runner de migraciones de Supabase corta el statement en el PRIMER
+-- comentario `--` que encuentra dentro de un cuerpo dollar-quoted. Falla con
+-- "syntax error at end of input" y el caret del error apunta justo al final de
+-- esa línea de comentario. El SQL no tiene nada malo: el archivo entero parsea
+-- limpio en un Postgres 16 local.
+--
+-- Postgres trata `/* */` y `--` igual, así que no se pierde una sola palabra.
+-- Vale para cualquier migración futura de este repo que defina una función.
 create or replace function public.company_screen_key(p_name text)
 returns text
 language sql
@@ -75,14 +79,14 @@ immutable
 set search_path to 'public', 'extensions', 'pg_catalog'
 as $screen_key$
   select nullif(btrim(regexp_replace(
-    -- 3) Espacios colapsados: "cia.  pesquera" y "cia. pesquera" son el mismo nombre.
+    /* 3) Espacios colapsados: "cia.  pesquera" y "cia. pesquera" son el mismo nombre. */
     regexp_replace(
-      -- 2) Plural en tokens de 6+ caracteres. El guard evita comerse la `s` de
-      --    una sigla ("NCS", "SERHS"): ahí la `s` es parte del nombre.
+      /* 2) Plural en tokens de 6+ caracteres. El guard evita comerse la `s` de
+         una sigla ("NCS", "SERHS"): ahí la `s` es parte del nombre. */
       regexp_replace(
-        -- 1) Puntuación a ESPACIO, no a vacío. Es la diferencia entre que
-        --    "cia.pesquera" se vuelva "cia pesquera" (y colapse con
-        --    "cia. pesquera") o "ciapesquera" (y no colapse con nada).
+        /* 1) Puntuación a ESPACIO, no a vacío. Es la diferencia entre que
+           "cia.pesquera" se vuelva "cia pesquera" (y colapse con
+           "cia. pesquera") o "ciapesquera" (y no colapse con nada). */
         regexp_replace(public.company_core_name(p_name), '[().,:&+_\[\]{}«»-]+', ' ', 'g'),
       '(\w{5})s\M', '\1', 'g'),
     '\s+', ' ', 'g')), '')
@@ -111,10 +115,10 @@ DECLARE
   v_has_terms       boolean;
   v_min_conf        constant numeric := 0.50;
   v_max_inputs      constant integer := 100;
-  -- Tope de contactos que se miran por candidata para decidir la localidad. Con
-  -- EXISTS alcanzaría para decidir, pero entonces no se podría DECIR cuánta
-  -- evidencia había; y sin tope, una candidata con 100.000 contactos haría un
-  -- scan completo por cada corrida. 50 responde las dos cosas.
+  /* Tope de contactos que se miran por candidata para decidir la localidad. Con
+     EXISTS alcanzaría para decidir, pero entonces no se podría DECIR cuánta
+     evidencia había; y sin tope, una candidata con 100.000 contactos haría un
+     scan completo por cada corrida. 50 responde las dos cosas. */
   v_locality_probe  constant integer := 50;
   v_countries_norm  text[];
   v_result          jsonb;
@@ -130,8 +134,8 @@ BEGIN
     RAISE EXCEPTION 'SCREEN_LIST_TOO_MANY: % nombres (max %). Parti la lista en lotes de %.', v_count, v_max_inputs, v_max_inputs;
   END IF;
 
-  -- LOCAL: se restaura al terminar la transaccion, asi que no contamina la sesion
-  -- que despues reusa el pool.
+  /* LOCAL: se restaura al terminar la transaccion, asi que no contamina la sesion
+     que despues reusa el pool. */
   PERFORM set_config('pg_trgm.similarity_threshold', '0.45', true);
 
   v_has_terms := coalesce(array_length(p_product_ids, 1), 0) > 0
@@ -144,9 +148,9 @@ BEGIN
     RAISE EXCEPTION 'SCREEN_LIST_TOO_MANY_PRODUCTS: % productos (max 20)', array_length(p_product_ids, 1);
   END IF;
 
-  -- Los países pedidos, normalizados UNA vez con la misma función que normalizó
-  -- `contacts.country_normalized`. Comparar "Chile" contra "CL" sin esto daría
-  -- cero localidad para todo el mundo, en silencio.
+  /* Los países pedidos, normalizados UNA vez con la misma función que normalizó
+     `contacts.country_normalized`. Comparar "Chile" contra "CL" sin esto daría
+     cero localidad para todo el mundo, en silencio. */
   IF p_countries IS NOT NULL THEN
     SELECT array_agg(lower(btrim(public.normalize_country(x))))
       INTO v_countries_norm
@@ -217,9 +221,9 @@ BEGIN
            bool_or(rc.contained) AS core_contained
     FROM raw_candidates rc GROUP BY rc.idx, rc.company_id
   ),
-  -- LOCALIDAD POR SEÑAL. Cuánta gente de esta empresa está en los países
-  -- pedidos. Acotado a v_locality_probe para que el costo no dependa del tamaño
-  -- de la empresa.
+  /* LOCALIDAD POR SEÑAL. Cuánta gente de esta empresa está en los países
+     pedidos. Acotado a v_locality_probe para que el costo no dependa del tamaño
+     de la empresa. */
   locality AS (
     SELECT cd.idx, cd.company_id, z.local_contacts
     FROM candidates cd
@@ -239,8 +243,8 @@ BEGIN
     SELECT
       cd.idx, cd.company_id, cd.tier, cd.sim, cd.core_match, cd.domain_match, cd.core_contained,
       c.name, c.website, nullif(btrim(c.country), '') AS country, c.industry,
-      -- La clave laxa, calculada al vuelo. Antes era `c.normalized_name`, y por
-      -- eso dos paréntesis convertían una empresa en dos entidades rivales.
+      /* La clave laxa, calculada al vuelo. Antes era `c.normalized_name`, y por
+         eso dos paréntesis convertían una empresa en dos entidades rivales. */
       coalesce(public.company_screen_key(c.name), cd.company_id::text) AS core_key,
       coalesce(loc.local_contacts, 0) AS local_contacts,
       CASE
@@ -254,8 +258,8 @@ BEGIN
         WHEN p_countries IS NULL THEN false
         WHEN nullif(btrim(c.country), '') IS NULL THEN false
         WHEN lower(btrim(c.country)) = ANY (SELECT lower(btrim(x)) FROM unnest(p_countries) AS x) THEN false
-        -- El rescate por evidencia: la ficha dice otro país pero la gente está
-        -- acá. Va DESPUÉS de las reglas viejas, así que solo agrega candidatas.
+        /* El rescate por evidencia: la ficha dice otro país pero la gente está
+           acá. Va DESPUÉS de las reglas viejas, así que solo agrega candidatas. */
         WHEN coalesce(loc.local_contacts, 0) > 0 THEN false
         ELSE true
       END AS excluded_by_country
@@ -320,9 +324,9 @@ BEGIN
   duplicates AS (
     SELECT idx, count(*)::integer AS duplicate_entities FROM ranked WHERE core_key = winner_core GROUP BY idx
   ),
-  -- CONTENDIENTES, que no es lo mismo que candidatas. El informe decía "elegir
-  -- entre 19" cuando la contienda real era entre 2: 19 es el pool entero, y
-  -- pedirle a alguien que elija entre 19 es lo que hacía sentir roto el reporte.
+  /* CONTENDIENTES, que no es lo mismo que candidatas. El informe decía "elegir
+     entre 19" cuando la contienda real era entre 2: 19 es el pool entero, y
+     pedirle a alguien que elija entre 19 es lo que hacía sentir roto el reporte. */
   contenders AS (
     SELECT idx, count(*)::integer AS contender_count
     FROM ranked
@@ -345,8 +349,8 @@ BEGIN
   country_filtered AS (
     SELECT idx, count(*)::integer AS filtered_by_country FROM enriched WHERE excluded_by_country GROUP BY idx
   ),
-  -- LA RED DE SEGURIDAD. Las candidatas que sacó el filtro de país, para poder
-  -- mostrarlas cuando no quedó ninguna otra en vez de decir "no está".
+  /* LA RED DE SEGURIDAD. Las candidatas que sacó el filtro de país, para poder
+     mostrarlas cuando no quedó ninguna otra en vez de decir "no está". */
   excluded_lists AS (
     SELECT idx, jsonb_agg(jsonb_build_object(
              'companyId', company_id, 'name', name, 'domain', website, 'country', country,
@@ -366,8 +370,8 @@ BEGIN
     SELECT
       i.idx, i.input,
       CASE
-        -- No hay ganadora, PERO habíamos excluido candidatas por país: eso no es
-        -- "no está en el catálogo", es "está y la descartamos nosotros".
+        /* No hay ganadora, PERO habíamos excluido candidatas por país: eso no es
+           "no está en el catálogo", es "está y la descartamos nosotros". */
         WHEN b.company_id IS NULL AND el.candidates IS NOT NULL THEN 'matched_ambiguous'
         WHEN b.company_id IS NULL THEN 'no_match'
         WHEN b.confidence < p_match_threshold
