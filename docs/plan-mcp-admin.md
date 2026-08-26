@@ -172,10 +172,28 @@ Tres decisiones de forma:
 
 ---
 
-## 5. Fase C — El server `admin`
+## 5. Fase C — El server `admin` ✅ (26-ago-2026)
 
 `/api/v3/mcp/admin/[transport]/route.ts`. Reusa **las mismas funciones** de `lib/v3`:
 lo único propio son las descripciones y las `instructions`.
+
+**Cómo quedó, y por qué.** Las 44 registraciones se extrajeron a
+`lib/v3/mcp-server-tools.ts` y las comparten los dos perfiles. Duplicarlas para
+cambiar nueve frases habría sido exactamente el bug de los scopes —dos copias, una
+se actualiza, la otra queda vieja— así que las diferencias van en una lista corta de
+reglas `find`/`replace` (`ADMIN_DESCRIPTION_RULES`) aplicadas por un proxy sobre
+`server.tool`, el mismo mecanismo que ya usaba `withToolAudit`.
+
+Una descripción admin escrita aparte también se desincroniza en silencio; una regla
+`find` no puede: si alguien reescribe la frase standard, la regla deja de aplicar y
+**el test falla**. El desfasaje se vuelve ruidoso en vez de invisible.
+
+Se tocan dos cosas y ninguna más: *"la cuenta tiene que estar guardada"* (en admin es
+falso) y *"pedí confirmación porque consume cupo"* (en admin no hay cupo). Apollo y lo
+destructivo conservan su confirmación entera, y hay un test que lo fija.
+
+**El acceso lo cierra el handshake**: una credencial sin el marcador `unrestricted` se
+rechaza en `/api/v3/mcp/admin`. Conocer la URL no alcanza.
 
 Qué cambia en el texto:
 
@@ -246,7 +264,7 @@ Consecuencias:
 | B0 | Tabla de costos de Apollo + desglose por tipo de crédito (§8) | — | Chico + 1 migración |
 | B1 | Verificar el consumo real de un run de Apify | — | Una corrida |
 | B2 | ~~`get_cost_summary` (con `groupBy`) + atribución por `batchJobId`~~ ✅ | A | Hecho. El USD de Apify queda en `null` hasta B1 |
-| C | Server `admin` con sus descripciones e `instructions` | A | Medio: mucho texto, poca lógica |
+| C | ~~Server `admin` con sus descripciones e `instructions`~~ ✅ | A | Hecho |
 
 **Una migración**, que el borrador no preveía: `contact_enrichment_runs.credits_spent`
 es un `integer` suelto y no puede representar "3 emails + 2 teléfonos" (§8.2). La
@@ -280,10 +298,19 @@ workspace admin y lo loguea. Es la razón por la que existe `lib/v3/admin-worksp
 **4. El cupo mensual de Apollo NO se tocó, a propósito.** `getContactEnrichmentLimits`
 + `getMonthlyPoolUsage` frenan el enrichment al llegar a las unidades del plan
 (`mcp-contact-enrichment.ts:265`). Es un tope, y por la regla del perfil debería
-liberarse — pero es además el único techo del gasto irreversible, y la confirmación
-**por lote** que lo reemplaza es Fase C. Liberarlo ahora dejaría, por un rato, un
-perfil sin techo de Apollo y sin la autorización de lote que lo justifica. Se libera
-junto con Fase C, no antes.
+liberarse — pero es además el único techo del gasto irreversible.
+
+**Sigue sin tocarse después de la Fase C, y conviene ser preciso sobre por qué.** El
+server admin le *dice* al modelo que confirme Apollo una vez por lote, pero eso es
+prompt, no enforcement: el `batchPlanHash` de `create_batch_job` **todavía no
+autoriza créditos de Apollo** (la Fase 3 lo dejó afuera a propósito, §5). Liberar el
+cupo mensual ahora dejaría un perfil sin techo de Apollo y con una autorización que
+solo existe como texto — y la regla del proyecto es que un tope que importa vive en
+la capa 2, nunca en la 3.
+
+**Queda como el trabajo pendiente que cierra el perfil**: meter los créditos de
+Apollo en el `batchPlanHash` y recién entonces liberar el cupo mensual, las dos cosas
+juntas.
 
 ---
 

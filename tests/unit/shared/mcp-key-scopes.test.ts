@@ -29,16 +29,16 @@ function scopesRequiredBy(...files: string[]): string[] {
 
 const SERVER_FILES: Record<Exclude<ApiKeyType, never>, string[]> = {
   standard: [
-    "app/api/v3/mcp/server/[transport]/route.ts",
+    "lib/v3/mcp-server-tools.ts",
     "lib/v3/services/mcp-contact-enrichment.ts",
   ],
   explore: ["app/api/v3/mcp/explore/[transport]/route.ts"],
   profiles: ["app/api/v3/mcp/profiles/[transport]/route.ts"],
-  // El server admin (Fase C) todavía no existe: por ahora apunta a los mismos
-  // archivos que standard, que son las tools que va a exponer. Cuando exista su
-  // route, se agrega acá y el test pasa a cubrirlo igual que a los otros tres.
+  // Admin registra EXACTAMENTE las mismas tools que standard —una sola función
+  // las registra para los dos perfiles—, así que apunta al mismo archivo. Si
+  // alguna vez se bifurcan, este test lo va a notar.
   admin: [
-    "app/api/v3/mcp/server/[transport]/route.ts",
+    "lib/v3/mcp-server-tools.ts",
     "lib/v3/services/mcp-contact-enrichment.ts",
   ],
 }
