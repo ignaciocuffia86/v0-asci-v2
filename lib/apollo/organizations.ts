@@ -24,12 +24,25 @@ type Company = CompanyEnrichTarget & {
   apollo_organization_id: string | null
   apollo_org_status: string | null
   apollo_org_synced_at: string | null
+  /** Testigo de que el enrichment completo llego a escribirse (ver hasEnrichment) */
+  apollo_technologies: string[] | null
 }
 
 export type ResolvedOrganization =
   | { status: "found"; organizationId: string; organization: ApolloOrganization | null }
   | { status: "not_found"; reason: string }
   | { status: "error"; reason: string; statusCode: number }
+
+/**
+ * Si el enrichment completo llego a escribirse.
+ *
+ * `apollo_technologies` sirve de testigo: Apollo lo devuelve en el 100% de los
+ * payloads medidos (134/134), asi que su ausencia significa "el writer viejo
+ * paso por aca" y no "esta empresa no tiene tecnologias".
+ */
+function hasEnrichment(company: Pick<Company, "apollo_technologies">): boolean {
+  return Array.isArray(company.apollo_technologies) && company.apollo_technologies.length > 0
+}
 
 function isFresh(syncedAt: string | null, days: number): boolean {
   if (!syncedAt) return false
@@ -48,7 +61,7 @@ export async function resolveCompanyOrganizationId(
     .from("companies")
     .select(
       "id,name,website,linkedin_url,country,logo_url,description,linkedin_company_id," +
-        "apollo_organization_id,apollo_org_status,apollo_org_synced_at",
+        "apollo_organization_id,apollo_org_status,apollo_org_synced_at,apollo_technologies",
     )
     .eq("id", companyId)
     .single<Company>()
@@ -62,7 +75,18 @@ export async function resolveCompanyOrganizationId(
     if (
       company.apollo_organization_id &&
       company.apollo_org_status === "found" &&
-      isFresh(company.apollo_org_synced_at, ORG_TTL_DAYS)
+      isFresh(company.apollo_org_synced_at, ORG_TTL_DAYS) &&
+      // Tener organization_id NO alcanza para dar la empresa por enriquecida.
+      // Durante meses este camino escribio solo 5 columnas y descarto el resto
+      // del payload: quedaron 63 empresas con org_id y CERO datos, por las que
+      // ya se pago el credito. Como el cache hit cortaba antes de llamar, esas
+      // empresas nunca se iban a completar — el descubrimiento de decisores las
+      // visitaba una y otra vez sin aportarles nada.
+      //
+      // La condicion ahora incluye que el enrichment haya aterrizado de verdad.
+      // Si no, se cae al camino normal y se vuelve a pedir: cuesta un credito,
+      // pero es el credito que recupera una empresa que ya estaba pagada.
+      hasEnrichment(company)
     ) {
       return {
         status: "found",
