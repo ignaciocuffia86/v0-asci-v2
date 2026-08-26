@@ -3,6 +3,7 @@ import {
   normalizePerson,
   parseSearchResponse,
   parseOrganizationResponse,
+  parseBulkOrganizationResponse,
   pickBestPhone,
 } from "@/lib/apollo/parsers"
 
@@ -122,5 +123,87 @@ describe("parseOrganizationResponse", () => {
   it("acepta payload plano (sin wrapping)", () => {
     const r = parseOrganizationResponse({ id: "org_2", name: "Beta" })
     expect(r?.id).toBe("org_2")
+  })
+})
+
+describe("parseOrganizationResponse — campos de la Fase 1 (ago-2026)", () => {
+  // Shape real observado en produccion (apollo_api_calls, 26-ago-2026).
+  const RESPUESTA_REAL = {
+    organization: {
+      id: "org_pluspetrol",
+      name: "Pluspetrol",
+      primary_domain: "pluspetrol.net",
+      website_url: "http://www.pluspetrol.net",
+      linkedin_url: "http://www.linkedin.com/company/pluspetrol",
+      country: "Argentina",
+      industry: "oil & energy",
+      estimated_num_employees: 3200,
+      founded_year: 1977,
+      annual_revenue: 573000000.0,
+      short_description: "Pluspetrol is an independent energy company",
+      logo_url: "https://cdn.apollo.io/pluspetrol.png",
+      technology_names: ["SAP", "Salesforce", "Oracle"],
+      keywords: ["oil", "gas", "energy"],
+      publicly_traded_symbol: null,
+      organization_headcount_twelve_month_growth: 0.08,
+    },
+  }
+
+  it("extrae los campos nuevos del payload real", () => {
+    const r = parseOrganizationResponse(RESPUESTA_REAL)!
+    expect(r.foundedYear).toBe(1977)
+    expect(r.annualRevenue).toBe(573000000)
+    expect(r.technologies).toEqual(["SAP", "Salesforce", "Oracle"])
+    expect(r.keywords).toEqual(["oil", "gas", "energy"])
+    expect(r.description).toBe("Pluspetrol is an independent energy company")
+    expect(r.logoUrl).toBe("https://cdn.apollo.io/pluspetrol.png")
+    expect(r.headcountGrowth).toEqual({ twelve_month: 0.08 })
+  })
+
+  it("redondea annual_revenue: la columna destino es bigint", () => {
+    const r = parseOrganizationResponse({ organization: { id: "o", annual_revenue: 1234.7 } })!
+    expect(r.annualRevenue).toBe(1235)
+  })
+
+  it("devuelve null en headcountGrowth cuando Apollo no lo manda", () => {
+    expect(parseOrganizationResponse({ organization: { id: "o" } })!.headcountGrowth).toBeNull()
+  })
+
+  it("tolera arrays sucios sin romper", () => {
+    const r = parseOrganizationResponse({
+      organization: { id: "o", technology_names: ["SAP", null, 42, "  ", "Oracle"] },
+    })!
+    expect(r.technologies).toEqual(["SAP", "Oracle"])
+  })
+
+  it("recorta las keywords a 50: Apollo manda hasta ~160", () => {
+    const muchas = Array.from({ length: 160 }, (_, i) => `kw${i}`)
+    const r = parseOrganizationResponse({ organization: { id: "o", keywords: muchas } })!
+    expect(r.keywords).toHaveLength(50)
+    expect(r.keywords[0]).toBe("kw0")
+  })
+
+  it("devuelve listas vacias (no undefined) cuando faltan los campos", () => {
+    const r = parseOrganizationResponse({ organization: { id: "o" } })!
+    expect(r.technologies).toEqual([])
+    expect(r.keywords).toEqual([])
+  })
+})
+
+describe("parseBulkOrganizationResponse", () => {
+  it("preserva el orden y los huecos para poder re-emparejar por indice", () => {
+    const r = parseBulkOrganizationResponse({
+      organizations: [{ id: "a" }, null, { id: "c" }],
+    })
+    expect(r).toHaveLength(3)
+    expect(r[0]?.id).toBe("a")
+    expect(r[1]).toBeNull()
+    expect(r[2]?.id).toBe("c")
+  })
+
+  it("devuelve [] ante respuestas invalidas", () => {
+    expect(parseBulkOrganizationResponse(null)).toEqual([])
+    expect(parseBulkOrganizationResponse({})).toEqual([])
+    expect(parseBulkOrganizationResponse({ organizations: "nope" })).toEqual([])
   })
 })

@@ -10,6 +10,7 @@
  */
 
 import { logApolloCall, type ApolloCallLog, type ApolloEndpoint } from "./logger"
+import { extractRateLimits, type ApolloRateLimits } from "./rate-limits"
 
 const APOLLO_BASE_URL = "https://api.apollo.io/api/v1"
 
@@ -23,8 +24,15 @@ export type ApolloRequestOpts = Omit<ApolloCallLog, "responseStatus" | "latencyM
 }
 
 export type ApolloResult<T> =
-  | { ok: true; data: T; status: number; latencyMs: number }
-  | { ok: false; status: number; error: string; latencyMs: number; retriesUsed: number }
+  | { ok: true; data: T; status: number; latencyMs: number; rateLimits: ApolloRateLimits }
+  | {
+      ok: false
+      status: number
+      error: string
+      latencyMs: number
+      retriesUsed: number
+      rateLimits: ApolloRateLimits
+    }
 
 function getApiKey(): string | null {
   return process.env.APOLLO_API_KEY || null
@@ -71,6 +79,7 @@ export async function apolloRequest<T = unknown>(
       error: "APOLLO_API_KEY no está configurada",
       latencyMs: 0,
       retriesUsed: 0,
+      rateLimits: extractRateLimits(null),
     }
   }
 
@@ -104,6 +113,7 @@ export async function apolloRequest<T = unknown>(
     !(typeof opts.requestBody === "object" && Object.keys(opts.requestBody as object).length === 0)
 
   let lastResponseBody: unknown = null
+  let lastRateLimits: ApolloRateLimits = extractRateLimits(null)
 
   while (attempt < maxRetries) {
     attempt++
@@ -124,6 +134,9 @@ export async function apolloRequest<T = unknown>(
 
       const latencyMs = Date.now() - attemptStart
       lastStatus = res.status
+      // La cuota viaja en los headers de CADA response (incluidas las que
+      // fallan). Se lee siempre para que el caller pueda frenar antes del 429.
+      lastRateLimits = extractRateLimits(res.headers)
 
       if (res.ok) {
         const data = (await res.json()) as T
@@ -144,10 +157,14 @@ export async function apolloRequest<T = unknown>(
           latencyMs: totalLatency,
           queryHash: opts.queryHash,
           creditsEstimated: opts.creditsEstimated,
-          extraMetadata: { ...(opts.extraMetadata ?? {}), attempts: attempt },
+          extraMetadata: {
+            ...(opts.extraMetadata ?? {}),
+            attempts: attempt,
+            rate_limits: lastRateLimits,
+          },
         })
 
-        return { ok: true, data, status: res.status, latencyMs: totalLatency }
+        return { ok: true, data, status: res.status, latencyMs: totalLatency, rateLimits: lastRateLimits }
       }
 
       const body = await res.text()
@@ -163,9 +180,12 @@ export async function apolloRequest<T = unknown>(
         break
       }
 
-      // Backoff 500ms, 1.5s, 3.5s
-      const delay = 500 * Math.pow(3, attempt - 1)
-      await sleep(delay)
+      // Backoff 500ms, 1.5s, 4.5s — salvo que Apollo diga explicitamente
+      // cuanto esperar (Retry-After en un 429), en cuyo caso mandamos eso.
+      const backoff = 500 * Math.pow(3, attempt - 1)
+      const retryAfterMs =
+        lastRateLimits.retryAfterSeconds !== null ? lastRateLimits.retryAfterSeconds * 1000 : 0
+      await sleep(Math.max(backoff, retryAfterMs))
     } catch (err) {
       lastStatus = 0
       lastError = err instanceof Error ? err.message : String(err)
@@ -187,7 +207,11 @@ export async function apolloRequest<T = unknown>(
     latencyMs: totalLatency,
     errorMessage: lastError,
     queryHash: opts.queryHash,
-    extraMetadata: { ...(opts.extraMetadata ?? {}), attempts: attempt },
+    extraMetadata: {
+      ...(opts.extraMetadata ?? {}),
+      attempts: attempt,
+      rate_limits: lastRateLimits,
+    },
   })
 
   return {
@@ -196,5 +220,6 @@ export async function apolloRequest<T = unknown>(
     error: lastError || `Apollo respondió ${lastStatus}`,
     latencyMs: totalLatency,
     retriesUsed: attempt,
+    rateLimits: lastRateLimits,
   }
 }
