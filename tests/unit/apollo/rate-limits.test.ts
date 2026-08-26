@@ -59,3 +59,38 @@ describe("isNearLimit", () => {
     expect(isNearLimit(extractRateLimits(null))).toBe(false)
   })
 })
+
+describe("extractRateLimits — alias de ventana observados en produccion", () => {
+  it("lee x-rate-limit-24-hour como ventana diaria (el nombre real de Apollo)", () => {
+    const r = extractRateLimits(
+      h({ "x-rate-limit-24-hour": "5000", "x-24-hour-requests-left": "4990" }),
+    )
+    expect(r.daily.limit).toBe(5000)
+    expect(r.daily.remaining).toBe(4990)
+  })
+
+  it("sigue soportando el alias -daily", () => {
+    expect(extractRateLimits(h({ "x-rate-limit-daily": "100" })).daily.limit).toBe(100)
+  })
+
+  it("lee x-rate-limit-hour ademas de -hourly", () => {
+    expect(extractRateLimits(h({ "x-rate-limit-hour": "200" })).hourly.limit).toBe(200)
+  })
+
+  it("reproduce los headers reales medidos el 26-ago-2026", () => {
+    // Respuesta real de organizations/enrich en produccion.
+    const r = extractRateLimits(
+      h({
+        "x-minute-usage": "1",
+        "x-rate-limit-minute": "1000",
+        "x-minute-requests-left": "999",
+        "x-rate-limit-hourly": "",
+        "x-rate-limit-24-hour": "",
+      }),
+    )
+    expect(r.minute).toEqual({ limit: 1000, remaining: 999, used: 1 })
+    // Los vacios no deben leerse como 0: no hay tope informado.
+    expect(r.hourly.limit).toBeNull()
+    expect(r.daily.limit).toBeNull()
+  })
+})
