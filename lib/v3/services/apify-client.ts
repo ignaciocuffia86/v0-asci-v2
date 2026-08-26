@@ -149,6 +149,48 @@ export interface ApifyRunResult {
   /** Ventana realmente aplicada, que puede ser más amplia que la pedida. */
   appliedWindow: ApifyPublishedWindow
   truncatedWindow: boolean
+  /**
+   * Lo que Apify cobró por ESTA corrida, en dólares. `null` si no se pudo leer.
+   *
+   * Es el `usageTotalUsd` del objeto del run, verificado contra una corrida real
+   * (35 vacantes, US$ 0,0142511). Cubre uso de plataforma: compute units, proxy
+   * residencial, storage y transferencia. Es un número medido, no una estimación.
+   *
+   * NO INCLUYE EL ALQUILER DEL ACTOR. El scraper de vacantes se factura con
+   * `pricingModel: FLAT_PRICE_PER_MONTH` a US$ 29,99 por mes, un fijo que se paga
+   * exista o no la corrida. Por eso no se prorratea acá: repartir un fijo entre
+   * las corridas del mes daría un número que cambia según cuántas corridas hubo
+   * después, y ninguna de las dos cifras sería el costo de este informe. Lo que
+   * este campo mide es el costo MARGINAL, que es el que sí depende de haberlo
+   * pedido.
+   */
+  usageTotalUsd: number | null
+}
+
+/**
+ * Lee el costo de una corrida terminada.
+ *
+ * Devuelve `null` ante cualquier problema y nunca tira: el scraping ya ocurrió y
+ * las vacantes ya están, así que un fallo leyendo el precio no puede voltear la
+ * ingesta. `null` viaja hasta el resumen de costos y ahí se muestra como "no lo
+ * tenemos", que es la respuesta honesta y la que ya sabe manejar.
+ *
+ * Se pide de nuevo en vez de aprovechar el último poll a propósito: el poll corta
+ * en el instante en que el estado deja de ser RUNNING, y la contabilidad de proxy
+ * y transferencia puede cerrarse un momento después. Una llamada más, ya
+ * terminado el run, es barata al lado de subreportar el costo.
+ */
+async function readRunCostUsd(runId: string, auth: Record<string, string>): Promise<number | null> {
+  try {
+    const res = await fetch(`https://api.apify.com/v2/actor-runs/${runId}`, { headers: auth, signal: AbortSignal.timeout(15_000) })
+    if (!res.ok) return null
+    const usage = ((await res.json()) as { data?: { usageTotalUsd?: unknown } }).data?.usageTotalUsd
+    // Se exige un número finito: un `undefined` de un actor que no lo reporte, o
+    // un string, tienen que quedar en null y no convertirse en cero.
+    return typeof usage === "number" && Number.isFinite(usage) ? usage : null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -296,5 +338,8 @@ export async function runLinkedinJobsActor(params: {
     items,
     appliedWindow: requestedWindow,
     truncatedWindow: params.windowDays != null && params.windowDays > 30,
+    // Se lee incluso si el run no terminó en SUCCEEDED: un run TIMED-OUT también
+    // se paga, y ese gasto tiene que aparecer en el informe.
+    usageTotalUsd: await readRunCostUsd(runId, auth),
   }
 }

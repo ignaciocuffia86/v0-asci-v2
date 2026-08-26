@@ -11,6 +11,7 @@ import { requirePaidMcp, reserveMcpUsage, setReservationStatus, getMcpUsage, typ
 import { searchCompanies, getCompanyProfile, getCompanySignals, listWorkspaceAccounts, getAccountIntelligence, getResearchStatus, getAccountEvidenceDetailTool } from "@/lib/v3/mcp-read-tools"
 import { prepareAccountResearch, submitResearchStage, getClientResearchStatus, prepareAccountIcebreaker, submitAccountIcebreaker, refreshPromptPackage, prepareCompanySuccessCases, submitCompanySuccessCases, prepareCompanyNews, submitCompanyNews } from "@/lib/v3/mcp-client-ai"
 import { runLinkedinJobsActor, companyNameVariants, isApifyConfigured } from "@/lib/v3/services/apify-client"
+import { recordApifyRun } from "@/lib/v3/services/spend-ledger"
 import { ingestApifyJobPostings } from "@/lib/v3/services/apify-job-ingest"
 import { prepareSaveAccount, saveAccount, removeWorkspaceAccount, listSavedAccounts, requireSavedAccount, guardSavedAccounts } from "@/lib/v3/mcp-account-lifecycle"
 import { recommendContactRoles, getCompanyContacts } from "@/lib/v3/mcp-contact-coverage"
@@ -514,7 +515,22 @@ export function registerV3Tools(
           ? `Las vacantes quedaron en cola. En \`preview\` tenés ${ingest.preview.length} de las ${ingest.queued} encoladas (título, ubicación y URL) para responderle al usuario YA, sin esperar. Si necesitás el listado completo y normalizado, consultá get_company_signal_summary en unos minutos.`
           : "No se encontraron vacantes de esta empresa con esa búsqueda.",
       }
-      await setReservationStatus(reservation.reservationId, "committed", { batchId: ingest.batchId, queued: ingest.queued })
+      // El costo va al ledger, que es la ÚNICA fuente: la metadata de la reserva
+      // solo cubre este camino, y el cron —que es el que más va a gastar— no
+      // tiene reserva. Dos registros del mismo gasto es la forma conocida de que
+      // uno quede viejo sin que nadie se entere.
+      await recordApifyRun({
+        runId: run.runId,
+        source: "mcp_tool",
+        companyId,
+        workspaceId: auth.workspaceId,
+        userId: auth.userId,
+        batchJobId: batchJobId ?? null,
+        costUsd: run.usageTotalUsd,
+        rowsIngested: ingest.queued,
+        status: "SUCCEEDED",
+      })
+      await setReservationStatus(reservation.reservationId, "committed", { batchId: ingest.batchId, queued: ingest.queued, runId: run.runId })
       return response
     } catch (error) {
       // Se libera la reserva: si el scraping falló, el usuario no gastó nada útil.
@@ -614,7 +630,7 @@ export function registerV3Tools(
       return createScreeningExport(auth, args)
     }),
   )
-  server.tool("get_cost_summary", "Cuánto costó, DESPUÉS de gastarlo. Cierra un informe diciendo qué se consumió y quién lo consumió. Solo lectura, sin cuota, sin IA.\n\nDOS ALCANCES: pasá `batchJobId` para el costo de UN informe (el id que devolvió create_batch_job), o `from`/`to` para un período. Sin nada, es el mes en curso. `groupBy` desagrega por persona.\n\nCADA NÚMERO DICE DE QUÉ CALIDAD ES, y no son intercambiables:\n• `ai` está MEDIDO: es lo que cobró el AI Gateway.\n• `apollo` es una ESTIMACIÓN: los créditos son reales, el precio por crédito es la tarifa contratada.\n• `apify.costUsd` viene en `null` porque NO lo tenemos. null NO es cero: significa que no sabemos. Nunca lo estimes ni lo presentes como gratis; decí las corridas y las filas, que sí son reales.\n\nSi `totalIsPartial` es true, el total NO incluye todo: decilo al reportarlo. Un total parcial presentado como total es un número falso.", { batchJobId: z.string().uuid().optional(), from: z.string().datetime().optional().describe("ISO 8601. Ignorado si pasás batchJobId."), to: z.string().datetime().optional(), groupBy: z.enum(["user"]).optional().describe("Desagrega el costo por persona. Es para lo que cada admin tiene su propia API key.") }, async ({ batchJobId, from, to, groupBy }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "usage:read", "read"); return getCostSummary(auth, { batchJobId, from, to, groupBy }) }))
+  server.tool("get_cost_summary", "Cuánto costó, DESPUÉS de gastarlo. Cierra un informe diciendo qué se consumió y quién lo consumió. Solo lectura, sin cuota, sin IA.\n\nDOS ALCANCES: pasá `batchJobId` para el costo de UN informe (el id que devolvió create_batch_job), o `from`/`to` para un período. Sin nada, es el mes en curso. `groupBy` desagrega por persona.\n\nCADA NÚMERO DICE DE QUÉ CALIDAD ES, y no son intercambiables:\n• `ai` está MEDIDO: es lo que cobró el AI Gateway.\n• `apollo` es una ESTIMACIÓN: los créditos son reales, el precio por crédito es la tarifa contratada.\n• `apify` está MEDIDO por corrida: es el `usageTotalUsd` que devuelve Apify. Es uso de plataforma (cómputo, proxy, storage) y NO incluye el alquiler mensual del actor, que es un fijo. Ojo con `runsWithCost`: si es MENOR que `runs`, hay corridas sin medir y ese costo es un PISO, no el total. Si `costUsd` viene en `null`, ninguna corrida trajo su número — null NO es cero, significa que no sabemos: no lo estimes ni lo presentes como gratis.\n\nSi `totalIsPartial` es true, el total NO incluye todo: decilo al reportarlo. Un total parcial presentado como total es un número falso.", { batchJobId: z.string().uuid().optional(), from: z.string().datetime().optional().describe("ISO 8601. Ignorado si pasás batchJobId."), to: z.string().datetime().optional(), groupBy: z.enum(["user"]).optional().describe("Desagrega el costo por persona. Es para lo que cada admin tiene su propia API key.") }, async ({ batchJobId, from, to, groupBy }, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "usage:read", "read"); return getCostSummary(auth, { batchJobId, from, to, groupBy }) }))
 
   server.tool("get_ai_usage", "Devuelve los TRES medidores mensuales del workspace: monthlyServerResearch (research con tokens de ASCI), monthlyClientResearch (research con tus tokens, que igual ocupa cupo del plan) y monthlyApolloCredits (créditos de contactos, 1 crédito = 1 contacto). Suma tokens y costo verificado del AI Gateway. Son independientes entre sí.\n\nCUIDADO CON EL ALCANCE al citar cifras: `workspaceAi` es del WORKSPACE desde el 1° del mes y es la que hay que usar para decir cuánto consume la cuenta. `verifiedAi` y `lastSevenDays` son de QUIEN LLAMA y de los últimos 7 días: con varios miembros en el workspace, sub-reportan. Cada bloque declara su `scope`.\n\nPara saber cuánto cuesta un LOTE concreto antes de correrlo, usá estimate_batch.", {}, async (_args, extra) => safely(async () => { const auth = authOf(extra); await requirePaidMcp(auth, "usage:read", "read"); return getMcpUsage(auth) }))
 }

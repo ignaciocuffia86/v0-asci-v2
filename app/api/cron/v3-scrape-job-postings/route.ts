@@ -196,6 +196,7 @@ export async function GET(request: Request) {
         userId: candidate.userId,
         // Primera pasada: todas las vacantes abiertas. Mensual: novedades 30d.
         windowDays: candidate.reason === "first_pass" ? null : 30,
+        source: candidate.reason === "first_pass" ? "cron_first_pass" : "cron_monthly",
       })
       if (!result.ok) failedCount++
       results.push({

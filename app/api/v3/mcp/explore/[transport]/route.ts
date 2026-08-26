@@ -9,6 +9,7 @@ import { requirePaidMcp, reserveMcpUsage, setReservationStatus, type McpPrincipa
 import { guardSavedAccounts, saveAccount } from "@/lib/v3/mcp-account-lifecycle"
 import { prepareContactEnrichment, runContactEnrichment } from "@/lib/v3/services/mcp-contact-enrichment"
 import { runLinkedinJobsActor, companyNameVariants, isApifyConfigured } from "@/lib/v3/services/apify-client"
+import { recordApifyRun } from "@/lib/v3/services/spend-ledger"
 import { ingestApifyJobPostings } from "@/lib/v3/services/apify-job-ingest"
 import {
   prepareTerms,
@@ -393,7 +394,19 @@ const handler = createMcpHandler(
               maxRows,
             })
             const ingest = await ingestApifyJobPostings({ companyId, userId: auth.userId, runId: run.runId, items: run.items })
-            await setReservationStatus(reservation.reservationId, "committed", { batchId: ingest.batchId, queued: ingest.queued })
+            // Con el ledger, el scraping de explore DEJA de ser invisible: antes su
+            // reserva no llevaba `kind: "job_scrape"` y el resumen no lo sumaba nunca.
+            await recordApifyRun({
+              runId: run.runId,
+              source: "mcp_explore",
+              companyId,
+              workspaceId: auth.workspaceId,
+              userId: auth.userId,
+              costUsd: run.usageTotalUsd,
+              rowsIngested: ingest.queued,
+              status: "SUCCEEDED",
+            })
+            await setReservationStatus(reservation.reservationId, "committed", { batchId: ingest.batchId, queued: ingest.queued, runId: run.runId })
             return {
               ...ingest,
               appliedWindow: run.appliedWindow,
