@@ -43,7 +43,14 @@ export type ApolloCallLog = {
 
 // Truncado seguro del response_body para no inflar la tabla.
 // Si el JSON serializado supera el limite, lo cortamos y agregamos meta.
-const MAX_RESPONSE_BYTES = 32 * 1024
+//
+// El tope era 32KB y eso nos costo data real: un payload de organizations/enrich
+// con 224 tecnologias y 160 keywords pasa los 32KB, asi que se truncaban justo
+// las empresas mas ricas —13 de las 63 que quedaron sin datos—. La fuente de
+// verdad del payload es v3.apollo_company_enrichment, que guarda sin truncar;
+// esta columna es para diagnostico. Pero un diagnostico que pierde los casos
+// grandes no sirve para diagnosticar los casos grandes.
+const MAX_RESPONSE_BYTES = 128 * 1024
 function truncateForLog(body: unknown): unknown {
   if (body === null || body === undefined) return null
   try {

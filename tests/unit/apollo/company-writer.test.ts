@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
+  applyCompanyEnrichment,
   buildCompanyUpdate,
   buildNotFoundUpdate,
   unwrapOrganization,
@@ -27,6 +28,14 @@ function org(overrides: Partial<ApolloOrganization> = {}): ApolloOrganization {
     publiclyTradedSymbol: null,
     publiclyTradedExchange: null,
     headcountGrowth: { twelve_month: 0.12 },
+    departmentalHeadCount: { information_technology: 700, engineering: 472 },
+    phone: "+541150000000",
+    industries: ["oil & energy", "utilities"],
+    naicsCodes: ["211120"],
+    sicCodes: ["1311"],
+    city: "Buenos Aires",
+    state: "CABA",
+    linkedinUid: 3046,
     ...overrides,
   }
 }
@@ -38,6 +47,7 @@ const VACIA = {
   country: null,
   logo_url: null,
   description: null,
+  linkedin_company_id: null,
 }
 
 describe("buildCompanyUpdate — namespace de Apollo", () => {
@@ -162,5 +172,109 @@ describe("unwrapOrganization — una sola forma en el checkpoint", () => {
     expect(unwrapOrganization(null)).toBeNull()
     expect(unwrapOrganization("nope")).toBeNull()
     expect(unwrapOrganization({ organization: null })).toEqual({ organization: null })
+  })
+})
+
+describe("buildCompanyUpdate — campos de alto valor (Fase 1.2)", () => {
+  it("guarda el headcount por area, que es el campo mas util del payload", () => {
+    const { patch } = buildCompanyUpdate(VACIA, org(), NOW)
+    expect(patch.apollo_departmental_head_count).toEqual({
+      information_technology: 700,
+      engineering: 472,
+    })
+  })
+
+  it("guarda telefono, industrias multiples, codigos y ubicacion", () => {
+    const { patch } = buildCompanyUpdate(VACIA, org(), NOW)
+    expect(patch.apollo_phone).toBe("+541150000000")
+    expect(patch.apollo_industries).toEqual(["oil & energy", "utilities"])
+    expect(patch.apollo_naics_codes).toEqual(["211120"])
+    expect(patch.apollo_city).toBe("Buenos Aires")
+  })
+
+  it("completa linkedin_company_id cuando falta", () => {
+    const { patch, filledColumns } = buildCompanyUpdate(VACIA, org(), NOW)
+    expect(patch.linkedin_company_id).toBe(3046)
+    expect(filledColumns).toContain("linkedin_company_id")
+  })
+
+  it("NO pisa un linkedin_company_id que ya tenemos", () => {
+    const conId = { ...VACIA, linkedin_company_id: 99999 }
+    const { patch, filledColumns } = buildCompanyUpdate(conId, org(), NOW)
+    expect(patch).not.toHaveProperty("linkedin_company_id")
+    expect(filledColumns).not.toContain("linkedin_company_id")
+  })
+})
+
+describe("applyCompanyEnrichment — colision de linkedin_company_id", () => {
+  // La columna tiene UNIQUE. Que Apollo devuelva un uid que otra fila ya tiene
+  // significa duplicado o id mal asignado — no es motivo para perder la empresa
+  // entera (y su credito) por un campo secundario.
+  function fakeSupabase(fallaPrimerUpdate: boolean) {
+    const updates: Array<Record<string, unknown>> = []
+    let intentos = 0
+    const upserts: Array<Record<string, unknown>> = []
+    return {
+      updates,
+      upserts,
+      client: {
+        from() {
+          return {
+            update(patch: Record<string, unknown>) {
+              updates.push(patch)
+              intentos++
+              const falla = fallaPrimerUpdate && intentos === 1
+              return {
+                eq: async () => ({ error: falla ? { code: "23505" } : null }),
+              }
+            },
+          }
+        },
+        schema() {
+          return {
+            from() {
+              return {
+                upsert: async (row: Record<string, unknown>) => {
+                  upserts.push(row)
+                  return { error: null }
+                },
+              }
+            },
+          }
+        },
+      },
+    }
+  }
+
+  it("reintenta sin el uid y guarda la empresa igual", async () => {
+    const fake = fakeSupabase(true)
+    const filled = await applyCompanyEnrichment(
+      fake.client as never,
+      VACIA,
+      org(),
+      "acme.com",
+      null,
+    )
+    expect(fake.updates).toHaveLength(2)
+    expect(fake.updates[0]).toHaveProperty("linkedin_company_id")
+    expect(fake.updates[1]).not.toHaveProperty("linkedin_company_id")
+    // el resto de los datos se escribe igual
+    expect(fake.updates[1].apollo_technologies).toEqual(["SAP", "Salesforce"])
+    expect(filled).not.toContain("linkedin_company_id")
+  })
+
+  it("deja la colision anotada en el checkpoint para poder revisarla", async () => {
+    const fake = fakeSupabase(true)
+    await applyCompanyEnrichment(fake.client as never, VACIA, org(), "acme.com", null)
+    expect(String(fake.upserts[0].error_message)).toContain("3046")
+    expect(String(fake.upserts[0].error_message)).toContain("duplicado")
+  })
+
+  it("no reintenta cuando no hay colision", async () => {
+    const fake = fakeSupabase(false)
+    const filled = await applyCompanyEnrichment(fake.client as never, VACIA, org(), "acme.com", null)
+    expect(fake.updates).toHaveLength(1)
+    expect(filled).toContain("linkedin_company_id")
+    expect(fake.upserts[0].error_message).toBeNull()
   })
 })

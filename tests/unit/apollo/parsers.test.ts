@@ -235,3 +235,62 @@ describe("countEnrichCredits — Apollo cobra por cuenta resuelta", () => {
     expect(countEnrichCredits({ organizations: "nope" })).toBe(0)
   })
 })
+
+describe("parseOrganizationResponse — campos de alto valor (Fase 1.2)", () => {
+  it("prefiere organization_revenue, que cubre el doble que annual_revenue", () => {
+    // Medido: annual_revenue esta en 53% de los payloads, organization_revenue
+    // en 100%, y cuando ambos existen nunca difieren.
+    const soloOrg = parseOrganizationResponse({
+      organization: { id: "o", organization_revenue: 880000000 },
+    })!
+    expect(soloOrg.annualRevenue).toBe(880000000)
+
+    const ambos = parseOrganizationResponse({
+      organization: { id: "o", annual_revenue: 500, organization_revenue: 500 },
+    })!
+    expect(ambos.annualRevenue).toBe(500)
+  })
+
+  it("extrae el headcount por area", () => {
+    const r = parseOrganizationResponse({
+      organization: {
+        id: "o",
+        departmental_head_count: { information_technology: 700, engineering: 472 },
+      },
+    })!
+    expect(r.departmentalHeadCount).toEqual({
+      information_technology: 700,
+      engineering: 472,
+    })
+  })
+
+  it("descarta claves no numericas del headcount sin romper", () => {
+    const r = parseOrganizationResponse({
+      organization: { id: "o", departmental_head_count: { it: 5, basura: "x", nulo: null } },
+    })!
+    expect(r.departmentalHeadCount).toEqual({ it: 5 })
+  })
+
+  it("saca el telefono del objeto anidado, prefiriendo el sanitizado", () => {
+    const r = parseOrganizationResponse({
+      organization: {
+        id: "o",
+        primary_phone: { number: "+33 1 64 50 66 34", sanitized_number: "+33164506634" },
+      },
+    })!
+    expect(r.phone).toBe("+33164506634")
+  })
+
+  it("cae a `number` si no hay sanitized_number", () => {
+    const r = parseOrganizationResponse({
+      organization: { id: "o", primary_phone: { number: "+5411 5000-0000" } },
+    })!
+    expect(r.phone).toBe("+5411 5000-0000")
+  })
+
+  it("extrae linkedin_uid como numero", () => {
+    expect(
+      parseOrganizationResponse({ organization: { id: "o", linkedin_uid: "3046" } })!.linkedinUid,
+    ).toBe(3046)
+  })
+})

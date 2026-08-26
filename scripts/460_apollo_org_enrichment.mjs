@@ -172,7 +172,20 @@ function parseOrg(org) {
     const n = num(org[apolloKey])
     if (n !== null) growth[k] = n
   }
-  const revenue = num(org.annual_revenue)
+  // organization_revenue cubre 100% vs 53% de annual_revenue (medido sobre 134
+  // payloads reales) y nunca difieren cuando ambos existen.
+  const revenue = num(org.annual_revenue) ?? num(org.organization_revenue)
+  const dept = {}
+  if (org.departmental_head_count && typeof org.departmental_head_count === "object") {
+    for (const [k, v] of Object.entries(org.departmental_head_count)) {
+      const n = num(v)
+      if (n !== null) dept[k] = n
+    }
+  }
+  const phone =
+    typeof org.primary_phone === "object" && org.primary_phone
+      ? str(org.primary_phone.sanitized_number) || str(org.primary_phone.number)
+      : str(org.primary_phone)
   return {
     id: org.id,
     linkedinUrl: str(org.linkedin_url),
@@ -189,6 +202,14 @@ function parseOrg(org) {
     publiclyTradedSymbol: str(org.publicly_traded_symbol),
     publiclyTradedExchange: str(org.publicly_traded_exchange),
     headcountGrowth: Object.keys(growth).length ? growth : null,
+    departmentalHeadCount: Object.keys(dept).length ? dept : null,
+    phone,
+    industries: strArr(org.industries, 20),
+    naicsCodes: strArr(org.naics_codes, 20),
+    sicCodes: strArr(org.sic_codes, 20),
+    city: str(org.city),
+    state: str(org.state),
+    linkedinUid: num(org.linkedin_uid),
   }
 }
 
@@ -213,7 +234,7 @@ async function main() {
   // Candidatas: tienen website real y todavia no las resolvimos. Se ordenan por
   // actividad propia (contactos/vacantes) porque son las que se usan de verdad.
   const { rows: candidates } = await db.query(
-    `SELECT c.id, c.name, c.website, c.linkedin_url, c.country, c.logo_url, c.description
+    `SELECT c.id, c.name, c.website, c.linkedin_url, c.country, c.logo_url, c.description, c.linkedin_company_id
        FROM public.companies c
        LEFT JOIN v3.apollo_company_enrichment e ON e.company_id = c.id
        LEFT JOIN v3.company_name_index i ON i.company_id = c.id
@@ -349,6 +370,10 @@ async function main() {
         push("linkedin_url", org.linkedinUrl)
         filled.push("linkedin_url")
       }
+      if (company.linkedin_company_id === null && org.linkedinUid !== null) {
+        push("linkedin_company_id", org.linkedinUid)
+        filled.push("linkedin_company_id")
+      }
       if (isEmpty(company.country) && org.country) {
         push("country", org.country)
         filled.push("country")
@@ -375,6 +400,13 @@ async function main() {
       push("apollo_headcount_growth", org.headcountGrowth ? JSON.stringify(org.headcountGrowth) : null)
       push("apollo_publicly_traded_symbol", org.publiclyTradedSymbol)
       push("apollo_publicly_traded_exchange", org.publiclyTradedExchange)
+      push("apollo_departmental_head_count", org.departmentalHeadCount ? JSON.stringify(org.departmentalHeadCount) : null)
+      push("apollo_phone", org.phone)
+      push("apollo_industries", org.industries.length ? org.industries : null)
+      push("apollo_naics_codes", org.naicsCodes.length ? org.naicsCodes : null)
+      push("apollo_sic_codes", org.sicCodes.length ? org.sicCodes : null)
+      push("apollo_city", org.city)
+      push("apollo_state", org.state)
 
       if (COMMIT) {
         vals.push(company.id)
