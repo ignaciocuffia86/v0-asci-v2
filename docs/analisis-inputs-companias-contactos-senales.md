@@ -89,10 +89,13 @@ La ingesta impone la identidad canónica de la cuenta destino después del sprea
   procedencia a imitar). Estado: 13.696 intentos → 8.497 ok, 4.052 no_hq,
   1.094 no_result, 50 error, 3 identity_mismatch. **Cola casi agotada**: quedan 182
   compañías con URL y sin datos. Las 385 k vacías son inalcanzables (sin URL).
-- **Apollo org enrich** (`lib/apollo/organizations.ts:43-153`): por dominio, 0 créditos,
-  escribe solo `apollo_*` (aislado por diseño del enrichment de LinkedIn). Solo 194
-  compañías sincronizadas — hay 128 k con website elegibles (63.833 de ellas sin
-  LinkedIn URL).
+- **Apollo org enrich** (`lib/apollo/organizations.ts`, `lib/apollo/org-enrichment-runner.ts`):
+  por dominio. **Cuesta 1 crédito por cuenta resuelta** — la nota anterior decía
+  "0 créditos" y estaba mal: confundía el cupo interno de ASCI por plan (que sí es
+  0 en este paso) con la facturación de Apollo. Escribe las 19 columnas `apollo_*`
+  siempre y las genéricas sólo si están vacías (`lib/apollo/company-writer.ts`).
+  Estado al 26-ago-2026: 197 compañías resueltas, 61.304 candidatas con website
+  sin tocar.
 
 ---
 
@@ -236,3 +239,50 @@ ingesta y de merge.*
 El advisor de Supabase reporta RLS deshabilitado en `public.company_news_scrapes` y
 `public.dictionary_backup_20260824` (expuestas a la anon key). Habilitar RLS requiere
 definir políticas primero para no bloquear el acceso legítimo.
+
+---
+
+## Apéndice: cómo corre el enrichment de Apollo en producción
+
+Hay dos caminos y hacen lo mismo por debajo (`applyCompanyEnrichment`), así que
+las reglas de precedencia valen para los dos.
+
+**1. Oportunista, al buscar decisores.** `prepare_contact_enrichment` resuelve la
+organización antes de buscar personas, y de paso enriquece la compañía. Es el
+camino que alimentó las primeras 197. No se planifica: llega la empresa que el
+usuario pidió.
+
+**2. En lote, por cron.** `/api/cron/v3-apollo-org-enrichment`, cada 10 minutos,
+lotes de 100 dominios vía `organizations/bulk_enrich` (10 por llamada).
+
+El detalle que importa del cron: **no descubre trabajo, lo consume**. Sólo procesa
+filas de `v3.apollo_company_enrichment` con `status = 'pending'` y nunca sale a
+buscar candidatas. Es deliberado — barrer las 61.304 candidatas son ~38.000
+créditos, y eso lo decide el dueño del proyecto, no un cron. Con la cola vacía la
+corrida no llama a Apollo y gasta cero.
+
+Autorizar un lote es sembrarlo. Priorizado por contactos, que es lo que
+discrimina (el 85 % de las compañías tiene alguna señal, así que las señales no
+ordenan nada):
+
+```sql
+insert into v3.apollo_company_enrichment (company_id, requested_domain, status, next_attempt_at)
+select c.id, null, 'pending', now()
+  from public.companies c
+  left join v3.apollo_company_enrichment e on e.company_id = c.id
+ where nullif(btrim(c.website), '') is not null
+   and coalesce(c.apollo_org_status, 'unknown') not in ('found', 'not_found')
+   and e.company_id is null
+ order by (select count(*) from public.contacts ct where ct.current_company_id = c.id) desc, c.id
+ limit 500
+on conflict (company_id) do nothing;
+```
+
+Para seguirlo sin abrir la base: `cron_executions` con `cron_name =
+'v3-apollo-org-enrichment'` guarda por corrida los créditos gastados, el hit
+rate, las columnas genéricas completadas y cuántas quedan en cola.
+
+**Fuera de prod** el mismo trabajo lo hace `scripts/460_apollo_org_enrichment.mjs`
+(dry-run por defecto, `--commit` para escribir, `--max-credits` con tope 500), que
+necesita `APOLLO_API_KEY` y `POSTGRES_URL_NON_POOLING`. El cron existe justamente
+para no depender de tener esas dos variables a mano.

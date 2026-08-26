@@ -3,30 +3,58 @@ import { hasEnrichment } from "@/lib/apollo/organizations"
 
 /**
  * `hasEnrichment` es la guarda que decide si una empresa con organization_id
- * cuenta como enriquecida. Dos caminos distintos la usan —el resolvedor y el
- * servicio de contact enrichment del MCP— porque el segundo cortocircuita ANTES
- * de llamar al primero: arreglar solo uno dejaba el agujero abierto.
+ * guardado hay que volver a pedirsela a Apollo. Un falso positivo deja la
+ * empresa vacia para siempre; un falso negativo la vuelve a pedir y paga un
+ * credito de gusto. Los dos casos ya pasaron en produccion.
  */
 describe("hasEnrichment", () => {
-  it("una empresa con tecnologias esta enriquecida", () => {
+  it("con tecnologias, enriquecida", () => {
     expect(hasEnrichment({ apollo_technologies: ["SAP", "Oracle"] })).toBe(true)
   })
 
-  it("null significa que paso el writer viejo, no que no tenga tecnologias", () => {
-    // Apollo devuelve technology_names en el 100% de los payloads medidos
-    // (134/134), asi que su ausencia es la firma del writer anterior.
+  /**
+   * El caso que rompio la version anterior de esta guarda.
+   * `organizations/bulk_enrich` NO devuelve technology_names —0 de 183 payloads
+   * crudos del primer lote del cron lo traen— pero si devuelve headcount por
+   * area, facturacion e industrias. Con el testigo viejo, las 179 empresas de
+   * ese lote se veian como "sin enriquecer".
+   */
+  it("sin tecnologias pero con headcount por area, enriquecida", () => {
+    expect(
+      hasEnrichment({
+        apollo_technologies: null,
+        apollo_departmental_head_count: { information_technology: 83, engineering: 210 },
+      }),
+    ).toBe(true)
+  })
+
+  it("alcanza con la facturacion", () => {
+    expect(hasEnrichment({ apollo_technologies: null, apollo_annual_revenue: 3378000000 })).toBe(true)
+  })
+
+  it("alcanza con las industrias", () => {
+    expect(hasEnrichment({ apollo_technologies: null, apollo_industries: ["retail"] })).toBe(true)
+  })
+
+  it("sin ninguno de los testigos, NO enriquecida", () => {
     expect(hasEnrichment({ apollo_technologies: null })).toBe(false)
-  })
-
-  it("un array vacio tampoco cuenta", () => {
-    expect(hasEnrichment({ apollo_technologies: [] })).toBe(false)
-  })
-
-  it("la columna ausente se trata como no enriquecida", () => {
     expect(hasEnrichment({})).toBe(false)
   })
 
-  it("tolera un valor con forma inesperada sin romper", () => {
+  /** Los vacios son ausencia de dato, no dato: si no, la guarda deja pasar filas vacias. */
+  it("colecciones vacias no cuentan", () => {
+    expect(
+      hasEnrichment({
+        apollo_technologies: [],
+        apollo_industries: [],
+        apollo_departmental_head_count: {},
+      }),
+    ).toBe(false)
+  })
+
+  it("no explota con formas inesperadas", () => {
     expect(hasEnrichment({ apollo_technologies: "SAP" as unknown as string[] })).toBe(false)
+    expect(hasEnrichment({ apollo_departmental_head_count: "nope" })).toBe(false)
+    expect(hasEnrichment({ apollo_departmental_head_count: null })).toBe(false)
   })
 })

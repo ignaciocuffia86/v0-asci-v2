@@ -24,8 +24,11 @@ type Company = CompanyEnrichTarget & {
   apollo_organization_id: string | null
   apollo_org_status: string | null
   apollo_org_synced_at: string | null
-  /** Testigo de que el enrichment completo llego a escribirse (ver hasEnrichment) */
+  /** Testigos de que el enrichment completo llego a escribirse (ver hasEnrichment) */
   apollo_technologies: string[] | null
+  apollo_departmental_head_count: Record<string, number> | null
+  apollo_annual_revenue: number | null
+  apollo_industries: string[] | null
 }
 
 export type ResolvedOrganization =
@@ -36,12 +39,30 @@ export type ResolvedOrganization =
 /**
  * Si el enrichment completo llego a escribirse.
  *
- * `apollo_technologies` sirve de testigo: Apollo lo devuelve en el 100% de los
- * payloads medidos (134/134), asi que su ausencia significa "el writer viejo
- * paso por aca" y no "esta empresa no tiene tecnologias".
+ * Antes el unico testigo era `apollo_technologies`, porque `organizations/enrich`
+ * lo devuelve en el 100% de los payloads medidos. Pero `organizations/bulk_enrich`
+ * NO devuelve `technology_names` — verificado sobre 183 payloads crudos del primer
+ * lote del cron: 0 lo traen, mientras keywords y departmental_head_count vienen en
+ * los 183. Con el testigo viejo, cada empresa enriquecida por el cron se veia como
+ * "sin enriquecer" y el descubrimiento de decisores la volvia a pedir, pagando un
+ * credito de gusto.
+ *
+ * Ahora alcanza con que haya aterrizado CUALQUIERA de los campos ricos. Medido
+ * sobre las 330 empresas resueltas por los dos caminos, `departmental_head_count`
+ * y `annual_revenue` estan en las 330, asi que la guarda no depende de que Apollo
+ * siga mandando un campo en particular.
  */
-export function hasEnrichment(company: { apollo_technologies?: string[] | null }): boolean {
-  return Array.isArray(company.apollo_technologies) && company.apollo_technologies.length > 0
+export function hasEnrichment(company: {
+  apollo_technologies?: string[] | null
+  apollo_departmental_head_count?: unknown
+  apollo_annual_revenue?: number | null
+  apollo_industries?: string[] | null
+}): boolean {
+  if (Array.isArray(company.apollo_technologies) && company.apollo_technologies.length > 0) return true
+  if (Array.isArray(company.apollo_industries) && company.apollo_industries.length > 0) return true
+  if (typeof company.apollo_annual_revenue === "number") return true
+  const dept = company.apollo_departmental_head_count
+  return !!dept && typeof dept === "object" && Object.keys(dept as object).length > 0
 }
 
 function isFresh(syncedAt: string | null, days: number): boolean {
@@ -61,7 +82,8 @@ export async function resolveCompanyOrganizationId(
     .from("companies")
     .select(
       "id,name,website,linkedin_url,country,logo_url,description,linkedin_company_id," +
-        "apollo_organization_id,apollo_org_status,apollo_org_synced_at,apollo_technologies",
+        "apollo_organization_id,apollo_org_status,apollo_org_synced_at,apollo_technologies," +
+        "apollo_departmental_head_count,apollo_annual_revenue,apollo_industries",
     )
     .eq("id", companyId)
     .single<Company>()
@@ -83,7 +105,8 @@ export async function resolveCompanyOrganizationId(
       // empresas nunca se iban a completar — el descubrimiento de decisores las
       // visitaba una y otra vez sin aportarles nada.
       //
-      // La condicion ahora incluye que el enrichment haya aterrizado de verdad.
+      // La condicion ahora incluye que el enrichment haya aterrizado de verdad
+      // (ver hasEnrichment: mira varios campos, no solo tecnologias).
       // Si no, se cae al camino normal y se vuelve a pedir: cuesta un credito,
       // pero es el credito que recupera una empresa que ya estaba pagada.
       hasEnrichment(company)
