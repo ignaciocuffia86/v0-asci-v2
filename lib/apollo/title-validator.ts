@@ -54,15 +54,24 @@ export function validateTitle(raw: string): TitleValidation {
  */
 export function sanitizeTitleList(
   titles: string[],
-  { max = 25 }: { max?: number } = {},
+  // `null` es SIN TOPE, y es distinto de omitirlo (que aplica el default de 25).
+  // Lo usa la credencial sin topes del perfil admin.
+  { max = 25 }: { max?: number | null } = {},
 ): {
   accepted: string[]
   rejected: Array<{ input: string; reason: string }>
+  /**
+   * Cargos VÁLIDOS que no entraron por el tope. Distinto de `rejected`, que son
+   * los inválidos: un cargo rechazado no servía, uno descartado sí servía y se
+   * perdió por el límite. Quien decide el gasto tiene que poder ver cuáles.
+   */
+  dropped: string[]
   truncated: boolean
 } {
   const accepted: string[] = []
   const seen = new Set<string>()
   const rejected: Array<{ input: string; reason: string }> = []
+  const dropped: string[] = []
 
   for (const raw of titles) {
     const r = validateTitle(raw)
@@ -72,13 +81,22 @@ export function sanitizeTitleList(
     }
     if (seen.has(r.normalized)) continue
     seen.add(r.normalized)
+    // No se corta el bucle al llegar al tope: hay que seguir para poder DECIR
+    // cuáles quedaron afuera. Cortar era lo que hacía invisible el recorte.
+    if (max !== null && accepted.length >= max) {
+      dropped.push(raw.trim())
+      continue
+    }
     accepted.push(raw.trim())
-    if (accepted.length >= max) break
   }
 
   return {
     accepted,
     rejected,
-    truncated: titles.length > max,
+    dropped,
+    // Antes era `titles.length > max`, que cuenta la ENTRADA cruda: con 12
+    // cargos de los cuales 3 son inválidos, aceptaba 9 de un tope de 10 y aun
+    // así reportaba truncado. Ahora dice si de verdad se cortó algo.
+    truncated: dropped.length > 0,
   }
 }

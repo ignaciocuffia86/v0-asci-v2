@@ -59,7 +59,8 @@ export interface RecommendRolesResult {
   signalsAnalyzed: number
   driversDetected: { driver: string; signalType: string; signalCount: number }[]
   roles: RecommendedRole[]
-  maxRolesPerEnrichment: number
+  /** Tope de cargos por ejecución. `null` = sin tope. */
+  maxRolesPerEnrichment: number | null
   truncated: boolean
   warnings: string[]
   message: string
@@ -78,8 +79,12 @@ export async function recommendContactRoles(
   params: { companyId: string; additionalTitles?: string[] }
 ): Promise<RecommendRolesResult> {
   const guard = await requireSavedAccount(principal, params.companyId)
-  const limits = await getContactEnrichmentLimits(principal.workspaceId)
-  const maxRoles = limits.maxRoles || 10
+  const limits = await getContactEnrichmentLimits(principal.workspaceId, principal.unrestricted)
+  // `null` = sin tope, y viaja así hasta abajo. Antes acá había un `|| 10` que
+  // le devolvía el tope del plan justo a la credencial que no lo tiene; un `?? 10`
+  // arreglaría el bug pero dejaría escrito un default que ya nunca aplica, y eso
+  // se lee como si "sin tope" fuera 10.
+  const maxRoles = limits.maxRoles
   const warnings: string[] = []
 
   if (guard.state !== "saved") {
@@ -239,7 +244,7 @@ export async function recommendContactRoles(
     .sort((a, b) => b._score - a._score)
     .map(({ _score, ...role }) => role)
 
-  const truncated = roles.length > maxRoles
+  const truncated = maxRoles !== null && roles.length > maxRoles
 
   if (!roles.length) {
     warnings.push(
@@ -257,7 +262,7 @@ export async function recommendContactRoles(
       signalType: d.signalType,
       signalCount: d.count,
     })),
-    roles: roles.slice(0, maxRoles),
+    roles: maxRoles === null ? roles : roles.slice(0, maxRoles),
     maxRolesPerEnrichment: maxRoles,
     truncated,
     warnings,
@@ -327,7 +332,7 @@ export async function getCompanyContacts(
   params: { companyId: string; roles?: string[] }
 ): Promise<ContactCoverageResult> {
   const guard = await requireSavedAccount(principal, params.companyId)
-  const limits = await getContactEnrichmentLimits(principal.workspaceId)
+  const limits = await getContactEnrichmentLimits(principal.workspaceId, principal.unrestricted)
   const freshnessDays = limits.freshnessDays || DEFAULT_FRESHNESS_DAYS
 
   const empty = (message: string): ContactCoverageResult => ({

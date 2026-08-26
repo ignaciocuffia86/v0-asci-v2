@@ -394,7 +394,7 @@ export async function getMcpUsage(principal: McpPrincipal) {
   const [clientResearchUsed, apolloUsed, enrichmentLimits] = await Promise.all([
     getMonthlyPoolUsage(principal.workspaceId, "research_client"),
     getMonthlyPoolUsage(principal.workspaceId, "apollo_enrichment"),
-    getContactEnrichmentLimits(principal.workspaceId),
+    getContactEnrichmentLimits(principal.workspaceId, principal.unrestricted),
   ])
 
   return {

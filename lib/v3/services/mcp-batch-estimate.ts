@@ -4,6 +4,7 @@ import crypto from "crypto"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { getWorkspaceUsage, checkResearchQuota, getContactEnrichmentLimits } from "@/lib/v3/plans"
 import { getMonthlyPoolUsage, principalColumns, type McpPrincipal } from "@/lib/v3/mcp-usage"
+import { sanitizeTitleList } from "@/lib/apollo/title-validator"
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Preflight de costo POR LOTE.
@@ -195,7 +196,7 @@ export async function estimateBatch(principal: McpPrincipal, params: BatchEstima
   const estimatedResearchUsd = perAccountUsd === null ? null : perAccountUsd * researchNeeded
 
   // ── Apollo ────────────────────────────────────────────────────────────────
-  const enrichmentLimits = wantsEnrichment ? await getContactEnrichmentLimits(principal.workspaceId) : null
+  const enrichmentLimits = wantsEnrichment ? await getContactEnrichmentLimits(principal.workspaceId, principal.unrestricted) : null
   const creditsUsed = wantsEnrichment ? await getMonthlyPoolUsage(principal.workspaceId, "apollo_enrichment") : 0
   const creditsAvailable = enrichmentLimits ? Math.max(0, enrichmentLimits.monthlyUnits - creditsUsed) : 0
   const contactsPerAccount = enrichmentLimits
@@ -225,7 +226,33 @@ export async function estimateBatch(principal: McpPrincipal, params: BatchEstima
     blockers.push(`Faltan créditos de Apollo: el peor caso son ${estimatedCredits} y quedan ${creditsAvailable} este mes. El lote se puede correr igual, pero se va a cortar al agotarlos.`)
   }
 
+  // ── Los cargos, contra el tope, ACÁ ───────────────────────────────────────
+  //
+  // El recorte ocurría en `prepare_contact_enrichment`, cuenta por cuenta, con el
+  // gasto ya autorizado por este mismo hash — y sin decirlo. En la corrida real
+  // fueron 18 cargos cotizados y 10 ejecutados: la búsqueda que se pagó era más
+  // angosta que la que se autorizó, y eso se supo después.
+  //
+  // El tope no se toca acá: recortar es correcto si el plan lo impone. Lo que
+  // cambia es CUÁNDO se sabe. Mismo principio que el presupuesto de Apollo: lo
+  // que va a pasar se dice antes de que se pague.
+  const roleCheck = wantsEnrichment && enrichmentLimits?.allowed
+    ? sanitizeTitleList(params.roles ?? [], { max: enrichmentLimits.maxRoles })
+    : null
+
   const warnings: string[] = []
+  if (roleCheck?.dropped.length) {
+    warnings.push(
+      `Cotizaste ${(params.roles ?? []).length} cargos y el plan permite ${enrichmentLimits?.maxRoles} por ejecución: ` +
+        `${roleCheck.dropped.length} van a quedar afuera en CADA cuenta del lote (${roleCheck.dropped.join(", ")}). ` +
+        `Si esos importan, achicá la lista y volvé a cotizar poniendo primero los que querés.`,
+    )
+  }
+  if (roleCheck?.rejected.length) {
+    warnings.push(
+      `${roleCheck.rejected.length} cargo(s) no son válidos y no se van a buscar: ${roleCheck.rejected.map((r) => `${r.input} (${r.reason})`).join("; ")}.`,
+    )
+  }
   if (notFound.length) warnings.push(`${notFound.length} companyId(s) no existen en el catálogo y quedaron fuera de la cotización.`)
   if (classified.free.length) warnings.push(`${classified.free.length} cuenta(s) NO suman costo: ya están investigadas, en cooldown o en seguimiento automático. El lote sale más barato por eso.`)
   if (costSource === "platform") warnings.push(`El costo sale del promedio de la plataforma (${samples} researches), no de este workspace: todavía no tiene historial propio de research server-managed.`)

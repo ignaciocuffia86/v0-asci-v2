@@ -54,9 +54,14 @@ describe("las reglas del perfil admin siguen aplicando", () => {
 describe("qué cambia y qué NO cambia entre perfiles", () => {
   const rulesFor = (tool: string) => ADMIN_DESCRIPTION_RULES.filter((r) => r.tool === tool)
 
-  it("el gasto en Apollo conserva su confirmación", () => {
+  it("el gasto en Apollo conserva su confirmación, y no por una regla de perfil", () => {
     // Es Tier 3 e irreversible: el crédito de un tercero no vuelve. Que admin no
     // pregunte por el cupo NO puede arrastrar a que deje de pedir el planHash.
+    //
+    // Lo que se preserva es la confirmación DEL PLAN —una por lote, la del
+    // batchPlanHash—, no una re-confirmación por cuenta. Esa distinción no se
+    // resuelve con una regla de perfil sino en la descripción compartida, que
+    // vale para los dos servers: ver el test de abajo.
     expect(rulesFor("run_contact_enrichment")).toEqual([])
     expect(rulesFor("prepare_contact_enrichment")).toEqual([])
   })
@@ -109,5 +114,34 @@ describe("withProfileDescriptions", () => {
     expect(applied.size).toBe(0)
     wrapped.tool("a", "con x adentro")
     expect(applied.get("a::x")).toBe(1)
+  })
+})
+
+
+describe("la descripción de run_contact_enrichment distingue los dos techos", () => {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // El defecto que este test cierra, medido en la primera corrida real del perfil
+  // admin: la descripción decía, sin excepción, "Requiere confirmación explícita
+  // del usuario". `prepare_contact_enrichment` SÍ contemplaba el lote, pero el
+  // modelo obedece a la tool que ejecuta el gasto — y con razón. Resultado:
+  // anunció que las 22 cuentas del lote necesitaban una confirmación cada una,
+  // que es exactamente lo que el batchPlanHash viene a evitar.
+  //
+  // Las dos ramas tienen que estar. Si alguien reescribe esta descripción y borra
+  // una, vuelve el problema: sin la de `batch`, 42 preguntas; sin la de
+  // `monthly`, un gasto irreversible sin que nadie lo haya autorizado.
+  // ═══════════════════════════════════════════════════════════════════════════
+  const run = registeredDescriptions().get("run_contact_enrichment") ?? ""
+
+  it("con lote: dice explícitamente que NO hay que volver a confirmar", () => {
+    expect(run).toContain("authorizedBy")
+    expect(run.toLowerCase()).toContain("ya está autorizado")
+    expect(run.toLowerCase()).toContain("no vuelvas a pedir confirmación")
+  })
+
+  it("sin lote: sigue exigiendo la confirmación", () => {
+    // La rama que protege el gasto suelto. Es la que no se puede perder.
+    expect(run.toLowerCase()).toContain("no hay autorización previa")
+    expect(run.toLowerCase()).toContain("confirmá antes de ejecutar")
   })
 })
