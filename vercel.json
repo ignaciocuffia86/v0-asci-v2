@@ -43,6 +43,10 @@
       "schedule": "*/10 * * * *"
     },
     {
+      "path": "/api/cron/v3-apollo-org-enrichment",
+      "schedule": "*/10 * * * *"
+    },
+    {
       "path": "/api/cron/v3-scrape-job-postings",
       "schedule": "*/10 * * * *"
     },
