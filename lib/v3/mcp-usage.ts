@@ -30,6 +30,20 @@ export interface McpPrincipal {
   scopes: string[]
   allowedModes: string[]
   /**
+   * Apaga los TOPES de cuenta y de cupo, no la medición.
+   *
+   * Lo derivan `lib/v3/mcp-auth.ts` a partir del scope marcador de la credencial
+   * y NUNCA quien llama: si viniera del request, cualquier key sería admin. Lo
+   * consultan los cuatro guards de la capa 2 (`requireSavedAccount`,
+   * `guardSavedAccounts`, `assertWorkspaceAccount`, `checkResearchQuota`).
+   *
+   * Lo que NO cambia con esto: las reservas se siguen tomando, el planHash de
+   * Apollo se sigue exigiendo y todo se sigue registrando. Un perfil que gasta sin
+   * dejar rastro no sirve para lo único que justifica el perfil, que es poder
+   * decir cuánto costó un informe.
+   */
+  unrestricted: boolean
+  /**
    * Modo efectivo de la llamada en curso, que estampa `requirePaidMcp`.
    *
    * Existe para que la auditoría por tool pueda registrar el modo real sin mantener un

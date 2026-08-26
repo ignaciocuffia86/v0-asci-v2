@@ -129,12 +129,23 @@ export interface ResearchQuotaItem {
   reason: string | null
   /** Fecha estimada del próximo refresh automático (si está seguida). */
   nextAutoRefreshDate: string | null
+  /**
+   * Solo en modo `unrestricted`: por qué ESTA cuenta habría quedado bloqueada con
+   * los topes puestos. `allowed` viene en true igual.
+   *
+   * Existe porque el perfil admin apaga el bloqueo, no la medición: sin este campo
+   * la única forma de saber cuánto cupo "habría" consumido un informe sería volver
+   * a calcularlo, y el cálculo ya se hizo acá.
+   */
+  wouldBlockReason?: string | null
 }
 
 export interface ResearchQuotaResult {
   plan: WorkspacePlan
   items: ResearchQuotaItem[]
   monthlyRemaining: number
+  /** True si los topes se midieron pero no se aplicaron. Ver `unrestricted`. */
+  unrestricted?: boolean
 }
 
 /**
@@ -143,9 +154,35 @@ export interface ResearchQuotaResult {
  * - Empresa ya investigada → refresh manual: requiere plan pago, cooldown de 30 días
  *   y NO estar seguida (las seguidas se refrescan solas vía cron).
  */
+/**
+ * Libera los bloqueos de cupo conservando el motivo, para el perfil admin.
+ *
+ * Es una función aparte y pura por una razón concreta: es la única parte de
+ * `checkResearchQuota` que se puede probar sin base, y es justo la que decide si
+ * un tope se aplica. Si estuviera embebida en las 100 líneas de consultas, el
+ * comportamiento que distingue al perfil admin quedaría sin cobertura.
+ *
+ * `reason` se vacía porque los callers lo muestran cuando `allowed` es false, y un
+ * item permitido con motivo de bloqueo se leería como un error. El motivo no se
+ * pierde: viaja en `wouldBlockReason`, que es lo que después permite decir cuánto
+ * cupo habría consumido el informe.
+ */
+export function releaseQuotaBlocks(items: ResearchQuotaItem[]): ResearchQuotaItem[] {
+  return items.map((item) =>
+    item.allowed ? item : { ...item, allowed: true, reason: null, wouldBlockReason: item.reason },
+  )
+}
+
 export async function checkResearchQuota(params: {
   workspaceId: string
   companies: { input: string; companyId: string | null }[]
+  /**
+   * Credencial sin topes (perfil admin). NO saltea el cálculo: lo corre entero y
+   * después libera el bloqueo, conservando en `wouldBlockReason` lo que habría
+   * dicho. Saltearlo sería más simple y perdería exactamente el dato que el perfil
+   * admin existe para producir.
+   */
+  unrestricted?: boolean
 }): Promise<ResearchQuotaResult> {
   const admin = createAdminClient()
   const plan = await getWorkspacePlan(params.workspaceId)
@@ -256,23 +293,39 @@ export async function checkResearchQuota(params: {
     return { input: c.input, companyId: c.companyId, allowed: true, isRefresh, reason: null, nextAutoRefreshDate: null }
   })
 
+  if (params.unrestricted) {
+    return {
+      plan,
+      unrestricted: true,
+      monthlyRemaining: Math.max(0, monthlyRemaining),
+      items: releaseQuotaBlocks(items),
+    }
+  }
+
   return { plan, items, monthlyRemaining: Math.max(0, monthlyRemaining) }
 }
 
 // ─── Check de follow ─────────────────────────────────────────
 
 export async function checkFollowQuota(
-  workspaceId: string
-): Promise<{ allowed: boolean; reason: string | null; used: number; cap: number }> {
+  workspaceId: string,
+  /**
+   * Credencial sin topes (perfil admin). Mismo criterio que `checkResearchQuota`:
+   * se sigue midiendo (`used` y `cap` viajan igual) y solo se libera el bloqueo.
+   *
+   * Sin esto el perfil admin no cumple su objetivo: `followedCap` frena
+   * `save_account` y, con él, `create_batch_job` — o sea, exactamente el "armar
+   * bases sin tanto límite" que motivó el perfil. El plan escrito no lo tenía en
+   * la lista de guards; apareció al implementarlo.
+   */
+  unrestricted = false,
+): Promise<{ allowed: boolean; reason: string | null; used: number; cap: number; wouldBlockReason?: string | null }> {
   const usage = await getWorkspaceUsage(workspaceId)
   const cap = usage.config.followedCap
   if (usage.followedCount >= cap) {
-    return {
-      allowed: false,
-      used: usage.followedCount,
-      cap,
-      reason: `Alcanzaste el límite de ${cap} cuentas seguidas del plan ${usage.config.label}. Dejá de seguir alguna cuenta o hacé upgrade de plan.`,
-    }
+    const reason = `Alcanzaste el límite de ${cap} cuentas seguidas del plan ${usage.config.label}. Dejá de seguir alguna cuenta o hacé upgrade de plan.`
+    if (unrestricted) return { allowed: true, reason: null, used: usage.followedCount, cap, wouldBlockReason: reason }
+    return { allowed: false, used: usage.followedCount, cap, reason }
   }
   return { allowed: true, reason: null, used: usage.followedCount, cap }
 }

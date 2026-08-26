@@ -28,10 +28,11 @@ const KEY_TYPE_LABELS: Record<string, { label: string; description: string }> = 
   standard: { label: "Estándar", description: "Señales procesadas, research e icebreakers." },
   explore: { label: "Explore", description: "Exploración conversacional sobre datos crudos." },
   profiles: { label: "Perfiles", description: "Búsqueda de talento por skill/industria, con contacto personal." },
+  admin: { label: "Admin", description: "Sin topes de cuenta ni de cupo. Solo para el equipo de ASCI." },
 }
 
 /** Tipos de key generables desde la UI. */
-const KEY_TYPES = ["standard", "explore", "profiles"] as const
+const KEY_TYPES = ["standard", "explore", "profiles", "admin"] as const
 type NewKeyType = (typeof KEY_TYPES)[number]
 
 interface ApiKeysViewProps {
@@ -241,6 +242,11 @@ export function ApiKeysView({ workspaces, defaultWorkspaceId, isSuperAdmin }: Ap
                     <SelectItem value="standard">Estándar · señales procesadas</SelectItem>
                     <SelectItem value="explore">Explore · exploración conversacional</SelectItem>
                     <SelectItem value="profiles">Perfiles · búsqueda de talento</SelectItem>
+                    {/* La opción solo se ofrece a un superadmin global. No es el
+                        control —el server revalida las dos condiciones en
+                        generateApiKey— sino que no tiene sentido mostrar una
+                        opción que va a ser rechazada. */}
+                    {isSuperAdmin && <SelectItem value="admin">Admin · sin topes (equipo ASCI)</SelectItem>}
                   </SelectGroup>
                 </SelectContent>
               </Select>

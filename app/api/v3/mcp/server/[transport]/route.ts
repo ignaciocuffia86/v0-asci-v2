@@ -296,7 +296,7 @@ const handler = createMcpHandler((rawServer) => {
     // tenerla guardada, y se verifica antes de tocar cuota.
     const blocked = await guardSavedAccounts(auth, canonical.map((item) => item.companyId))
     if (blocked) return blocked
-    const quota = await checkResearchQuota({ workspaceId: auth.workspaceId, companies: canonical })
+    const quota = await checkResearchQuota({ workspaceId: auth.workspaceId, companies: canonical, unrestricted: auth.unrestricted })
     const rejected = quota.items.filter((item) => !item.allowed)
     if (rejected.length) {
       // No todo rechazo es falta de cupo. Una cuenta EN SEGUIMIENTO se rechaza porque
@@ -310,7 +310,7 @@ const handler = createMcpHandler((rawServer) => {
     const reservation = await reserveMcpUsage({ principal: auth, pool: "research_server", units: canonical.length, idempotencyKey, metadata: { companies: canonical } })
     if (!reservation.allowed || !reservation.reservationId) return reservation
     if (reservation.idempotent && reservation.status === "committed" && reservation.metadata?.batchId) return { ...reservation.metadata, idempotent: true }
-    const result = await createResearchBatch({ workspaceId: auth.workspaceId, userId: auth.userId, inputs: canonical.map((item) => item.input), forceRefresh, source: "user", quotaMode: "all_or_nothing" })
+    const result = await createResearchBatch({ workspaceId: auth.workspaceId, userId: auth.userId, inputs: canonical.map((item) => item.input), forceRefresh, source: "user", quotaMode: "all_or_nothing", unrestricted: auth.unrestricted })
     if ("error" in result) { await setReservationStatus(reservation.reservationId, "released"); throw new Error(result.error) }
     const response = { batchId: result.batchId, enqueued: result.jobs.length, reservationId: reservation.reservationId }
     await setReservationStatus(reservation.reservationId, "committed", response)
@@ -510,7 +510,7 @@ const authedHandler = withMcpAuth(handler, async (req: Request, token?: string) 
   if (!result.success || !result.workspaceId || !result.userId || !result.keyId || !result.keyType) return undefined
   // `keyType` viene de validateMcpRequest y hay que propagarlo: es lo que decide
   // si keyId se escribe en api_key_id o en oauth_token_id.
-  const principal: McpPrincipal = { workspaceId: result.workspaceId, userId: result.userId, keyId: result.keyId, keyType: result.keyType, scopes: result.scopes ?? [], allowedModes: result.allowedModes ?? ["read"] }
+  const principal: McpPrincipal = { workspaceId: result.workspaceId, userId: result.userId, keyId: result.keyId, keyType: result.keyType, scopes: result.scopes ?? [], allowedModes: result.allowedModes ?? ["read"], unrestricted: result.unrestricted ?? false }
   // Fila de TRANSPORTE (queda con `tool_name` null a propósito): es el ticket que cuenta
   // el rate limiter, y por eso se escribe acá, antes de ejecutar. No describe la tool —de
   // eso se encarga `auditToolCall`—, así que no se le pone status ni duración reales.

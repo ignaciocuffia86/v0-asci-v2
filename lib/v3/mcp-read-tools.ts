@@ -262,6 +262,9 @@ async function hasAccountInWorkspace(principal: McpPrincipal, companyId: string)
 }
 
 async function assertWorkspaceAccount(principal: McpPrincipal, companyId: string) {
+  // Una credencial sin topes trabaja sobre el catálogo global: exigirle que la
+  // cuenta esté en el workspace es justamente el tope que apaga.
+  if (principal.unrestricted) return
   if (!(await hasAccountInWorkspace(principal, companyId))) throw new Error("ACCOUNT_NOT_AVAILABLE_IN_WORKSPACE")
 }
 

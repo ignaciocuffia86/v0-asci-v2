@@ -147,7 +147,7 @@ export async function estimateBatch(principal: McpPrincipal, params: BatchEstima
 
   // ── Research ──────────────────────────────────────────────────────────────
   const quota = wantsResearch && resolved.length
-    ? await checkResearchQuota({ workspaceId: principal.workspaceId, companies: resolved.map((id) => ({ input: id, companyId: id })) })
+    ? await checkResearchQuota({ workspaceId: principal.workspaceId, companies: resolved.map((id) => ({ input: id, companyId: id })), unrestricted: principal.unrestricted })
     : null
 
   const classified = classifyResearchQuota(quota?.items ?? [])

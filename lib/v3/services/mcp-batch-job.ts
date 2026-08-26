@@ -147,6 +147,7 @@ export async function createBatchJob(
       inputs: runnable,
       source: "user",
       quotaMode: "partial",
+      unrestricted: principal.unrestricted,
     })
     if ("error" in result) {
       await admin
