@@ -61,12 +61,19 @@
 -- ═══════════════════════════════════════════════════════════
 
 -- ── 1. La clave de consolidación del screening ────────────────────────────
+--
+-- El cuerpo va con tag NOMBRADO (`$screen_key$`) y no con `$$`. No es estilo: con
+-- `$$` y comentarios adentro, el runner de migraciones de Supabase cortó el
+-- statement en medio del cuerpo y falló con "syntax error at end of input",
+-- mientras el mismo archivo parsea limpio en un Postgres 16 local. De las
+-- migraciones ya aplicadas, la única con comentarios dentro del cuerpo
+-- (20260824205956) usa `$function$`; la que usa `$$` no tiene ninguno.
 create or replace function public.company_screen_key(p_name text)
 returns text
 language sql
 immutable
 set search_path to 'public', 'extensions', 'pg_catalog'
-as $$
+as $screen_key$
   select nullif(btrim(regexp_replace(
     -- 3) Espacios colapsados: "cia.  pesquera" y "cia. pesquera" son el mismo nombre.
     regexp_replace(
@@ -76,10 +83,10 @@ as $$
         -- 1) Puntuación a ESPACIO, no a vacío. Es la diferencia entre que
         --    "cia.pesquera" se vuelva "cia pesquera" (y colapse con
         --    "cia. pesquera") o "ciapesquera" (y no colapse con nada).
-        regexp_replace(public.company_core_name(p_name), '[().,;:&+_\[\]{}«»-]+', ' ', 'g'),
+        regexp_replace(public.company_core_name(p_name), '[().,:&+_\[\]{}«»-]+', ' ', 'g'),
       '(\w{5})s\M', '\1', 'g'),
     '\s+', ' ', 'g')), '')
-$$;
+$screen_key$;
 
 comment on function public.company_screen_key(text) is
   'Clave de consolidación LAXA, solo para v3.screen_account_list. Deliberadamente separada de company_core_name/normalized_name, de las que dependen upsert_company y auto_merge_safe_duplicates: aflojar aquéllas haría que el merge automático fusione empresas hoy separadas.';
