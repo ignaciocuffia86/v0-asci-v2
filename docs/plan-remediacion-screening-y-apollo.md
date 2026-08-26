@@ -1,6 +1,6 @@
 # Plan de remediación — screening de listas y enrichment de Apollo
 
-Estado: **propuesto, sin implementar.** Escrito el 26-ago-2026 a partir de la primera
+Estado: **validado, sin implementar.** La única decisión abierta (la semántica de `countries`) se cerró el 26-ago-2026: localidad por señal. Escrito el 26-ago-2026 a partir de la primera
 corrida real del perfil admin: 75 cuentas de Chile, señal Power BI, con el objetivo de
 enriquecer tomadores de decisión de TI desde Apollo.
 
@@ -134,20 +134,49 @@ El filtro de país ya es prudente con los nulos (`country IS NULL` no excluye), 
 bien: **el 87,4% del catálogo no tiene país** (452.389 de 517.326). Lo que no contempla
 es el caso opuesto: país presente pero irrelevante para la pregunta.
 
-### La decisión de diseño que hay que tomar
+### La decisión, tomada: localidad por SEÑAL
 
-Hoy `countries: ["Chile"]` significa *"la ficha dice Chile"*. Hay dos lecturas
-alternativas y **hay que elegir una explícitamente**:
+`countries: ["Chile"]` pasa a significar *"tiene evidencia en Chile"*, no *"la ficha dice
+Chile"*. Decidido el 26-ago-2026.
 
-| Opción | Qué significa | Costo |
-|---|---|---|
-| **A. Localidad por señal** (recomendada) | La empresa es chilena si su **evidencia** (contactos, vacantes) está en Chile, sin importar el HQ | Es la semántica correcta para multinacionales. Requiere mirar las señales antes de filtrar: más caro |
-| B. País como preferencia, no como filtro | El país ordena candidatas pero nunca elimina la última | Barato y evita el "no está" falso. No resuelve el caso de dos fichas legítimas en países distintos |
-| C. Statu quo + red de seguridad | Si el filtro dejaría cero candidatas, devolver las excluidas como `matched_ambiguous` con motivo `country_mismatch` | El más chico de todos. **Va igual, sea cual sea la opción elegida** |
+**Los datos la respaldan, y por un margen grande.** El filtro actual se apoya en la peor
+columna disponible y la alternativa se apoya en la mejor:
 
-**Lo que no se negocia es C**: `no_match` significa "no está en el catálogo", y decir eso
-cuando en realidad se excluyó algo es reportar mal. Un dato que descartamos nosotros no
-puede presentarse como un dato que no existe.
+| Columna | Cobertura |
+|---|---|
+| `companies.country` (la que se usa hoy) | **12,6%** (64.937 de 517.326) |
+| `contacts.country_normalized` (la propuesta) | **94,4%** (523.508 de 554.692) |
+
+Y funciona sobre los casos reales que se perdieron:
+
+| Ficha | País de la ficha | Contactos | En Chile |
+|---|---|---|---|
+| MAPFRE | Spain | 291 | **25 (8,6%)** ✅ rescatada |
+| EWOS | Norway | 1 | **1 (100%)** ✅ rescatada |
+| Principal Financial | — | **0** | 0 ❌ no la rescata |
+
+**Pero la localidad por señal NO alcanza sola**, y eso es lo que hay que tener presente al
+implementarla: una empresa sin ningún contacto cargado no tiene evidencia de localidad en
+ninguna dirección. `Principal Financial` tiene cero contactos, así que ninguna regla de
+señal la va a salvar. A esa la rescatan las otras dos piezas:
+
+- la **red de seguridad** (abajo), que evita reportarla como inexistente, y
+- la **generación de candidatas** (§2c), porque `Principal Financial Group Chile` **sí
+  está en el catálogo** y el matcher hoy no lo alcanza.
+
+Umbral a definir con datos: con qué mínimo de evidencia chilena una empresa cuenta como
+chilena. `MAPFRE` con 8,6% califica; una con 1 contacto de 5.000, probablemente no. Se
+calibra contra esta misma lista de 75, que ya tiene la respuesta conocida.
+
+### La red de seguridad, que va sí o sí
+
+Independiente de la semántica elegida: si el filtro dejaría **cero** candidatas, hay que
+devolver las excluidas como `matched_ambiguous` con motivo `country_mismatch`, nunca
+`no_match`.
+
+`no_match` significa "no está en el catálogo". Decir eso cuando en realidad lo descartamos
+nosotros es reportar mal, y es el error que hizo perder 6 empresas que sí estaban. Un dato
+que descartamos no puede presentarse como un dato que no existe.
 
 **(c) Aparte:** ampliar la generación de candidatas para nombres cortos (bajar el umbral
 de trigramas cuando el core es corto, o sumar match por palabra completa). Sin esto,
@@ -243,7 +272,7 @@ El orden no es por tamaño: es por cuánto desbloquea del objetivo.
 | 3 | §4 la excepción del lote en `run_contact_enrichment` | El flujo de Apollo del perfil admin, que hoy no se usa como fue diseñado | Chico, sin migración |
 | 4 | §5 el tope de cargos, visible en la cotización | Que no se gasten créditos con 8 cargos menos de los pedidos | Chico, sin migración |
 | 5 | §3 lugares del plan con `unrestricted` | Lotes grandes desde admin | Chico, sin migración |
-| 6 | §2(A/B) la semántica de `countries` | Multinacionales | **Requiere tu decisión** |
+| 6 | §2(A) localidad por señal | Multinacionales con operación local | Mediano: RPC + calibrar el umbral |
 | 7 | §2(c) candidatas para marcas cortas | MAPFRE ve 1 de 108 fichas | Mediano, hay que medir performance |
 | 8 | §1.2 singular/plural y prefijos societarios | Las 2 ambigüedades que quedan | Opinable, medir aparte |
 
