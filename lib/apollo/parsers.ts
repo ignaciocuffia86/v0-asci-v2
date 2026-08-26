@@ -228,8 +228,10 @@ function parseHeadcountGrowth(org: Record<string, unknown>): Record<string, numb
 // Guardamos las primeras 50: vienen por relevancia y el resto queda intacto en
 // el payload crudo del checkpoint.
 const MAX_KEYWORDS = 50
-// Las tecnologias llegan entre 45 y 70 por empresa; entran todas.
-const MAX_TECHNOLOGIES = 200
+// Tope de seguridad, no de recorte: la mediana ronda las 55 tecnologias por
+// empresa pero Carrefour trae 221 (medido en produccion). Se deja holgado para
+// no truncar en silencio; el payload crudo del checkpoint queda igual completo.
+const MAX_TECHNOLOGIES = 500
 
 export function parseOrganizationResponse(resp: unknown): ApolloOrganization | null {
   if (!resp || typeof resp !== "object") return null

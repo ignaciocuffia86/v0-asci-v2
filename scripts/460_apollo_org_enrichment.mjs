@@ -174,7 +174,7 @@ function parseOrg(org) {
     employeesCount: num(org.estimated_num_employees),
     foundedYear: num(org.founded_year),
     annualRevenue: revenue === null ? null : Math.round(revenue),
-    technologies: strArr(org.technology_names, 200),
+    technologies: strArr(org.technology_names, 500),
     keywords: strArr(org.keywords, MAX_KEYWORDS),
     publiclyTradedSymbol: str(org.publicly_traded_symbol),
     publiclyTradedExchange: str(org.publicly_traded_exchange),
