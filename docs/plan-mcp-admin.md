@@ -242,10 +242,10 @@ Consecuencias:
 
 | Fase | Qué | Depende de | Tamaño |
 |---|---|---|---|
-| A | Flag `unrestricted` en los 4 guards + tipo de key + emisión gateada | — | Chico. 4 funciones, 1 tipo, 2 chequeos |
+| A | ~~Flag `unrestricted` + tipo de key + emisión gateada + excepción del workspace~~ ✅ | — | Hecho |
 | B0 | Tabla de costos de Apollo + desglose por tipo de crédito (§8) | — | Chico + 1 migración |
 | B1 | Verificar el consumo real de un run de Apify | — | Una corrida |
-| B2 | `get_cost_summary` (con `groupBy`) + atribución por `batchJobId` | A, B1 | Medio |
+| B2 | ~~`get_cost_summary` (con `groupBy`) + atribución por `batchJobId`~~ ✅ | A | Hecho. El USD de Apify queda en `null` hasta B1 |
 | C | Server `admin` con sus descripciones e `instructions` | A | Medio: mucho texto, poca lógica |
 
 **Una migración**, que el borrador no preveía: `contact_enrichment_runs.credits_spent`

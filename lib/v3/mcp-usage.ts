@@ -143,9 +143,28 @@ export async function getMonthlyPoolUsage(workspaceId: string, pool: McpUsagePoo
 export async function setReservationStatus(reservationId: string, status: "committed" | "released", metadata?: Record<string, unknown>) {
   const admin = createAdminClient()
   const timestamp = new Date().toISOString()
+
+  // El metadata se MEZCLA con lo que ya había, no lo reemplaza.
+  //
+  // Antes se pisaba entero, y eso borraba en silencio lo que la reserva había
+  // guardado al crearse. Con el scraping de vacantes es concreto: se reserva con
+  // { kind, companyId, batchJobId } y se cierra con { batchId, queued }, así que
+  // el commit se llevaba puesta justamente la información que permite atribuir
+  // ese gasto a un informe. Nadie lo notaba porque el dato desaparecía sin error.
+  let merged = metadata
+  if (metadata) {
+    const { data: current } = await admin
+      .schema("v3")
+      .from("mcp_usage_reservations")
+      .select("metadata")
+      .eq("id", reservationId)
+      .maybeSingle()
+    merged = { ...((current?.metadata as Record<string, unknown>) ?? {}), ...metadata }
+  }
+
   const { error } = await admin.schema("v3").from("mcp_usage_reservations").update({
     status,
-    ...(metadata ? { metadata } : {}),
+    ...(merged ? { metadata: merged } : {}),
     ...(status === "committed" ? { committed_at: timestamp } : { released_at: timestamp }),
   }).eq("id", reservationId).eq("status", "reserved")
   if (error) throw new Error(`RESERVATION_UPDATE_FAILED:${error.message}`)
