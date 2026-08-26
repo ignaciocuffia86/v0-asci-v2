@@ -57,7 +57,9 @@ type ScreenRow = {
   matchedName: string | null
   matchConfidence: number
   signalStrength: "solid" | "weak" | "none" | "not_evaluated"
-  ambiguityReason: "multiple_candidates" | "low_confidence" | null
+  ambiguityReason: "multiple_candidates" | "low_confidence" | "country_mismatch" | null
+  /** Rivales de OTRA entidad realmente empatados. NO es `candidateCount`, que es el pool entero. */
+  contenderCount?: number
   [key: string]: unknown
 }
 
@@ -188,9 +190,11 @@ export async function screenAccountList(params: ScreenAccountListParams, princip
       "• matched — la empresa está en ASCI y tiene el término.",
       "• matched_no_signal — está en ASCI y NO tiene el término. Es un DESCARTE LEGÍTIMO, podés decirle al cliente que no tiene la señal.",
       "• no_match — la empresa NO está en ASCI. NO es lo mismo que el anterior: acá no sabemos nada, no afirmes que no tiene la tecnología.",
-      "• matched_ambiguous — hay que confirmar con el usuario ANTES de usar la fila. `ambiguityReason` dice qué preguntar: \"multiple_candidates\" = elegir entre los `candidates`; \"low_confidence\" = confirmar que el único candidato es la empresa correcta.",
+      "• matched_ambiguous — hay que confirmar con el usuario ANTES de usar la fila. `ambiguityReason` dice qué preguntar: \"multiple_candidates\" = elegir entre los `candidates`; \"low_confidence\" = confirmar que el único candidato es la empresa correcta; \"country_mismatch\" = la empresa EXISTE pero su ficha es de otro país y no encontramos gente suya en los países pedidos, así que preguntá si es la misma (típico de una multinacional cuya casa matriz está afuera).",
+      "PARA PREGUNTAR \"ENTRE CUÁNTAS ELEGIR\", USÁ `contenderCount`, NO `candidateCount`. `candidateCount` es el pool completo que se miró; `contenderCount` son las que están realmente empatadas con la ganadora. Decir \"elegí entre 19\" cuando la disputa es entre 2 hace que el reporte se sienta roto y que el usuario deje de leerlo.",
       "NUNCA presentes una fila matched_ambiguous como si fuera matched: atribuirle a un cliente la evidencia de un homónimo es el peor error posible de este reporte.",
       "`signalStrength` en \"weak\" significa menos señales que el mínimo pedido: una mención suelta en un solo perfil no es una oportunidad. Marcalo o filtralo, no lo mezcles con las sólidas.",
+      "`localContacts` es cuánta gente de esa empresa está en los países pedidos, hasta un tope de 50. Es lo que sostiene una fila cuya ficha dice otro país: si es 0 y el país no coincide, la empresa quedó fuera del alcance geográfico y hay que decirlo así, no como que no existe.",
       "`signalsForTerms` es el total de la EMPRESA, sumando las entidades duplicadas que el catálogo tiene con el mismo nombre canónico. `signalsOwn` es solo de la entidad que se devuelve, y `duplicateEntities` dice cuántas se consolidaron. Si las dos cifras difieren, la cuenta está fragmentada: usá el total y mencionalo.",
       "Para la cita textual de una cuenta, seguí con get_company_signal_summary detail=\"evidence\" y el `term`: no consume cupo ni necesita research previo.",
       "Si el usuario quiere la tabla como archivo, NO la transcribas al chat: llamá create_export con el `screeningId` y pasale la URL firmada.",
@@ -209,6 +213,15 @@ function nextStepFor(payload: ScreenPayload, ambiguousCount: number) {
   if (noMatch) {
     steps.push(
       `${noMatch} nombre(s) no están en el catálogo de ASCI. Si el usuario los necesita, se resuelven scrapeando la cuenta, no reintentando esta tool con otra escritura.`,
+    )
+  }
+  const countryMismatch = payload.summary.countryMismatch ?? 0
+  if (countryMismatch) {
+    // Se separa del `noMatch` a propósito: la acción es distinta. Un no_match se
+    // resuelve trayendo la empresa; este se resuelve con una respuesta del
+    // usuario, y confundirlos manda a scrapear algo que ya está en el catálogo.
+    steps.push(
+      `${countryMismatch} nombre(s) SÍ están en el catálogo pero con ficha de otro país y sin gente en los países pedidos. No los scrapees: mostrale al usuario la candidata con su país y preguntale si es la misma empresa.`,
     )
   }
   steps.push(
