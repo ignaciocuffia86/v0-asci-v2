@@ -40,7 +40,7 @@ export type ResolvedOrganization =
  * payloads medidos (134/134), asi que su ausencia significa "el writer viejo
  * paso por aca" y no "esta empresa no tiene tecnologias".
  */
-function hasEnrichment(company: Pick<Company, "apollo_technologies">): boolean {
+export function hasEnrichment(company: { apollo_technologies?: string[] | null }): boolean {
   return Array.isArray(company.apollo_technologies) && company.apollo_technologies.length > 0
 }
 
