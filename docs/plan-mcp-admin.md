@@ -215,17 +215,26 @@ gasto por persona. Las dos llaves de contención (superadmin global + workspace 
 y por qué el límite de una por usuario ya existe, en §3.1. El desagregado es lo que
 justifica `groupBy` en `get_cost_summary` (§4.3).
 
-### 6.4 Los informes on-demand se arman en el workspace de ASCI
+### 6.4 Los informes on-demand se arman en el workspace admin
 
-Consecuencias que hay que tener presentes:
+**Cuál es**: el de **Bigua** (`c731ba5a-aeb1-4e36-8bd5-401135566ecd`), que es de
+testing y puede resetearse. Plan silver, así que `allowsApiKeys` pasa; sus dos
+miembros —los únicos que entran con `@bigua.lat`— ya son `superadmin` global, o sea
+que las dos llaves de §3.1 dan.
 
-- Las cuentas que el lote guarde quedan en el workspace de ASCI, no en el del cliente.
+**Es la excepción a las reglas, y está declarada en un solo lugar**:
+`lib/v3/admin-workspace.ts`. Ahí se lista qué deja de aplicar y qué sigue aplicando.
+Una excepción repartida en cinco archivos es una excepción que nadie puede auditar.
+
+Consecuencias:
+
+- Las cuentas que el lote guarde quedan en el workspace admin, no en el del cliente.
   `saved_by_job` (que ya existe en `mcp_batch_job_items`) permite revertirlas sin tocar
   las que ya estaban.
 - Todo el gasto se atribuye a ASCI, que es lo correcto: el crédito lo paga ASCI.
-- El `followedCap` del workspace de ASCI **deja de ser un cap** —eso es justamente lo
-  que hace `unrestricted`—, así que ese workspace no puede usarse a la vez como
-  workspace de trabajo con topes.
+- El `followedCap` **deja de ser un cap** —eso es lo que hace `unrestricted`—, así que
+  ese workspace no puede usarse a la vez como workspace de trabajo con topes.
+- **El cron mensual lo saltea.** Ver §9.
 
 ---
 
@@ -261,7 +270,14 @@ tiene que valer eso para dejar pasar. Se agregó `actuallySaved`: `state` es la 
 del guard, `actuallySaved` es el hecho. Una tool cuyo trabajo es responder "¿está
 guardada?" no puede contestar que sí porque el guard la dejó pasar.
 
-**3. El cupo mensual de Apollo NO se tocó, a propósito.** `getContactEnrichmentLimits`
+**3. El cron mensual habría cobrado para siempre.** `v3-refresh-accounts` re-investiga
+TODA cuenta seguida activa de un plan pago. Un informe admin puede guardar cientos de
+cuentas para armar una base: sin exclusión, cada una entraba al ciclo mensual y gastaba
+IA todos los meses, sin que nadie lo decidiera. El `followedCap` contenía eso **por
+accidente** —60 cuentas es poco— y `unrestricted` lo levanta. El cron ahora saltea el
+workspace admin y lo loguea. Es la razón por la que existe `lib/v3/admin-workspace.ts`.
+
+**4. El cupo mensual de Apollo NO se tocó, a propósito.** `getContactEnrichmentLimits`
 + `getMonthlyPoolUsage` frenan el enrichment al llegar a las unidades del plan
 (`mcp-contact-enrichment.ts:265`). Es un tope, y por la regla del perfil debería
 liberarse — pero es además el único techo del gasto irreversible, y la confirmación

@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin"
 import { assertCron } from "@/lib/cron-auth"
 import { createResearchBatch, runResearchJob } from "@/lib/v3/services/research-pipeline"
 import { buildDigestData, sendAccountDigest } from "@/lib/v3/services/digest"
+import { isAdminWorkspace } from "@/lib/v3/admin-workspace"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 300
@@ -127,7 +128,14 @@ export async function GET(request: Request) {
       throw new Error(error.message)
     }
 
-    // El refresh automático es solo para planes pagos: excluir workspaces trial
+    // El refresh automático es solo para planes pagos: excluir workspaces trial.
+    //
+    // Y excluir el WORKSPACE ADMIN, que es una decisión distinta y más cara de
+    // equivocar: ahí un informe on-demand puede guardar cientos de cuentas para
+    // armar una base, y sin esta exclusión cada una entraría al ciclo mensual y
+    // gastaría IA todos los meses, para siempre. El `followedCap` contenía eso
+    // por accidente; la key admin lo levanta a propósito. La lista completa de
+    // lo que ese workspace deja de aplicar vive en lib/v3/admin-workspace.ts.
     let accounts = allAccounts ?? []
     if (accounts.length > 0) {
       const workspaceIds = [...new Set(accounts.map((a) => a.workspace_id))]
@@ -137,8 +145,14 @@ export async function GET(request: Request) {
         .select("id, plan")
         .in("id", workspaceIds)
       const cronEnabled = new Set(
-        (workspaces ?? []).filter((w) => w.plan !== "trial").map((w) => w.id)
+        (workspaces ?? [])
+          .filter((w) => w.plan !== "trial" && !isAdminWorkspace(w.id))
+          .map((w) => w.id)
       )
+      const skippedAdmin = accounts.filter((a) => isAdminWorkspace(a.workspace_id)).length
+      if (skippedAdmin > 0) {
+        console.log(`[v3-cron] ${skippedAdmin} cuenta(s) omitidas: workspace admin, sin refresh automático`)
+      }
       accounts = accounts
         .filter((a) => cronEnabled.has(a.workspace_id))
         .slice(0, MAX_ACCOUNTS_PER_RUN)

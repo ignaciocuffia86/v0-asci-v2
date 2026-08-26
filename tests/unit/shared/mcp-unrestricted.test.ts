@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 
 import {
   SCOPES_BY_TYPE,
@@ -8,6 +8,7 @@ import {
   scopesAreUnrestricted,
 } from "@/lib/v3/mcp-key-scopes"
 import { releaseQuotaBlocks, type ResearchQuotaItem } from "@/lib/v3/plans"
+import { ADMIN_WORKSPACE_ENV_VAR, adminWorkspaceId, isAdminWorkspace } from "@/lib/v3/admin-workspace"
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Fase A del perfil admin: quién queda sin topes y quién NO.
@@ -117,5 +118,45 @@ describe("releaseQuotaBlocks", () => {
     ])
     expect(released.isRefresh).toBe(true)
     expect(released.nextAutoRefreshDate).toBe("5 de septiembre")
+  })
+})
+
+// ── El workspace admin: la excepción, y sus bordes ──────────────────────────
+
+describe("isAdminWorkspace", () => {
+  const original = process.env[ADMIN_WORKSPACE_ENV_VAR]
+  afterEach(() => {
+    if (original === undefined) delete process.env[ADMIN_WORKSPACE_ENV_VAR]
+    else process.env[ADMIN_WORKSPACE_ENV_VAR] = original
+  })
+
+  it("sin la variable configurada NADIE es el workspace admin", () => {
+    // Falla cerrado: un despliegue mal configurado se queda sin la función, no
+    // la reparte. Si esto diera true, el cron dejaría de refrescar cuentas de
+    // clientes reales.
+    delete process.env[ADMIN_WORKSPACE_ENV_VAR]
+    expect(adminWorkspaceId()).toBeNull()
+    expect(isAdminWorkspace("c731ba5a-aeb1-4e36-8bd5-401135566ecd")).toBe(false)
+  })
+
+  it("un workspaceId vacío contra una variable vacía NO da true", () => {
+    // El borde que convertiría a cualquier workspace en la excepción: dos
+    // valores ausentes comparados con === son iguales.
+    process.env[ADMIN_WORKSPACE_ENV_VAR] = ""
+    expect(isAdminWorkspace("")).toBe(false)
+    expect(isAdminWorkspace(null)).toBe(false)
+    expect(isAdminWorkspace(undefined)).toBe(false)
+  })
+
+  it("solo el id exacto es la excepción", () => {
+    process.env[ADMIN_WORKSPACE_ENV_VAR] = "ws-admin"
+    expect(isAdminWorkspace("ws-admin")).toBe(true)
+    expect(isAdminWorkspace("ws-admin-2")).toBe(false)
+    expect(isAdminWorkspace("WS-ADMIN")).toBe(false)
+  })
+
+  it("tolera espacios alrededor del valor configurado", () => {
+    process.env[ADMIN_WORKSPACE_ENV_VAR] = "  ws-admin  "
+    expect(isAdminWorkspace("ws-admin")).toBe(true)
   })
 })

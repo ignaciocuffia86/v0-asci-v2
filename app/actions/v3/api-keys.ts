@@ -4,6 +4,7 @@ import crypto from "crypto"
 import { createClient } from "@/lib/supabase/server"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { resolveApiKeyAccess, isGlobalSuperAdmin } from "@/lib/v3/api-key-access"
+import { ADMIN_WORKSPACE_ENV_VAR, adminWorkspaceId, isAdminWorkspace } from "@/lib/v3/admin-workspace"
 import { getWorkspaceMembers, resolveUserIdentities } from "@/lib/v3/workspace"
 import { SCOPES_BY_TYPE, keyTypeFromScopes, type ApiKeyType } from "@/lib/v3/mcp-key-scopes"
 
@@ -139,7 +140,9 @@ export async function generateApiKey(
   //  1. Quien la emite es superadmin GLOBAL. El `canManage` de arriba NO alcanza:
   //     lo tiene cualquier admin de cualquier workspace, incluido el de un
   //     cliente.
-  //  2. El workspace destino es el de ASCI, declarado por variable de entorno.
+  //  2. El workspace destino es EL workspace admin. Qué significa eso, y qué
+  //     otras reglas deja de aplicar ese workspace, está declarado en un solo
+  //     lugar: lib/v3/admin-workspace.ts.
   //
   // Falla CERRADO: sin la variable configurada no se puede emitir ninguna. Es
   // preferible que un despliegue mal configurado no pueda crear la key a que
@@ -148,12 +151,11 @@ export async function generateApiKey(
     if (!(await isGlobalSuperAdmin(userId))) {
       return { success: false, error: "Solo un superadmin global puede generar una API key admin" }
     }
-    const asciWorkspaceId = process.env.ASCI_ADMIN_WORKSPACE_ID?.trim()
-    if (!asciWorkspaceId) {
-      return { success: false, error: "Falta configurar ASCI_ADMIN_WORKSPACE_ID para poder emitir keys admin" }
+    if (!adminWorkspaceId()) {
+      return { success: false, error: `Falta configurar ${ADMIN_WORKSPACE_ENV_VAR} para poder emitir keys admin` }
     }
-    if (workspaceId !== asciWorkspaceId) {
-      return { success: false, error: "Las API keys admin solo se emiten en el workspace de ASCI" }
+    if (!isAdminWorkspace(workspaceId)) {
+      return { success: false, error: "Las API keys admin solo se emiten en el workspace admin" }
     }
   }
 
