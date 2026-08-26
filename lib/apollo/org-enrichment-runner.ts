@@ -34,6 +34,15 @@ const SLEEP_MS = 150
 /** Cuanto se posterga una fila que fallo por error de red o HTTP. */
 const RETRY_DELAY_MS = 30 * 60 * 1000
 
+/**
+ * Tope de intentos por empresa. Sin el, una fila que falla SIEMPRE —una
+ * constraint que nunca va a ceder, un dominio que revienta el parser— se
+ * reintentaria cada 30 minutos para siempre, y cada reintento resuelve la cuenta
+ * en Apollo antes de fallar al escribir: un credito por vuelta, indefinidamente.
+ * Al llegar al tope la fila queda 'failed', terminal, y sale de la cola.
+ */
+const MAX_ATTEMPTS = 3
+
 type QueueRow = {
   company_id: string
   requested_domain: string | null
@@ -64,17 +73,25 @@ export type OrgEnrichmentRunResult = {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-/** Cuantas filas siguen en cola. Se reporta para saber cuanto falta sin abrir la base. */
+/**
+ * Cuantas filas siguen en cola. Cuenta lo MISMO que reclama la corrida
+ * ('pending' y 'error'): si contara menos, el reporte diria "no queda trabajo"
+ * mientras el cron sigue teniendo que reintentar.
+ */
 async function countPending(db: SupabaseClient): Promise<number> {
   const { count } = await db
     .schema("v3")
     .from("apollo_company_enrichment")
     .select("company_id", { count: "exact", head: true })
-    .eq("status", "pending")
+    .in("status", ["pending", "error"])
+    .lt("attempts", MAX_ATTEMPTS)
   return count ?? 0
 }
 
-/** Marca una fila como fallida y la reprograma. No se pierde: vuelve en 30 minutos. */
+/**
+ * Marca una fila como fallida. Vuelve a la cola en 30 minutos, salvo que ya haya
+ * agotado MAX_ATTEMPTS: ahi queda 'failed' y no se reintenta mas.
+ */
 async function markError(db: SupabaseClient, companyId: string, message: string): Promise<void> {
   const { data: previo } = await db
     .schema("v3")
@@ -83,15 +100,18 @@ async function markError(db: SupabaseClient, companyId: string, message: string)
     .eq("company_id", companyId)
     .maybeSingle<{ attempts: number }>()
 
+  const intentos = (previo?.attempts ?? 0) + 1
+  const agotada = intentos >= MAX_ATTEMPTS
+
   await db
     .schema("v3")
     .from("apollo_company_enrichment")
     .update({
-      status: "error",
-      error_message: message.slice(0, 500),
-      attempts: (previo?.attempts ?? 0) + 1,
+      status: agotada ? "failed" : "error",
+      error_message: agotada ? `${message.slice(0, 460)} (${intentos} intentos)` : message.slice(0, 500),
+      attempts: intentos,
       processed_at: new Date().toISOString(),
-      next_attempt_at: new Date(Date.now() + RETRY_DELAY_MS).toISOString(),
+      next_attempt_at: agotada ? null : new Date(Date.now() + RETRY_DELAY_MS).toISOString(),
     })
     .eq("company_id", companyId)
 }
@@ -127,14 +147,20 @@ export async function runApolloOrgEnrichment(
     pendingLeft: 0,
   }
 
-  // La cola se ordena por next_attempt_at para que las reprogramadas por error
-  // no se adelanten a las que nunca se intentaron.
+  // Se reclama 'pending' Y 'error' con el reintento ya vencido. Incluir 'error'
+  // no es un detalle: markError reprograma a 30 minutos, pero si la query solo
+  // mirara 'pending' esa reprogramacion no existiria — un 429 o un 500 pasajero
+  // dejaria las 10 empresas del lote varadas para siempre, con la cola diciendo
+  // que no queda trabajo. Se ordena por next_attempt_at para que las
+  // reprogramadas no se adelanten a las que nunca se intentaron.
+  const ahora = new Date().toISOString()
   const { data: cola, error: colaErr } = await db
     .schema("v3")
     .from("apollo_company_enrichment")
     .select("company_id, requested_domain")
-    .eq("status", "pending")
-    .or(`next_attempt_at.is.null,next_attempt_at.lte.${new Date().toISOString()}`)
+    .in("status", ["pending", "error"])
+    .lt("attempts", MAX_ATTEMPTS)
+    .or(`next_attempt_at.is.null,next_attempt_at.lte.${ahora}`)
     .order("next_attempt_at", { ascending: true, nullsFirst: true })
     .limit(limit)
     .returns<QueueRow[]>()

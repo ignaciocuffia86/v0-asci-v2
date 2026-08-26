@@ -278,6 +278,10 @@ select c.id, null, 'pending', now()
 on conflict (company_id) do nothing;
 ```
 
+Los estados de la cola: `pending` (sembrada, sin tocar), `error` (falló, vuelve
+en 30 minutos), `found` / `not_found` (resuelta), `skipped` (website sin dominio
+parseable) y `failed` (agotó los 3 intentos). Los tres últimos son terminales.
+
 Para seguirlo sin abrir la base: `cron_executions` con `cron_name =
 'v3-apollo-org-enrichment'` guarda por corrida los créditos gastados, el hit
 rate, las columnas genéricas completadas y cuántas quedan en cola.
