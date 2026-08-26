@@ -20,10 +20,14 @@ export const maxDuration = 300
 // selección y una compañía sin follows activos sale sola — no hay registro de
 // inscripción que administrar.
 //
-// Dos prioridades:
+// Tres prioridades:
 //   1. Primera pasada: seguidas sin NINGÚN batch apify:// (altas nuevas),
 //      sin límite de fecha (todas las vacantes abiertas).
-//   2. Refresh mensual: refresh_day == hoy + cooldown de 25 días, ventana 30d.
+//   2. Vencidas (`stale`): último batch con 60+ días, o sea que se saltearon al
+//      menos un ciclo mensual entero — el caso típico es una cuenta que se dejó
+//      de seguir y se volvió a seguir. Van sin límite de fecha, porque una
+//      ventana de 30 días nunca cubriría el hueco. No esperan al refresh_day.
+//   3. Refresh mensual: refresh_day == hoy + cooldown de 25 días, ventana 30d.
 // La regla anti-re-ejecución (marcar el intento antes de gastar, cooldown,
 // tope de reintentos) vive en job-scrape-eligibility/runner, con tests.
 // ═══════════════════════════════════════════════════════════
@@ -40,7 +44,7 @@ const LOCK_TTL_SECS = 600
 interface Candidate {
   companyId: string
   userId: string
-  reason: "first_pass" | "monthly"
+  reason: "first_pass" | "stale" | "monthly"
 }
 
 export async function GET(request: Request) {
@@ -136,6 +140,7 @@ export async function GET(request: Request) {
 
     const now = new Date()
     const firstPass: Candidate[] = []
+    const stale: Candidate[] = []
     const monthly: Candidate[] = []
     const skipped = { cooldown: 0, attempts: 0, not_due: 0 }
 
@@ -156,19 +161,25 @@ export async function GET(request: Request) {
       if (decision.eligible) {
         const candidate: Candidate = { companyId, userId: info.userId, reason: decision.reason }
         if (decision.reason === "first_pass") firstPass.push(candidate)
+        else if (decision.reason === "stale") stale.push(candidate)
         else monthly.push(candidate)
       } else {
         skipped[decision.skip]++
       }
     }
 
-    const queue = [...firstPass, ...monthly].slice(0, MAX_COMPANIES_PER_RUN)
+    // Orden: primero las que no tienen NADA, después las vencidas, y al final el
+    // refresco del día. `stale` se autodrena (cada corrida deja marcador y saca a
+    // esa compañía del bucket), así que no puede hambrear a `monthly` más que
+    // transitoriamente.
+    const queue = [...firstPass, ...stale, ...monthly].slice(0, MAX_COMPANIES_PER_RUN)
 
     if (dryRun) {
       return NextResponse.json({
         success: true,
         dryRun: true,
         firstPass: firstPass.length,
+        stale: stale.length,
         monthly: monthly.length,
         skipped,
         queue,
@@ -194,8 +205,9 @@ export async function GET(request: Request) {
       const result = await scrapeCompanyJobPostings({
         companyId: candidate.companyId,
         userId: candidate.userId,
-        // Primera pasada: todas las vacantes abiertas. Mensual: novedades 30d.
-        windowDays: candidate.reason === "first_pass" ? null : 30,
+        // Primera pasada y vencidas: todas las vacantes abiertas. Mensual:
+        // novedades 30d.
+        windowDays: candidate.reason === "monthly" ? 30 : null,
       })
       if (!result.ok) failedCount++
       results.push({
@@ -218,6 +230,7 @@ export async function GET(request: Request) {
           records_failed: failedCount,
           details: {
             firstPassPending: firstPass.length,
+            stalePending: stale.length,
             monthlyPending: monthly.length,
             skipped,
             results,
