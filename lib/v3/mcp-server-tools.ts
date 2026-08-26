@@ -11,6 +11,7 @@ import { requirePaidMcp, reserveMcpUsage, setReservationStatus, getMcpUsage, typ
 import { searchCompanies, getCompanyProfile, getCompanySignals, listWorkspaceAccounts, getAccountIntelligence, getResearchStatus, getAccountEvidenceDetailTool } from "@/lib/v3/mcp-read-tools"
 import { prepareAccountResearch, submitResearchStage, getClientResearchStatus, prepareAccountIcebreaker, submitAccountIcebreaker, refreshPromptPackage, prepareCompanySuccessCases, submitCompanySuccessCases, prepareCompanyNews, submitCompanyNews } from "@/lib/v3/mcp-client-ai"
 import { runLinkedinJobsActor, companyNameVariants, isApifyConfigured } from "@/lib/v3/services/apify-client"
+import { recordApifyRun } from "@/lib/v3/services/spend-ledger"
 import { ingestApifyJobPostings } from "@/lib/v3/services/apify-job-ingest"
 import { prepareSaveAccount, saveAccount, removeWorkspaceAccount, listSavedAccounts, requireSavedAccount, guardSavedAccounts } from "@/lib/v3/mcp-account-lifecycle"
 import { recommendContactRoles, getCompanyContacts } from "@/lib/v3/mcp-contact-coverage"
@@ -514,12 +515,22 @@ export function registerV3Tools(
           ? `Las vacantes quedaron en cola. En \`preview\` tenés ${ingest.preview.length} de las ${ingest.queued} encoladas (título, ubicación y URL) para responderle al usuario YA, sin esperar. Si necesitás el listado completo y normalizado, consultá get_company_signal_summary en unos minutos.`
           : "No se encontraron vacantes de esta empresa con esa búsqueda.",
       }
-      // `usageTotalUsd` es lo que Apify cobró por esta corrida. Va en la misma
-      // metadata que `queued` porque es donde get_cost_summary ya busca el
-      // scraping del informe: sin columna nueva y sin migración. Puede ser null
-      // (no se pudo leer) y ese null es significativo — se muestra como "no lo
-      // tenemos", nunca como cero.
-      await setReservationStatus(reservation.reservationId, "committed", { batchId: ingest.batchId, queued: ingest.queued, runId: run.runId, usageTotalUsd: run.usageTotalUsd })
+      // El costo va al ledger, que es la ÚNICA fuente: la metadata de la reserva
+      // solo cubre este camino, y el cron —que es el que más va a gastar— no
+      // tiene reserva. Dos registros del mismo gasto es la forma conocida de que
+      // uno quede viejo sin que nadie se entere.
+      await recordApifyRun({
+        runId: run.runId,
+        source: "mcp_tool",
+        companyId,
+        workspaceId: auth.workspaceId,
+        userId: auth.userId,
+        batchJobId: batchJobId ?? null,
+        costUsd: run.usageTotalUsd,
+        rowsIngested: ingest.queued,
+        status: "SUCCEEDED",
+      })
+      await setReservationStatus(reservation.reservationId, "committed", { batchId: ingest.batchId, queued: ingest.queued, runId: run.runId })
       return response
     } catch (error) {
       // Se libera la reserva: si el scraping falló, el usuario no gastó nada útil.

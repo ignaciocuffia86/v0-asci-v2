@@ -43,7 +43,8 @@ export type CostBreakdown = { ai: AiCost; apollo: ApolloCost; apify: ApifyCost }
 
 export type AiRow = { cost_usd: number | string | null; input_tokens: number | null; output_tokens: number | null }
 export type ApolloRow = { credits_spent: number | null; contacts_found: number | null; cache_hit: boolean | null }
-export type ApifyRow = { metadata: Record<string, unknown> | null }
+/** Una fila de `v3.apify_runs`. `cost_usd` es numeric: viaja como string. */
+export type ApifyRow = { cost_usd: number | string | null; rows_ingested: number | null }
 
 /** Suma el gasto de IA. Es la única cifra medida de verdad: la cobra el gateway. */
 export function sumAi(rows: AiRow[]): AiCost {
@@ -82,9 +83,10 @@ export function sumApollo(rows: ApolloRow[]): ApolloCost {
 /**
  * Suma el scraping de vacantes.
  *
- * `queued` lo escribe el commit de la reserva y son las filas que entraron al
- * pipeline. `usageTotalUsd` lo escribe el mismo commit desde el objeto del run de
- * Apify: es un costo MEDIDO, no estimado.
+ * Las filas salen de `v3.apify_runs`, el ledger: una por corrida, con su costo
+ * medido (`usageTotalUsd` de Apify) y las filas que entraron al pipeline. El
+ * ledger es la única fuente — cubre también el cron y explore, que no tienen
+ * reserva de MCP y antes no registraban su gasto en ningún lado.
  *
  * Las corridas viejas —anteriores a que se empezara a guardar el costo— no tienen
  * el campo, y ese es el caso que decide el diseño de esta función: sumar solo las
@@ -102,13 +104,13 @@ export function sumApify(rows: ApifyRow[]): ApifyCost {
   let costUsd = 0
 
   for (const row of rows) {
-    const queued = row.metadata?.queued
-    if (typeof queued === "number") rowsIngested += queued
+    rowsIngested += Math.max(0, Math.round(Number(row.rows_ingested ?? 0)) || 0)
 
-    const usage = row.metadata?.usageTotalUsd
-    // Finito y no negativo. Un null explícito (no se pudo leer) cae acá y NO
-    // cuenta como corrida con costo, que es exactamente la distinción del caso.
-    if (typeof usage === "number" && Number.isFinite(usage) && usage >= 0) {
+    // `numeric` vuelve como string, así que se convierte antes de decidir. Se
+    // exige finito y no negativo: un null explícito (no se pudo leer el costo)
+    // cae acá y NO cuenta como corrida medida, que es la distinción del caso.
+    const usage = row.cost_usd === null || row.cost_usd === undefined ? Number.NaN : Number(row.cost_usd)
+    if (Number.isFinite(usage) && usage >= 0) {
       runsWithCost += 1
       costUsd += usage
     }
@@ -202,6 +204,25 @@ export async function getCostSummary(principal: McpPrincipal, params: Params) {
 type Admin = ReturnType<typeof createAdminClient>
 
 /**
+ * El ledger que falla NO puede leerse como "no hubo scraping".
+ *
+ * supabase-js no tira: ante un error devuelve `{ data: null, error }`, y el
+ * `?? []` de abajo lo convertiría en cero corridas. Sería exactamente el error
+ * que este módulo existe para no cometer, y encima en el caso más probable: la
+ * migración del ledger todavía sin aplicar mientras el código ya está deployado.
+ * Un error explícito es peor experiencia y mejor información.
+ */
+function assertLedgerAvailable(result: { error: { message: string } | null }): void {
+  if (!result.error) return
+  throw new Error(
+    `APIFY_LEDGER_UNAVAILABLE:No se pudo leer v3.apify_runs (${result.error.message}). ` +
+      "Si la migración del ledger todavía no se aplicó, el costo de scraping no está disponible: " +
+      "no lo reportes como cero.",
+  )
+}
+
+
+/**
  * Costo de UN informe.
  *
  * La cadena de atribución ya existía y no hubo que inventarla: el lote conoce sus
@@ -255,13 +276,13 @@ async function batchSummary(admin: Admin, principal: McpPrincipal, batchJobId: s
       .select("id, credits_spent, contacts_found, cache_hit, user_id")
       .eq("workspace_id", principal.workspaceId)
       .or(`batch_job_id.eq.${batchJobId}${planHashes.length ? `,plan_hash.in.(${planHashes.join(",")})` : ""}`),
-    admin.schema("v3").from("mcp_usage_reservations")
-      .select("metadata, user_id")
+    admin.schema("v3").from("apify_runs")
+      .select("cost_usd, rows_ingested, user_id")
       .eq("workspace_id", principal.workspaceId)
-      .eq("status", "committed")
-      .eq("metadata->>kind", "job_scrape")
-      .eq("metadata->>batchJobId", batchJobId),
+      .eq("batch_job_id", batchJobId),
   ])
+
+  assertLedgerAvailable(apifyRes)
 
   return assemble({
     scope: "batch" as const,
@@ -299,15 +320,15 @@ async function periodSummary(admin: Admin, principal: McpPrincipal, params: Para
       .select("credits_spent, contacts_found, cache_hit, user_id")
       .eq("workspace_id", principal.workspaceId)
       .gte("created_at", from).lte("created_at", to),
-    admin.schema("v3").from("mcp_usage_reservations")
-      .select("metadata, user_id")
+    admin.schema("v3").from("apify_runs")
+      .select("cost_usd, rows_ingested, user_id")
       .eq("workspace_id", principal.workspaceId)
-      .eq("status", "committed")
-      .eq("metadata->>kind", "job_scrape")
       .gte("created_at", from).lte("created_at", to),
   ])
 
-  return assemble({
+  assertLedgerAvailable(apifyRes)
+
+  const summary = await assemble({
     scope: "period" as const,
     context: { from, to },
     ai: (aiRes.data ?? []) as (AiRow & { user_id: string })[],
@@ -316,6 +337,78 @@ async function periodSummary(admin: Admin, principal: McpPrincipal, params: Para
     groupBy: params.groupBy,
     admin,
   })
+
+  // El gasto COMPARTIDO solo se le muestra a una credencial sin topes. Para un
+  // cliente sería ruido —no es su costo y no puede accionarlo—; para ASCI es la
+  // pregunta entera: el cron es lo que más va a gastar cuando esto escale.
+  return principal.unrestricted ? { ...summary, sharedSpend: await sharedSpend(admin, from, to) } : summary
+}
+
+/**
+ * El gasto que no es de ningún workspace: el cron.
+ *
+ * Es la mitad invisible del costo. Medido contra producción, el 78% del gasto de
+ * IA registrado no tiene `workspace_id`, y `get_cost_summary` filtraba por
+ * workspace: el grueso de la factura no aparecía en la única herramienta que
+ * existe para mirarla. No era un bug del filtro —ese gasto efectivamente no es de
+ * un workspace— sino que faltaba mirarlo por su propia dimensión.
+ *
+ * Apify se corta por ORIGEN (`source` del ledger) y la IA por FEATURE. Son las dos
+ * preguntas distintas: "cuánto me cuesta el cron" y "en qué etapa del research se
+ * va la plata".
+ */
+async function sharedSpend(admin: Admin, from: string, to: string) {
+  const [apifyRes, aiRes] = await Promise.all([
+    admin.schema("v3").from("apify_runs")
+      .select("cost_usd, rows_ingested, source")
+      .is("workspace_id", null)
+      .gte("created_at", from).lte("created_at", to),
+    admin.schema("v3").from("ai_usage_log")
+      .select("cost_usd, input_tokens, output_tokens, feature")
+      .is("workspace_id", null)
+      .gte("created_at", from).lte("created_at", to),
+  ])
+
+  assertLedgerAvailable(apifyRes)
+  const apifyRows = (apifyRes.data ?? []) as (ApifyRow & { source: string })[]
+  const aiRows = (aiRes.data ?? []) as (AiRow & { feature: string })[]
+
+  const apify = sumApify(apifyRows)
+  const ai = sumAi(aiRows)
+
+  return {
+    apify: {
+      ...apify,
+      bySource: groupSum(apifyRows, (r) => r.source, sumApify),
+    },
+    ai: {
+      ...ai,
+      // Por FEATURE y no por origen: `ai_usage_log` no tiene todavía la columna
+      // que diga quién disparó el gasto. Para este bucket casi no importa —lo que
+      // no tiene workspace es, hoy, el cron— y `feature` contesta la pregunta que
+      // de verdad se hace: en qué etapa del research se va la plata.
+      byFeature: groupSum(aiRows, (r) => r.feature, sumAi),
+    },
+    totalUsd: roundUsd(ai.costUsd + (apify.costUsd ?? 0)),
+    note:
+      "Este gasto NO es de ningún workspace: lo dispara el cron y una corrida sirve a TODAS las cuentas que siguen esa empresa. No se lo repartas a nadie por usuario — la unidad real es la empresa.",
+  }
+}
+
+/** Agrupa por una clave y aplica el mismo sumador, ordenando por costo. */
+function groupSum<Row, Out extends { costUsd: number | null }>(
+  rows: Row[],
+  keyOf: (row: Row) => string,
+  sum: (rows: Row[]) => Out,
+): Array<Out & { key: string }> {
+  const buckets = new Map<string, Row[]>()
+  for (const row of rows) {
+    const key = keyOf(row)
+    buckets.set(key, [...(buckets.get(key) ?? []), row])
+  }
+  return [...buckets.entries()]
+    .map(([key, group]) => ({ key, ...sum(group) }))
+    .sort((a, b) => (b.costUsd ?? 0) - (a.costUsd ?? 0))
 }
 
 function emptyRows() {

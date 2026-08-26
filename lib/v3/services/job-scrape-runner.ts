@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { runLinkedinJobsActor, companyNameVariants } from "./apify-client"
 import { ingestApifyJobPostings, apifyBatchFilenamePrefix } from "./apify-job-ingest"
+import { recordApifyRun, type ApifyRunSource } from "./spend-ledger"
 
 // ═══════════════════════════════════════════════════════════
 // Runner compartido de scraping de vacantes (Fase 4).
@@ -41,6 +42,14 @@ export async function scrapeCompanyJobPostings(params: {
   /** null = sin límite de fecha (primera pasada); 30 = novedades del mes. */
   windowDays: number | null
   maxRows?: number
+  /**
+   * Quién disparó esto, para el ledger de gasto.
+   *
+   * Lo pasa el llamador y no se infiere de `windowDays`, aunque hoy
+   * correlacionen: el día que el cron mensual necesite otra ventana, inferirlo
+   * atribuiría el gasto al origen equivocado sin que nadie lo note.
+   */
+  source: ApifyRunSource
 }): Promise<ScrapeRunResult> {
   const admin = createAdminClient()
 
@@ -98,6 +107,20 @@ export async function scrapeCompanyJobPostings(params: {
         .eq("id", marker.id)
     }
 
+    // El gasto queda registrado ACÁ y no en el cron: este es el único punto por
+    // el que pasan los dos llamadores (el corredor y el kick de la UI), así que
+    // ninguno puede olvidarse. `workspaceId` va en null a propósito — el cron
+    // deduplica por empresa y esta corrida sirve a todos los que la siguen.
+    await recordApifyRun({
+      runId: run.runId,
+      source: params.source,
+      companyId: params.companyId,
+      userId: params.userId,
+      costUsd: run.usageTotalUsd,
+      rowsIngested: ingest.queued,
+      status: "SUCCEEDED",
+    })
+
     return {
       ok: true,
       runId: run.runId,
@@ -131,7 +154,7 @@ export async function kickFirstScrapeIfNeeded(companyId: string, userId: string)
     .maybeSingle()
   if (existing) return // ya scrapeada o en vuelo: la cadencia la maneja el corredor
 
-  const result = await scrapeCompanyJobPostings({ companyId, userId, windowDays: null })
+  const result = await scrapeCompanyJobPostings({ companyId, userId, windowDays: null, source: "ui_kick" })
   if (!result.ok) {
     console.warn(`[v3] Kick de scraping para ${companyId} falló (${result.error}); el corredor reintenta.`)
   }

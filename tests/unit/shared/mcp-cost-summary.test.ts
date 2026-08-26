@@ -61,8 +61,11 @@ describe("sumApollo", () => {
 })
 
 describe("sumApify", () => {
-  it("suma las filas ingestadas que dejó el commit de la reserva", () => {
-    const result = sumApify([{ metadata: { queued: 12 } }, { metadata: { queued: 30 } }])
+  it("suma las filas ingestadas de cada corrida del ledger", () => {
+    const result = sumApify([
+      { cost_usd: null, rows_ingested: 12 },
+      { cost_usd: null, rows_ingested: 30 },
+    ])
     expect(result.runs).toBe(2)
     expect(result.rowsIngested).toBe(42)
   })
@@ -71,49 +74,59 @@ describe("sumApify", () => {
     // El número real de una corrida verificada contra la API: 35 vacantes por
     // US$ 0,0142511 (`usageTotalUsd` del objeto del run).
     const result = sumApify([
-      { metadata: { queued: 35, usageTotalUsd: 0.01425110013586978 } },
-      { metadata: { queued: 10, usageTotalUsd: 0.008 } },
+      { cost_usd: 0.01425110013586978, rows_ingested: 35 },
+      { cost_usd: 0.008, rows_ingested: 10 },
     ])
     expect(result.costUsd).toBeCloseTo(0.0223, 4)
+    expect(result.runsWithCost).toBe(2)
+  })
+
+  it("`numeric` de Postgres vuelve como STRING y se suma igual", () => {
+    // supabase-js entrega `numeric` como string. Sin convertirlo, "0.014" + "0.008"
+    // concatenaría a "0.0140.008" y el costo del informe sería basura.
+    const result = sumApify([
+      { cost_usd: "0.014251", rows_ingested: 35 },
+      { cost_usd: "0.008", rows_ingested: 10 },
+    ])
+    // 0,014251 + 0,008 = 0,022251, y roundUsd deja 4 decimales.
+    expect(result.costUsd).toBe(0.0223)
     expect(result.runsWithCost).toBe(2)
   })
 
   it("sin ninguna corrida con costo, el costo es null, NUNCA cero", () => {
     // Cero significa "no gastó". null significa "no sabemos". Es la diferencia
     // entre un informe sin scraping y un informe cuyo scraping no se pudo medir.
-    expect(sumApify([{ metadata: { queued: 5 } }]).costUsd).toBeNull()
+    expect(sumApify([{ cost_usd: null, rows_ingested: 5 }]).costUsd).toBeNull()
     expect(sumApify([]).costUsd).toBeNull()
   })
 
   it("una corrida sin costo NO se cuenta como cero: baja runsWithCost", () => {
-    // El caso de verdad: las corridas viejas no tienen el campo, y un `null` es
-    // el resultado de no haber podido leerlo. Sumar 0 por ellas daría un total
-    // con cara de completo. Acá el total es un PISO y runsWithCost lo dice.
+    // El caso de verdad: una lectura fallida del costo deja la fila en null.
+    // Sumar 0 por ella daría un total con cara de completo. Acá el total es un
+    // PISO y runsWithCost lo dice.
     const result = sumApify([
-      { metadata: { queued: 35, usageTotalUsd: 0.014 } },
-      { metadata: { queued: 20 } },
-      { metadata: { queued: 5, usageTotalUsd: null } },
+      { cost_usd: 0.014, rows_ingested: 35 },
+      { cost_usd: null, rows_ingested: 20 },
     ])
-    expect(result.runs).toBe(3)
+    expect(result.runs).toBe(2)
     expect(result.runsWithCost).toBe(1)
     expect(result.costUsd).toBeCloseTo(0.014, 4)
   })
 
   it("un costo que no es número finito no entra al total", () => {
-    // Un string "0.01" sumaría como concatenación y un NaN envenenaría el total
-    // entero: cualquier suma con NaN es NaN, así que el costo de IA y el de
-    // Apollo también se perderían.
+    // Un NaN envenenaría el total entero: cualquier suma con NaN es NaN, así que
+    // el costo de IA y el de Apollo del mismo informe también se perderían.
     const result = sumApify([
-      { metadata: { queued: 1, usageTotalUsd: "0.01" } },
-      { metadata: { queued: 1, usageTotalUsd: Number.NaN } },
-      { metadata: { queued: 1, usageTotalUsd: -3 } },
+      { cost_usd: "no-es-un-numero", rows_ingested: 1 },
+      { cost_usd: Number.NaN, rows_ingested: 1 },
+      { cost_usd: -3, rows_ingested: 1 },
     ])
     expect(result.runsWithCost).toBe(0)
     expect(result.costUsd).toBeNull()
   })
 
-  it("una reserva sin `queued` no inventa filas", () => {
-    expect(sumApify([{ metadata: null }, { metadata: { batchId: "x" } }]).rowsIngested).toBe(0)
+  it("una fila sin `rows_ingested` no inventa filas", () => {
+    expect(sumApify([{ cost_usd: null, rows_ingested: null }]).rowsIngested).toBe(0)
   })
 })
 
