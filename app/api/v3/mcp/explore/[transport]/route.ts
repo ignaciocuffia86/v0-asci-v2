@@ -393,7 +393,10 @@ const handler = createMcpHandler(
               maxRows,
             })
             const ingest = await ingestApifyJobPostings({ companyId, userId: auth.userId, runId: run.runId, items: run.items })
-            await setReservationStatus(reservation.reservationId, "committed", { batchId: ingest.batchId, queued: ingest.queued })
+            // El costo de la corrida se guarda también acá, donde ocurrió el gasto.
+            // Ojo: esta reserva no lleva `kind: "job_scrape"`, así que get_cost_summary
+            // todavía no la suma — el scraping de explore queda fuera del resumen.
+            await setReservationStatus(reservation.reservationId, "committed", { batchId: ingest.batchId, queued: ingest.queued, runId: run.runId, usageTotalUsd: run.usageTotalUsd })
             return {
               ...ingest,
               appliedWindow: run.appliedWindow,

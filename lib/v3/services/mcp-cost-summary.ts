@@ -15,20 +15,29 @@ import type { McpPrincipal } from "@/lib/v3/mcp-usage"
 // módulo: un total que mezcla una cifra medida con una supuesta, sin decirlo, es
 // una cifra inventada con apariencia de precisión.
 //
-//   measured    — sale de un ledger real (el AI Gateway cobra eso).
+//   measured    — sale de un ledger real (el AI Gateway cobra eso; el
+//                 `usageTotalUsd` de cada corrida de Apify).
 //   estimated   — cantidad real, precio supuesto (Apollo: créditos × tarifa).
-//   unavailable — no lo tenemos (Apify hoy). Viaja null, NO cero.
+//   partial     — algunas corridas reportaron su costo y otras no. La suma es un
+//                 PISO, no el total.
+//   unavailable — no lo tenemos. Viaja null, NO cero.
 //
 // La diferencia entre `null` y `0` no es cosmética: cero significa "no gastó",
 // null significa "no sabemos". Poner cero donde no sabemos es la forma más
 // barata de subreportar un costo.
 // ═══════════════════════════════════════════════════════════════════════════
 
-export type CostQuality = "measured" | "estimated" | "unavailable"
+export type CostQuality = "measured" | "estimated" | "partial" | "unavailable"
 
 export type AiCost = { costUsd: number; inputTokens: number; outputTokens: number; calls: number }
 export type ApolloCost = { credits: number; costUsd: number; runs: number; contactsFound: number; cacheHits: number }
-export type ApifyCost = { runs: number; rowsIngested: number; costUsd: number | null }
+export type ApifyCost = {
+  runs: number
+  /** Cuántas de esas corridas trajeron su costo. Si es menor que `runs`, la suma es un piso. */
+  runsWithCost: number
+  rowsIngested: number
+  costUsd: number | null
+}
 
 export type CostBreakdown = { ai: AiCost; apollo: ApolloCost; apify: ApifyCost }
 
@@ -74,16 +83,38 @@ export function sumApollo(rows: ApolloRow[]): ApolloCost {
  * Suma el scraping de vacantes.
  *
  * `queued` lo escribe el commit de la reserva y son las filas que entraron al
- * pipeline. `costUsd` es null a propósito: Apify no nos está devolviendo el
- * consumo del run (ver docs/plan-mcp-admin.md §4.2). Cuando lo devuelva, este es
- * el único lugar que cambia.
+ * pipeline. `usageTotalUsd` lo escribe el mismo commit desde el objeto del run de
+ * Apify: es un costo MEDIDO, no estimado.
+ *
+ * Las corridas viejas —anteriores a que se empezara a guardar el costo— no tienen
+ * el campo, y ese es el caso que decide el diseño de esta función: sumar solo las
+ * que sí lo tienen y decir CUÁNTAS fueron. Un informe con tres corridas de las
+ * cuales una reporta US$ 0,014 no costó US$ 0,014 en Apify: costó por lo menos
+ * eso. `runsWithCost` es lo que deja distinguir un total de un piso, y lo que
+ * hace que `totalUsd` marque el total como parcial en vez de darlo por cerrado.
+ *
+ * Lo que este número NO incluye: el alquiler mensual del actor (US$ 29,99 fijos).
+ * Ver la nota de `ApifyRunResult.usageTotalUsd` en apify-client.ts.
  */
 export function sumApify(rows: ApifyRow[]): ApifyCost {
-  const rowsIngested = rows.reduce((total, row) => {
+  let rowsIngested = 0
+  let runsWithCost = 0
+  let costUsd = 0
+
+  for (const row of rows) {
     const queued = row.metadata?.queued
-    return total + (typeof queued === "number" ? queued : 0)
-  }, 0)
-  return { runs: rows.length, rowsIngested, costUsd: null }
+    if (typeof queued === "number") rowsIngested += queued
+
+    const usage = row.metadata?.usageTotalUsd
+    // Finito y no negativo. Un null explícito (no se pudo leer) cae acá y NO
+    // cuenta como corrida con costo, que es exactamente la distinción del caso.
+    if (typeof usage === "number" && Number.isFinite(usage) && usage >= 0) {
+      runsWithCost += 1
+      costUsd += usage
+    }
+  }
+
+  return { runs: rows.length, runsWithCost, rowsIngested, costUsd: runsWithCost > 0 ? roundUsd(costUsd) : null }
 }
 
 /**
@@ -100,8 +131,15 @@ export function totalUsd(breakdown: CostBreakdown): {
   missing: string[]
   quality: Record<string, CostQuality>
 } {
+  const { runs, runsWithCost } = breakdown.apify
+  // Una sola corrida sin costo alcanza para que el total sea un piso. No importa
+  // que las otras diez sí lo tengan: lo que se está afirmando con `partial: false`
+  // es "esto es lo que costó", y con una corrida sin medir eso no es cierto.
+  const apifyIncomplete = runs > 0 && runsWithCost < runs
+
   const missing: string[] = []
-  if (breakdown.apify.costUsd === null && breakdown.apify.runs > 0) missing.push("apify")
+  if (apifyIncomplete) missing.push(runsWithCost === 0 ? "apify" : `apify (${runs - runsWithCost} de ${runs} corridas)`)
+
   return {
     usd: roundUsd(breakdown.ai.costUsd + breakdown.apollo.costUsd + (breakdown.apify.costUsd ?? 0)),
     partial: missing.length > 0,
@@ -109,9 +147,32 @@ export function totalUsd(breakdown: CostBreakdown): {
     quality: {
       ai: "measured",
       apollo: breakdown.apollo.runs ? "estimated" : "measured",
-      apify: breakdown.apify.costUsd === null ? "unavailable" : "measured",
+      apify: runs === 0 || runsWithCost === runs ? "measured" : runsWithCost === 0 ? "unavailable" : "partial",
     },
   }
+}
+
+/**
+ * Cómo se cuenta el scraping en el informe.
+ *
+ * Tres frases distintas para tres situaciones distintas, y la del medio es la que
+ * justifica que exista esta función: cuando parte de las corridas reportaron su
+ * costo, decir el número sin decir que faltan corridas lo convierte en un total
+ * que no es. El caso "todo medido" además aclara que el alquiler mensual del
+ * actor queda afuera, para que nadie lea la cifra como la factura de Apify.
+ */
+export function apifyNote(apify: ApifyCost): string {
+  if (apify.runs === 0) return "No hubo scraping de vacantes en este alcance."
+
+  const cuantos = `${apify.runs} scraping(s) de vacantes con ${apify.rowsIngested} fila(s) ingestadas`
+
+  if (apify.runsWithCost === 0) {
+    return `Hubo ${cuantos}: su costo en dólares NO lo tenemos y NO está en el total. No lo estimes.`
+  }
+  if (apify.runsWithCost < apify.runs) {
+    return `Hubo ${cuantos}. Solo ${apify.runsWithCost} de las ${apify.runs} corridas reportaron su costo: los US$ ${apify.costUsd?.toFixed(4)} de Apify son un PISO, no el total. Decilo así.`
+  }
+  return `Hubo ${cuantos} por US$ ${apify.costUsd?.toFixed(4)}, medido por Apify corrida por corrida. Es uso de plataforma (cómputo, proxy, storage) y NO incluye el alquiler mensual del actor, que son US$ 29,99 fijos al mes se scrapee o no.`
 }
 
 export function roundUsd(value: number): number {
@@ -290,9 +351,7 @@ async function assemble(input: {
     interpretationGuidance: [
       `Total: US$ ${total.usd.toFixed(4)}${total.partial ? ` — PARCIAL, no incluye ${total.missing.join(", ")}` : ""}.`,
       "El costo de IA está medido por el AI Gateway. El de Apollo es una ESTIMACIÓN: los créditos son reales, el precio (US$ 0,01 por crédito) es la tarifa contratada, y hoy la cuenta asume 1 crédito por contacto, que es cierto mientras solo se revelen emails.",
-      breakdown.apify.runs > 0
-        ? `Hubo ${breakdown.apify.runs} scraping(s) de vacantes con ${breakdown.apify.rowsIngested} fila(s) ingestadas: su costo en dólares NO lo tenemos y NO está en el total. No lo estimes.`
-        : "No hubo scraping de vacantes en este alcance.",
+      apifyNote(breakdown.apify),
       breakdown.apollo.cacheHits > 0
         ? `${breakdown.apollo.cacheHits} corrida(s) de Apollo salieron de caché: devolvieron datos sin gastar créditos.`
         : "",

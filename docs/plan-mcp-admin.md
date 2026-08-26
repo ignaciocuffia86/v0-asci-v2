@@ -1,6 +1,7 @@
 # Plan — MCP `admin`: sin topes, con costo medido
 
-Estado: **validado, sin implementar.** Las cuatro decisiones abiertas se cerraron el
+Estado: **implementado.** Fases A, B1, B2 y C están en `main`; queda B0 (el desglose
+por tipo de crédito de Apollo, §8). Las cuatro decisiones abiertas se cerraron el
 25-ago-2026 y están en §6.
 
 Objetivo: un perfil de MCP para el equipo de ASCI que pueda hacer enrichment y armar
@@ -127,18 +128,41 @@ se estampa en `metadata` de la reserva (`mcp_usage_reservations.metadata` ya es
 `jsonb`, no hace falta migración). Sin esto, el costo de scraping solo se puede
 reportar por workspace y mes, nunca por informe.
 
-**2. El costo real.** `lib/v3/services/apify-client.ts:265` ya llama a
-`GET /v2/actor-runs/{runId}` en cada poll y **descarta todo menos `status`**. La API de
-Apify devuelve el consumo del run en ese mismo objeto.
+**2. El costo real.** ✅ **Verificado contra una corrida real y ya implementado.**
 
-> ⚠️ **A verificar antes de construir sobre esto.** No está confirmado contra una
-> corrida real que el campo venga en la respuesta de este actor y que esté poblado
-> cuando el run termina. Si viene: el costo de Apify es **real**, no estimado, y es una
-> línea de código. Si no viene: se reporta *corridas y filas ingestadas*, sin USD, y se
-> dice explícitamente que el USD no lo tenemos — nunca un número inventado.
->
-> Es la misma lección de las migraciones: probarlo contra lo real antes de darlo por
-> bueno.
+`GET /v2/actor-runs/{runId}` sobre el run `pUFB8Lq6E5yM8ajGF` (24/08/2026, 35 vacantes
+ingestadas) devolvió:
+
+```
+usageTotalUsd: 0.01425110013586978
+usageUsd: { PROXY_RESIDENTIAL_TRANSFER_GBYTES: 0.00781, ACTOR_COMPUTE_UNITS: 0.00350,
+            REQUEST_QUEUE_WRITES: 0.00187, ... }
+pricingInfo: { pricingModel: "FLAT_PRICE_PER_MONTH", pricePerUnitUsd: 29.99 }
+```
+
+Tres cosas que salieron de ahí y que el código refleja:
+
+- **El costo por corrida existe y está poblado.** Son US$ 0,0142511 por 35 vacantes:
+  US$ 0,0004 por vacante. El scraping es, por lejos, el gasto más barato de los tres.
+- **El 55% es proxy residencial**, no cómputo. Si alguna vez hay que bajar este costo,
+  el lugar es `apifyProxyGroups`, no el timeout ni la memoria.
+- **`usageTotalUsd` NO incluye el alquiler del actor.** El scraper se factura
+  `FLAT_PRICE_PER_MONTH` a US$ 29,99/mes, un fijo que se paga exista o no la corrida.
+  Se decidió **no prorratearlo**: repartir un fijo entre las corridas del mes daría un
+  número que cambia según cuántas corridas haya *después*. Lo que se reporta es el
+  costo **marginal**, y la nota del resumen dice explícitamente que el fijo queda afuera.
+
+El campo se lee con una llamada dedicada **después** de que el run termina (no se
+aprovecha el último poll: la contabilidad de proxy y transferencia puede cerrarse un
+instante después de que el estado deja de ser RUNNING) y se guarda en la misma
+`metadata` de la reserva que ya lleva `queued`. Sin migración.
+
+> **Una corrida sin costo no vale cero.** Las corridas anteriores a este cambio no
+> tienen el campo, y una lectura fallida devuelve `null`. `sumApify` cuenta aparte
+> `runsWithCost`: si es menor que `runs`, el USD de Apify es un **piso** y el total
+> sigue declarándose parcial, nombrando cuántas corridas faltan. La regla vieja
+> (`costUsd === null` ⇒ parcial) habría dado el total por completo apenas *una* corrida
+> trajera su número.
 
 ### 4.3 La tool
 
@@ -152,7 +176,7 @@ Devuelve, por concepto:
 ai:      { costUsd, inputTokens, outputTokens, jobs }         ← real, del AI Gateway
 apollo:  { credits: {emails, phones, firmographics}, costUsd,
            runs, contactsFound, cacheHits }                   ← estimado hasta §8.3
-apify:   { runs, rowsIngested, costUsd | null }               ← costUsd sujeto a 4.2
+apify:   { runs, runsWithCost, rowsIngested, costUsd | null } ← medido por corrida (4.2)
 totalUsd
 scope:   "batch" | "period"
 by:      [{ userId, name, ...los mismos conceptos }]          ← si hay groupBy
@@ -162,9 +186,10 @@ Tres decisiones de forma:
 
 - **Cada número dice de qué calidad es.** El de IA es medido (AI Gateway). El de
   Apollo es **estimado** mientras no se cierre §8.3, y va rotulado como tal. El de
-  Apify es medido o `null`, nunca inventado. `totalUsd` suma lo disponible y declara
-  qué quedó afuera: un total que mezcla un número medido con uno supuesto sin decirlo
-  es un número inventado.
+  Apify es medido o `null`, nunca inventado, y cuando solo algunas corridas trajeron
+  su número el total se declara **piso** (`runsWithCost < runs`). `totalUsd` suma lo
+  disponible y declara qué quedó afuera: un total que mezcla un número medido con uno
+  supuesto sin decirlo es un número inventado.
 - **`cacheHits` va aparte** porque es la diferencia entre "buscamos 40 contactos" y
   "pagamos 40 contactos".
 - **Va en el server admin y en el standard.** Saber cuánto se consumió no es un
@@ -262,8 +287,8 @@ Consecuencias:
 |---|---|---|---|
 | A | ~~Flag `unrestricted` + tipo de key + emisión gateada + excepción del workspace~~ ✅ | — | Hecho |
 | B0 | Tabla de costos de Apollo + desglose por tipo de crédito (§8) | — | Chico + 1 migración |
-| B1 | Verificar el consumo real de un run de Apify | — | Una corrida |
-| B2 | ~~`get_cost_summary` (con `groupBy`) + atribución por `batchJobId`~~ ✅ | A | Hecho. El USD de Apify queda en `null` hasta B1 |
+| B1 | ~~Verificar el consumo real de un run de Apify~~ ✅ | — | Hecho. `usageTotalUsd` existe, está poblado y ya se guarda por corrida (§4.2) |
+| B2 | ~~`get_cost_summary` (con `groupBy`) + atribución por `batchJobId`~~ ✅ | A | Hecho. Con B1 cerrado, el USD de Apify pasó de `null` a **medido** |
 | C | ~~Server `admin` con sus descripciones e `instructions`~~ ✅ | A | Hecho |
 
 **Una migración**, que el borrador no preveía: `contact_enrichment_runs.credits_spent`
