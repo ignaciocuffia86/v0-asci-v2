@@ -308,7 +308,11 @@ cupo mensual ahora dejaría un perfil sin techo de Apollo y con una autorizació
 solo existe como texto — y la regla del proyecto es que un tope que importa vive en
 la capa 2, nunca en la 3.
 
-**Hecho el 26-ago-2026, y las dos cosas juntas como correspondía.** El
+**Hecho y DESPLEGADO el 26-ago-2026, y las dos cosas juntas como correspondía.**
+La migración `20260826191459_apollo_en_el_batch_plan_hash` está aplicada en
+`asciv2-database`: verificadas las dos columnas de presupuesto en
+`v3.mcp_batch_jobs`, `batch_job_id` en `v3.contact_enrichment_runs`, su índice
+parcial y el RPC `increment_batch_credits`. El
 `batchPlanHash` ahora autoriza un presupuesto de créditos
 (`enrichment_credits_authorized`, calculado en el server desde el plan congelado), y
 `prepare_contact_enrichment` con `batchJobId` cobra contra ese presupuesto en vez de
