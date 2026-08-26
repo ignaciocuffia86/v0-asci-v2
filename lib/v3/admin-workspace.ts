@@ -60,3 +60,31 @@ export function isAdminWorkspace(workspaceId: string | null | undefined): boolea
   const admin = adminWorkspaceId()
   return Boolean(admin && workspaceId && workspaceId === admin)
 }
+
+/**
+ * Si un token OAuth puede llevar el marcador `unrestricted`.
+ *
+ * POR QUÉ EXISTE. El perfil admin exige `unrestricted`, y la rama OAuth de
+ * `mcp-auth` devolvía `false` LITERAL. Eso dejaba el server admin inalcanzable
+ * desde un conector de claude.ai, que se autentica por OAuth y por diseño no
+ * tiene dónde pegar una API key: el conector conectaba bien y listaba CERO
+ * tools. El perfil existía y no se podía usar.
+ *
+ * QUÉ NO CAMBIA. La razón original de aquel `false` sigue en pie: el marcador
+ * NO puede salir de los scopes, porque los scopes de un token OAuth salen del
+ * consentimiento del usuario y un consentimiento manipulado emitiría una
+ * credencial sin topes. Acá no sale de los scopes: sale de dos hechos que vive
+ * el servidor y que el cliente no puede tocar —el workspace del token, guardado
+ * en la fila, y el rol global del usuario, leído de `profiles`—.
+ *
+ * Son las MISMAS dos llaves que exige la emisión de una key admin
+ * (`app/actions/v3/api-keys.ts`): superadmin global + workspace de ASCI. Un
+ * superadmin que entre por el workspace de un cliente NO queda sin topes, que
+ * es justo lo que protege al cliente de un gasto que no autorizó.
+ */
+export function oauthUnrestricted(
+  workspaceId: string | null | undefined,
+  isGlobalSuperAdmin: boolean,
+): boolean {
+  return isAdminWorkspace(workspaceId) && isGlobalSuperAdmin
+}
