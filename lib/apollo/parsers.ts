@@ -160,7 +160,78 @@ export type ApolloOrganization = {
   employeesCount: number | null
   linkedinUrl: string | null
   country: string | null
+  // ── Campos agregados en la Fase 1 de Apollo (26-ago-2026) ──
+  // Apollo devuelve ~45 campos por empresa y solo leiamos 8. Estos son los que
+  // tienen destino en `companies`; el resto vive en el payload crudo del
+  // checkpoint (v3.apollo_company_enrichment).
+  logoUrl: string | null
+  description: string | null
+  foundedYear: number | null
+  annualRevenue: number | null
+  /** technology_names[] — insumo complementario: NO reemplaza al tech radar propio */
+  technologies: string[]
+  keywords: string[]
+  publiclyTradedSymbol: string | null
+  publiclyTradedExchange: string | null
+  /** Crecimiento de headcount a 6/12/24 meses; Apollo solo lo manda a veces */
+  headcountGrowth: Record<string, number> | null
 }
+
+/** Lista de strings defensiva: Apollo a veces manda null y a veces objetos. */
+function strArray(value: unknown, cap: number): string[] {
+  if (!Array.isArray(value)) return []
+  const out: string[] = []
+  for (const item of value) {
+    if (typeof item !== "string") continue
+    const clean = item.trim()
+    if (clean) out.push(clean)
+    if (out.length >= cap) break
+  }
+  return out
+}
+
+function numOrNull(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null
+  if (typeof value === "string" && value.trim() !== "") {
+    const n = Number(value)
+    return Number.isFinite(n) ? n : null
+  }
+  return null
+}
+
+function strOrNull(value: unknown): string | null {
+  if (typeof value !== "string") return null
+  const clean = value.trim()
+  return clean === "" ? null : clean
+}
+
+/**
+ * Agrupa el crecimiento de headcount. Apollo manda tres claves sueltas
+ * (six/twelve/twenty_four) y solo para ~18% de las empresas; devolvemos null
+ * si no vino ninguna para no llenar la columna de objetos vacios.
+ */
+function parseHeadcountGrowth(org: Record<string, unknown>): Record<string, number> | null {
+  const windows: Array<[string, string]> = [
+    ["six_month", "organization_headcount_six_month_growth"],
+    ["twelve_month", "organization_headcount_twelve_month_growth"],
+    ["twenty_four_month", "organization_headcount_twenty_four_month_growth"],
+  ]
+  const out: Record<string, number> = {}
+  for (const [key, apolloKey] of windows) {
+    const n = numOrNull(org[apolloKey])
+    if (n !== null) out[key] = n
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
+
+// Apollo devuelve hasta ~160 keywords por empresa (medido en produccion).
+// Guardamos las primeras 50: vienen por relevancia y el resto queda intacto en
+// el payload crudo del checkpoint.
+const MAX_KEYWORDS = 50
+// Tope de seguridad, no de recorte: la mediana ronda las 55 tecnologias por
+// empresa pero Carrefour trae 221 (medido en produccion). Se deja holgado para
+// no truncar en silencio; el payload crudo del checkpoint queda igual completo.
+const MAX_TECHNOLOGIES = 500
 
 export function parseOrganizationResponse(resp: unknown): ApolloOrganization | null {
   if (!resp || typeof resp !== "object") return null
@@ -169,6 +240,8 @@ export function parseOrganizationResponse(resp: unknown): ApolloOrganization | n
   if (!org || typeof org !== "object") return null
   const id = org.id as string | undefined
   if (!id) return null
+  // annual_revenue puede venir como float grande; la columna destino es bigint.
+  const revenue = numOrNull(org.annual_revenue)
   return {
     id,
     name: (org.name as string | undefined) || null,
@@ -178,5 +251,30 @@ export function parseOrganizationResponse(resp: unknown): ApolloOrganization | n
     employeesCount: (org.estimated_num_employees as number | undefined) || null,
     linkedinUrl: (org.linkedin_url as string | undefined) || null,
     country: (org.country as string | undefined) || null,
+    logoUrl: strOrNull(org.logo_url),
+    description: strOrNull(org.short_description),
+    foundedYear: numOrNull(org.founded_year),
+    annualRevenue: revenue === null ? null : Math.round(revenue),
+    technologies: strArray(org.technology_names, MAX_TECHNOLOGIES),
+    keywords: strArray(org.keywords, MAX_KEYWORDS),
+    publiclyTradedSymbol: strOrNull(org.publicly_traded_symbol),
+    publiclyTradedExchange: strOrNull(org.publicly_traded_exchange),
+    headcountGrowth: parseHeadcountGrowth(org),
   }
+}
+
+/**
+ * Parsea el response de /organizations/bulk_enrich.
+ *
+ * Apollo devuelve `{ organizations: [...] }` en el MISMO orden en que se
+ * pidieron los dominios, con huecos para los que no matchearon. Preservar ese
+ * orden es lo que permite al caller mapear cada resultado a su company_id, asi
+ * que devolvemos un array con `null` en los huecos en vez de filtrarlos.
+ */
+export function parseBulkOrganizationResponse(resp: unknown): Array<ApolloOrganization | null> {
+  if (!resp || typeof resp !== "object") return []
+  const r = resp as Record<string, unknown>
+  const list = r.organizations
+  if (!Array.isArray(list)) return []
+  return list.map((item) => parseOrganizationResponse(item))
 }

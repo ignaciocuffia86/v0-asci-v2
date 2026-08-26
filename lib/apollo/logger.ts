@@ -10,6 +10,10 @@ import { createAdminClient } from "@/lib/supabase/admin"
 
 export type ApolloEndpoint =
   | "organizations/enrich"
+  // Bulk: hasta 10 dominios por llamada (Fase 1, ago-2026)
+  | "organizations/bulk_enrich"
+  // Cuota real de la cuenta; requiere master key
+  | "usage_stats/api_usage_stats"
   | "mixed_people/search"
   | "people/match"
   | "people/match:phone"

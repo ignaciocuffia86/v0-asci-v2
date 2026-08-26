@@ -14,15 +14,13 @@ import { createAdminClient } from "@/lib/supabase/admin"
 import { apolloRequest } from "./client"
 import { normalizeDomain } from "./domain"
 import { parseOrganizationResponse, type ApolloOrganization } from "./parsers"
+import { applyCompanyEnrichment, buildNotFoundUpdate, type CompanyEnrichTarget } from "./company-writer"
 
 const ORG_TTL_DAYS = 60
 const NOT_FOUND_TTL_DAYS = 7
 
-type Company = {
-  id: string
+type Company = CompanyEnrichTarget & {
   name: string | null
-  website: string | null
-  linkedin_url?: string | null
   apollo_organization_id: string | null
   apollo_org_status: string | null
   apollo_org_synced_at: string | null
@@ -48,7 +46,9 @@ export async function resolveCompanyOrganizationId(
 
   const { data: company, error } = await supabase
     .from("companies")
-    .select("id,name,website,linkedin_url,apollo_organization_id,apollo_org_status,apollo_org_synced_at")
+    .select(
+      "id,name,website,linkedin_url,country,logo_url,description,apollo_organization_id,apollo_org_status,apollo_org_synced_at",
+    )
     .eq("id", companyId)
     .single<Company>()
 
@@ -88,6 +88,10 @@ export async function resolveCompanyOrganizationId(
   }
 
   let found: ApolloOrganization | null = null
+  // Con que dominio matcheo y que devolvio Apollo: los necesita el checkpoint
+  // para poder promover campos nuevos sin volver a llamar a la API.
+  let foundWithDomain: string | null = null
+  let foundRaw: unknown = null
   let lastStatus = 0
   let lastError = ""
 
@@ -113,34 +117,38 @@ export async function resolveCompanyOrganizationId(
     }
 
     found = parseOrganizationResponse(result.data)
-    if (found) break
+    if (found) {
+      foundWithDomain = domain
+      foundRaw = result.data
+      break
+    }
   }
 
   if (found) {
-    await supabase
-      .from("companies")
-      .update({
-        apollo_organization_id: found.id,
-        apollo_org_status: "found",
-        apollo_org_synced_at: new Date().toISOString(),
-        apollo_employees_count: found.employeesCount,
-        apollo_industry: found.industry,
-      })
-      .eq("id", companyId)
+    // Antes se escribian 5 columnas y se tiraba el resto del payload (tecnologias,
+    // facturacion, LinkedIn, descripcion...). applyCompanyEnrichment persiste todo
+    // respetando la precedencia: apollo_* siempre, genericas solo si estan vacias.
+    await applyCompanyEnrichment(supabase, company, found, foundWithDomain, foundRaw)
 
     return { status: "found", organizationId: found.id, organization: found }
   }
 
   // Not found: marcamos con TTL para no reintentar
   if (lastStatus === 404 || (lastStatus >= 200 && lastStatus < 300)) {
+    await supabase.from("companies").update(buildNotFoundUpdate()).eq("id", companyId)
+
     await supabase
-      .from("companies")
-      .update({
-        apollo_organization_id: null,
-        apollo_org_status: "not_found",
-        apollo_org_synced_at: new Date().toISOString(),
-      })
-      .eq("id", companyId)
+      .schema("v3")
+      .from("apollo_company_enrichment")
+      .upsert(
+        {
+          company_id: companyId,
+          requested_domain: domains[0] ?? null,
+          status: "not_found",
+          processed_at: new Date().toISOString(),
+        },
+        { onConflict: "company_id" },
+      )
 
     return { status: "not_found", reason: "Empresa no indexada en Apollo" }
   }
