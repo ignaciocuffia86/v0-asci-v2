@@ -23,6 +23,8 @@ const MCP_SERVER_URL = "https://bot.bigua.lat/api/v3/mcp/server/mcp"
 const MCP_EXPLORE_URL = "https://bot.bigua.lat/api/v3/mcp/explore/mcp"
 /** MCP Perfiles: búsqueda de talento persona-first, con contacto personal. */
 const MCP_PROFILES_URL = "https://bot.bigua.lat/api/v3/mcp/profiles/mcp"
+/** MCP Admin: las MISMAS tools que el estándar, sin topes y sin preguntar por cada gasto. */
+const MCP_ADMIN_URL = "https://bot.bigua.lat/api/v3/mcp/admin/mcp"
 
 const KEY_TYPE_LABELS: Record<string, { label: string; description: string }> = {
   standard: { label: "Estándar", description: "Señales procesadas, research e icebreakers." },
@@ -165,6 +167,10 @@ export function ApiKeysView({ workspaces, defaultWorkspaceId, isSuperAdmin }: Ap
             { url: MCP_SERVER_URL, ...KEY_TYPE_LABELS.standard },
             { url: MCP_EXPLORE_URL, ...KEY_TYPE_LABELS.explore },
             { url: MCP_PROFILES_URL, ...KEY_TYPE_LABELS.profiles },
+            // La URL admin se muestra solo a un superadmin global: es la única
+            // persona que puede emitir una key que la abra, así que a cualquier
+            // otra le sería ruido.
+            ...(isSuperAdmin ? [{ url: MCP_ADMIN_URL, ...KEY_TYPE_LABELS.admin }] : []),
           ] as const).map((server) => (
             <div key={server.url} className="flex flex-col gap-2 rounded-lg border bg-muted/50 p-4">
               <div className="flex items-center gap-2">

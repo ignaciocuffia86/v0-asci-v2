@@ -273,8 +273,8 @@ La regla que no se negocia: **admin no significa "sin medición", significa "sin
 | 1 | ~~Arreglar scopes de `standard`~~ ✅ | — |
 | 2 | ~~`estimate_batch` + `batchPlanHash` de lote~~ ✅ | — |
 | 3 | ~~Presupuesto en USD por workspace~~ — **descartado por ahora**: medir antes de trabar | — |
-| 4 | Flag `unrestricted` en los guards de capa 2 | 3 |
-| 5 | Server `admin` con sus propias descripciones e `instructions` | 4 |
+| 4 | ~~Flag `unrestricted` en los guards de capa 2~~ ✅ | — |
+| 5 | ~~Server `admin` con sus propias descripciones e `instructions`~~ ✅ | 4 |
 | 6 | ~~Export (`create_export`)~~ ✅ | — |
 
 Los pasos 2, 3 y 6 son las Fases 2 y 3 del plan de ejecución directa (`docs/plan-mcp-ejecucion-directa.md`): el perfil admin **no es un proyecto paralelo**, es lo que queda habilitado cuando ese plan termina.
