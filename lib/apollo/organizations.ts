@@ -47,7 +47,8 @@ export async function resolveCompanyOrganizationId(
   const { data: company, error } = await supabase
     .from("companies")
     .select(
-      "id,name,website,linkedin_url,country,logo_url,description,apollo_organization_id,apollo_org_status,apollo_org_synced_at",
+      "id,name,website,linkedin_url,country,logo_url,description,linkedin_company_id," +
+        "apollo_organization_id,apollo_org_status,apollo_org_synced_at",
     )
     .eq("id", companyId)
     .single<Company>()

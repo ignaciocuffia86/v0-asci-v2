@@ -175,6 +175,18 @@ export type ApolloOrganization = {
   publiclyTradedExchange: string | null
   /** Crecimiento de headcount a 6/12/24 meses; Apollo solo lo manda a veces */
   headcountGrowth: Record<string, number> | null
+  // ── Fase 1.2: campos medidos con alta cobertura sobre payloads reales ──
+  /** Headcount por area. 100% de cobertura; el campo mas valioso del payload */
+  departmentalHeadCount: Record<string, number> | null
+  phone: string | null
+  /** Todas las industrias; `industry` guarda la principal */
+  industries: string[]
+  naicsCodes: string[]
+  sicCodes: string[]
+  city: string | null
+  state: string | null
+  /** ID numerico de LinkedIn — alimenta linkedin_company_id si esta vacia */
+  linkedinUid: number | null
 }
 
 /** Lista de strings defensiva: Apollo a veces manda null y a veces objetos. */
@@ -224,6 +236,33 @@ function parseHeadcountGrowth(org: Record<string, unknown>): Record<string, numb
   return Object.keys(out).length > 0 ? out : null
 }
 
+/**
+ * Headcount por area. Apollo lo manda como objeto plano
+ * {"information_technology": 700, "engineering": 472, ...} con 100% de
+ * cobertura sobre los payloads medidos. Se filtran las claves no numericas
+ * porque el shape ya cambio antes sin aviso.
+ */
+function parseDepartmentalHeadCount(value: unknown): Record<string, number> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const out: Record<string, number> = {}
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    const n = numOrNull(v)
+    if (n !== null) out[k] = n
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
+
+/**
+ * El telefono viene anidado: {number, source, sanitized_number}. Preferimos el
+ * sanitizado, que es el unico apto para discar sin limpiar.
+ */
+function parsePhone(value: unknown): string | null {
+  if (typeof value === "string") return strOrNull(value)
+  if (!value || typeof value !== "object") return null
+  const p = value as Record<string, unknown>
+  return strOrNull(p.sanitized_number) ?? strOrNull(p.number)
+}
+
 // Apollo devuelve hasta ~160 keywords por empresa (medido en produccion).
 // Guardamos las primeras 50: vienen por relevancia y el resto queda intacto en
 // el payload crudo del checkpoint.
@@ -240,8 +279,10 @@ export function parseOrganizationResponse(resp: unknown): ApolloOrganization | n
   if (!org || typeof org !== "object") return null
   const id = org.id as string | undefined
   if (!id) return null
-  // annual_revenue puede venir como float grande; la columna destino es bigint.
-  const revenue = numOrNull(org.annual_revenue)
+  // Facturacion: `organization_revenue` cubre el 100% de los payloads medidos
+  // contra el 53% de `annual_revenue`, y cuando ambos existen NUNCA difieren
+  // (verificado sobre 134 payloads reales). Se prefiere el que mas cubre.
+  const revenue = numOrNull(org.annual_revenue) ?? numOrNull(org.organization_revenue)
   return {
     id,
     name: (org.name as string | undefined) || null,
@@ -260,6 +301,14 @@ export function parseOrganizationResponse(resp: unknown): ApolloOrganization | n
     publiclyTradedSymbol: strOrNull(org.publicly_traded_symbol),
     publiclyTradedExchange: strOrNull(org.publicly_traded_exchange),
     headcountGrowth: parseHeadcountGrowth(org),
+    departmentalHeadCount: parseDepartmentalHeadCount(org.departmental_head_count),
+    phone: parsePhone(org.primary_phone) ?? strOrNull(org.sanitized_phone),
+    industries: strArray(org.industries, 20),
+    naicsCodes: strArray(org.naics_codes, 20),
+    sicCodes: strArray(org.sic_codes, 20),
+    city: strOrNull(org.city),
+    state: strOrNull(org.state),
+    linkedinUid: numOrNull(org.linkedin_uid),
   }
 }
 

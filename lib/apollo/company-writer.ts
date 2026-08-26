@@ -28,6 +28,13 @@ export type CompanyEnrichTarget = {
   country: string | null
   logo_url: string | null
   description: string | null
+  /** Solo se llena si esta vacia; Apollo trae el uid en el 99% de los casos */
+  linkedin_company_id?: number | null
+}
+
+/** Violacion de constraint UNIQUE en Postgres. */
+function isUniqueViolation(error: { code?: string | null }): boolean {
+  return error?.code === "23505"
 }
 
 /** '' cuenta como vacio: hay ~66k filas historicas con string vacio. */
@@ -67,6 +74,14 @@ export function buildCompanyUpdate(
     apollo_headcount_growth: org.headcountGrowth,
     apollo_publicly_traded_symbol: org.publiclyTradedSymbol,
     apollo_publicly_traded_exchange: org.publiclyTradedExchange,
+    // ── Fase 1.2 ──
+    apollo_departmental_head_count: org.departmentalHeadCount,
+    apollo_phone: org.phone,
+    apollo_industries: org.industries.length > 0 ? org.industries : null,
+    apollo_naics_codes: org.naicsCodes.length > 0 ? org.naicsCodes : null,
+    apollo_sic_codes: org.sicCodes.length > 0 ? org.sicCodes : null,
+    apollo_city: org.city,
+    apollo_state: org.state,
   }
 
   // ── Columnas genericas: solo huecos ──
@@ -92,6 +107,15 @@ export function buildCompanyUpdate(
   if (isEmpty(current.description) && !isEmpty(org.description)) {
     patch.description = org.description
     filledColumns.push("description")
+  }
+  // linkedin_company_id es el id numerico de LinkedIn. Apollo lo trae en el
+  // 99.3% de los payloads y a 60 de 134 empresas medidas les faltaba.
+  if (
+    (current.linkedin_company_id === null || current.linkedin_company_id === undefined) &&
+    org.linkedinUid !== null
+  ) {
+    patch.linkedin_company_id = org.linkedinUid
+    filledColumns.push("linkedin_company_id")
   }
 
   return { patch, filledColumns }
@@ -138,7 +162,26 @@ export async function applyCompanyEnrichment(
 ): Promise<string[]> {
   const { patch, filledColumns } = buildCompanyUpdate(current, org)
 
-  const { error } = await supabase.from("companies").update(patch).eq("id", current.id)
+  let { error } = await supabase.from("companies").update(patch).eq("id", current.id)
+
+  // `linkedin_company_id` tiene UNIQUE. Que Apollo devuelva un uid que otra fila
+  // ya tiene NO es un error de escritura: es la señal de que las dos filas son
+  // la misma empresa (duplicado sin mergear) o de que una de las dos tiene el
+  // id mal asignado. Medido en produccion: 2 colisiones sobre 134 empresas.
+  //
+  // Romper el enrichment por eso seria perder la empresa entera —y su credito—
+  // por un campo secundario. Se reintenta sin ese campo y la colision queda
+  // anotada en el checkpoint para poder revisarla despues.
+  let uidEnConflicto: number | null = null
+  if (error && isUniqueViolation(error) && "linkedin_company_id" in patch) {
+    uidEnConflicto = patch.linkedin_company_id as number
+    const { linkedin_company_id: _descartado, ...sinUid } = patch
+    const reintento = await supabase.from("companies").update(sinUid).eq("id", current.id)
+    error = reintento.error
+    const i = filledColumns.indexOf("linkedin_company_id")
+    if (i !== -1) filledColumns.splice(i, 1)
+  }
+
   if (error) throw new Error(`No se pudo actualizar companies ${current.id}: ${error.message}`)
 
   await supabase
@@ -152,7 +195,9 @@ export async function applyCompanyEnrichment(
         apollo_organization_id: org.id,
         payload: unwrapOrganization(rawPayload),
         filled_columns: filledColumns,
-        error_message: null,
+        error_message: uidEnConflicto
+          ? `linkedin_uid ${uidEnConflicto} ya pertenece a otra company: posible duplicado o id mal asignado`
+          : null,
         processed_at: new Date().toISOString(),
       },
       { onConflict: "company_id" },
