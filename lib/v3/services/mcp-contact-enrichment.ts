@@ -37,7 +37,7 @@ import { readSearchCache, writeSearchCache } from "@/lib/apollo/search-cache"
 import { hashSearchParams, type SearchParams } from "@/lib/apollo/query-hash"
 import { sanitizeTitleList } from "@/lib/apollo/title-validator"
 import { normalizeDomain } from "@/lib/apollo/domain"
-import { resolveCompanyOrganizationId } from "@/lib/apollo/organizations"
+import { hasEnrichment, resolveCompanyOrganizationId } from "@/lib/apollo/organizations"
 import { recordTitleObservations, recordTitleSuccess } from "@/lib/apollo/title-catalog"
 import { requireSavedAccount } from "@/lib/v3/mcp-account-lifecycle"
 import type { RoleOrigin } from "@/lib/v3/mcp-contact-coverage"
@@ -152,7 +152,7 @@ export async function prepareContactEnrichment(
   //    deriva de `website` con normalizeDomain.
   const { data: company, error: companyError } = await admin
     .from("companies")
-    .select("id, name, website, country, apollo_organization_id")
+    .select("id, name, website, country, apollo_organization_id, apollo_technologies")
     .eq("id", input.companyId)
     .maybeSingle()
 
@@ -166,7 +166,16 @@ export async function prepareContactEnrichment(
   // rendirse hay que intentar resolverla contra Apollo: `organizations/enrich`
   // acepta `name` cuando no hay dominio y cuesta 0 créditos, así que resolver acá
   // es gratis y evita un COMPANY_NOT_RESOLVABLE innecesario.
-  let organizationId = company.apollo_organization_id ?? null
+  // Tener organization_id guardado NO significa que la empresa este enriquecida.
+  // Durante meses el resolvedor escribio solo 5 columnas y descarto el resto del
+  // payload: quedaron 63 empresas con org_id y CERO datos, ya pagadas. Si este
+  // atajo las diera por hechas, el descubrimiento de decisores las visitaria una
+  // y otra vez sin completarlas nunca — que es exactamente lo que pasaba.
+  //
+  // El arreglo equivalente en resolveCompanyOrganizationId no alcanza para este
+  // camino: aca se cortocircuita ANTES de llamarlo.
+  const enriquecida = hasEnrichment(company)
+  let organizationId = enriquecida ? (company.apollo_organization_id ?? null) : null
   let resolvedOrganization: ResolvedOrgIdentity | null = organizationId
     ? {
         method: "stored",
