@@ -13,7 +13,7 @@
 import { createAdminClient } from "@/lib/supabase/admin"
 import { apolloRequest } from "./client"
 import { normalizeDomain } from "./domain"
-import { parseOrganizationResponse, type ApolloOrganization } from "./parsers"
+import { countEnrichCredits, parseOrganizationResponse, type ApolloOrganization } from "./parsers"
 import { applyCompanyEnrichment, buildNotFoundUpdate, type CompanyEnrichTarget } from "./company-writer"
 
 const ORG_TTL_DAYS = 60
@@ -107,7 +107,12 @@ export async function resolveCompanyOrganizationId(
       bookmarkId: opts.bookmarkId,
       companyId,
       requestBody,
-      creditsEstimated: 0, // enrich no consume credits
+      // Apollo cobra 1 credito por cuenta resuelta. Antes esto decia
+      // `0, // enrich no consume credits`: esa suposicion venia de confundir el
+      // cupo interno de ASCI por plan (que si es 0 para este paso) con la
+      // facturacion de Apollo, y dejaba el ledger de apollo_api_calls —el que
+      // alimenta get_ai_usage y el dashboard de admin— ciego al gasto real.
+      creditsEstimated: countEnrichCredits,
     })
 
     if (!result.ok) {

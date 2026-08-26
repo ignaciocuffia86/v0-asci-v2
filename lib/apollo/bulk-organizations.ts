@@ -18,7 +18,7 @@
 
 import { apolloRequest } from "./client"
 import { normalizeDomain } from "./domain"
-import { parseBulkOrganizationResponse } from "./parsers"
+import { countEnrichCredits, parseBulkOrganizationResponse } from "./parsers"
 import type { ApolloOrganization } from "./parsers"
 import { extractRateLimits, type ApolloRateLimits } from "./rate-limits"
 
@@ -97,7 +97,9 @@ export async function bulkEnrichOrganizations(
     method: "POST",
     userId: opts.userId ?? null,
     requestBody: { domains: sendable.map((s) => s.domain) },
-    creditsEstimated: 0,
+    // 1 credito por cuenta que matchee, no por dominio enviado. bulk_size deja
+    // los dos numeros anotados para poder reconciliar contra Apollo.
+    creditsEstimated: countEnrichCredits,
     extraMetadata: { bulk_size: sendable.length },
   })
 

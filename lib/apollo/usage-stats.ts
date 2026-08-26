@@ -3,9 +3,10 @@
  *
  * Es la unica fuente confiable para dos preguntas que no se pueden contestar
  * leyendo nuestro codigo:
- *   1. Cuanto cuesta REALMENTE cada endpoint (nuestro `creditsEstimated: 0`
- *      para organizations/enrich es una suposicion nuestra, no la contabilidad
- *      de Apollo).
+ *   1. La contabilidad REAL de Apollo, contra la que reconciliar la nuestra.
+ *      `organizations/enrich` cobra 1 credito por cuenta resuelta; lo anotamos
+ *      en apollo_api_calls.credits_estimated, pero ese numero sigue siendo
+ *      NUESTRA cuenta. Solo el contador de Apollo confirma si acertamos.
  *   2. Cuales son los limites por minuto/hora/dia de NUESTRO plan.
  *
  * Requiere master API key: con una key comun Apollo devuelve 403. Ese 403 no es
