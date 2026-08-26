@@ -2,7 +2,8 @@ import "server-only"
 
 import { after } from "next/server"
 import { createAdminClient } from "@/lib/supabase/admin"
-import { principalColumns, type McpPrincipal } from "@/lib/v3/mcp-usage"
+import { principalColumns, getMonthlyPoolUsage, type McpPrincipal } from "@/lib/v3/mcp-usage"
+import { getContactEnrichmentLimits } from "@/lib/v3/plans"
 import { saveAccount } from "@/lib/v3/mcp-account-lifecycle"
 import { createResearchBatch, runResearchJob } from "./research-pipeline"
 
@@ -36,6 +37,26 @@ export type BatchJobItemState = {
  * Sin eso, un reintento del cliente MCP —que es normal ante un timeout— gastaría
  * el cupo dos veces, y el cupo de cuentas no se recupera solo.
  */
+/**
+ * Cuántos créditos de Apollo puede autorizar un lote.
+ *
+ * Pura y aparte para poder probar el único caso que importa de verdad: que una
+ * credencial CON topes no pueda usar el presupuesto del lote para saltear su
+ * cupo mensual. Cotizar 60 cuentas x 10 contactos en un plan de 150 créditos no
+ * puede autorizar 600.
+ *
+ * Para una credencial sin topes el peor caso pasa entero: no hay cupo mensual que
+ * respetar, y el techo es justamente lo que se cotizó y se confirmó.
+ */
+export function authorizedBatchCredits(
+  worstCase: number,
+  unrestricted: boolean,
+  monthlyRemaining: number,
+): number {
+  if (unrestricted) return worstCase
+  return Math.min(worstCase, Math.max(0, monthlyRemaining))
+}
+
 export async function createBatchJob(
   principal: McpPrincipal,
   params: { batchPlanHash: string; userConfirmed: boolean },
@@ -88,6 +109,28 @@ export async function createBatchJob(
   const wantsEnrichment = plan.operation !== "research"
   const wantsResearch = plan.operation !== "enrichment"
 
+  // ── El presupuesto de Apollo que este lote autoriza ────────────────────────
+  //
+  // El peor caso es cuentas x contactos por cuenta, que es el número que
+  // `estimate_batch` le mostró a quien confirmó el hash.
+  //
+  // Pero para una credencial CON topes ese número se recorta al cupo mensual que
+  // le queda al plan. Sin ese recorte, el presupuesto del lote se habría
+  // convertido en una forma de saltear el cupo: cotizás 60 cuentas x 10
+  // contactos y gastás 600 créditos en un plan que permite 150. El techo del
+  // lote reemplaza al mensual solo donde no hay tope que respetar.
+  const worstCaseCredits =
+    wantsEnrichment && payload.contactsPerAccount ? companyIds.length * payload.contactsPerAccount : null
+
+  let authorizedCredits = worstCaseCredits
+  if (worstCaseCredits !== null && !principal.unrestricted) {
+    const [limits, used] = await Promise.all([
+      getContactEnrichmentLimits(principal.workspaceId),
+      getMonthlyPoolUsage(principal.workspaceId, "apollo_enrichment"),
+    ])
+    authorizedCredits = authorizedBatchCredits(worstCaseCredits, false, limits.monthlyUnits - used)
+  }
+
   const cols = principalColumns(principal)
   const { data: job, error: jobError } = await admin
     .schema("v3")
@@ -101,6 +144,10 @@ export async function createBatchJob(
       operation: plan.operation,
       enrichment_roles: wantsEnrichment ? payload.roles : null,
       contacts_per_account: wantsEnrichment ? payload.contactsPerAccount : null,
+      // Calculado arriba desde el plan CONGELADO, nunca desde el input: es lo que
+      // convierte al batchPlanHash de una descripción del trabajo en una
+      // autorización de gasto.
+      enrichment_credits_authorized: authorizedCredits,
       accounts_total: companyIds.length,
     })
     .select("id")
@@ -273,6 +320,16 @@ export async function getBatchJob(principal: McpPrincipal, jobId: string) {
       ? {
           roles: job.enrichment_roles,
           contactsPerAccount: job.contacts_per_account,
+          // El presupuesto que este lote AUTORIZÓ y lo que va consumido. Es el
+          // techo real del gasto en Apollo mientras se trabaja el lote: cuando
+          // llega a cero, para. Un lote nuevo exige cotizar y confirmar de nuevo.
+          credits: {
+            authorized: job.enrichment_credits_authorized ?? null,
+            spent: job.enrichment_credits_spent ?? 0,
+            remaining: job.enrichment_credits_authorized === null
+              ? null
+              : Math.max(0, (job.enrichment_credits_authorized as number) - ((job.enrichment_credits_spent as number) ?? 0)),
+          },
           readyToPrepare: readyToPrepare.length,
           note: "Los enrichments NO se preparan por adelantado: una preparación vive 30 minutos y el research del lote tarda más, así que vencerían todas y dejarían créditos de Apollo reservados sin usarse. Se preparan cuando la cuenta está lista.",
         }
