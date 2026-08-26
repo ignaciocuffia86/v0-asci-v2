@@ -107,6 +107,25 @@ export function buildNotFoundUpdate(now: Date = new Date()): Record<string, unkn
 }
 
 /**
+ * Normaliza el payload del checkpoint a UNA sola forma: el objeto
+ * `organization` pelado.
+ *
+ * `/organizations/enrich` responde `{ organization: {...} }` y `bulk_enrich`
+ * devuelve los objetos sueltos dentro de un array. Si guardamos cada uno como
+ * viene, la tabla termina con dos shapes y toda query de promocion futura
+ * (`payload->>'technology_names'`) falla en silencio para la mitad de las
+ * filas. Guardar siempre el objeto interno hace que el checkpoint sea
+ * consultable de una sola manera.
+ */
+export function unwrapOrganization(rawPayload: unknown): unknown {
+  if (!rawPayload || typeof rawPayload !== "object") return null
+  const r = rawPayload as Record<string, unknown>
+  const inner = r.organization
+  if (inner && typeof inner === "object") return inner
+  return rawPayload
+}
+
+/**
  * Aplica el enrichment y deja el rastro en el checkpoint.
  * Devuelve las columnas genericas que se llenaron.
  */
@@ -131,7 +150,7 @@ export async function applyCompanyEnrichment(
         requested_domain: requestedDomain,
         status: "found",
         apollo_organization_id: org.id,
-        payload: rawPayload ?? null,
+        payload: unwrapOrganization(rawPayload),
         filled_columns: filledColumns,
         error_message: null,
         processed_at: new Date().toISOString(),

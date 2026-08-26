@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest"
-import { buildCompanyUpdate, buildNotFoundUpdate } from "@/lib/apollo/company-writer"
+import {
+  buildCompanyUpdate,
+  buildNotFoundUpdate,
+  unwrapOrganization,
+} from "@/lib/apollo/company-writer"
 import type { ApolloOrganization } from "@/lib/apollo/parsers"
 
 const NOW = new Date("2026-08-26T12:00:00.000Z")
@@ -131,5 +135,32 @@ describe("buildNotFoundUpdate", () => {
     expect(patch.apollo_org_status).toBe("not_found")
     expect(patch.apollo_organization_id).toBeNull()
     expect(Object.keys(patch)).toHaveLength(3)
+  })
+})
+
+describe("unwrapOrganization — una sola forma en el checkpoint", () => {
+  it("desenvuelve la respuesta de /organizations/enrich", () => {
+    expect(unwrapOrganization({ organization: { id: "o", technology_names: ["SAP"] } })).toEqual({
+      id: "o",
+      technology_names: ["SAP"],
+    })
+  })
+
+  it("deja pasar el objeto suelto de bulk_enrich", () => {
+    expect(unwrapOrganization({ id: "o", technology_names: ["SAP"] })).toEqual({
+      id: "o",
+      technology_names: ["SAP"],
+    })
+  })
+
+  it("las dos rutas convergen a la misma forma", () => {
+    const suelto = { id: "o", technology_names: ["SAP"] }
+    expect(unwrapOrganization({ organization: suelto })).toEqual(unwrapOrganization(suelto))
+  })
+
+  it("no explota con entradas invalidas", () => {
+    expect(unwrapOrganization(null)).toBeNull()
+    expect(unwrapOrganization("nope")).toBeNull()
+    expect(unwrapOrganization({ organization: null })).toEqual({ organization: null })
   })
 })

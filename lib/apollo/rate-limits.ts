@@ -52,7 +52,7 @@ export function extractRateLimits(
       // Guardamos cualquier header que hable de cuota, incluso los que todavia
       // no sabemos interpretar: si Apollo renombra algo, queda la evidencia.
       if (
-        /^(x-)?(rate-?limit|minute|hourly|daily)/.test(k) ||
+        /^(x-)?(rate-?limit|minute|hourly|hour|daily|day|24-hour)/.test(k) ||
         k === "retry-after"
       ) {
         raw[k] = value
@@ -67,21 +67,37 @@ export function extractRateLimits(
     return null
   }
 
+  // Apollo no usa UN nombre por ventana sino varios. Medido en produccion
+  // (26-ago-2026) nuestra cuenta devuelve `x-rate-limit-24-hour`, NO
+  // `x-rate-limit-daily`. Sin estos alias la ventana diaria quedaba en null
+  // aunque Apollo la estuviera informando. Se prueban todos los conocidos.
+  const ALIASES: Record<"minute" | "hourly" | "daily", string[]> = {
+    minute: ["minute"],
+    hourly: ["hourly", "hour"],
+    daily: ["24-hour", "daily", "day"],
+  }
+
   const window = (
-    prefix: "minute" | "hourly" | "daily",
+    win: "minute" | "hourly" | "daily",
     generic: boolean,
-  ): ApolloRateLimit => ({
-    limit: num(
-      get(`x-rate-limit-${prefix}`, ...(generic ? ["x-ratelimit-limit"] : [])),
-    ),
-    remaining: num(
-      get(
-        `x-${prefix}-requests-left`,
-        ...(generic ? ["x-ratelimit-remaining"] : []),
+  ): ApolloRateLimit => {
+    const names = ALIASES[win]
+    return {
+      limit: num(
+        get(
+          ...names.map((n) => `x-rate-limit-${n}`),
+          ...(generic ? ["x-ratelimit-limit"] : []),
+        ),
       ),
-    ),
-    used: num(get(`x-${prefix}-usage`)),
-  })
+      remaining: num(
+        get(
+          ...names.map((n) => `x-${n}-requests-left`),
+          ...(generic ? ["x-ratelimit-remaining"] : []),
+        ),
+      ),
+      used: num(get(...names.map((n) => `x-${n}-usage`))),
+    }
+  }
 
   return {
     // Solo la ventana de minuto hereda los headers genericos X-RateLimit-*:

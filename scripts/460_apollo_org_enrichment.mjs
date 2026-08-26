@@ -41,9 +41,15 @@ const getArg = (name, def) => {
   return i !== -1 && args[i + 1] ? Number(args[i + 1]) : def
 }
 const LIMIT = getArg("--limit", 100)
-// Pausa entre llamadas. Apollo limita por ventana de minuto y los bulk cuentan
-// ~1/10 del limite del endpoint simple, asi que vamos conservadores.
-const SLEEP_MS = getArg("--sleep", 1200)
+// Pausa entre llamadas. MEDIDO en produccion el 26-ago-2026 sobre nuestra
+// cuenta (headers de organizations/enrich):
+//     x-rate-limit-minute : 1000
+//     x-rate-limit-hourly : (vacio -> sin tope)
+//     x-rate-limit-24-hour: (vacio -> sin tope)
+// O sea ~16 req/s. El default de 150ms deja ~6.7 req/s: menos de la mitad de
+// la cuota, con margen para que convivan otras llamadas de la app. El script
+// igual frena solo si algun header de cuota se acerca a cero.
+const SLEEP_MS = getArg("--sleep", 150)
 const COMMIT = args.includes("--commit")
 const RETRY_ERRORS = args.includes("--retry-errors")
 
@@ -260,6 +266,14 @@ async function main() {
     stats.enviadas += enviables.length
     ultimoRateLimit = r.rateLimits
 
+    // Freno preventivo: si la ventana de minuto se agota, esperar a que rote
+    // en vez de comerse un 429.
+    const quedan = Number(r.rateLimits["x-minute-requests-left"] ?? NaN)
+    if (Number.isFinite(quedan) && quedan <= 20) {
+      console.log(`\n[460]   cuota de minuto casi agotada (${quedan}), esperando 60s`)
+      await sleep(60_000)
+    }
+
     if (!r.ok) {
       stats.errores += enviables.length
       console.log(`ERROR HTTP ${r.status}: ${JSON.stringify(r.data).slice(0, 200)}`)
@@ -362,6 +376,9 @@ async function main() {
                  apollo_organization_id = EXCLUDED.apollo_organization_id,
                  payload = EXCLUDED.payload, filled_columns = EXCLUDED.filled_columns,
                  processed_at = now(), attempts = v3.apollo_company_enrichment.attempts + 1`,
+          // orgs[i] ya es el objeto pelado: bulk_enrich devuelve las
+          // organizaciones sueltas. Misma forma que guarda el writer de TS
+          // (ver unwrapOrganization en lib/apollo/company-writer.ts).
           [company.id, domain, org.id, JSON.stringify(orgs[i]), filled],
         )
       }
