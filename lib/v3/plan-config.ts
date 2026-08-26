@@ -108,4 +108,20 @@ export const PLAN_CONFIG: Record<WorkspacePlan, PlanConfig> = {
   },
 }
 
+/**
+ * Precio del crédito de Apollo: 1.000 créditos = US$ 10.
+ *
+ * Vive acá, con la configuración de planes, y no en la tool que reporta costos,
+ * porque es un dato comercial que va a cambiar cuando cambie el contrato — y
+ * cuando cambie tiene que cambiar en UN lugar.
+ *
+ * OJO con qué se multiplica: el crédito NO es la unidad de consumo. Apollo cobra
+ * 1 crédito por email y **5 por teléfono** (ver docs/plan-mcp-admin.md §8). Hoy
+ * `contact_enrichment_runs.credits_spent` es un entero sin desglose y el código
+ * solo revela emails, así que multiplicar el total por este precio es correcto
+ * MIENTRAS no se revelen teléfonos. Cuando entre `includePhone`, hace falta el
+ * desglose por tipo antes de que este número siga siendo cierto.
+ */
+export const APOLLO_USD_PER_CREDIT = 0.01
+
 export const PLAN_ORDER: WorkspacePlan[] = ["trial", "silver", "gold", "platinum"]
