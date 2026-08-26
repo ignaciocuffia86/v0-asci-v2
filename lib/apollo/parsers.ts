@@ -264,6 +264,31 @@ export function parseOrganizationResponse(resp: unknown): ApolloOrganization | n
 }
 
 /**
+ * Cuenta los creditos que cobra un enrichment de organizaciones.
+ *
+ * Apollo cobra 1 credito POR CUENTA RESUELTA, no por request: un
+ * `bulk_enrich` con 10 dominios de los que matchean 6 cuesta 6, no 10 ni 1.
+ * Un dominio que no matchea no se cobra.
+ *
+ * Sirve para las dos formas de respuesta: `{organization:{...}}` del enrich
+ * simple y `{organizations:[...]}` del bulk.
+ *
+ * NOTA: esto es nuestra contabilidad, no la de Apollo. La unica forma de
+ * confirmarla es reconciliar contra el contador real de la cuenta. Por eso el
+ * logger tambien guarda cuantos dominios se enviaron (metadata.bulk_size):
+ * si Apollo cobrara por request y no por cuenta, la diferencia entre ambos
+ * numeros deja el error a la vista en vez de esconderlo.
+ */
+export function countEnrichCredits(resp: unknown): number {
+  if (!resp || typeof resp !== "object") return 0
+  const r = resp as Record<string, unknown>
+  if (Array.isArray(r.organizations)) {
+    return r.organizations.filter((o) => parseOrganizationResponse(o) !== null).length
+  }
+  return parseOrganizationResponse(resp) !== null ? 1 : 0
+}
+
+/**
  * Parsea el response de /organizations/bulk_enrich.
  *
  * Apollo devuelve `{ organizations: [...] }` en el MISMO orden en que se

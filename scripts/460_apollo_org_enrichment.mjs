@@ -41,6 +41,10 @@ const getArg = (name, def) => {
   return i !== -1 && args[i + 1] ? Number(args[i + 1]) : def
 }
 const LIMIT = getArg("--limit", 100)
+// Tope duro de gasto. Apollo cobra 1 credito POR CUENTA RESUELTA, asi que un
+// barrido completo (57.485 dominios, 63% de hit rate medido) son ~36.000
+// creditos. Sin un tope, un --limit mal tipeado se come el saldo del mes.
+const MAX_CREDITS = getArg("--max-credits", 500)
 // Pausa entre llamadas. MEDIDO en produccion el 26-ago-2026 sobre nuestra
 // cuenta (headers de organizations/enrich):
 //     x-rate-limit-minute : 1000
@@ -230,6 +234,7 @@ async function main() {
   const stats = {
     llamadas: 0,
     enviadas: 0,
+    creditos: 0,
     found: 0,
     not_found: 0,
     skipped: 0,
@@ -256,6 +261,15 @@ async function main() {
       enviables.push({ company: c, domain: dom })
     }
     if (enviables.length === 0) continue
+
+    if (stats.creditos >= MAX_CREDITS) {
+      console.log(
+        `\n[460] TOPE DE CREDITOS alcanzado (${stats.creditos}/${MAX_CREDITS}). ` +
+          `Cortando con ${lotes.length - n} lotes sin procesar. ` +
+          `El checkpoint permite reanudar: volver a correr con --max-credits mayor.`,
+      )
+      break
+    }
 
     process.stdout.write(`[460] lote ${n + 1}/${lotes.length} (${enviables.length} dominios)... `)
 
@@ -315,6 +329,8 @@ async function main() {
 
       stats.found++
       foundEnLote++
+      // 1 credito por cuenta resuelta (no por dominio enviado)
+      stats.creditos++
       if (org.technologies.length > 0) {
         stats.conTecnologias++
         stats.tecnologias += org.technologies.length
@@ -400,6 +416,7 @@ async function main() {
   console.log(`  no encontradas         : ${stats.not_found}`)
   console.log(`  sin dominio parseable  : ${stats.skipped}`)
   console.log(`  errores                : ${stats.errores}`)
+  console.log(`  CREDITOS CONSUMIDOS    : ${stats.creditos} (1 por cuenta resuelta, tope ${MAX_CREDITS})`)
   const base = stats.found + stats.not_found
   if (base > 0) console.log(`  hit rate               : ${((stats.found / base) * 100).toFixed(1)}%`)
   if (stats.conTecnologias > 0) {

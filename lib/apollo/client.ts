@@ -14,9 +14,22 @@ import { extractRateLimits, type ApolloRateLimits } from "./rate-limits"
 
 const APOLLO_BASE_URL = "https://api.apollo.io/api/v1"
 
-export type ApolloRequestOpts = Omit<ApolloCallLog, "responseStatus" | "latencyMs" | "errorMessage"> & {
+export type ApolloRequestOpts = Omit<
+  ApolloCallLog,
+  "responseStatus" | "latencyMs" | "errorMessage" | "creditsEstimated"
+> & {
   endpoint: ApolloEndpoint
   maxRetries?: number
+  /**
+   * Creditos que consume la llamada.
+   *
+   * Puede ser una funcion del response porque varios endpoints de Apollo cobran
+   * POR CUENTA DEVUELTA, no por request: `organizations/enrich` cuesta 1 credito
+   * por empresa resuelta, y un `bulk_enrich` de 10 dominios cobra por los que
+   * matchearon, no por los 10. Sin esto el ledger solo puede anotar un numero
+   * fijo decidido ANTES de saber que devolvio Apollo.
+   */
+  creditsEstimated?: number | ((data: unknown) => number)
   // Query params a appender a la URL (URL-encoded). Algunos endpoints de Apollo
   // esperan flags como `reveal_phone_number` y `webhook_url` en la URL, NO en el
   // body. Ver docs oficial de /people/match con phone reveal.
@@ -156,7 +169,10 @@ export async function apolloRequest<T = unknown>(
           totalEntries: opts.totalEntries,
           latencyMs: totalLatency,
           queryHash: opts.queryHash,
-          creditsEstimated: opts.creditsEstimated,
+          creditsEstimated:
+            typeof opts.creditsEstimated === "function"
+              ? opts.creditsEstimated(data)
+              : opts.creditsEstimated,
           extraMetadata: {
             ...(opts.extraMetadata ?? {}),
             attempts: attempt,

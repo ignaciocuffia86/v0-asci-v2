@@ -4,6 +4,7 @@ import {
   parseSearchResponse,
   parseOrganizationResponse,
   parseBulkOrganizationResponse,
+  countEnrichCredits,
   pickBestPhone,
 } from "@/lib/apollo/parsers"
 
@@ -205,5 +206,32 @@ describe("parseBulkOrganizationResponse", () => {
     expect(parseBulkOrganizationResponse(null)).toEqual([])
     expect(parseBulkOrganizationResponse({})).toEqual([])
     expect(parseBulkOrganizationResponse({ organizations: "nope" })).toEqual([])
+  })
+})
+
+describe("countEnrichCredits — Apollo cobra por cuenta resuelta", () => {
+  it("cobra 1 por el enrich simple que matchea", () => {
+    expect(countEnrichCredits({ organization: { id: "o" } })).toBe(1)
+  })
+
+  it("no cobra cuando no matchea", () => {
+    expect(countEnrichCredits({ organization: null })).toBe(0)
+    expect(countEnrichCredits({})).toBe(0)
+  })
+
+  it("en bulk cobra por los que matchearon, NO por los dominios enviados", () => {
+    // 5 dominios enviados, 3 matchean -> 3 creditos
+    const resp = { organizations: [{ id: "a" }, null, { id: "c" }, null, { id: "e" }] }
+    expect(countEnrichCredits(resp)).toBe(3)
+  })
+
+  it("un bulk sin ningun match no cuesta nada", () => {
+    expect(countEnrichCredits({ organizations: [null, null] })).toBe(0)
+  })
+
+  it("no explota con respuestas invalidas", () => {
+    expect(countEnrichCredits(null)).toBe(0)
+    expect(countEnrichCredits("nope")).toBe(0)
+    expect(countEnrichCredits({ organizations: "nope" })).toBe(0)
   })
 })
