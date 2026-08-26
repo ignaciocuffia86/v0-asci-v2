@@ -358,7 +358,8 @@ export interface ContactEnrichmentLimits {
   allowed: boolean
   reason: string | null
   monthlyUnits: number
-  maxRoles: number
+  /** Tope de cargos por ejecución. `null` = sin tope (credencial sin topes). */
+  maxRoles: number | null
   maxContacts: number
   freshnessDays: number
 }
@@ -367,8 +368,20 @@ export interface ContactEnrichmentLimits {
  * Límites de enrichment de contactos para un workspace. Fuente única para la app
  * y para el MCP: ninguna tool debe hardcodear 10 cargos, 10 contactos ni 90 días.
  * Los créditos de Apollo los absorbe ASCI, por eso el tope es por plan.
+ *
+ * `unrestricted` levanta SOLO el tope de cargos. Es deliberado que no levante
+ * `maxContacts`: los cargos son puntería —afinan a quién se busca— mientras que
+ * los contactos son el gasto, porque el crédito se paga por contacto revelado.
+ * Levantar la puntería no cuesta un peso más; levantar el gasto sí, y ese techo
+ * lo mueve el presupuesto del lote, no este flag.
+ *
+ * El tope de cargos es un límite de plan y el perfil admin existe para no
+ * tenerlos. `maxRoles: null` significa "sin tope", nunca "cero".
  */
-export async function getContactEnrichmentLimits(workspaceId: string): Promise<ContactEnrichmentLimits> {
+export async function getContactEnrichmentLimits(
+  workspaceId: string,
+  unrestricted = false,
+): Promise<ContactEnrichmentLimits> {
   const plan = await getWorkspacePlan(workspaceId)
   const config = PLAN_CONFIG[plan]
   return {
@@ -378,7 +391,7 @@ export async function getContactEnrichmentLimits(workspaceId: string): Promise<C
       ? null
       : `La búsqueda de tomadores de decisión requiere un plan pago (tu plan actual: ${config.label}).`,
     monthlyUnits: config.monthlyContactEnrichmentUnits,
-    maxRoles: config.maxRolesPerEnrichment,
+    maxRoles: unrestricted ? null : config.maxRolesPerEnrichment,
     maxContacts: config.maxContactsPerEnrichment,
     freshnessDays: config.contactFreshnessDays,
   }

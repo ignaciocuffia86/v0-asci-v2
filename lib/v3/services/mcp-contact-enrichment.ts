@@ -98,6 +98,12 @@ export type PreparedPlan = {
   resolvedOrganization: ResolvedOrgIdentity | null
   roles: string[]
   rejectedRoles: Array<{ input: string; reason: string }>
+  /**
+   * Cargos válidos que NO entraron por el tope del plan. Vacío si no se recortó
+   * nada. Si tiene elementos, el usuario está por pagar una búsqueda más angosta
+   * que la que pidió, y tiene que enterarse ACÁ y no después del gasto.
+   */
+  droppedRoles: string[]
   maxContacts: number
   /** Créditos en el peor caso. El commit real puede ser menor. */
   maxCredits: number
@@ -134,6 +140,23 @@ export type RunResult = {
   contactsWithEmail: number
   creditsSpent: number
   fromCache: boolean
+  /**
+   * QUÉ autorizó este gasto. Es lo que le permite al modelo decirlo sin deducirlo.
+   *
+   * `prepare` ya devolvía `ceiling`, pero `run` no devolvía nada, y esa asimetría
+   * tuvo un costo real: en la primera corrida del perfil admin el modelo anunció
+   * que cada cuenta necesitaba su propia confirmación —lo contrario de lo que
+   * hace un lote— porque la única fuente que le quedaba era la descripción de la
+   * tool, que no contemplaba el caso del lote.
+   */
+  authorizedBy:
+    | { source: "batch"; batchJobId: string }
+    | { source: "monthly" }
+}
+
+/** Con `batch_job_id` el gasto lo autorizó el lote; sin él, el cupo mensual. */
+function authorizedBy(batchJobId: string | null | undefined): RunResult["authorizedBy"] {
+  return batchJobId ? { source: "batch", batchJobId } : { source: "monthly" }
 }
 
 /** Error con código estable para que la capa MCP lo traduzca. */
@@ -215,7 +238,7 @@ export async function prepareContactEnrichment(
 ): Promise<PreparedPlan> {
   await requirePaidMcp(principal, "contacts:write", "server_managed")
 
-  const limits = await getContactEnrichmentLimits(principal.workspaceId)
+  const limits = await getContactEnrichmentLimits(principal.workspaceId, principal.unrestricted)
   if (!limits.allowed) {
     throw new EnrichmentError("PLAN_REQUIRED", limits.reason ?? "Tu plan no permite enrichment de contactos.")
   }
@@ -336,6 +359,11 @@ export async function prepareContactEnrichment(
 
   // 2) Validar cargos con el límite del plan (nunca hardcodear 10).
   const sanitized = sanitizeTitleList(input.roles ?? [], { max: limits.maxRoles })
+  // Los cargos VÁLIDOS que no entraron por el tope. No es lo mismo que
+  // `rejected` —esos no servían—: estos servían y se perdieron por el límite.
+  // Antes se recortaban acá, en la ejecución, cuando el gasto ya estaba
+  // autorizado, y nadie se enteraba. Ahora viajan en la respuesta.
+  const droppedRoles = sanitized.dropped
   if (sanitized.accepted.length === 0) {
     throw new EnrichmentError(
       "NO_VALID_ROLES",
@@ -462,6 +490,7 @@ export async function prepareContactEnrichment(
     resolvedOrganization,
     roles: sanitized.accepted,
     rejectedRoles: sanitized.rejected,
+    droppedRoles,
     maxContacts: effectiveMax,
     maxCredits: cached.hit ? 0 : effectiveMax,
     expiresAt: expiresAt.toISOString(),
@@ -515,6 +544,7 @@ export async function runContactEnrichment(
       contactsWithEmail: run.contacts_with_email,
       creditsSpent: run.credits_spent,
       fromCache: true,
+      authorizedBy: authorizedBy(run.batch_job_id),
     }
   }
 
@@ -553,7 +583,7 @@ export async function runContactEnrichment(
   if (!locked) throw new EnrichmentError("ALREADY_RUNNING", "Otra ejecución tomó este plan primero.")
 
   const plan = run.plan_payload as SearchParams & { companyId: string; queryHash: string; maxContacts: number }
-  const limits = await getContactEnrichmentLimits(principal.workspaceId)
+  const limits = await getContactEnrichmentLimits(principal.workspaceId, principal.unrestricted)
 
   try {
     let contacts: EnrichedPerson[] = []
@@ -671,6 +701,7 @@ export async function runContactEnrichment(
       contactsWithEmail: withEmail,
       creditsSpent,
       fromCache,
+      authorizedBy: authorizedBy(run.batch_job_id),
     }
   } catch (err) {
     // Falló: devolver el crédito. Si no, el usuario paga por nada.

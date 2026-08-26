@@ -125,7 +125,7 @@ export async function createBatchJob(
   let authorizedCredits = worstCaseCredits
   if (worstCaseCredits !== null && !principal.unrestricted) {
     const [limits, used] = await Promise.all([
-      getContactEnrichmentLimits(principal.workspaceId),
+      getContactEnrichmentLimits(principal.workspaceId, principal.unrestricted),
       getMonthlyPoolUsage(principal.workspaceId, "apollo_enrichment"),
     ])
     authorizedCredits = authorizedBatchCredits(worstCaseCredits, false, limits.monthlyUnits - used)

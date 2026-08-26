@@ -234,7 +234,7 @@ export async function prepareSaveAccount(
   const alreadySaved = Boolean(followedRes.data?.is_active)
   // Reactivar una cuenta dada de baja también ocupa un lugar activo.
   const consumesQuota = !alreadySaved
-  const limits = await getContactEnrichmentLimits(principal.workspaceId)
+  const limits = await getContactEnrichmentLimits(principal.workspaceId, principal.unrestricted)
 
   const unlocks = [
     "Investigación de noticias y tech radar con los tokens del cliente",
