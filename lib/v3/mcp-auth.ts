@@ -1,7 +1,7 @@
 import crypto from "crypto"
 import { NextRequest } from "next/server"
 import { createAdminClient } from "@/lib/supabase/admin"
-import { effectiveApiKeyScopes } from "./mcp-key-scopes"
+import { effectiveApiKeyScopes, scopesAreUnrestricted } from "./mcp-key-scopes"
 import { hashOAuthValue } from "@/lib/v3/mcp-oauth"
 import { principalColumns, type McpPrincipal } from "./mcp-usage"
 
@@ -62,7 +62,11 @@ export async function validateMcpRequest(req: NextRequest): Promise<McpAuthResul
     }
     await admin.schema("v3").from("mcp_oauth_tokens").update({ last_used_at: new Date().toISOString() }).eq("id", token.id)
     const scopes: string[] = token.scopes ?? []
-    return { success: true, workspaceId: token.workspace_id, userId: token.user_id, keyId: token.id, keyType: "oauth_token", scopes, allowedModes: resolveAllowedModes(scopes) }
+    // `unrestricted: false` es literal y deliberado. Los scopes de un token OAuth
+    // salen del consentimiento del usuario, y el catálogo de consentimiento no
+    // ofrece el marcador de admin; dejarlo derivar de los scopes abriría la puerta
+    // a que un consentimiento manipulado emita una credencial sin topes.
+    return { success: true, workspaceId: token.workspace_id, userId: token.user_id, keyId: token.id, keyType: "oauth_token", scopes, allowedModes: resolveAllowedModes(scopes), unrestricted: false }
   }
 
   if (!rawKey.startsWith("asci_")) return failure("INVALID_KEY_FORMAT", "Formato de credencial inválido", 401)
@@ -98,6 +102,10 @@ export async function validateMcpRequest(req: NextRequest): Promise<McpAuthResul
     keyType: "api_key",
     scopes,
     allowedModes,
+    // Se deriva de lo GUARDADO en la fila, no de `scopes` ya expandido: la
+    // expansión completa por tipo, y no queremos que un día un cambio en la
+    // expansión termine otorgando el marcador a una key que nunca lo tuvo.
+    unrestricted: scopesAreUnrestricted(storedScopes),
   }
 }
 

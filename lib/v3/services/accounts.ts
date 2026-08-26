@@ -13,6 +13,8 @@ export async function followAccount(params: {
   workspaceId: string
   companyId: string
   userId: string
+  /** Credencial sin topes: el cap del plan se mide pero no bloquea. Ver checkFollowQuota. */
+  unrestricted?: boolean
 }): Promise<{ followedAccountId: string } | { error: string }> {
   const admin = createAdminClient()
 
@@ -27,7 +29,7 @@ export async function followAccount(params: {
   // Cap de cuentas seguidas según plan (solo si suma una cuenta activa nueva)
   if (!existing || !existing.is_active) {
     const { checkFollowQuota } = await import("@/lib/v3/plans")
-    const quota = await checkFollowQuota(params.workspaceId)
+    const quota = await checkFollowQuota(params.workspaceId, params.unrestricted ?? false)
     if (!quota.allowed) return { error: quota.reason ?? "Límite de cuentas seguidas alcanzado" }
   }
 

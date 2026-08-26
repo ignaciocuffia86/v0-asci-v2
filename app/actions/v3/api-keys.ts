@@ -123,12 +123,39 @@ export async function generateApiKey(
   const userId = await getAuthenticatedUserId()
   if (!userId) return { success: false, error: "No autenticado" }
   if (!name.trim()) return { success: false, error: "Ingresa un nombre para la API key" }
-  if (keyType !== "standard" && keyType !== "explore" && keyType !== "profiles") {
+  if (keyType !== "standard" && keyType !== "explore" && keyType !== "profiles" && keyType !== "admin") {
     return { success: false, error: "Tipo de API key inválido" }
   }
 
   const access = await resolveApiKeyAccess(userId, workspaceId)
   if (!access?.canManage) return { success: false, error: "Solo admins pueden generar API keys" }
+
+  // ── Dos llaves para emitir una credencial SIN TOPES ────────────────────────
+  //
+  // Una key `admin` apaga el cap de cuentas y el cupo de research. En un
+  // workspace de cliente eso destruye el único freno de costo que ese workspace
+  // tiene, así que las dos condiciones son independientes y ambas obligatorias:
+  //
+  //  1. Quien la emite es superadmin GLOBAL. El `canManage` de arriba NO alcanza:
+  //     lo tiene cualquier admin de cualquier workspace, incluido el de un
+  //     cliente.
+  //  2. El workspace destino es el de ASCI, declarado por variable de entorno.
+  //
+  // Falla CERRADO: sin la variable configurada no se puede emitir ninguna. Es
+  // preferible que un despliegue mal configurado no pueda crear la key a que
+  // pueda crearla en cualquier lado.
+  if (keyType === "admin") {
+    if (!(await isGlobalSuperAdmin(userId))) {
+      return { success: false, error: "Solo un superadmin global puede generar una API key admin" }
+    }
+    const asciWorkspaceId = process.env.ASCI_ADMIN_WORKSPACE_ID?.trim()
+    if (!asciWorkspaceId) {
+      return { success: false, error: "Falta configurar ASCI_ADMIN_WORKSPACE_ID para poder emitir keys admin" }
+    }
+    if (workspaceId !== asciWorkspaceId) {
+      return { success: false, error: "Las API keys admin solo se emiten en el workspace de ASCI" }
+    }
+  }
 
   const { checkApiKeyAccess } = await import("@/lib/v3/plans")
   const planAccess = await checkApiKeyAccess(workspaceId)
@@ -162,7 +189,9 @@ export async function generateApiKey(
         ? "Ese usuario ya tiene una API key de exploración activa"
         : keyType === "profiles"
           ? "Ese usuario ya tiene una API key de perfiles activa"
-          : "Ese usuario ya tiene una API key activa",
+          : keyType === "admin"
+            ? "Ese usuario ya tiene una API key admin activa"
+            : "Ese usuario ya tiene una API key activa",
     }
   }
 

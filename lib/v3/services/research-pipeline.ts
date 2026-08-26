@@ -52,6 +52,8 @@ export async function createResearchBatch(params: {
   forceRefresh?: boolean
   source?: "user" | "cron"
   quotaMode?: "partial" | "all_or_nothing"
+  /** Credencial sin topes (perfil admin): el cupo se mide pero no bloquea. */
+  unrestricted?: boolean
 }): Promise<
   | { batchId: string; jobs: ResearchJob[]; blocked: BlockedResearchInput[] }
   | { error: string; blocked?: BlockedResearchInput[] }
@@ -82,7 +84,7 @@ export async function createResearchBatch(params: {
       })
     )
 
-    const quota = await checkResearchQuota({ workspaceId: params.workspaceId, companies })
+    const quota = await checkResearchQuota({ workspaceId: params.workspaceId, companies, unrestricted: params.unrestricted })
     for (const item of quota.items) {
       if (!item.allowed && item.reason) blocked.push({ input: item.input, reason: item.reason })
     }

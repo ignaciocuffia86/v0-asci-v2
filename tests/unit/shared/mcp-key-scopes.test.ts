@@ -34,6 +34,13 @@ const SERVER_FILES: Record<Exclude<ApiKeyType, never>, string[]> = {
   ],
   explore: ["app/api/v3/mcp/explore/[transport]/route.ts"],
   profiles: ["app/api/v3/mcp/profiles/[transport]/route.ts"],
+  // El server admin (Fase C) todavía no existe: por ahora apunta a los mismos
+  // archivos que standard, que son las tools que va a exponer. Cuando exista su
+  // route, se agrega acá y el test pasa a cubrirlo igual que a los otros tres.
+  admin: [
+    "app/api/v3/mcp/server/[transport]/route.ts",
+    "lib/v3/services/mcp-contact-enrichment.ts",
+  ],
 }
 
 describe("catálogo de scopes por tipo de key", () => {

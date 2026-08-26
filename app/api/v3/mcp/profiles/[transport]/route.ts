@@ -293,7 +293,7 @@ const authedHandler = withMcpAuth(
     if (!token) return undefined
     const result = await validateMcpRequest(req as NextRequest)
     if (!result.success || !result.workspaceId || !result.userId || !result.keyId || !result.keyType) return undefined
-    const principal: McpPrincipal = { workspaceId: result.workspaceId, userId: result.userId, keyId: result.keyId, keyType: result.keyType, scopes: result.scopes ?? [], allowedModes: result.allowedModes ?? ["read"] }
+    const principal: McpPrincipal = { workspaceId: result.workspaceId, userId: result.userId, keyId: result.keyId, keyType: result.keyType, scopes: result.scopes ?? [], allowedModes: result.allowedModes ?? ["read"], unrestricted: result.unrestricted ?? false }
     // Fila de transporte (tool_name null): la cuenta el rate limiter. Se marca el
     // servidor en metadata para separar la telemetría de los tres MCP.
     await logMcpRequest({ principal, method: req.method, statusCode: 200, requestId: crypto.randomUUID(), metadata: { phase: "transport", server: "profiles" } })

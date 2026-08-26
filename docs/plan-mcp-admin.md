@@ -246,6 +246,31 @@ cadena de atribución de IA y Apollo, en cambio, ya existe, y
 
 ---
 
+## 9. Fase A — lo que apareció al implementarla (25-ago-2026)
+
+Tres cosas que el plan escrito no tenía:
+
+**1. `checkFollowQuota` era un quinto guard.** El plan listaba cuatro. Pero
+`followedCap` frena `save_account` y, con él, `create_batch_job` — o sea, justo el
+"armar bases sin tanto límite" que motivó el perfil. Ahora también acepta
+`unrestricted`, con el mismo criterio: mide igual, no bloquea.
+
+**2. `check_account_access` habría mentido.** Devuelve el `SavedAccountGuard` tal cual,
+y con `unrestricted` el guard vale `"saved"` aunque nadie haya guardado la cuenta —
+tiene que valer eso para dejar pasar. Se agregó `actuallySaved`: `state` es la decisión
+del guard, `actuallySaved` es el hecho. Una tool cuyo trabajo es responder "¿está
+guardada?" no puede contestar que sí porque el guard la dejó pasar.
+
+**3. El cupo mensual de Apollo NO se tocó, a propósito.** `getContactEnrichmentLimits`
++ `getMonthlyPoolUsage` frenan el enrichment al llegar a las unidades del plan
+(`mcp-contact-enrichment.ts:265`). Es un tope, y por la regla del perfil debería
+liberarse — pero es además el único techo del gasto irreversible, y la confirmación
+**por lote** que lo reemplaza es Fase C. Liberarlo ahora dejaría, por un rato, un
+perfil sin techo de Apollo y sin la autorización de lote que lo justifica. Se libera
+junto con Fase C, no antes.
+
+---
+
 ## 8. La tabla de costos de Apollo (25-ago-2026)
 
 Precio base: **1.000 créditos = US$ 10 → US$ 0,01 por crédito**.

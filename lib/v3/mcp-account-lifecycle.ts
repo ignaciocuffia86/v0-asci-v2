@@ -25,6 +25,16 @@ export type SavedAccountState = "saved" | "not_saved" | "company_not_found"
 
 export interface SavedAccountGuard {
   state: SavedAccountState
+  /**
+   * Si la cuenta está REALMENTE guardada en el workspace.
+   *
+   * Existe porque con una credencial sin topes `state` vale "saved" aunque nadie
+   * la haya guardado: el guard tiene que dejar pasar. Pero `check_account_access`
+   * devuelve este objeto tal cual y su trabajo es responder si la cuenta está
+   * guardada — sin este campo contestaría que sí sobre una cuenta que no lo está.
+   * `state` es la decisión del guard; `actuallySaved` es el hecho.
+   */
+  actuallySaved: boolean
   companyId: string
   companyName: string | null
   followedAccountId: string | null
@@ -62,6 +72,7 @@ export async function requireSavedAccount(
   if (!companyRes.data) {
     return {
       state: "company_not_found",
+      actuallySaved: false,
       companyId,
       companyName: null,
       followedAccountId: null,
@@ -71,9 +82,27 @@ export async function requireSavedAccount(
     }
   }
 
+  // Credencial sin topes: la cuenta no necesita estar guardada. El chequeo de que
+  // la empresa EXISTA queda arriba a propósito y sigue aplicando — `unrestricted`
+  // levanta el tope de cupo, no la integridad referencial: un companyId inventado
+  // tiene que seguir fallando igual que para cualquier otra credencial.
+  if (principal.unrestricted) {
+    return {
+      state: "saved",
+      actuallySaved: Boolean(followedRes.data?.is_active),
+      companyId,
+      companyName: companyRes.data.name,
+      followedAccountId: followedRes.data?.is_active ? followedRes.data.id : null,
+      accountLimit: null,
+      nextAction: "none",
+      message: null,
+    }
+  }
+
   if (followedRes.data?.is_active) {
     return {
       state: "saved",
+      actuallySaved: true,
       companyId,
       companyName: companyRes.data.name,
       followedAccountId: followedRes.data.id,
@@ -83,9 +112,10 @@ export async function requireSavedAccount(
     }
   }
 
-  const quota = await checkFollowQuota(principal.workspaceId)
+  const quota = await checkFollowQuota(principal.workspaceId, principal.unrestricted)
   return {
     state: "not_saved",
+    actuallySaved: false,
     companyId,
     companyName: companyRes.data.name,
     followedAccountId: null,
@@ -112,6 +142,12 @@ export interface SavedAccountsBlocked {
  * explicar qué falta y pedir confirmación. Es imprescindible llamarlo ANTES de
  * reservar cuota: si no, la ejecución consume cupo de research sobre cuentas que
  * el workspace nunca guardó.
+ *
+ * No mira `principal.unrestricted` por su cuenta: `requireSavedAccount` ya lo hace y
+ * devuelve "saved", así que acá no queda nada bloqueado. Duplicar el chequeo sería
+ * una segunda condición que puede quedar desalineada con la primera. Lo que SÍ
+ * sigue bloqueando en modo unrestricted es `company_not_found`, y está bien: un
+ * companyId que no existe no es un problema de cupo.
  */
 export async function guardSavedAccounts(
   principal: McpPrincipal,
@@ -190,7 +226,7 @@ export async function prepareSaveAccount(
       .eq("workspace_id", principal.workspaceId)
       .eq("company_id", companyId)
       .maybeSingle(),
-    checkFollowQuota(principal.workspaceId),
+    checkFollowQuota(principal.workspaceId, principal.unrestricted),
   ])
 
   if (!companyRes.data) throw new Error("COMPANY_NOT_FOUND")
@@ -290,6 +326,7 @@ export async function saveAccount(
     workspaceId: principal.workspaceId,
     companyId: params.companyId,
     userId: principal.userId,
+    unrestricted: principal.unrestricted,
   })
 
   if ("error" in result) {
