@@ -8,7 +8,7 @@ import {
   scopesAreUnrestricted,
 } from "@/lib/v3/mcp-key-scopes"
 import { releaseQuotaBlocks, type ResearchQuotaItem } from "@/lib/v3/plans"
-import { ADMIN_WORKSPACE_ENV_VAR, adminWorkspaceId, isAdminWorkspace } from "@/lib/v3/admin-workspace"
+import { ADMIN_WORKSPACE_ENV_VAR, adminWorkspaceId, isAdminWorkspace, oauthUnrestricted } from "@/lib/v3/admin-workspace"
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Fase A del perfil admin: quién queda sin topes y quién NO.
@@ -158,5 +158,48 @@ describe("isAdminWorkspace", () => {
   it("tolera espacios alrededor del valor configurado", () => {
     process.env[ADMIN_WORKSPACE_ENV_VAR] = "  ws-admin  "
     expect(isAdminWorkspace("ws-admin")).toBe(true)
+  })
+})
+
+describe("oauthUnrestricted", () => {
+  const WS_ADMIN = "c731ba5a-aeb1-4e36-8bd5-401135566ecd"
+  const original = process.env[ADMIN_WORKSPACE_ENV_VAR]
+
+  afterEach(() => {
+    if (original === undefined) delete process.env[ADMIN_WORKSPACE_ENV_VAR]
+    else process.env[ADMIN_WORKSPACE_ENV_VAR] = original
+  })
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // Un token OAuth podía valer `unrestricted: false` y nada más, y eso dejaba el
+  // perfil admin INALCANZABLE desde un conector de claude.ai —que se autentica
+  // por OAuth y no tiene dónde pegar una API key—: conectaba y listaba cero
+  // tools. Las dos llaves siguen siendo las mismas que exige emitir una key
+  // admin, y ninguna sale del cliente.
+  // ═════════════════════════════════════════════════════════════════════════
+
+  it("superadmin EN el workspace admin queda sin topes", () => {
+    process.env[ADMIN_WORKSPACE_ENV_VAR] = WS_ADMIN
+    expect(oauthUnrestricted(WS_ADMIN, true)).toBe(true)
+  })
+
+  it("un superadmin en el workspace de un CLIENTE conserva los topes", () => {
+    // La llave que protege al cliente: ser superadmin de ASCI no puede levantarle
+    // los topes al workspace de otro, que es de quien paga esa cuenta.
+    process.env[ADMIN_WORKSPACE_ENV_VAR] = WS_ADMIN
+    expect(oauthUnrestricted("11111111-1111-1111-1111-111111111111", true)).toBe(false)
+  })
+
+  it("un usuario común del workspace admin NO queda sin topes", () => {
+    // La otra llave: estar en el workspace correcto no alcanza sin el rol.
+    process.env[ADMIN_WORKSPACE_ENV_VAR] = WS_ADMIN
+    expect(oauthUnrestricted(WS_ADMIN, false)).toBe(false)
+  })
+
+  it("sin la variable configurada, NADIE queda sin topes", () => {
+    // Falla cerrado: un despliegue mal configurado se queda sin la función, no
+    // la reparte. Es el mismo criterio que el resto de este módulo.
+    delete process.env[ADMIN_WORKSPACE_ENV_VAR]
+    expect(oauthUnrestricted(WS_ADMIN, true)).toBe(false)
   })
 })

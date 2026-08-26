@@ -11,6 +11,7 @@ import { requirePaidMcp, reserveMcpUsage, setReservationStatus, getMcpUsage, typ
 import { searchCompanies, getCompanyProfile, getCompanySignals, listWorkspaceAccounts, getAccountIntelligence, getResearchStatus, getAccountEvidenceDetailTool } from "@/lib/v3/mcp-read-tools"
 import { prepareAccountResearch, submitResearchStage, getClientResearchStatus, prepareAccountIcebreaker, submitAccountIcebreaker, refreshPromptPackage, prepareCompanySuccessCases, submitCompanySuccessCases, prepareCompanyNews, submitCompanyNews } from "@/lib/v3/mcp-client-ai"
 import { runLinkedinJobsActor, companyNameVariants, isApifyConfigured } from "@/lib/v3/services/apify-client"
+import { ADMIN_WORKSPACE_ENV_VAR } from "@/lib/v3/admin-workspace"
 import { recordApifyRun } from "@/lib/v3/services/spend-ledger"
 import { ingestApifyJobPostings } from "@/lib/v3/services/apify-job-ingest"
 import { prepareSaveAccount, saveAccount, removeWorkspaceAccount, listSavedAccounts, requireSavedAccount, guardSavedAccounts } from "@/lib/v3/mcp-account-lifecycle"
@@ -648,7 +649,20 @@ export function createV3McpHandler(options: { profile: McpProfile; basePath: str
     // El perfil admin exige una credencial SIN TOPES. Un principal normal que
     // llegue a esta ruta se rechaza acá: si no, alcanzaría con conocer la URL
     // para saltearse las descripciones que le piden confirmar antes de gastar.
-    if (options.profile === "admin" && !result.unrestricted) return undefined
+    //
+    // El rechazo se LOGUEA porque desde afuera es indistinguible de un servidor
+    // vacío: el cliente completa el OAuth, pide tools/list, recibe 401 y muestra
+    // "este conector no tiene herramientas disponibles". Sin esta línea, el único
+    // síntoma es una lista vacía y no hay por dónde empezar a mirar.
+    if (options.profile === "admin" && !result.unrestricted) {
+      console.error(
+        `[v3][mcp][admin] credencial RECHAZADA: no es unrestricted. ` +
+          `keyType=${result.keyType} workspace=${result.workspaceId} user=${result.userId}. ` +
+          `Con un token OAuth hace falta que el workspace sea el declarado en ${ADMIN_WORKSPACE_ENV_VAR} ` +
+          `y que el usuario sea superadmin global; con una API key, que tenga el scope de admin.`,
+      )
+      return undefined
+    }
     // `keyType` viene de validateMcpRequest y hay que propagarlo: es lo que decide
     // si keyId se escribe en api_key_id o en oauth_token_id.
     const principal: McpPrincipal = { workspaceId: result.workspaceId, userId: result.userId, keyId: result.keyId, keyType: result.keyType, scopes: result.scopes ?? [], allowedModes: result.allowedModes ?? ["read"], unrestricted: result.unrestricted ?? false }

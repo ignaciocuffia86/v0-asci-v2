@@ -4,6 +4,8 @@ import { createAdminClient } from "@/lib/supabase/admin"
 import { effectiveApiKeyScopes, scopesAreUnrestricted } from "./mcp-key-scopes"
 import { hashOAuthValue } from "@/lib/v3/mcp-oauth"
 import { principalColumns, type McpPrincipal } from "./mcp-usage"
+import { isAdminWorkspace, oauthUnrestricted } from "./admin-workspace"
+import { isGlobalSuperAdmin } from "@/lib/v3/api-key-access"
 
 /**
  * Tope de requests por minuto para tokens OAuth. Las API keys lo tienen por fila
@@ -62,11 +64,20 @@ export async function validateMcpRequest(req: NextRequest): Promise<McpAuthResul
     }
     await admin.schema("v3").from("mcp_oauth_tokens").update({ last_used_at: new Date().toISOString() }).eq("id", token.id)
     const scopes: string[] = token.scopes ?? []
-    // `unrestricted: false` es literal y deliberado. Los scopes de un token OAuth
-    // salen del consentimiento del usuario, y el catálogo de consentimiento no
-    // ofrece el marcador de admin; dejarlo derivar de los scopes abriría la puerta
-    // a que un consentimiento manipulado emita una credencial sin topes.
-    return { success: true, workspaceId: token.workspace_id, userId: token.user_id, keyId: token.id, keyType: "oauth_token", scopes, allowedModes: resolveAllowedModes(scopes), unrestricted: false }
+    // El marcador NO sale de los scopes, y eso no cambió: los scopes de un token
+    // OAuth salen del consentimiento del usuario, así que derivarlo de ahí dejaría
+    // que un consentimiento manipulado emita una credencial sin topes.
+    //
+    // Sale de dos hechos del SERVIDOR que el cliente no puede tocar: el workspace
+    // guardado en la fila del token y el rol global del usuario. Antes acá había
+    // un `false` literal, y eso dejaba el perfil admin inalcanzable desde un
+    // conector de claude.ai —que se autentica por OAuth—: conectaba y listaba cero
+    // tools. Ver la nota de `oauthUnrestricted`.
+    //
+    // El `?:` corta antes de la consulta: solo el workspace admin paga el read
+    // extra a `profiles`, el resto del tráfico OAuth no toca la base de más.
+    const superAdmin = isAdminWorkspace(token.workspace_id) ? await isGlobalSuperAdmin(token.user_id) : false
+    return { success: true, workspaceId: token.workspace_id, userId: token.user_id, keyId: token.id, keyType: "oauth_token", scopes, allowedModes: resolveAllowedModes(scopes), unrestricted: oauthUnrestricted(token.workspace_id, superAdmin) }
   }
 
   if (!rawKey.startsWith("asci_")) return failure("INVALID_KEY_FORMAT", "Formato de credencial inválido", 401)
