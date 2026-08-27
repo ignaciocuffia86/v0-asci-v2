@@ -232,7 +232,8 @@ ingesta y de merge.*
 
 **Fase 3.5 — Apollo por NOMBRE para las que no tienen dominio (gratis, en curso)**
 *Implementada el 27-ago-2026: `lib/apollo/domain-lookup.ts`, su runner, el cron
-`v3-apollo-domain-lookup` y la migración `20260827203000` (pendiente de aplicar).*
+`v3-apollo-domain-lookup` y la migración `20260827205412`, **aplicada** el 27-ago-2026:
+420.753 filas sembradas en `pending`. El cron queda activo recién al desplegar.*
 - El problema que resuelve: las 455.747 companies sin `website` (88% del catálogo)
   no entran a **ninguna** fase de Apollo, porque `enrich` y `bulk_enrich` reciben
   dominios, no nombres. Descontando las ~34.700 `Unknown Company <uuid>` quedan
