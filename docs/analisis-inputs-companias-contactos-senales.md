@@ -230,6 +230,32 @@ ingesta y de merge.*
   enrichment de Apollo, llena `apollo_employees_count`/`apollo_industry` sin tocar
   columnas de LinkedIn. Hoy solo 194 sincronizadas.
 
+**Fase 3.5 — Apollo por NOMBRE para las que no tienen dominio (gratis, en curso)**
+*Implementada el 27-ago-2026: `lib/apollo/domain-lookup.ts`, su runner, el cron
+`v3-apollo-domain-lookup` y la migración `20260827203000` (pendiente de aplicar).*
+- El problema que resuelve: las 455.747 companies sin `website` (88% del catálogo)
+  no entran a **ninguna** fase de Apollo, porque `enrich` y `bulk_enrich` reciben
+  dominios, no nombres. Descontando las ~34.700 `Unknown Company <uuid>` quedan
+  **421.075 candidatas** con nombre buscable.
+- `organizations/search` con `display_mode: fuzzy_select_mode` devuelve candidatos
+  shallow (id, name, domain, website_url, logo_url) **sin consumir créditos**.
+- **El techo es la cuota, no el precio: 400 llamadas/hora** del plan sobre ese
+  endpoint (medido; el mensaje de rechazo de Apollo nombra el endpoint y remite a
+  upgradear el plan). Es cuota del plan, no del transporte: un script con API key
+  tiene el mismo techo que el MCP. No confundir con el `x-rate-limit-minute: 1000`
+  de `organizations/enrich`, que es otro endpoint.
+- El cron usa **350/hora y deja 50 libres** para trabajo manual, y cuenta lo gastado
+  leyendo `apollo_api_calls` (no un contador propio), así la reserva sobrevive a
+  llamadas hechas por fuera del cron. A ese ritmo el barrido completo son ~50 días:
+  es el precio de la cuota, y para eso está el checkpoint.
+- **Sólo se promueve `auto_ok` a `companies`**, y sólo sobre columnas vacías. El
+  match por nombre es difuso: medido, "Joyeria Vasari" matcheó con "JOYERIA VASARI
+  MADRID SL" con similitud 0.67 y contención 1.00 — pasaba como automático hasta
+  que se agregó la guarda que baja a `revisar` cualquier match con un token
+  geográfico presente de un solo lado. Los `revisar` esperan ojo humano.
+- Medición preliminar sobre 180 casos reales: 23% `auto_ok`, 36% con algún dominio
+  candidato, 60% sin match. Falta rehacerla sobre la muestra completa.
+
 **Fase 4 — Coherencia de señales y limpieza**
 - `job_posted_at` en `process_job_signals`; `source_field` real (título vs descripción);
   unificar `past_position`/`previous_position`; escanear descripciones también inline;

@@ -12,6 +12,9 @@ export type ApolloEndpoint =
   | "organizations/enrich"
   // Bulk: hasta 10 dominios por llamada (Fase 1, ago-2026)
   | "organizations/bulk_enrich"
+  // Lookup shallow nombre -> dominio. GRATIS, pero con cuota propia de 400/hora
+  // (del plan, no del transporte). Ver lib/apollo/domain-lookup.ts.
+  | "organizations/search"
   // Cuota real de la cuenta; requiere master key
   | "usage_stats/api_usage_stats"
   | "mixed_people/search"

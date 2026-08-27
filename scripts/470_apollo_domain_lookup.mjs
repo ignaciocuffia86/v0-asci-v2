@@ -57,6 +57,13 @@
  * `v3.apollo_domain_lookup` con score y clasificacion; promover a `companies.
  * website` es un paso separado y deliberado.
  *
+ * RELACION CON EL CRON
+ * El barrido de fondo lo corre `v3-apollo-domain-lookup` (cron cada 10', cola
+ * `v3.apollo_domain_lookup`, 350 llamadas/hora dejando 50 libres). Este script
+ * es la herramienta de MEDICION: sirve para probar el endpoint, medir consumo
+ * y evaluar umbrales sobre una muestra, sin tocar la cola. Para produccion
+ * usar el cron; para responder "¿esto anda y cuanto cuesta?", este.
+ *
  * USO
  *   node --env-file-if-exists=/vercel/share/.env.project \
  *     scripts/470_apollo_domain_lookup.mjs [--limit N] [--commit] [--probe]
