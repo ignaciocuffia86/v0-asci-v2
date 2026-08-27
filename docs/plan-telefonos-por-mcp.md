@@ -42,7 +42,7 @@ duplica el mismo contacto por bookmark, así que contar filas infla todo—:
 
 ## 2. Lo que falta: cuatro piezas
 
-### 2.1 El reveal, scopeado por principal
+### 2.1 El reveal, scopeado por principal — HECHO
 
 Hoy vive en `revealProspectPhone` (`app/actions/apollo.ts`) y es una Server
 Action de la UI: entra por `auth.getUser()` y lee `public.user_company_contacts`
@@ -57,6 +57,18 @@ resolución del contacto y la escritura cambian de tabla.
 Con `reveal_phone_number=true` a secas Apollo busca solo en su base y devuelve un
 `request_id` que exige polling, sin webhook. Está documentado en el código actual
 y conviene que siga estándolo.
+
+Quedó en `lib/v3/services/mcp-contact-phones.ts`. Dos cosas que no estaban en el
+plan y salieron de escribirlo:
+
+- **Se falla antes de gastar si falta el webhook.** Sin `NEXT_PUBLIC_SITE_URL` o
+  `APOLLO_WEBHOOK_SECRET` no se llama a Apollo: el waterfall cobra igual y el
+  número no vuelve nunca. Es el único error de configuración que cuesta plata.
+- **`pending` se marca ANTES de llamar, y se revierte si Apollo no acepta.** Si el
+  proceso se cae entre la marca y la respuesta, el estado ya dice que hay un
+  pedido en vuelo y una segunda corrida no lo duplica. Pero un `pending` que
+  nunca llegó a pedirse es peor que un fallo —parece que todavía puede llegar—,
+  así que cuando el waterfall no acepta, la fila vuelve a `not_requested`.
 
 ### 2.2 El webhook aprende el camino v3 — HECHO
 
@@ -95,11 +107,51 @@ igual y nadie se entera.
 Depende de la migración `20260827172000`: sin ella, el CHECK viejo rechaza
 `received` y `not_available`.
 
-### 2.3 Dos tools
+### 2.2b Los teléfonos viejos, al caché compartido — HECHO
+
+F2 dejó el camino para que los teléfonos NUEVOS aterricen en
+`apollo_contacts_cache`. Los viejos seguían solo en `user_company_contacts`, y
+sin moverlos el MCP habría salido a pagarle a Apollo por números que ya
+compramos — el mismo error que se acaba de cerrar para los emails.
+
+Medido antes de escribir la migración (`20260827190000`):
+
+| | |
+|---|---|
+| Filas con teléfono en `user_company_contacts` | 106 |
+| **Personas distintas** | **80** |
+| De esas, ya con fila en el caché | **80** (0 huérfanas) |
+| Con móvil / solo fijo | 65 / 15 |
+| Personas con dos números distintos entre sus filas | **0** |
+
+Las 106 filas eran 80 personas: la tabla duplica el contacto por bookmark, hasta
+4 filas por persona, así que contar filas infla el número un 32%. Cero
+conflictos y cero filas nuevas — son 80 `UPDATE` sobre filas que ya existían.
+
+**No se insertan personas nuevas.** Importar al caché gente que nunca pasó por el
+enrichment de v3 es otra decisión: traería su email, su cargo y su empresa, y no
+es lo que este backfill viene a resolver.
+
+Dos guardas que parecen de más y no lo son: solo se llena la columna si está
+**vacía** (misma regla que v2 y el webhook), y el `UPDATE` excluye las filas
+donde no hay nada real que escribir — si no, tocaría `updated_at` de filas que no
+cambian, y `splitByContactCache` usa esa fecha para decidir frescura: las
+estaríamos rejuveneciendo sin motivo.
+
+Verificado después de aplicar: 80 teléfonos en el caché (65 móvil, 15 fijo),
+4.416 filas totales —ninguna nueva—, 0 personas de v2 sin espejo, y re-correrla
+toca **0 filas**.
+
+### 2.3 Dos tools — HECHO
 
 - **`request_contact_phones`** — pide teléfonos para contactos ya enriquecidos de
-  una cuenta. Gasta créditos.
+  una cuenta. Gasta créditos. Registrada en `lib/v3/mcp-server-tools.ts` con
+  `userConfirmed: true` obligatorio, igual que el enrichment.
 - La lectura **no necesita tool nueva**: `get_company_contacts` ya la hace.
+
+La regla del gasto vive en `decidirPedidos`, exportada aparte y pura: sin base ni
+red, para que se pueda testear el criterio que decide 5 créditos por contacto
+(`tests/unit/v3/contact-phone-requests.test.ts`).
 
 ### 2.4 La medición
 
@@ -225,11 +277,18 @@ como si fuera real, y encima sin haber preguntado.
 
 ## 4. Tres decisiones que son del dueño
 
-**a. ¿Sobre qué subconjunto?** Pendiente. Pedir teléfono para todos los contactos
-de 37 cuentas es del orden de 185 personas. Con el costo corregido y la tasa de
-entrega real (56,7%), eso es ~105 teléfonos y ~525 créditos. La alternativa es
-pedirlo solo para los que ya tienen email verificado y cargo que matchea, que es
-donde el teléfono agrega algo.
+**a. ¿Sobre qué subconjunto? — DECIDIDO: email verificado Y cargo que matchea.**
+Pedir teléfono para todos los contactos de 37 cuentas es del orden de 185
+personas: con el costo corregido y la tasa de entrega real (56,7%), ~105
+teléfonos y ~525 créditos. Con el filtro se paga solo por los contactos que ya
+probaron ser los correctos —los que ibas a llamar igual—, que es donde 5 créditos
+contra 1 del email se justifican.
+
+Los descartes viajan en la respuesta con su motivo, y el ORDEN importa: "ya tiene
+teléfono" y "pedido en curso" van antes que los de calificación, porque son los
+que responden *por qué no se gastó*. Si un contacto ya tiene el número, que
+además no tenga el email verificado es ruido: informarlo mandaría a arreglar un
+email para conseguir un dato que ya está en la base.
 
 **b. ¿La tool espera o no? — DECIDIDO: no espera.** El reveal es asíncrono con
 ~57% de entrega; una tool que espera bloquea la conversación por algo que la
@@ -260,13 +319,14 @@ por el mismo dato, que es una distinción distinta y mucho más útil.
 |---|---|---|
 | ~~**F1**~~ | ~~La traducción de estados en una función pura + tests.~~ **HECHO.** `lib/shared/phone-status.ts` + migración `20260827172000` + `pendingPhone` arreglado. | — |
 | ~~**F2**~~ | ~~El webhook aprende v3.~~ **HECHO.** `lib/v3/services/contact-phone-inbox.ts`, enganchado en un solo punto del webhook. Sin tool todavía, así que no hay gasto nuevo. | F1 |
-| **F3** | El servicio de reveal scopeado por principal + `request_contact_phones`. Acá empieza a gastar. | F2 |
+| ~~**F3**~~ | ~~El servicio de reveal scopeado por principal + `request_contact_phones`.~~ **HECHO.** `lib/v3/services/mcp-contact-phones.ts` + la tool registrada. Acá empieza a gastar: 5 créditos por pedido aceptado. | F2 |
 | **F4** | Vencimiento de `pending` → `not_available` y el costo de teléfono en `get_cost_summary`. | F3 |
 
-F1 y F2 están hechas: no gastaron un crédito y el camino de vuelta ya existe —
-un teléfono que llegue hoy por el reveal de la UI aterriza también del lado v3.
-F3 es la que empieza a gastar, y la única que necesita las decisiones del punto 4
-que siguen abiertas.
+F1, F2 y el backfill no gastaron un crédito: armaron el camino de vuelta y
+metieron en el caché los 80 teléfonos que v2 ya había pagado. F3 es la que
+empieza a gastar, y por eso iba última de las tres. Queda F4, que no gasta: es
+vencer los `pending` colgados y mostrar el costo del teléfono en
+`get_cost_summary`.
 
 ---
 
@@ -275,7 +335,7 @@ que siguen abiertas.
 - **No se toca la UI ni `user_company_contacts`.** Ese camino funciona, tiene 106
   filas con teléfono y no hay motivo para arriesgarlo.
 - **No se piden teléfonos dentro de `run_contact_enrichment`.** Un crédito por
-  email y 7,75 por teléfono son decisiones distintas; meterlas en la misma
-  llamada esconde la segunda detrás de la primera.
+  email y 5 por teléfono son decisiones distintas; meterlas en la misma llamada
+  esconde la segunda detrás de la primera —y la más cara de las dos.
 - **No se inventa un teléfono "probable".** Si Apollo no lo tiene, el campo va
   vacío y el estado lo dice.
