@@ -40,6 +40,7 @@ import { normalizeDomain } from "@/lib/apollo/domain"
 import { hasEnrichment, resolveCompanyOrganizationId } from "@/lib/apollo/organizations"
 import { recordTitleObservations, recordTitleSuccess } from "@/lib/apollo/title-catalog"
 import { requireSavedAccount } from "@/lib/v3/mcp-account-lifecycle"
+import { PHONE_STATUS_DEFAULT } from "@/lib/shared/phone-status"
 import type { RoleOrigin } from "@/lib/v3/mcp-contact-coverage"
 
 const POOL = "apollo_enrichment" as const
@@ -801,7 +802,7 @@ async function linkContactsToAccount(opts: {
       apollo_cache_id: cacheIdByApolloId.get(c.apolloId) ?? null,
       person_last_verified_at: nowIso,
       email_last_verified_at: c.email ? nowIso : null,
-      phone_status: "not_requested",
+      phone_status: PHONE_STATUS_DEFAULT,
       // `role_origin` describe DE DÓNDE SALIÓ EL CARGO, no quién escribió la fila. El dominio
       // es `RoleOrigin` = 'signal_derived' | 'user_input' (regla canónica en
       // mcp-contact-coverage.ts: `entry.because.length ? 'signal_derived' : 'user_input'`).

@@ -1,6 +1,7 @@
 import "server-only"
 
 import { createAdminClient } from "@/lib/supabase/admin"
+import { normalizePhoneStatus, type PhoneStatus } from "@/lib/shared/phone-status"
 import { getLegacySignals } from "@/lib/v3/services/legacy-signal-provider"
 import { getContactEnrichmentLimits } from "@/lib/v3/plans"
 import { requireSavedAccount, type SavedAccountGuard } from "./mcp-account-lifecycle"
@@ -286,7 +287,8 @@ export interface ExistingContact {
   email: string | null
   emailStatus: string | null
   hasPhone: boolean
-  phoneStatus: string
+  /** Vocabulario canónico, compartido con v2. Ver `lib/shared/phone-status.ts`. */
+  phoneStatus: PhoneStatus
   roleOrigin: RoleOrigin
   matchedRole: string | null
   /** Frescura evaluada por campo: la persona puede estar vigente y el email no. */
@@ -400,7 +402,9 @@ export async function getCompanyContacts(
       email: (cache?.email as string) ?? null,
       emailStatus: (cache?.email_status as string) ?? null,
       hasPhone: Boolean(cache?.phone || cache?.mobile_phone),
-      phoneStatus: row.phone_status,
+      // Se normaliza al leer, no se confía en lo que haya en la columna: es la
+      // red para una fila escrita con el vocabulario viejo de v3.
+      phoneStatus: normalizePhoneStatus(row.phone_status),
       roleOrigin: row.role_origin as RoleOrigin,
       matchedRole: row.matched_role,
       freshness: {
@@ -427,7 +431,10 @@ export async function getCompanyContacts(
   const freshContacts = contacts.filter((c) => c.freshness.person === "fresh").length
   const withUsableEmail = contacts.filter((c) => c.email && c.freshness.email === "fresh").length
   const withUsablePhone = contacts.filter((c) => c.hasPhone && c.freshness.phone === "fresh").length
-  const pendingPhone = contacts.filter((c) => c.phoneStatus === "processing").length
+  // EL BUG: buscaba 'processing', que es del vocabulario viejo de v3 y que nadie
+  // escribía nunca. `pendingPhone` era 0 por construcción, no por no haber
+  // pendientes.
+  const pendingPhone = contacts.filter((c) => c.phoneStatus === "pending").length
 
   const { recommended, reason, message } = decideEnrichment({
     planAllows: limits.allowed,

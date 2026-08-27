@@ -13,7 +13,9 @@ Todo lo de abajo está medido contra producción el 27-ago-2026.
 
 ## 1. Esto es más chico de lo que parece
 
-El esquema ya está entero. **No hace falta ninguna migración.**
+El esquema ya tenía todas las columnas. **La única migración que hizo falta fue
+de vocabulario**, no de estructura: alinear el CHECK de `phone_status` al de v2
+(ver §3.1). Ninguna columna nueva.
 
 | Tabla | Ya tiene |
 |---|---|
@@ -95,25 +97,37 @@ incluido en el enrichment.
 
 ## 3. Los tres riesgos, medidos
 
-### 3.1 Los vocabularios no coinciden — y ya nos costó una vez
+### 3.1 Los vocabularios no coincidían — RESUELTO
 
 | | Valores |
 |---|---|
 | v2 (`user_company_contacts`, webhook) | `not_requested` · `pending` · `received` · `not_available` |
-| v3 (`account_contacts`, CHECK) | `unknown` · `not_requested` · `processing` · `available` · `unavailable` · `failed` |
+| v3 (`account_contacts`, CHECK viejo) | `unknown` · `not_requested` · `processing` · `available` · `unavailable` · `failed` |
 
-Solo `not_requested` está en las dos. Si el webhook escribe `received` en
-`v3.account_contacts`, el CHECK lo rechaza.
+Solo `not_requested` estaba en las dos, así que el webhook —que escribe las
+palabras de v2— no podía tocar `v3.account_contacts` sin que el CHECK lo
+rechazara. El camino de vuelta del teléfono no podía existir.
 
-Esto ya pasó, con la misma forma: `linkContactsToAccount` escribía
-`role_origin: 'mcp_enrichment'`, el CHECK lo rechazaba y el enrichment entero
-moría con `LINK_CONTACTS_FAILED`. El CHECK tenía razón las dos veces.
+Es la misma forma exacta del bug que ya mató el enrichment una vez:
+`linkContactsToAccount` escribía `role_origin: 'mcp_enrichment'`, el CHECK lo
+rechazaba y todo moría con `LINK_CONTACTS_FAILED`. El CHECK tenía razón las dos
+veces.
 
-**Hay una tercera desalineación, ya presente en el código de hoy:** el default de
-la columna es `'unknown'`, `linkContactsToAccount` escribe `'not_requested'`, y
-`mcp-contact-coverage.ts` cuenta pendientes buscando `'processing'`. Tres
-palabras para el mismo eje. Conviene fijar la traducción en **una** función pura
-y testeada, no en cada punto de escritura.
+Había además una tercera desalineación viva en el código: el default de la
+columna era `'unknown'`, `linkContactsToAccount` escribía `'not_requested'` y
+`mcp-contact-coverage.ts` contaba pendientes buscando `'processing'` — que nadie
+escribía nunca, o sea que `pendingPhone` daba **0 por construcción**.
+
+**Se alineó v3 a v2**, y v2 gana no por antigüedad sino porque es el vocabulario
+que está en producción con 5.148 filas y el que habla el webhook de Apollo, que
+es la pieza que ninguna de las dos plataformas controla. Alinear v3 a v2 es un
+CHECK y un default; al revés sería migrar datos vivos y reescribir el webhook.
+
+La fuente única es `lib/shared/phone-status.ts`, y el mapeo de las palabras
+viejas está escrito dos veces a propósito —ahí y en el `CASE` de la migración—
+con un test que verifica que no diverjan. Se pierde `failed`: desde el lado de
+quien lee un informe es indistinguible de que Apollo no entregara, y tener las
+dos palabras obligaba a explicar la diferencia en cada informe.
 
 ### 3.2 El 11,3% que se cuelga
 
@@ -122,9 +136,14 @@ webhook nunca llegó. En la UI eso es una fila con un spinner que alguien ignora
 En un lote de 200 contactos son ~22 estados que nunca cierran, y una tool que
 reporta "22 pendientes" indefinidamente es una tool que se deja de leer.
 
-Hace falta un vencimiento: pasado un plazo, `processing` → `failed`, dicho como
-"se pidió, se pagó y no llegó" y no como "todavía puede llegar". Un pendiente
-eterno es la versión teléfono del `null` que se lee como `0`.
+Hace falta un vencimiento: pasado un plazo, `pending` → `not_available`, que en
+el vocabulario alineado es el estado que significa "se pidió, se pagó y no hay
+número". Un pendiente eterno es la versión teléfono del `null` que se lee como
+`0`: un estado que parece información y no lo es.
+
+Queda como F4 y no se hizo acá porque hoy no hay nada que vencer —
+`v3.account_contacts` tiene 0 filas— y el plazo correcto se elige mirando cuánto
+tarda un webhook real en llegar, no de memoria.
 
 ### 3.3 El crédito se gasta aunque no haya teléfono
 
@@ -144,11 +163,18 @@ cuentas es del orden de 185 personas ≈ 1.435 créditos. La alternativa es pedi
 solo para los que ya tienen email verificado y cargo que matchea, que es donde el
 teléfono agrega algo.
 
-**b. ¿La tool espera o no?** El reveal es asíncrono con ~57% de entrega. Una tool
-que espera bloquea la conversación por algo que la mitad de las veces no llega.
-Una que no espera devuelve "pedidos: 185" y obliga a volver a preguntar. Mi
-recomendación: **no esperar**, y que `get_company_contacts` sea el lugar donde se
-leen los resultados — que además ya está construido para eso.
+**b. ¿La tool espera o no? — DECIDIDO: no espera.** El reveal es asíncrono con
+~57% de entrega; una tool que espera bloquea la conversación por algo que la
+mitad de las veces no llega. `request_contact_phones` devuelve qué se pidió y
+termina, y **los resultados se leen por cuenta con `get_company_contacts`**, que
+ya está construido para eso (`hasPhone`, `phoneStatus`, `freshness.phone`,
+`pendingPhone`).
+
+Consecuencia de diseño que sigue de esto: el estado es la única forma de saber
+qué pasó, así que tiene que ser legible sin glosa externa. Por eso
+`PHONE_STATUS_MEANING` viaja en el payload — `not_available` se lee como "esta
+persona no tiene teléfono" cuando en realidad es "Apollo no nos lo dio, y el
+crédito se gastó igual".
 
 **c. ¿El cooldown de 7 días sigue aplicando en admin?** Hoy `revealProspectPhone`
 no reintenta antes de 7 días. Es un tope que protege del gasto repetido, no un
@@ -162,10 +188,10 @@ irrecuperable y la decisión es tuya.
 
 | | Qué | Depende de |
 |---|---|---|
-| **F1** | La traducción de estados en una función pura + tests. Alinea el default `unknown`, el `not_requested` que se escribe y el `processing` que se lee. | — |
+| ~~**F1**~~ | ~~La traducción de estados en una función pura + tests.~~ **HECHO.** `lib/shared/phone-status.ts` + migración `20260827172000` + `pendingPhone` arreglado. | — |
 | **F2** | El webhook aprende v3: teléfono al caché, estado a `account_contacts`. Sin tool todavía, así que no hay gasto nuevo. | F1 |
 | **F3** | El servicio de reveal scopeado por principal + `request_contact_phones`. Acá empieza a gastar. | F2 |
-| **F4** | Vencimiento de `processing` → `failed` y el costo de teléfono en `get_cost_summary`. | F3 |
+| **F4** | Vencimiento de `pending` → `not_available` y el costo de teléfono en `get_cost_summary`. | F3 |
 
 F1 y F2 no gastan un crédito y dejan el camino de vuelta funcionando, que es lo
 que hoy no existe. F3 es la única fase que necesita las decisiones del punto 4.
