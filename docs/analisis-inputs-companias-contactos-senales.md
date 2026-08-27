@@ -222,8 +222,11 @@ ingesta y de merge.*
 3. Registrar cada intento en `v3.linkedin_company_enrichment` (checkpoint +
    `filled_columns`).
 
-**Fase 3 — Apollo por dominio (gratis, casi sin usar)**
-- `organizations/enrich` (0 créditos) sobre las 128 k con website → habilita filtros y
+**Fase 3 — Apollo por dominio (1 crédito por match, casi sin usar)**
+- `organizations/enrich` (**1 crédito por empresa resuelta**, 0 si no matchea — lo
+  confirman `countEnrichCredits` en `lib/apollo/parsers.ts` y la tabla de costos de
+  `docs/plan-mcp-admin.md`; este documento decía "0 créditos" y estaba equivocado)
+  sobre las 128 k con website → habilita filtros y
   enrichment de Apollo, llena `apollo_employees_count`/`apollo_industry` sin tocar
   columnas de LinkedIn. Hoy solo 194 sincronizadas.
 
