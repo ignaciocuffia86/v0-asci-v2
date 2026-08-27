@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { logApolloCall } from "@/lib/apollo/logger"
+import { receivePhoneForV3 } from "@/lib/v3/services/contact-phone-inbox"
 
 /**
  * Webhook callback de Apollo cuando un /people/match con reveal_phone_number=true
@@ -194,6 +195,24 @@ export async function POST(
   }
 
   const { value: bestPhone, isMobile } = pickBestPhone(phones)
+
+  // ── El lado v3, ANTES de las tres salidas de v2 ──────────────────────────
+  //
+  // Va acá arriba y no dentro de cada rama a propósito: abajo hay tres returns
+  // distintos —sin teléfono, ya lo tenía, lo escribimos— y meter el camino v3
+  // en los tres es la forma segura de que uno quede afuera cuando alguien toque
+  // esta función. Lo que v3 hace no depende del resultado de v2: las dos
+  // plataformas guardan lo mismo en lugares distintos.
+  //
+  // Nunca tira. El webhook tiene que devolver 200 igual, porque un reintento de
+  // Apollo no recupera el crédito.
+  const v3 = await receivePhoneForV3({
+    apolloPersonId: apollo_person_id,
+    linkedinUrl: linkedin_url,
+    phone: bestPhone,
+    isMobile,
+  })
+
   const supabase = createAdminClient()
 
   // Match: preferimos apollo_person_id, fallback a linkedin_url.
@@ -208,12 +227,12 @@ export async function POST(
   const { data: matches, error: matchError } = await query
   if (matchError) {
     console.error("[v0][apollo-webhook] match query failed:", matchError)
-    return NextResponse.json({ ok: true, ignored: "db_error" })
+    return NextResponse.json({ ok: true, ignored: "db_error", v3 })
   }
 
   if (!matches || matches.length === 0) {
     console.warn("[v0][apollo-webhook] no contact matched, ignoring")
-    return NextResponse.json({ ok: true, ignored: "no_match" })
+    return NextResponse.json({ ok: true, ignored: "no_match", v3 })
   }
 
   // Si Apollo no encontro telefono, marcamos not_available.
@@ -228,7 +247,7 @@ export async function POST(
       console.error("[v0][apollo-webhook] mark not_available failed:", updErr)
     }
     console.log(`[v0][apollo-webhook] marked ${ids.length} contacts as not_available`)
-    return NextResponse.json({ ok: true, updated: ids.length, status: "not_available" })
+    return NextResponse.json({ ok: true, updated: ids.length, status: "not_available", v3 })
   }
 
   // Si vino telefono, lo guardamos en mobile_phone (preferido) o phone (fallback).
@@ -251,7 +270,7 @@ export async function POST(
         matches.map((m) => m.id),
       )
       .eq("phone_status", "pending")
-    return NextResponse.json({ ok: true, updated: 0, status: "received_no_overwrite" })
+    return NextResponse.json({ ok: true, updated: 0, status: "received_no_overwrite", v3 })
   }
 
   const { error: updErr } = await supabase
@@ -264,7 +283,7 @@ export async function POST(
 
   if (updErr) {
     console.error("[v0][apollo-webhook] update phone failed:", updErr)
-    return NextResponse.json({ ok: true, ignored: "update_error" })
+    return NextResponse.json({ ok: true, ignored: "update_error", v3 })
   }
 
   // Log en apollo_api_calls via logger (que conoce el schema real de la
@@ -282,6 +301,9 @@ export async function POST(
       linkedin_url,
       contacts_updated: updates.length,
       column_used: updateColumn,
+      // Sin esto, un teléfono que no aterriza en v3 se pierde en silencio: v2
+      // devuelve 200 igual y nadie se entera.
+      v3,
     },
   })
 
@@ -293,6 +315,7 @@ export async function POST(
     updated: updates.length,
     status: "received",
     column: updateColumn,
+    v3,
   })
 }
 

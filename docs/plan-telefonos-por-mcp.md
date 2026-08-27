@@ -58,18 +58,42 @@ Con `reveal_phone_number=true` a secas Apollo busca solo en su base y devuelve u
 `request_id` que exige polling, sin webhook. Está documentado en el código actual
 y conviene que siga estándolo.
 
-### 2.2 El webhook tiene que aprender el camino v3
+### 2.2 El webhook aprende el camino v3 — HECHO
 
-`app/api/webhooks/apollo/[secret]/route.ts` matchea por `apollo_person_id` y
-actualiza **solo** `user_company_contacts`. La buena noticia es que
-`v3.account_contacts` tiene la misma columna `apollo_person_id`, así que el match
-es el mismo.
+`app/api/webhooks/apollo/[secret]/route.ts` matcheaba por `apollo_person_id` y
+actualizaba **solo** `user_company_contacts`. `v3.account_contacts` tiene la
+misma columna, así que el match es el mismo.
 
-La decisión de diseño que hay que respetar: en v3 **la PII vive en el caché
-global compartido**, y `account_contacts` solo referencia `apollo_cache_id`. O
-sea que el teléfono va a `apollo_contacts_cache.mobile_phone` / `.phone`, y en
-`account_contacts` va únicamente el estado. Escribir el teléfono por workspace
-duplicaría PII sin necesidad.
+El lado v3 vive aparte, en `lib/v3/services/contact-phone-inbox.ts`, y el
+webhook lo llama **en un solo punto, antes de sus tres salidas**. No es
+cosmético: abajo hay tres `return` distintos —sin teléfono, ya lo tenía, lo
+escribimos— y repartir el camino v3 entre los tres es la forma segura de que uno
+quede afuera la próxima vez que alguien toque esa función. Lo que v3 hace no
+depende del resultado de v2.
+
+Dónde va cada cosa, que es la diferencia con v2: **el número al caché
+compartido** (`apollo_contacts_cache`), **el estado a `account_contacts`**. v2
+guarda el número en la fila del usuario; en v3 eso duplicaría el mismo teléfono
+por workspace.
+
+**Las dos reglas que no son obvias**, y que por eso tienen test propio:
+
+- El **estado** se toca solo en filas que están en `pending`. Pedir es por
+  workspace: si A pagó el reveal y B tiene a la misma persona sin haberla
+  pedido, el estado de B sigue en `not_requested`. Marcarle `received`
+  afirmaría un pedido que no hizo.
+- La **fecha de verificación** se toca en todas las filas de esa persona, haya
+  pedido o no, porque describe el DATO y no el pedido. B se beneficia del número
+  que pagó A —está en el caché compartido, que es el punto del diseño— y sin la
+  fecha, `get_company_contacts` lo contaría como `never_verified` y
+  `withUsablePhone` daría 0 teniendo el número en la mano.
+
+El resultado del lado v3 viaja en el log del webhook y en las seis respuestas.
+Sin eso, un teléfono que no aterriza se pierde en silencio: v2 devuelve 200
+igual y nadie se entera.
+
+Depende de la migración `20260827172000`: sin ella, el CHECK viejo rechaza
+`received` y `not_available`.
 
 ### 2.3 Dos tools
 
@@ -189,12 +213,14 @@ irrecuperable y la decisión es tuya.
 | | Qué | Depende de |
 |---|---|---|
 | ~~**F1**~~ | ~~La traducción de estados en una función pura + tests.~~ **HECHO.** `lib/shared/phone-status.ts` + migración `20260827172000` + `pendingPhone` arreglado. | — |
-| **F2** | El webhook aprende v3: teléfono al caché, estado a `account_contacts`. Sin tool todavía, así que no hay gasto nuevo. | F1 |
+| ~~**F2**~~ | ~~El webhook aprende v3.~~ **HECHO.** `lib/v3/services/contact-phone-inbox.ts`, enganchado en un solo punto del webhook. Sin tool todavía, así que no hay gasto nuevo. | F1 |
 | **F3** | El servicio de reveal scopeado por principal + `request_contact_phones`. Acá empieza a gastar. | F2 |
 | **F4** | Vencimiento de `pending` → `not_available` y el costo de teléfono en `get_cost_summary`. | F3 |
 
-F1 y F2 no gastan un crédito y dejan el camino de vuelta funcionando, que es lo
-que hoy no existe. F3 es la única fase que necesita las decisiones del punto 4.
+F1 y F2 están hechas: no gastaron un crédito y el camino de vuelta ya existe —
+un teléfono que llegue hoy por el reveal de la UI aterriza también del lado v3.
+F3 es la que empieza a gastar, y la única que necesita las decisiones del punto 4
+que siguen abiertas.
 
 ---
 
