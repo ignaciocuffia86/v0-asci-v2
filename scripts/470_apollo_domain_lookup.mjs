@@ -30,14 +30,25 @@
  *    de lookup shallow—. `--probe` prueba los candidatos y reporta cual
  *    responde 200 y con que consumo, sin escribir nada.
  *
- * POR QUE UN SCRIPT Y NO EL MCP DE APOLLO
- * El MCP oficial expone el mismo lookup, pero su gateway corta a ~400 llamadas
- * POR HORA (medido el 27-ago-2026: el piloto se comio la cuota a las ~180
- * llamadas y devolvio rate_limit_exceeded en las 339 restantes). A ese ritmo
- * las 421.075 candidatas son ~44 dias corridos. La API REST, medida sobre
- * nuestra propia cuenta en el script 460, da x-rate-limit-minute: 1000: el
- * mismo barrido son ~7 horas. Por eso esto es un script con API key y no una
- * herramienta de agente.
+ * EL TECHO REAL: 400 LLAMADAS POR HORA (leer antes de planificar un barrido)
+ * Medido el 27-ago-2026. Apollo rechaza con: "The maximum number of api calls
+ * allowed for api/v1/organizations/search is 400 times per hour. Please
+ * upgrade your plan". Es una cuota DEL PLAN sobre ESE endpoint, no del
+ * transporte: cambiar el MCP por este script NO la levanta. No confundirla con
+ * el x-rate-limit-minute: 1000 que el script 460 midio sobre
+ * organizations/enrich — son endpoints distintos con cuotas distintas.
+ *
+ * Consecuencia para el barrido completo: 421.075 candidatas / 400 por hora =
+ * ~1.053 horas = ~44 dias corriendo sin parar. Las salidas posibles son tres y
+ * conviene elegir antes de arrancar, no despues:
+ *   a) upgradear el plan de Apollo (el mensaje de error apunta ahi),
+ *   b) barrer un subconjunto priorizado en vez de las 421.075 (las 10.922 con
+ *      hq_country_iso, o las que ya tienen contactos/senales asociadas),
+ *   c) aceptar el barrido largo como proceso de fondo, con checkpoint — que es
+ *      justo para lo que existe v3.apollo_domain_lookup.
+ *
+ * Este script asume 400/hora en su sleep por default (9s). Correrlo mas rapido
+ * no acelera nada: choca la pared y devuelve errores.
  *
  * NO PISA `website`. El dominio resuelto por nombre es un CANDIDATO: el match
  * es difuso y puede traer una homonima de otro pais (lib/v3/services/
@@ -54,7 +65,7 @@
  *   pero NO toca la base.
  *
  *   --limit N        candidatas a procesar (default 1000, el tamaño del piloto)
- *   --sleep MS       pausa entre llamadas (default 150ms ~ 6.7 req/s)
+ *   --sleep MS       pausa entre llamadas (default y minimo 9000ms = 400/hora)
  *   --country-only   solo candidatas con hq_country_iso (acota la poblacion)
  *   --country-filter filtra por pais EN LA QUERY (apagado: recorta recall)
  *   --out FILE       CSV de salida (default scripts/out/470_lookup.csv)
@@ -71,14 +82,20 @@ const APOLLO_API_KEY = process.env.APOLLO_API_KEY
 const APOLLO_BASE = "https://api.apollo.io/api/v1"
 
 /**
- * Candidatos de path para el lookup gratuito, en orden de preferencia.
- * `--probe` los recorre y reporta cual anda. Cuando quede confirmado, dejar
- * solo el bueno y borrar el resto (con el delta de creditos medido al lado).
+ * Path CONFIRMADO el 27-ago-2026: el propio Apollo lo nombro al rechazar una
+ * llamada por cuota — "The maximum number of api calls allowed for
+ * api/v1/organizations/search is 400 times per hour". O sea que el lookup
+ * gratuito del MCP y este endpoint REST son la misma cosa.
  */
-const LOOKUP_ENDPOINTS = [
-  { path: "/mixed_companies/search", displayMode: "fuzzy_select_mode" },
-  { path: "/organizations/search", displayMode: "fuzzy_select_mode" },
-]
+const LOOKUP_ENDPOINTS = [{ path: "/organizations/search", displayMode: "fuzzy_select_mode" }]
+
+/**
+ * Cuota dura del endpoint, POR HORA y POR PLAN (no por transporte): el mensaje
+ * de rechazo remite a upgradear el plan. Con 400/hora el sleep minimo son 9s;
+ * cualquier valor mas agresivo choca la pared en 90 segundos.
+ */
+const CALLS_PER_HOUR = 400
+const MIN_SLEEP_MS = Math.ceil(3_600_000 / CALLS_PER_HOUR)
 
 const args = process.argv.slice(2)
 const getNum = (name, def) => {
@@ -90,7 +107,8 @@ const getStr = (name, def) => {
   return i !== -1 && args[i + 1] ? args[i + 1] : def
 }
 const LIMIT = getNum("--limit", 1000)
-const SLEEP_MS = getNum("--sleep", 150)
+// El default es la cuota, no una preferencia: 400/hora = 9s entre llamadas.
+const SLEEP_MS = Math.max(getNum("--sleep", MIN_SLEEP_MS), MIN_SLEEP_MS)
 const SEED = getStr("--seed", "pilot1")
 const OUT = getStr("--out", "scripts/out/470_lookup.csv")
 const COUNTRY_ONLY = args.includes("--country-only")
@@ -409,6 +427,7 @@ async function main() {
 
   const results = []
   let errors = 0
+  let consecutive429 = 0
   for (const [i, row] of candidates.entries()) {
     const r = await apolloFetch(endpoint.path, {
       body: lookupBody(endpoint, { core: row.core, iso: row.iso }),
@@ -417,14 +436,26 @@ async function main() {
     if (!r.ok) {
       errors++
       results.push({ ...row, match: null, sim: 0, cont: 0, clase: "error", status: r.status })
-      // 429 = cuota por minuto: esperamos lo que pida el header, o 60s.
+      // 429 = se acabo la cuota HORARIA. Insistir no la devuelve: lo unico que
+      // logra es llenar el checkpoint de filas en error que despues hay que
+      // reintentar igual. Cortamos y que reanude la proxima corrida — para eso
+      // existe el checkpoint.
       if (r.status === 429) {
+        consecutive429++
+        if (consecutive429 >= 3) {
+          console.log(
+            `\n[470] cuota horaria agotada en la fila ${i + 1}/${candidates.length}. ` +
+              `Cortando: las procesadas quedan guardadas y la proxima corrida sigue desde aca.`,
+          )
+          break
+        }
         const wait = Number(r.rateLimits["retry-after"]) * 1000 || 60_000
         console.log(`[470] 429 en la fila ${i + 1}: esperando ${Math.round(wait / 1000)}s`)
         await sleep(wait)
       }
       continue
     }
+    consecutive429 = 0
 
     const matches = extractMatches(r.data)
     // Preferimos el primer candidato QUE TRAIGA DOMINIO: un match sin dominio
