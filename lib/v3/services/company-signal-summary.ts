@@ -5,7 +5,29 @@ import { canonicalizeSignals, groupBySignal } from "@/lib/shared/canonical-signa
 
 const GENERIC_TOKENS = new Set(["banco", "bank", "argentina", "grupo", "group", "sa", "srl", "inc", "the", "de", "del", "y"])
 const MAX_ALIASES = 15
+/**
+ * Filas de `signals` que se leen para ARMAR EL PANORAMA.
+ *
+ * No es un tope de presentación: es cuántas señales se miran antes de contar. El
+ * valor anterior era 100 y el panorama se presentaba como si fuera el total. En
+ * Santander Chile —865 señales— eso significa contar sobre el 11,6% y llamarlo
+ * "las tecnologías de la cuenta".
+ *
+ * Medido sobre las 215.237 empresas con señales: p50 = 1, p95 = 14, p99 = 82.
+ * Con 2.000 el panorama es COMPLETO para todas menos 55 empresas del catálogo, y
+ * esas 55 lo dicen en `scan.complete: false` con el total exacto al lado.
+ *
+ * Subirlo es gratis en los dos costos que importan. En tokens, porque lo que se
+ * lee de la base no es lo que se devuelve: el payload sigue siendo la lista de
+ * términos. Y en base, porque el límite no es lo que cuesta — sobre la empresa
+ * más grande del catálogo (23.600 señales) el plan lee igual todas las filas que
+ * matchean y después ordena: 51 ms con límite 100, 44 ms con límite 2.000.
+ */
+const MAX_SIGNALS_SCAN = 2000
+/** Filas que se leen en `detail: "evidence"`, donde la consulta ya viene filtrada por término. */
 const MAX_SIGNALS = 100
+/** Candidatas a homónimo que se traen antes de decidir cuáles consolidar. */
+const MAX_ALIAS_CANDIDATES = 200
 const MAX_IMPLEMENTATIONS = 30
 const MAX_JOBS = 30
 
@@ -149,6 +171,105 @@ export function selectAliases(canonical: AliasCandidate, candidates: AliasCandid
     { ...canonical, score: 1, nameScore: 1, sharedTokens: canonicalTokens, domainMatch: false, reason: "entidad pedida" },
     ...selected,
   ]
+}
+
+/** Cuántas entradas de diccionario se aceptan al resolver un término pedido. */
+const MAX_TERM_DICTIONARY_MATCHES = 50
+
+/**
+ * Traduce el término que pidió el usuario a entradas de diccionario.
+ *
+ * Existe porque el panorama rotula con `dictionary_*.name` y `signals` guarda el
+ * texto literal que matcheó en `keyword_matched`. Pedir la evidencia de "IBM Z"
+ * —la etiqueta que la tool mostró— buscando ese texto en `keyword_matched` da
+ * cero, porque la fila dice "JCL".
+ *
+ * Si el diccionario no responde se devuelve vacío y queda el filtro por keyword:
+ * degrada a lo que había, no rompe la consulta.
+ */
+async function resolveTermSignalIds(admin: ReturnType<typeof createAdminClient>, term: string) {
+  const needle = `%${term.replaceAll(",", " ").replaceAll("%", "").trim()}%`
+  const [products, processes] = await Promise.all([
+    admin.from("dictionary_products").select("id,name").ilike("name", needle).limit(MAX_TERM_DICTIONARY_MATCHES),
+    admin.from("dictionary_processes").select("id,name").ilike("name", needle).limit(MAX_TERM_DICTIONARY_MATCHES),
+  ])
+  return [...(products.data ?? []), ...(processes.data ?? [])].slice(0, MAX_TERM_DICTIONARY_MATCHES)
+}
+
+/**
+ * Candidatas a homónimo: TODAS las que pueden serlo, nunca una muestra.
+ *
+ * EL BUG QUE ARREGLA. La consulta era un OR de `name ilike %token%` con
+ * `.limit(100)` y SIN `order by`. Dos consecuencias, las dos medidas contra
+ * producción con "Santander Chile":
+ *
+ *   1. El OR incluye el token `chile`, que matchea 7.153 empresas del catálogo.
+ *      De las 7.503 candidatas que devuelve el filtro, la tool leía 100. De las
+ *      31 entidades Santander de Chile que existen, **0 caían en esas 100**.
+ *   2. Sin `order by`, cuáles son esas 100 lo decide el orden físico de las
+ *      filas. Cambia entre llamadas, y con él cambia el conjunto de empresas
+ *      cuyas señales se leen. Por eso el panorama no era estable entre lecturas:
+ *      no era la ventana de señales lo que se movía, era la de EMPRESAS.
+ *
+ * El AND de todos los tokens es exacto y chico: para "Santander Chile" da las 31
+ * y nada más. La regla que sostiene el arreglo es la de abajo: un filtro que
+ * matchea más filas de las que estamos dispuestos a leer NO se usa, porque leerlo
+ * con un tope es tomar una muestra y presentarla como el catálogo. Preferimos un
+ * pool más chico y honesto, con `truncated` a la vista.
+ */
+async function findAliasCandidates(
+  admin: ReturnType<typeof createAdminClient>,
+  canonical: { id: string; name: string },
+  strategy: AliasStrategy,
+): Promise<{ candidates: AliasCandidate[]; tokens: Array<{ token: string; matches: number }>; truncated: boolean }> {
+  const identity = identityTokens(canonical.name).slice(0, 3)
+  const searchTokens = identity.length ? identity : normalize(canonical.name).split(" ").filter(Boolean).slice(0, 1)
+  const clean = (token: string) => token.replaceAll(",", "").replaceAll("%", "")
+
+  // Cuántas empresas matchea cada token. Es lo que convierte "el token más
+  // discriminativo" de una corazonada (¿el más largo?) en un número: `chile`
+  // matchea 7.153 y `santander` 381. Con el índice trigram cada conteo cuesta
+  // ~60ms y son en paralelo.
+  const counted = await Promise.all(
+    searchTokens.map(async (token) => {
+      const { count } = await admin.from("companies").select("id", { count: "exact", head: true }).ilike("name", `%${clean(token)}%`)
+      return { token, matches: count ?? Number.MAX_SAFE_INTEGER }
+    }),
+  )
+  const ranked = [...counted].sort((a, b) => a.matches - b.matches)
+
+  const fetchWith = async (tokens: string[]) => {
+    let query = admin.from("companies").select("id,name,website,country,industry")
+    for (const token of tokens) query = query.ilike("name", `%${clean(token)}%`)
+    // El orden explícito es lo que hace la lectura repetible. Sin él, dos llamadas
+    // iguales pueden devolver conjuntos distintos y el usuario ve un panorama que
+    // "cambia solo".
+    const { data, error } = await query
+      .order("normalized_name", { ascending: true, nullsFirst: false })
+      .order("id", { ascending: true })
+      .limit(MAX_ALIAS_CANDIDATES)
+    if (error) throw new Error(`COMPANY_ALIAS_SEARCH_FAILED:${error.message}`)
+    return (data ?? []) as AliasCandidate[]
+  }
+
+  const candidates = await fetchWith(searchTokens)
+
+  // Ensanchar es para la cuenta FRAGMENTADA en varias entidades, que es el caso
+  // que existen `balanced` y `broad` para atender. Se suelta el token menos
+  // discriminativo, nunca el más: soltar `santander` y buscar por `chile` no
+  // ensancha, sortea.
+  if (strategy !== "strict" && candidates.length < 3 && ranked.length > 1) {
+    const widened = ranked.slice(0, ranked.length - 1)
+    const reach = widened[widened.length - 1].matches
+    if (reach <= MAX_ALIAS_CANDIDATES) {
+      const extra = await fetchWith(widened.map((entry) => entry.token))
+      const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]))
+      for (const candidate of extra) byId.set(candidate.id, candidate)
+      return { candidates: [...byId.values()], tokens: counted, truncated: false }
+    }
+  }
+
+  return { candidates, tokens: counted, truncated: candidates.length >= MAX_ALIAS_CANDIDATES }
 }
 
 /**
@@ -312,28 +433,46 @@ export async function getCompanySignalSummary(
   if (companyError) throw new Error(`COMPANY_READ_FAILED:${companyError.message}`)
   if (!canonical) throw new Error("COMPANY_NOT_FOUND")
 
-  const tokens = identityTokens(canonical.name)
-  const searchTokens = tokens.length ? tokens.slice(0, 3) : normalize(canonical.name).split(" ").slice(0, 1)
-  const filters = searchTokens.map((token) => `name.ilike.%${token.replaceAll(",", "")}%`).join(",")
-  const { data: candidates, error: aliasError } = await admin.from("companies").select("id,name,website,country,industry").or(filters).limit(100)
-  if (aliasError) throw new Error(`COMPANY_ALIAS_SEARCH_FAILED:${aliasError.message}`)
-
-  const aliases = selectAliases(canonical, candidates ?? [], strategy)
+  const candidatePool = await findAliasCandidates(admin, canonical, strategy)
+  const aliases = selectAliases(canonical, candidatePool.candidates, strategy)
   const companyIds = aliases.map((alias) => alias.id)
   const aliasNames = new Map(aliases.map((alias) => [alias.id, alias.name]))
   // El modo evidence no necesita implementaciones ni vacantes: su contrato es
   // "el fragmento que prueba ESTE término". Traerlas sería pagar el peso que el
   // modo viene a evitar.
   if (detail === "evidence") {
-    return evidenceDetail({ canonical, aliases, aliasNames, companyIds, strategy, term: options.term })
+    return evidenceDetail({ canonical, aliases, aliasNames, companyIds, strategy, term: options.term, pool: candidatePool })
   }
 
-  const [signalsResult, implementationsResult, jobsResult] = await Promise.all([
-    admin.from("signals").select("id,company_id,signal_type,signal_id,keyword_matched,source_field,snippet,source_url,job_posting_id,job_posted_at,created_at,contacts:contact_id ( id, full_name, linkedin_url, email1, updated_at )").in("company_id", companyIds).order("created_at", { ascending: false }).limit(MAX_SIGNALS),
+  // `snippet` y `source_url` solo hacen falta para las citas de `full`. En
+  // `compact` son la mitad de los bytes que se leen y no se muestran: pedirlos
+  // sería traer 2.000 fragmentos para tirarlos. Las dos consultas van con la
+  // lista de columnas literal y no armada por concatenación, porque el cliente
+  // infiere el tipo de la fila desde ese literal.
+  //
+  // El segundo `order` no es decorativo: con solo `created_at`, las filas
+  // empatadas quedan en el orden que elige el motor y el corte del límite se
+  // mueve entre llamadas.
+  const scanSignals = (
+    detail === "full"
+      ? admin.from("signals").select("id,company_id,signal_type,signal_id,keyword_matched,source_field,snippet,source_url,job_posting_id,job_posted_at,created_at,contacts:contact_id ( id, full_name, linkedin_url, email1, updated_at )")
+      : admin.from("signals").select("id,company_id,signal_type,signal_id,keyword_matched,source_field,job_posting_id,job_posted_at,created_at,contacts:contact_id ( id, full_name, linkedin_url, email1, updated_at )")
+  )
+    .in("company_id", companyIds)
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(MAX_SIGNALS_SCAN)
+
+  const [signalsResult, signalsTotalResult, implementationsResult, jobsResult] = await Promise.all([
+    scanSignals,
+    // El total EXACTO, aparte. Es lo que permite decir "conté 2.000 de 23.600" en
+    // vez de presentar un recorte como si fuera la cuenta entera.
+    admin.from("signals").select("id", { count: "exact", head: true }).in("company_id", companyIds),
     admin.from("company_implementations").select("id,company_id,title,provider_name,technology,summary,area,evidence_level,relevance_snippet,source_url,source_name,published_at,created_at").in("company_id", companyIds).order("created_at", { ascending: false }).limit(MAX_IMPLEMENTATIONS),
     admin.from("job_postings").select("id,company_id,title,description,location,posted_at,job_url,created_at").in("company_id", companyIds).order("posted_at", { ascending: false, nullsFirst: false }).limit(MAX_JOBS),
   ])
   if (signalsResult.error) throw new Error(`SIGNALS_READ_FAILED:${signalsResult.error.message}`)
+  if (signalsTotalResult.error) throw new Error(`SIGNALS_COUNT_FAILED:${signalsTotalResult.error.message}`)
   if (implementationsResult.error) throw new Error(`IMPLEMENTATIONS_READ_FAILED:${implementationsResult.error.message}`)
   if (jobsResult.error) throw new Error(`JOBS_READ_FAILED:${jobsResult.error.message}`)
 
@@ -361,7 +500,12 @@ export async function getCompanySignalSummary(
 
   const implementations = implementationsResult.data ?? []
   const status = signals.length || implementations.length || jobs.length ? "evidence_available" : "empty"
-  const aliasResolution = aliasResolutionBlock(aliases, strategy, canonical.id)
+  const aliasResolution = aliasResolutionBlock(aliases, strategy, canonical.id, candidatePool)
+
+  // Qué parte de la evidencia se miró para armar estos números. Un panorama
+  // incompleto es una lectura válida; un panorama incompleto que no se declara
+  // es una lectura equivocada, y no hay forma de que quien lee lo note.
+  const scan = scanBlock(signals.length, signalsTotalResult.count)
 
   // `signalsOwn` vs `signalsConsolidated`: sin esta separación no había forma de
   // saber cuánto del número es de la empresa que se preguntó. Se reportaban 24
@@ -378,6 +522,7 @@ export async function getCompanySignalSummary(
       detail: "compact" as const,
       company: canonical,
       aliasResolution,
+      scan,
       summary: {
         status,
         technologies: grouped.filter((item) => item.type === "technology").map(strip),
@@ -399,9 +544,10 @@ export async function getCompanySignalSummary(
       jobPostings: { count: jobs.length, latestPostedAt: jobs[0]?.postedAt ?? null },
       interpretationGuidance:
         "Vista COMPACTA: hay conteos y fechas, no citas textuales. Sirve para decidir si la cuenta es relevante. " +
-        "Para la cita textual de UN término (fragmento, fecha, link, y si la persona sigue en la empresa) usá detail=\"evidence\" con ese `term`: cuesta <600 tokens y NO necesita research previo. " +
-        "Para el panorama entero con evidencia y vacantes, repetí esta tool con detail=\"full\".",
-      limits: { aliases: MAX_ALIASES, signals: MAX_SIGNALS, implementations: MAX_IMPLEMENTATIONS, jobPostings: MAX_JOBS },
+        "Para la cita textual de UN término (fragmento, fecha, link, y si la persona sigue en la empresa) usá detail=\"evidence\" pasando el `label` TAL CUAL figura acá: la tool lo resuelve contra el diccionario. " +
+        "Para el panorama entero con evidencia y vacantes, repetí esta tool con detail=\"full\". " +
+        (scan.note ?? "Panorama COMPLETO: se contaron todas las señales de la cuenta."),
+      limits: { aliases: MAX_ALIASES, signalsScanned: MAX_SIGNALS_SCAN, implementations: MAX_IMPLEMENTATIONS, jobPostings: MAX_JOBS },
     }
   }
 
@@ -409,19 +555,53 @@ export async function getCompanySignalSummary(
     detail: "full" as const,
     company: canonical,
     aliasResolution,
+    scan,
     summary: { status, technologies: grouped.filter((item) => item.type === "technology"), processes: grouped.filter((item) => item.type === "process"), signalsOwn: signalCounts.own, signalsConsolidated: signalCounts.consolidated, signalCount: signalCounts.consolidated, implementationCount: implementations.length, jobPostingCount: jobs.length },
     implementations: implementations.map((item) => ({ ...item, companyName: aliasNames.get(item.company_id) })),
     jobPostings: jobs,
-    interpretationGuidance: "Resume solo lo observado. Distingue señales clasificadas, implementaciones y evidencia cruda de vacantes. Una vacante sin linkedSignalIds es indicio, no confirmación de tecnología o proceso implementado.",
-    limits: { aliases: MAX_ALIASES, signals: MAX_SIGNALS, implementations: MAX_IMPLEMENTATIONS, jobPostings: MAX_JOBS },
+    interpretationGuidance:
+      "Resume solo lo observado. Distingue señales clasificadas, implementaciones y evidencia cruda de vacantes. Una vacante sin linkedSignalIds es indicio, no confirmación de tecnología o proceso implementado. " +
+      (scan.note ?? "Panorama COMPLETO: se contaron todas las señales de la cuenta."),
+    limits: { aliases: MAX_ALIASES, signalsScanned: MAX_SIGNALS_SCAN, implementations: MAX_IMPLEMENTATIONS, jobPostings: MAX_JOBS },
   }
 }
 
-function aliasResolutionBlock(aliases: SelectedAlias[], strategy: AliasStrategy, canonicalId: string) {
+/**
+ * Cuánta evidencia se miró para armar el panorama.
+ *
+ * `complete: false` no es un detalle técnico: cambia qué se puede afirmar. Con
+ * 2.000 de 23.600 señales, "esta cuenta no usa X" es una conclusión que los datos
+ * no sostienen, y "usa X 3 veces" tampoco. Por eso el aviso viaja como texto y no
+ * solo como número: el que lo lee tiene que saber qué NO puede decir.
+ */
+export function scanBlock(scanned: number, total: number | null) {
+  const complete = total === null ? null : scanned >= total
+  return {
+    signalsScanned: scanned,
+    // null ≠ 0: si el conteo no vino, no inventamos que miramos todo.
+    signalsTotal: total,
+    complete,
+    note:
+      complete === false
+        ? `PANORAMA PARCIAL: se contaron ${scanned} de ${total} señales (las más recientes). Los conteos por término son un piso, no el total, y la ausencia de un término NO prueba que la cuenta no lo tenga. Para un término puntual usá detail="evidence" con ese \`term\`: esa consulta filtra en la base y mira la cuenta entera.`
+        : null,
+  }
+}
+
+function aliasResolutionBlock(
+  aliases: SelectedAlias[],
+  strategy: AliasStrategy,
+  canonicalId: string,
+  pool?: { tokens: Array<{ token: string; matches: number }>; truncated: boolean },
+) {
   const consolidated = aliases.filter((alias) => alias.id !== canonicalId)
   return {
     strategy,
     aliasCount: aliases.length,
+    // De dónde salieron las candidatas. Con esto a la vista, un pool truncado deja
+    // de ser invisible: es la diferencia entre "no hay más homónimos" y "no
+    // miramos más".
+    candidatePool: pool ? { searchTokens: pool.tokens, truncated: pool.truncated } : undefined,
     // El warning anterior decía "se consolidaron entidades relacionadas" sin decir
     // CUÁLES. Con los nombres, quien lee puede ver de una que "Consorcio Persa" no
     // es la aseguradora y pedir otra estrategia.
@@ -452,8 +632,15 @@ async function evidenceDetail(params: {
   companyIds: string[]
   strategy: AliasStrategy
   term?: string
+  pool?: { tokens: Array<{ token: string; matches: number }>; truncated: boolean }
 }) {
   const admin = createAdminClient()
+
+  // El término que llega es, casi siempre, el `label` que el panorama mostró: un
+  // NOMBRE DE DICCIONARIO. Se resuelve contra el diccionario antes de tocar
+  // `signals` porque las dos columnas no hablan el mismo idioma (ver abajo).
+  const dictionaryMatches = params.term ? await resolveTermSignalIds(admin, params.term) : []
+
   let query = admin
     .from("signals")
     .select(
@@ -463,18 +650,42 @@ async function evidenceDetail(params: {
     )
     .in("company_id", params.companyIds)
 
-  // El filtro va en la consulta y no en memoria: si la cuenta tiene 400 señales y
-  // las de Power BI no están entre las 100 más nuevas, filtrar después devolvería
-  // "no hay evidencia" siendo mentira.
-  if (params.term) query = query.ilike("keyword_matched", `%${params.term}%`)
+  // EL BUG QUE ARREGLA. El filtro era solo `keyword_matched ilike %term%`, pero el
+  // panorama rotula cada término con su NOMBRE DE DICCIONARIO. Los dos coinciden
+  // por casualidad, no por diseño. Medido en Santander Chile:
+  //
+  //   etiqueta del panorama        keyword_matched real     ilike sobre keyword
+  //   IBM Z                        JCL                      0  ✗
+  //   Microsoft SQL Server         SQL Server               0  ✗   (11 filas perdidas)
+  //   .NET Framework y escritorio  NET Framework            0  ✗
+  //   Oracle Forms                 Oracle Forms             1  ✓
+  //
+  // Oracle Forms era el único que devolvía cita, y no porque tuviera más
+  // evidencia: es el único donde las dos columnas dicen lo mismo. Los otros tres
+  // volvían `matchedLabels: 0`, que se lee como "no hay evidencia" cuando lo que
+  // pasaba es que estábamos buscando en la columna equivocada.
+  //
+  // El filtro sigue yendo en la CONSULTA y no en memoria: filtrar después de un
+  // límite devuelve "no hay evidencia" siendo mentira.
+  if (params.term) {
+    const literal = params.term.replaceAll(",", " ").replaceAll("%", "").trim()
+    const clauses = [`keyword_matched.ilike.%${literal}%`]
+    if (dictionaryMatches.length) clauses.push(`signal_id.in.(${dictionaryMatches.map((entry) => entry.id).join(",")})`)
+    query = query.or(clauses.join(","))
+  }
 
-  const { data, error } = await query.order("created_at", { ascending: false }).limit(MAX_SIGNALS)
+  const { data, error } = await query.order("created_at", { ascending: false }).order("id", { ascending: false }).limit(MAX_SIGNALS)
   if (error) throw new Error(`SIGNALS_READ_FAILED:${error.message}`)
 
   const rows = data ?? []
+  // Se agrupa por la MISMA etiqueta que muestra el panorama. Agrupar por keyword
+  // partía un término en varias filas ("SQL Server" y "MS SQL Server" son la misma
+  // entrada de diccionario) y devolvía etiquetas que el usuario no había pedido
+  // nunca.
+  const dictionaryNames = await resolveDictionaryNames(admin, rows)
   const byTerm = new Map<string, typeof rows>()
   for (const row of rows) {
-    const label = String(row.keyword_matched || row.signal_id || "Sin clasificar")
+    const label = String((row.signal_id ? dictionaryNames.get(row.signal_id) : null) || row.keyword_matched || "Sin clasificar")
     byTerm.set(label, [...(byTerm.get(label) ?? []), row])
   }
 
@@ -533,19 +744,23 @@ async function evidenceDetail(params: {
     detail: "evidence" as const,
     company: { id: params.canonical.id, name: params.canonical.name, country: params.canonical.country, website: params.canonical.website },
     requestedTerm: params.term ?? null,
+    // Contra qué entradas de diccionario se resolvió el término. Sin esto, un
+    // cero no se puede distinguir de un término mal escrito.
+    resolvedFromDictionary: dictionaryMatches.map((entry) => entry.name),
     matchedLabels: byTerm.size,
     omittedLabels: Math.max(0, byTerm.size - EVIDENCE_TERMS_WITHOUT_QUERY),
-    aliasResolution: aliasResolutionBlock(params.aliases, params.strategy, params.canonical.id),
+    aliasResolution: aliasResolutionBlock(params.aliases, params.strategy, params.canonical.id, params.pool),
     terms,
     note: terms.length
       ? null
       : params.term
-        ? `No hay señales de "${params.term}" en esta entidad. NO significa que el término no exista en ASCI: puede estar en otra entidad homónima (mirá aliasResolution) o la cuenta puede no tenerlo.`
+        ? `No hay señales de "${params.term}" en esta entidad${dictionaryMatches.length ? ` (se buscó también por las entradas de diccionario: ${dictionaryMatches.map((entry) => entry.name).join(", ")})` : " y el término no coincide con ninguna entrada del diccionario, así que puede estar mal escrito"}. NO significa que el término no exista en ASCI: puede estar en otra entidad homónima (mirá aliasResolution) o la cuenta puede no tenerlo.`
         : "No hay señales cargadas para esta entidad.",
     interpretationGuidance:
       "Evidencia CRUDA global: no requiere research previo ni que la cuenta esté guardada. " +
       "`person.isCurrentEmployee` en false es un EX-empleado y no prueba uso actual: no construyas un icebreaker sobre esa señal sin decirlo. " +
-      "`entity.isRequestedEntity` en false significa que la señal es de una entidad homónima consolidada, no de la empresa que preguntaste.",
+      "`entity.isRequestedEntity` en false significa que la señal es de una entidad homónima consolidada, no de la empresa que preguntaste. " +
+      "El `term` se resuelve contra el diccionario además de contra el texto literal: podés pasar el `label` tal como lo mostró el panorama.",
     limits: { snippetsPerTerm: EVIDENCE_SNIPPETS_PER_TERM, snippetChars: EVIDENCE_SNIPPET_CHARS, signalsScanned: MAX_SIGNALS },
   }
 }
