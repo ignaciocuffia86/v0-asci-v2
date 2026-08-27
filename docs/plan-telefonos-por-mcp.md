@@ -95,6 +95,41 @@ igual y nadie se entera.
 Depende de la migración `20260827172000`: sin ella, el CHECK viejo rechaza
 `received` y `not_available`.
 
+### 2.2b Los teléfonos viejos, al caché compartido — HECHO
+
+F2 dejó el camino para que los teléfonos NUEVOS aterricen en
+`apollo_contacts_cache`. Los viejos seguían solo en `user_company_contacts`, y
+sin moverlos el MCP habría salido a pagarle a Apollo por números que ya
+compramos — el mismo error que se acaba de cerrar para los emails.
+
+Medido antes de escribir la migración (`20260827190000`):
+
+| | |
+|---|---|
+| Filas con teléfono en `user_company_contacts` | 106 |
+| **Personas distintas** | **80** |
+| De esas, ya con fila en el caché | **80** (0 huérfanas) |
+| Con móvil / solo fijo | 65 / 15 |
+| Personas con dos números distintos entre sus filas | **0** |
+
+Las 106 filas eran 80 personas: la tabla duplica el contacto por bookmark, hasta
+4 filas por persona, así que contar filas infla el número un 32%. Cero
+conflictos y cero filas nuevas — son 80 `UPDATE` sobre filas que ya existían.
+
+**No se insertan personas nuevas.** Importar al caché gente que nunca pasó por el
+enrichment de v3 es otra decisión: traería su email, su cargo y su empresa, y no
+es lo que este backfill viene a resolver.
+
+Dos guardas que parecen de más y no lo son: solo se llena la columna si está
+**vacía** (misma regla que v2 y el webhook), y el `UPDATE` excluye las filas
+donde no hay nada real que escribir — si no, tocaría `updated_at` de filas que no
+cambian, y `splitByContactCache` usa esa fecha para decidir frescura: las
+estaríamos rejuveneciendo sin motivo.
+
+Verificado después de aplicar: 80 teléfonos en el caché (65 móvil, 15 fijo),
+4.416 filas totales —ninguna nueva—, 0 personas de v2 sin espejo, y re-correrla
+toca **0 filas**.
+
 ### 2.3 Dos tools
 
 - **`request_contact_phones`** — pide teléfonos para contactos ya enriquecidos de
