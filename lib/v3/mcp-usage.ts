@@ -423,11 +423,16 @@ export async function getMcpUsage(principal: McpPrincipal) {
     // lote de 42 eso significa descubrir el presupuesto gastando llamadas.
     monthlyApolloCredits: {
       used: apolloUsed,
+      // `null` en las dos = sin cupo mensual (credencial sin topes). Devolver 0
+      // diría "no te queda nada", que es exactamente lo contrario.
       limit: enrichmentLimits.monthlyUnits,
-      remaining: Math.max(0, enrichmentLimits.monthlyUnits - apolloUsed),
+      remaining: enrichmentLimits.monthlyUnits === null ? null : Math.max(0, enrichmentLimits.monthlyUnits - apolloUsed),
       allowed: enrichmentLimits.allowed,
       reason: enrichmentLimits.reason,
-      note: "1 crédito = 1 contacto. Son créditos de Apollo que absorbe ASCI, NO tokens: se cuentan aparte de los dos pools de research.",
+      note:
+        enrichmentLimits.monthlyUnits === null
+          ? "1 crédito = 1 contacto. Esta credencial NO tiene cupo mensual: `used` es lo gastado en el mes y no hay techo que lo frene. El gasto queda medido y sale en get_cost_summary."
+          : "1 crédito = 1 contacto. Son créditos de Apollo que absorbe ASCI, NO tokens: se cuentan aparte de los dos pools de research.",
     },
     poolsNote:
       "Son TRES medidores independientes: monthlyServerResearch (tokens de ASCI), monthlyClientResearch (tus tokens, cupo del plan) y monthlyApolloCredits (créditos de terceros). Un research client-assisted no mueve monthlyServerResearch, y ninguno de los dos mueve los créditos de Apollo.",

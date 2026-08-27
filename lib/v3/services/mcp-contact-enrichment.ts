@@ -117,8 +117,21 @@ export type PreparedPlan = {
    * cotizado. Nunca rigen los dos a la vez.
    */
   ceiling:
-    | { source: "monthly"; used: number; limit: number; remaining: number }
+    | { source: "monthly"; used: number; limit: number | null; remaining: number }
     | { source: "batch"; batchJobId: string; authorized: number; spent: number; remaining: number }
+    /**
+     * Sin techo. `remaining: null` es "no hay cupo que frene", nunca "no queda
+     * nada" — la distinción es la razón de ser del perfil admin. `batchJobId`
+     * sigue viajando cuando lo hubo, pero como ATRIBUCIÓN del gasto, no como
+     * autorización.
+     */
+    | {
+        source: "unrestricted"
+        batchJobId: string | null
+        spentThisMonth: number | null
+        remaining: null
+        note: string
+      }
   /**
    * El cupo mensual, para no romper a quien ya leía este campo.
    *
@@ -126,7 +139,7 @@ export type PreparedPlan = {
    * NO es lo que frena, y este campo viaja en null justamente para que no se lo
    * lea como si lo fuera.
    */
-  monthly: { used: number; limit: number; remaining: number } | null
+  monthly: { used: number; limit: number | null; remaining: number | null } | null
   /** true si ya hay datos frescos en caché: la ejecución no gastaría créditos. */
   likelyCacheHit: boolean
   freshnessDays: number
@@ -152,10 +165,20 @@ export type RunResult = {
   authorizedBy:
     | { source: "batch"; batchJobId: string }
     | { source: "monthly" }
+    /**
+     * Nadie lo autorizó de antemano, y decirlo es el punto. Con `unrestricted` no
+     * hay cotización previa: el gasto se hace y se mide. Reportarlo como
+     * `monthly` sería nombrar un techo que no se aplicó.
+     */
+    | { source: "unrestricted"; batchJobId: string | null }
 }
 
-/** Con `batch_job_id` el gasto lo autorizó el lote; sin él, el cupo mensual. */
-function authorizedBy(batchJobId: string | null | undefined): RunResult["authorizedBy"] {
+/**
+ * Qué autorizó el gasto. Con topes: el lote si hubo `batch_job_id`, si no el cupo
+ * mensual. Sin topes: nada previo — el `batchJobId` queda como atribución.
+ */
+function authorizedBy(batchJobId: string | null | undefined, unrestricted: boolean): RunResult["authorizedBy"] {
+  if (unrestricted) return { source: "unrestricted", batchJobId: batchJobId ?? null }
   return batchJobId ? { source: "batch", batchJobId } : { source: "monthly" }
 }
 
@@ -373,26 +396,42 @@ export async function prepareContactEnrichment(
 
   const maxContacts = Math.min(Math.max(1, input.maxContacts ?? limits.maxContacts), limits.maxContacts)
 
-  // 3) EL TECHO. Uno de dos, nunca ninguno.
+  // 3) EL TECHO, y para quién.
   //
-  //    Con `batchJobId`, el gasto se cobra contra el presupuesto que congeló ese
-  //    lote: es la autorización que reemplaza al cupo mensual, y la que permite
-  //    que una credencial sin topes gaste Apollo con un límite real en vez de
-  //    solo una frase en el prompt.
-  //
-  //    Sin `batchJobId` rige el cupo mensual del plan, igual que siempre y para
-  //    todos los perfiles. Esa rama es la que evita el hueco: no hay forma de
-  //    llegar al gasto sin pasar por un techo.
-  //
+  //    Con topes (perfil estándar) sigue habiendo uno de dos y nunca ninguno: el
+  //    presupuesto del lote si vino `batchJobId`, el cupo mensual del plan si no.
   //    El RPC de reservas solo controla minuto/día/semana, así que sin este
   //    chequeo el tope sería decorativo en los dos casos.
+  //
+  //    SIN topes (perfil admin) no hay techo que frene, y el `batchJobId` deja de
+  //    ser autorización para ser ATRIBUCIÓN: sigue viajando para que el gasto se
+  //    le pueda imputar al informe, pero un presupuesto agotado ya no corta. Es
+  //    el punto del perfil —armar una base de 37 cuentas sin aceptar una
+  //    cotización antes de empezar— y lo que lo hace defendible no es un tope
+  //    sino que TODO queda medido: cada corrida registra sus créditos y
+  //    `get_cost_summary` los reporta al final.
+  //
+  //    Lo que NO se levanta es `maxContacts`, que no es un tope de plan sino
+  //    cuántos créditos gasta ESTA llamada. Ver `getContactEnrichmentLimits`.
   const budget = input.batchJobId
     ? await batchCreditBudget(admin, principal, input.batchJobId, input.companyId)
     : null
 
-  let remaining: number
+  // `null` = sin techo. Distinto de 0, que es "no queda nada".
+  let remaining: number | null
   let monthlyUsed: number | null = null
-  if (budget) {
+  let ceiling: PreparedPlan["ceiling"]
+  if (principal.unrestricted) {
+    remaining = null
+    monthlyUsed = await getMonthlyPoolUsage(principal.workspaceId, POOL)
+    ceiling = {
+      source: "unrestricted",
+      batchJobId: input.batchJobId ?? null,
+      spentThisMonth: monthlyUsed,
+      remaining: null,
+      note: "Credencial sin topes: no hay cupo que frene este gasto. Queda medido corrida por corrida y sale en get_cost_summary.",
+    }
+  } else if (budget) {
     remaining = budget.remaining
     if (remaining <= 0) {
       throw new EnrichmentError(
@@ -400,20 +439,24 @@ export async function prepareContactEnrichment(
         `El lote autorizó ${budget.authorized} crédito(s) de Apollo y ya se consumieron ${budget.spent}. Para gastar más hay que cotizar y confirmar un lote nuevo con estimate_batch.`,
       )
     }
+    ceiling = { source: "batch", batchJobId: input.batchJobId as string, authorized: budget.authorized, spent: budget.spent, remaining }
   } else {
     const used = await getMonthlyPoolUsage(principal.workspaceId, POOL)
     monthlyUsed = used
-    remaining = Math.max(0, limits.monthlyUnits - used)
+    const cap = limits.monthlyUnits ?? 0
+    remaining = Math.max(0, cap - used)
     if (remaining <= 0) {
       throw new EnrichmentError(
         "MONTHLY_LIMIT_REACHED",
-        `Agotaste tu cupo mensual de enrichment (${limits.monthlyUnits} contactos en el plan ${limits.plan}). Se renueva el 1° del mes que viene.`,
+        `Agotaste tu cupo mensual de enrichment (${cap} contactos en el plan ${limits.plan}). Se renueva el 1° del mes que viene.`,
       )
     }
+    ceiling = { source: "monthly", used, limit: limits.monthlyUnits, remaining }
   }
 
-  // Nunca reservar más de lo que queda en el techo que corresponda.
-  const effectiveMax = Math.min(maxContacts, remaining)
+  // Nunca reservar más de lo que queda en el techo que corresponda. Sin techo,
+  // manda `maxContacts` — que sigue existiendo, y a propósito.
+  const effectiveMax = remaining === null ? maxContacts : Math.min(maxContacts, remaining)
 
   const searchParams: SearchParams = {
     organizationId,
@@ -494,9 +537,7 @@ export async function prepareContactEnrichment(
     maxContacts: effectiveMax,
     maxCredits: cached.hit ? 0 : effectiveMax,
     expiresAt: expiresAt.toISOString(),
-    ceiling: budget
-      ? { source: "batch" as const, batchJobId: input.batchJobId as string, authorized: budget.authorized, spent: budget.spent, remaining }
-      : { source: "monthly" as const, used: monthlyUsed ?? 0, limit: limits.monthlyUnits, remaining },
+    ceiling,
     monthly: monthlyUsed === null ? null : { used: monthlyUsed, limit: limits.monthlyUnits, remaining },
     likelyCacheHit: cached.hit,
     freshnessDays: limits.freshnessDays,
@@ -544,7 +585,7 @@ export async function runContactEnrichment(
       contactsWithEmail: run.contacts_with_email,
       creditsSpent: run.credits_spent,
       fromCache: true,
-      authorizedBy: authorizedBy(run.batch_job_id),
+      authorizedBy: authorizedBy(run.batch_job_id, principal.unrestricted),
     }
   }
 
@@ -701,7 +742,7 @@ export async function runContactEnrichment(
       contactsWithEmail: withEmail,
       creditsSpent,
       fromCache,
-      authorizedBy: authorizedBy(run.batch_job_id),
+      authorizedBy: authorizedBy(run.batch_job_id, principal.unrestricted),
     }
   } catch (err) {
     // Falló: devolver el crédito. Si no, el usuario paga por nada.
