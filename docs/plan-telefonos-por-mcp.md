@@ -109,13 +109,24 @@ ya registra `credits_estimated` por llamada, y de ahí sale el número real:
 | | |
 |---|---|
 | Llamadas | 146 |
-| Créditos estimados | **620** |
-| Por llamada | 5 (0 en las que fallaron antes de llamar) |
-| **Por teléfono efectivamente obtenido** | **7,75** |
+| Créditos que registra nuestra telemetría | 620 |
+| Teléfonos obtenidos | 80 |
+| **Costo real por teléfono obtenido** | **5** |
 
-Contra **1 crédito por email**. Es la comparación que hay que poner delante de
-quien decide, y el motivo por el que esto merece su propio paso y no venir
-incluido en el enrichment.
+**Apollo NO cobra cuando no tiene el teléfono** (confirmado por el dueño). Eso
+corrige el número que este plan traía: 7,75 salía de dividir 620 entre 80, pero
+620 es lo que registra `credits_estimated`, que anota 5 por llamada sin mirar el
+resultado. Como 45 de los 146 pedidos volvieron sin número y no se cobraron, el
+gasto real es del orden de 5 × 80 = 400, y el costo por teléfono obtenido es **5,
+no 7,75**.
+
+Sigue siendo **5 veces el precio de un email**, así que la conclusión de diseño
+no cambia: esto merece su propio paso y no venir incluido en el enrichment.
+
+**Consecuencia aparte, que no es de este plan pero sale de acá:**
+`credits_estimated` sobreestima el gasto de teléfono en ~35% (620 contra ~400).
+Cualquier informe de costo que lo sume como si fuera la factura de Apollo está
+inflando. Se puede reconciliar contra el webhook, que ya sabe si hubo número.
 
 ---
 
@@ -169,23 +180,56 @@ Queda como F4 y no se hizo acá porque hoy no hay nada que vencer —
 `v3.account_contacts` tiene 0 filas— y el plazo correcto se elige mirando cuánto
 tarda un webhook real en llegar, no de memoria.
 
-### 3.3 El crédito se gasta aunque no haya teléfono
+### 3.3 El crédito cuando no hay teléfono — RESUELTO: no se cobra
 
-31,9% de los pedidos terminan en "Apollo no lo tiene". No tengo medido si esos
-cobran igual —`credits_estimated` es nuestra estimación, no la factura de
-Apollo— así que va como **incógnita explícita**, no como supuesto. Si cobran, el
-costo real por teléfono obtenido es el 7,75 de arriba; si no, baja. Antes de
-correr un lote grande conviene confirmarlo contra el uso real de la cuenta de
-Apollo.
+31,9% de los pedidos terminan en "Apollo no lo tiene", y **esos no se cobran**
+(confirmado por el dueño). La incógnita que este plan traía queda cerrada, y con
+ella baja el costo por teléfono obtenido de 7,75 a 5 (ver §2.4).
+
+Queda una consecuencia: nuestra propia telemetría no lo sabe. `credits_estimated`
+anota 5 por llamada sin mirar el resultado, así que sobreestima ~35%.
+
+### 3.4 Volver a pagar por gente que ya tenemos
+
+No estaba en el plan original y es el más caro de los tres, porque no afecta solo
+al teléfono: afecta a TODO el enrichment.
+
+El caché de búsqueda acierta solo cuando la consulta entera se repite —mismo
+organization_id, mismos cargos, mismo maxResults—. Cambiar un cargo la falla por
+completo y se vuelve a enriquecer, y a pagar, a gente que ya está en la base.
+
+Medido sobre las 4.223 llamadas a `people/match` del historial:
+
+| | |
+|---|---|
+| Llamadas totales | 4.223 |
+| Personas distintas | 3.300 |
+| **Llamadas repetidas sobre la misma persona** | **923** |
+| De esas, dentro de la ventana de frescura | **921** |
+| De esas, el mismo día | 677 |
+| Refresh legítimo (más de 90 días) | **2** |
+
+**921 créditos pagados por datos que ya teníamos**, sobre 4.223: el 21,8%.
+
+La regla: una fila en `apollo_contacts_cache` significa que ya pagamos por esa
+persona —`writeSearchCache` solo inserta contactos ya enriquecidos— así que
+dentro de la ventana no se vuelve a pedir, **tenga email o no**. Que Apollo no
+tenga el email también es una respuesta, y ya la compramos. Fuera de la ventana
+sí se vuelve a pedir: ahí el gasto compra un dato nuevo.
+
+Ante cualquier error de lectura del caché se pide todo. La dirección segura del
+error es gastar de más; devolver un hit falso sería entregar un contacto vacío
+como si fuera real, y encima sin haber preguntado.
 
 ---
 
 ## 4. Tres decisiones que son del dueño
 
-**a. ¿Sobre qué subconjunto?** Pedir teléfono para todos los contactos de 37
-cuentas es del orden de 185 personas ≈ 1.435 créditos. La alternativa es pedirlo
-solo para los que ya tienen email verificado y cargo que matchea, que es donde el
-teléfono agrega algo.
+**a. ¿Sobre qué subconjunto?** Pendiente. Pedir teléfono para todos los contactos
+de 37 cuentas es del orden de 185 personas. Con el costo corregido y la tasa de
+entrega real (56,7%), eso es ~105 teléfonos y ~525 créditos. La alternativa es
+pedirlo solo para los que ya tienen email verificado y cargo que matchea, que es
+donde el teléfono agrega algo.
 
 **b. ¿La tool espera o no? — DECIDIDO: no espera.** El reveal es asíncrono con
 ~57% de entrega; una tool que espera bloquea la conversación por algo que la
@@ -200,11 +244,13 @@ qué pasó, así que tiene que ser legible sin glosa externa. Por eso
 persona no tiene teléfono" cuando en realidad es "Apollo no nos lo dio, y el
 crédito se gastó igual".
 
-**c. ¿El cooldown de 7 días sigue aplicando en admin?** Hoy `revealProspectPhone`
-no reintenta antes de 7 días. Es un tope que protege del gasto repetido, no un
-tope de plan; por el criterio de "sin bloqueo, nunca sin medición" tendría que
-seguir midiéndose y avisando, pero no frenar. Lo dejo planteado porque es gasto
-irrecuperable y la decisión es tuya.
+**c. ¿El cooldown de 7 días aplica en admin? — DECIDIDO: no.** Es un tope
+administrativo, no un freno técnico, y el perfil admin existe para no tenerlos.
+Se sigue midiendo y avisando; no frena.
+
+Lo que SÍ frena, y es la regla que lo reemplaza: **antes de salir a Apollo se
+revisa el caché de contactos.** Ver §3.4 — no es un tope sino no pagar dos veces
+por el mismo dato, que es una distinción distinta y mucho más útil.
 
 ---
 
