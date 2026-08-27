@@ -74,7 +74,7 @@ language sql
 immutable
 set search_path to 'public', 'extensions', 'pg_catalog'
 as $screen_key$
-  select nullif(btrim(regexp_replace(
+  select nullif(btrim(
     -- 3) Espacios colapsados: "cia.  pesquera" y "cia. pesquera" son el mismo nombre.
     regexp_replace(
       -- 2) Plural en tokens de 6+ caracteres. El guard evita comerse la `s` de

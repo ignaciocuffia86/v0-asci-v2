@@ -100,11 +100,27 @@ runIf("no_match significa 'no está', nunca 'lo descartamos nosotros'", () => {
     // inexistente algo que excluyó nuestro propio filtro. La acción del usuario
     // es distinta —confirmar una identidad, no salir a scrapear— así que el
     // estado tiene que ser distinto.
+    //
+    // MAPFRE es el caso que de verdad ejercita la red: ficha en Spain, gente en
+    // Chile. Antes daba no_match con filteredByCountry=1.
+    const r = (await screen(["MAPFRE"])).get("MAPFRE")!
+    expect(r.status).not.toBe("no_match")
+    expect(r.localContacts).toBeGreaterThan(0)
+  })
+
+  it("Essbio NO lo pierde el país: lo pierde el piso de confianza", async () => {
+    // Medido después de aplicar la migración, y va escrito para que no se lea el
+    // caso como cubierto cuando no lo está. Essbio existe, es de Chile y tiene
+    // 160 contactos chilenos: el filtro de país nunca lo toca. Se cae antes,
+    // generando candidatas: el ruido del input ("S.A.  - ANSM") baja la
+    // similitud contra la ficha "Essbio" a 0.467, y v_min_conf es 0.50.
+    //
+    // Es un tercer mecanismo, distinto de los dos que arregla esta migración, y
+    // su arreglo —generación de candidatas para marcas cortas con sufijos— pide
+    // su propia medición: bajar el piso deja entrar basura en TODO el screening.
     const r = (await screen(["ESSBIO S.A.  - ANSM"])).get("ESSBIO S.A.  - ANSM")!
-    if (r.filteredByCountry > 0) {
-      expect(r.status).toBe("matched_ambiguous")
-      expect(r.ambiguityReason).toBe("country_mismatch")
-    }
+    expect(r.status).toBe("no_match")
+    expect(r.filteredByCountry, "si esto deja de ser 0, la causa cambió").toBe(0)
   })
 
   it("un nombre que de verdad no existe sigue dando no_match", async () => {
