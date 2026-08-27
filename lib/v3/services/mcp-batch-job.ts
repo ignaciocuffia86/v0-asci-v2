@@ -128,7 +128,7 @@ export async function createBatchJob(
       getContactEnrichmentLimits(principal.workspaceId, principal.unrestricted),
       getMonthlyPoolUsage(principal.workspaceId, "apollo_enrichment"),
     ])
-    authorizedCredits = authorizedBatchCredits(worstCaseCredits, false, limits.monthlyUnits - used)
+    authorizedCredits = authorizedBatchCredits(worstCaseCredits, false, (limits.monthlyUnits ?? 0) - used)
   }
 
   const cols = principalColumns(principal)

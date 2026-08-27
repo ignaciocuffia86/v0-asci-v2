@@ -357,7 +357,8 @@ export interface ContactEnrichmentLimits {
   plan: WorkspacePlan
   allowed: boolean
   reason: string | null
-  monthlyUnits: number
+  /** Créditos de Apollo del mes. `null` = sin tope (credencial sin topes). */
+  monthlyUnits: number | null
   /** Tope de cargos por ejecución. `null` = sin tope (credencial sin topes). */
   maxRoles: number | null
   maxContacts: number
@@ -369,14 +370,21 @@ export interface ContactEnrichmentLimits {
  * y para el MCP: ninguna tool debe hardcodear 10 cargos, 10 contactos ni 90 días.
  * Los créditos de Apollo los absorbe ASCI, por eso el tope es por plan.
  *
- * `unrestricted` levanta SOLO el tope de cargos. Es deliberado que no levante
- * `maxContacts`: los cargos son puntería —afinan a quién se busca— mientras que
- * los contactos son el gasto, porque el crédito se paga por contacto revelado.
- * Levantar la puntería no cuesta un peso más; levantar el gasto sí, y ese techo
- * lo mueve el presupuesto del lote, no este flag.
+ * `unrestricted` levanta el tope de cargos Y el cupo mensual de créditos. Los dos
+ * son límites de PLAN, y el perfil admin existe justamente para no tenerlos: el
+ * cupo mensual es lo que hacía que armar una base de 37 cuentas terminara en
+ * "quedan 145 créditos" y en una cotización que había que aceptar antes de
+ * trabajar. La regla del perfil es "sin bloqueo, nunca sin medición": el gasto se
+ * registra corrida por corrida y `get_cost_summary` lo reporta al final.
  *
- * El tope de cargos es un límite de plan y el perfil admin existe para no
- * tenerlos. `maxRoles: null` significa "sin tope", nunca "cero".
+ * `maxContacts` NO se levanta, y la distinción importa: los cargos y el cupo son
+ * topes administrativos, mientras que `maxContacts` es cuántos créditos gasta UNA
+ * llamada. Sin él, un `maxContactsPerAccount` mal puesto multiplica el gasto de
+ * cada cuenta sin que nadie lo pida. Levantar los topes del plan es la decisión
+ * del perfil; volar el freno por llamada no lo es.
+ *
+ * `null` significa "sin tope", nunca "cero": todo consumidor tiene que
+ * distinguirlos o el perfil admin queda peor que el estándar.
  */
 export async function getContactEnrichmentLimits(
   workspaceId: string,
@@ -390,7 +398,7 @@ export async function getContactEnrichmentLimits(
     reason: config.allowsContactEnrichment
       ? null
       : `La búsqueda de tomadores de decisión requiere un plan pago (tu plan actual: ${config.label}).`,
-    monthlyUnits: config.monthlyContactEnrichmentUnits,
+    monthlyUnits: unrestricted ? null : config.monthlyContactEnrichmentUnits,
     maxRoles: unrestricted ? null : config.maxRolesPerEnrichment,
     maxContacts: config.maxContactsPerEnrichment,
     freshnessDays: config.contactFreshnessDays,

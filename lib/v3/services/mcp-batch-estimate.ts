@@ -198,7 +198,12 @@ export async function estimateBatch(principal: McpPrincipal, params: BatchEstima
   // ── Apollo ────────────────────────────────────────────────────────────────
   const enrichmentLimits = wantsEnrichment ? await getContactEnrichmentLimits(principal.workspaceId, principal.unrestricted) : null
   const creditsUsed = wantsEnrichment ? await getMonthlyPoolUsage(principal.workspaceId, "apollo_enrichment") : 0
-  const creditsAvailable = enrichmentLimits ? Math.max(0, enrichmentLimits.monthlyUnits - creditsUsed) : 0
+  // `null` = sin cupo mensual (credencial sin topes). Nunca 0, que significa
+  // "no queda nada" y es justo lo contrario.
+  const creditsAvailable =
+    !enrichmentLimits || enrichmentLimits.monthlyUnits === null
+      ? null
+      : Math.max(0, enrichmentLimits.monthlyUnits - creditsUsed)
   const contactsPerAccount = enrichmentLimits
     ? Math.min(params.maxContactsPerAccount ?? enrichmentLimits.maxContacts, enrichmentLimits.maxContacts)
     : 0
@@ -209,8 +214,18 @@ export async function estimateBatch(principal: McpPrincipal, params: BatchEstima
 
   // ── Bloqueos ──────────────────────────────────────────────────────────────
   const blockers: string[] = []
-  if (slotsNeeded > slotsAvailable) {
-    blockers.push(`Faltan lugares del plan: el lote necesita ${slotsNeeded} y hay ${slotsAvailable} libres de ${usage.config.followedCap}. Liberá cuentas con remove_workspace_account o achicá el lote.`)
+  // Los lugares del plan NO frenan a una credencial sin topes.
+  //
+  // `checkFollowQuota` ya lo respetaba, así que `save_account` dejaba pasar el
+  // lote y este bloqueo lo frenaba una capa antes: el perfil admin pedía liberar
+  // cuentas para un cupo que después no se aplicaba. Se sigue midiendo —el número
+  // viaja igual en `slots`— y el motivo que HABRÍA bloqueado queda a la vista.
+  const slotsWouldBlock =
+    slotsNeeded > slotsAvailable
+      ? `El lote necesita ${slotsNeeded} lugares del plan y hay ${slotsAvailable} libres de ${usage.config.followedCap}.`
+      : null
+  if (slotsWouldBlock && !principal.unrestricted) {
+    blockers.push(`Faltan lugares del plan: ${slotsWouldBlock} Liberá cuentas con remove_workspace_account o achicá el lote.`)
   }
   if (classified.blockedByQuota.length) {
     // El motivo lo escribe checkResearchQuota y distingue trial de plan pago: se
@@ -222,7 +237,7 @@ export async function estimateBatch(principal: McpPrincipal, params: BatchEstima
   if (wantsEnrichment && enrichmentLimits && !enrichmentLimits.allowed) {
     blockers.push(enrichmentLimits.reason ?? "El plan no permite enrichment de contactos.")
   }
-  if (wantsEnrichment && enrichmentLimits?.allowed && estimatedCredits > creditsAvailable) {
+  if (wantsEnrichment && enrichmentLimits?.allowed && creditsAvailable !== null && estimatedCredits > creditsAvailable) {
     blockers.push(`Faltan créditos de Apollo: el peor caso son ${estimatedCredits} y quedan ${creditsAvailable} este mes. El lote se puede correr igual, pero se va a cortar al agotarlos.`)
   }
 
@@ -270,7 +285,17 @@ export async function estimateBatch(principal: McpPrincipal, params: BatchEstima
 
   const estimate = {
     accounts: { requested: companyIds.length, resolved: resolved.length, notFound },
-    slots: { needed: slotsNeeded, available: slotsAvailable, cap: usage.config.followedCap, alreadySaved: resolved.length - slotsNeeded },
+    slots: {
+      needed: slotsNeeded,
+      available: slotsAvailable,
+      cap: usage.config.followedCap,
+      alreadySaved: resolved.length - slotsNeeded,
+      // Medido siempre; aplicado solo con topes. Sin esto, un lote que "necesita
+      // 15 de 26 libres" se lee como un límite real cuando para esta credencial
+      // no lo es.
+      enforced: !principal.unrestricted,
+      wouldBlockReason: principal.unrestricted ? slotsWouldBlock : null,
+    },
     research: wantsResearch
       ? {
           needed: researchNeeded,
@@ -290,7 +315,8 @@ export async function estimateBatch(principal: McpPrincipal, params: BatchEstima
           allowed: enrichmentLimits?.allowed ?? false,
           estimatedCredits,
           creditsAvailable,
-          monthlyUnits: enrichmentLimits?.monthlyUnits ?? 0,
+          monthlyUnits: enrichmentLimits?.monthlyUnits ?? null,
+          capped: (enrichmentLimits?.monthlyUnits ?? null) !== null,
           contactsPerAccount,
           basis: "Peor caso: contactsPerAccount por cuenta. Apollo puede devolver menos y ahí se cobra menos.",
         }
