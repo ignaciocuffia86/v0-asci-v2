@@ -74,9 +74,26 @@ alguien que elija entre 19 cuando hay 2 en disputa es lo que hace que se sienta 
 
 ### Qué hacer
 
-1. **Endurecer `company_core_name`**: sacar toda puntuación (`(){}[].,"'&-`), colapsar
-   espacios múltiples. Con solo esto, **4 de las 6 parejas colapsan** y dejan de ser
-   ambiguas.
+> ⚠️ **Corrección del 26-ago, al implementarlo.** Este punto decía "endurecer
+> `company_core_name`". **No se hace, y por poco.** `normalized_name` se deriva de esa
+> función (verificado: 15.922 de 20.000 filas coinciden exacto, 0 divergen), y de esa
+> columna dependen `upsert_company` —que decide si una empresa ya existe al ingestar— y
+> `auto_merge_safe_duplicates`, que hace `GROUP BY normalized_name` y **fusiona** el
+> grupo. Aflojar el normalizador y backfillear haría que ese cron empiece a fusionar
+> empresas hoy separadas, sobre 517.326 filas y sin vuelta atrás.
+>
+> Va una clave SEPARADA, `public.company_screen_key`, que usa solo el screening y se
+> calcula al vuelo sobre las candidatas de cada consulta: sin backfill, sin tocar la
+> ingesta, sin riesgo para el merge.
+
+1. **`company_screen_key`**: puntuación a espacio (no a vacío — `cia.pesquera` tiene que
+   volverse `cia pesquera` y no `ciapesquera`), plural en tokens de 6+ caracteres, y
+   espacios colapsados. Medido: **4 de las 6 parejas colapsan** y los 5 controles se
+   mantienen separados, incluido `Andes Salud`/`Ande Salud` y `NC Group`/`NCS Group`.
+
+   El tope de 6 caracteres no es estético. Sobre 120.000 empresas reales, singularizar
+   cualquier token agrega 248 fusiones y algunas están mal, siempre en siglas donde la
+   `s` es parte del acrónimo. Con 6+ quedan 163 y las revisadas son todas correctas.
 2. Para las otras dos hace falta más: singularizar (`laboratorios` → `laboratorio`) y
    tratar prefijos genéricos de tipo societario (`caja`, `compañía`). Es opinable y
    riesgoso: **va en un segundo paso, medido aparte.**
@@ -149,24 +166,30 @@ columna disponible y la alternativa se apoya en la mejor:
 
 Y funciona sobre los casos reales que se perdieron:
 
-| Ficha | País de la ficha | Contactos | En Chile |
+Verificado corriendo el cuerpo nuevo contra producción, sin tocar el esquema:
+
+| Nombre | Ficha que matchea | País de la ficha | Contactos en Chile |
 |---|---|---|---|
-| MAPFRE | Spain | 291 | **25 (8,6%)** ✅ rescatada |
-| EWOS | Norway | 1 | **1 (100%)** ✅ rescatada |
-| Principal Financial | — | **0** | 0 ❌ no la rescata |
+| MAPFRE | MAPFRE | Spain | **25** ✅ |
+| SURA | Grupo SURA | Colombia | **10** ✅ |
+| PRINCIPAL FINANCIAL GROUP | Principal Financial Group | United States | **50+** ✅ |
+| EWOS S.A. | EWOS | Norway | **1** ✅ |
+| UNIVERSIDAD DE LOS ANDES | (ficha) | Colombia | **3** ✅ |
+| UNIVERSIDAD CATOLICA DEL MAULE | (ficha) | United States | **50+** ✅ |
+| ESSBIO S.A. - ANSM | — | — | 0 → la salva la red de seguridad |
 
-**Pero la localidad por señal NO alcanza sola**, y eso es lo que hay que tener presente al
-implementarla: una empresa sin ningún contacto cargado no tiene evidencia de localidad en
-ninguna dirección. `Principal Financial` tiene cero contactos, así que ninguna regla de
-señal la va a salvar. A esa la rescatan las otras dos piezas:
+> **Corrección del 26-ago.** Una versión previa de este documento decía que
+> `Principal Financial` tenía CERO contactos y que ninguna regla de localidad la
+> salvaría. Era un error de la consulta, no del dato: buscaba por nombre exacto
+> `Principal Financial` y la ficha real se llama `Principal Financial Group`, con 50+
+> contactos en Chile. Se rescata igual que las otras.
 
-- la **red de seguridad** (abajo), que evita reportarla como inexistente, y
-- la **generación de candidatas** (§2c), porque `Principal Financial Group Chile` **sí
-  está en el catálogo** y el matcher hoy no lo alcanza.
+**6 de 7 se rescatan por señal**, y la séptima deja de mentir.
 
-Umbral a definir con datos: con qué mínimo de evidencia chilena una empresa cuenta como
-chilena. `MAPFRE` con 8,6% califica; una con 1 contacto de 5.000, probablemente no. Se
-calibra contra esta misma lista de 75, que ya tiene la respuesta conocida.
+Umbral a definir con datos: hoy alcanza con **un** contacto local. `MAPFRE` con 25 califica
+holgadamente; una empresa con 1 contacto de 5.000 es un caso de borde que todavía no
+apareció. El campo `localContacts` viaja en la respuesta justamente para poder calibrarlo
+con evidencia cuando aparezca, en vez de elegir un número ahora.
 
 ### La red de seguridad, que va sí o sí
 
