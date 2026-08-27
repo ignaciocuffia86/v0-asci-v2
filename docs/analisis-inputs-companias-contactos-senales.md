@@ -236,7 +236,7 @@ ingesta y de merge.*
 - El problema que resuelve: las 455.747 companies sin `website` (88% del catálogo)
   no entran a **ninguna** fase de Apollo, porque `enrich` y `bulk_enrich` reciben
   dominios, no nombres. Descontando las ~34.700 `Unknown Company <uuid>` quedan
-  **421.075 candidatas** con nombre buscable.
+  **420.753 candidatas** con nombre buscable.
 - `organizations/search` con `display_mode: fuzzy_select_mode` devuelve candidatos
   shallow (id, name, domain, website_url, logo_url) **sin consumir créditos**.
 - **El techo es la cuota, no el precio: 400 llamadas/hora** del plan sobre ese

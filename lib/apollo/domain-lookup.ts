@@ -9,7 +9,7 @@
  *
  * `organizations/search` con `display_mode: fuzzy_select_mode` devuelve
  * candidatos shallow (id, name, domain, website_url, logo_url) SIN consumir
- * creditos, asi que se puede correr sobre las ~421.000 candidatas con nombre
+ * creditos, asi que se puede correr sobre las ~420.750 candidatas con nombre
  * buscable. Es el unico camino gratuito de nombre -> dominio que tenemos.
  *
  * EL TECHO: 400 LLAMADAS POR HORA

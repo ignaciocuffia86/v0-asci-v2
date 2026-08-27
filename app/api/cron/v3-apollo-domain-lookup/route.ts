@@ -6,7 +6,7 @@ import { runApolloDomainLookup, DEFAULT_LIMIT } from "@/lib/apollo/domain-lookup
 /**
  * CRON: resolucion de dominio por nombre contra Apollo (organizations/search).
  *
- * Drena `v3.apollo_domain_lookup`, la cola sembrada con las ~421.000 companies
+ * Drena `v3.apollo_domain_lookup`, la cola sembrada con las ~420.750 companies
  * sin `website` y con nombre buscable. El endpoint es gratuito, asi que a
  * diferencia de v3-apollo-org-enrichment esta cola SI puede estar llena de
  * entrada: sembrarla no compromete plata.

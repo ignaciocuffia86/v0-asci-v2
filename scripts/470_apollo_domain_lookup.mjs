@@ -9,26 +9,16 @@
  * LO QUE HACE ESTE SCRIPT: resuelve nombre -> dominio con el endpoint de
  * *lookup* de organizaciones, que devuelve candidatos shallow (id, name,
  * domain, website_url) y —a diferencia de enrich y de mixed_companies/search—
- * NO cobra creditos. Eso lo vuelve viable sobre las 421.075 candidatas reales
+ * NO cobra creditos. Eso lo vuelve viable sobre las 420.753 candidatas reales
  * (455.747 menos 34.672 placeholders "Unknown Company <uuid>", que no tienen
  * nombre buscable).
  *
- * DOS COSAS QUE ESTE SCRIPT NO DA POR SENTADAS
- *
- * 1) QUE SEA GRATIS. Es exactamente el error que ya cometimos: docs/analisis-
- *    inputs-companias-contactos-senales.md afirmaba que `organizations/enrich`
- *    costaba 0 creditos y cuesta 1 por match. Por eso el script mide la cuota
- *    ANTES y DESPUES (igual que 460) y aborta si detecta consumo. No confies en
- *    el default: corre `--limit 20` y leé el delta antes de largar el barrido.
- *
- * 2) CUAL ES EL PATH REST. El lookup gratuito lo expone el MCP oficial de
- *    Apollo (`apollo_organizations_lookup`, "CREDIT COST: Free"); el path REST
- *    equivalente NO esta confirmado contra la doc (docs.apollo.io no es
- *    alcanzable desde el entorno donde se escribio esto). El default de abajo
- *    es la hipotesis mas probable —el mismo recurso de busqueda con
- *    `display_mode: fuzzy_select_mode`, que es lo que el MCP declara como modo
- *    de lookup shallow—. `--probe` prueba los candidatos y reporta cual
- *    responde 200 y con que consumo, sin escribir nada.
+ * LO QUE ESTE SCRIPT NO DA POR SENTADO: QUE SEA GRATIS
+ * Es exactamente el error que ya cometimos: docs/analisis-inputs-companias-
+ * contactos-senales.md afirmaba que `organizations/enrich` costaba 0 creditos y
+ * cuesta 1 por match. Por eso el script mide la cuota ANTES y DESPUES (igual
+ * que 460) y reporta el delta. No confies en el default: corre `--probe` o un
+ * `--limit 20` y leé el delta antes de dar por buena la gratuidad.
  *
  * EL TECHO REAL: 400 LLAMADAS POR HORA (leer antes de planificar un barrido)
  * Medido el 27-ago-2026. Apollo rechaza con: "The maximum number of api calls
@@ -38,17 +28,15 @@
  * el x-rate-limit-minute: 1000 que el script 460 midio sobre
  * organizations/enrich — son endpoints distintos con cuotas distintas.
  *
- * Consecuencia para el barrido completo: 421.075 candidatas / 400 por hora =
- * ~1.053 horas = ~44 dias corriendo sin parar. Las salidas posibles son tres y
- * conviene elegir antes de arrancar, no despues:
- *   a) upgradear el plan de Apollo (el mensaje de error apunta ahi),
- *   b) barrer un subconjunto priorizado en vez de las 421.075 (las 10.922 con
- *      hq_country_iso, o las que ya tienen contactos/senales asociadas),
- *   c) aceptar el barrido largo como proceso de fondo, con checkpoint — que es
- *      justo para lo que existe v3.apollo_domain_lookup.
+ * Consecuencia para el barrido completo: 420.753 candidatas / 400 por hora =
+ * ~1.052 horas = ~44 dias corriendo sin parar. DECIDIDO (27-ago-2026): se
+ * acepta el barrido largo como proceso de fondo con checkpoint, a 350/hora
+ * dejando 50 libres para trabajo manual — ~50 dias. Lo corre el cron
+ * `v3-apollo-domain-lookup`, no este script.
  *
  * Este script asume 400/hora en su sleep por default (9s). Correrlo mas rapido
- * no acelera nada: choca la pared y devuelve errores.
+ * no acelera nada: choca la pared y devuelve errores. Y si corre en paralelo
+ * con el cron, los dos comparten la misma cuota: usar --limit chico.
  *
  * NO PISA `website`. El dominio resuelto por nombre es un CANDIDATO: el match
  * es difuso y puede traer una homonima de otro pais (lib/v3/services/
@@ -124,7 +112,7 @@ const COUNTRY_ONLY = args.includes("--country-only")
  * se hace siempre). Esta apagado por default a proposito: en el piloto parcial
  * del 27-ago-2026 el brazo con filtro dio 88% sin_match (n=25) contra 55% sin
  * filtro (n=155). La muestra es chica y las dos poblaciones no son iguales
- * —solo 10.922 de las 421.075 candidatas tienen hq_country_iso—, asi que no es
+ * —solo 10.922 de las 420.753 candidatas tienen hq_country_iso—, asi que no es
  * concluyente; lo que si es claro es que el filtro RECORTA candidatos antes de
  * que los veamos, mientras que puntuar por pais los conserva y solo baja el
  * score. Ante la duda, la version que no pierde informacion.
@@ -362,7 +350,7 @@ async function probe() {
   }
   console.log(
     "\n[470] Un delta > 0 en un endpoint que decimos gratuito es motivo para " +
-      "PARAR y revisar antes de barrer 421k filas.",
+      "PARAR y revisar antes de barrer 420k filas.",
   )
 }
 
@@ -508,13 +496,13 @@ async function main() {
     console.log(`\n[470] llamadas contabilizadas por Apollo: ${delta} (hicimos ${results.length})`)
     console.log(
       delta > 0
-        ? "[470] ATENCION: el endpoint registro consumo. Verificar que sean llamadas y NO creditos antes de barrer 421k."
+        ? "[470] ATENCION: el endpoint registro consumo. Verificar que sean llamadas y NO creditos antes de barrer 420k."
         : "[470] sin consumo registrado.",
     )
   } else {
     console.log(
       "\n[470] no se pudo medir la cuota (hace falta master key). El costo del " +
-        "endpoint queda SIN CONFIRMAR: no barrer 421k sobre esta base.",
+        "endpoint queda SIN CONFIRMAR: no barrer 420k sobre esta base.",
     )
   }
 

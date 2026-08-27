@@ -3,7 +3,7 @@
 -- 455.747 de 517.790 companies (88%) no tienen `website`, y sin dominio no
 -- entran a ningun flujo de Apollo: enrich y bulk_enrich reciben dominios, no
 -- nombres. El lookup de organizaciones resuelve nombre -> dominio sin consumir
--- creditos, asi que se puede correr sobre las ~421.000 candidatas con nombre
+-- creditos, asi que se puede correr sobre las ~420.750 candidatas con nombre
 -- buscable (las ~34.700 "Unknown Company <uuid>" quedan afuera solas, porque
 -- public.company_core_name() ya devuelve NULL para ellas).
 --
