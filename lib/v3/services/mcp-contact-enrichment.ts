@@ -33,7 +33,7 @@ import {
 } from "@/lib/v3/mcp-usage"
 import { searchPeople } from "@/lib/apollo/search"
 import { enrichMany, type EnrichedPerson } from "@/lib/apollo/enrich"
-import { readSearchCache, writeSearchCache } from "@/lib/apollo/search-cache"
+import { readSearchCache, writeSearchCache, splitByContactCache } from "@/lib/apollo/search-cache"
 import { hashSearchParams, type SearchParams } from "@/lib/apollo/query-hash"
 import { sanitizeTitleList } from "@/lib/apollo/title-validator"
 import { normalizeDomain } from "@/lib/apollo/domain"
@@ -153,6 +153,13 @@ export type RunResult = {
   contactsFound: number
   contactsWithEmail: number
   creditsSpent: number
+  /**
+   * Contactos que salieron del caché en vez de pagarse. Es el número que
+   * distingue "no había nadie" de "no hubo que pagar por nadie": sin él, un
+   * `creditsSpent: 0` con 8 contactos se lee como si Apollo los hubiera
+   * regalado.
+   */
+  creditsSaved: number
   fromCache: boolean
   /**
    * QUÉ autorizó este gasto. Es lo que le permite al modelo decirlo sin deducirlo.
@@ -585,6 +592,9 @@ export async function runContactEnrichment(
       contactsFound: run.contacts_found,
       contactsWithEmail: run.contacts_with_email,
       creditsSpent: run.credits_spent,
+      // Una corrida ya completada no vuelve a pedir nada, pero tampoco ahorra
+      // nada ahora: lo que ahorró quedó contado en su propia corrida.
+      creditsSaved: 0,
       fromCache: true,
       authorizedBy: authorizedBy(run.batch_job_id, principal.unrestricted),
     }
@@ -632,6 +642,8 @@ export async function runContactEnrichment(
     let totalEntries = 0
     let fromCache = false
     let creditsSpent = 0
+    /** Contactos que salieron del caché en vez de pagarse. Va en la respuesta. */
+    let creditsSaved = 0
 
     // 1) Caché primero. Lectura habilitada explícitamente (v3 opt-in).
     const cached = await readSearchCache(plan.queryHash, limits.freshnessDays, { enabled: true })
@@ -657,13 +669,37 @@ export async function runContactEnrichment(
       totalEntries = search.totalEntries
 
       if (search.people.length > 0) {
-        // 3) Enrichment: acá se gastan los créditos, uno por contacto.
-        contacts = await enrichMany(
-          search.people.slice(0, plan.maxContacts),
-          { userId: principal.userId, bookmarkId: null, companyId: plan.companyId, revealEmail: true },
-          4,
+        const candidatos = search.people.slice(0, plan.maxContacts)
+
+        // 3) ANTES de pagar: ¿a quién de estos ya lo tenemos?
+        //
+        // El caché de búsqueda de arriba acierta solo si la consulta ENTERA se
+        // repite. Cambiar un cargo la falla y se vuelve a enriquecer a gente que
+        // ya está en la base. Medido sobre el historial: 923 de 4.223 llamadas a
+        // people/match fueron por alguien ya enriquecido, y 921 de esas cayeron
+        // dentro de la ventana de frescura — 677 el mismo día. Un crédito cada
+        // una, por datos que ya teníamos.
+        const { cached: yaTeniamos, missingIds } = await splitByContactCache(
+          candidatos.map((p) => p.apolloId).filter(Boolean) as string[],
+          limits.freshnessDays,
         )
-        creditsSpent = contacts.length
+        const aPedir = candidatos.filter((p) => !p.apolloId || missingIds.has(p.apolloId))
+
+        // 4) Enrichment: acá se gastan los créditos, uno por contacto, y solo
+        //    por los que no teníamos.
+        const enriquecidos = aPedir.length
+          ? await enrichMany(
+              aPedir,
+              { userId: principal.userId, bookmarkId: null, companyId: plan.companyId, revealEmail: true },
+              4,
+            )
+          : []
+
+        contacts = [...yaTeniamos, ...enriquecidos]
+        // Se cobra lo que se pidió, no lo que se devuelve: los del caché salieron
+        // gratis y contarlos acá sería cobrar dos veces por la misma persona.
+        creditsSpent = enriquecidos.length
+        creditsSaved = yaTeniamos.length
 
         await writeSearchCache({
           queryHash: plan.queryHash,
@@ -742,6 +778,7 @@ export async function runContactEnrichment(
       contactsFound: contacts.length,
       contactsWithEmail: withEmail,
       creditsSpent,
+      creditsSaved,
       fromCache,
       authorizedBy: authorizedBy(run.batch_job_id, principal.unrestricted),
     }
