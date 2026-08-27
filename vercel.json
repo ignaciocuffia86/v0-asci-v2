@@ -47,6 +47,10 @@
       "schedule": "*/10 * * * *"
     },
     {
+      "path": "/api/cron/v3-apollo-domain-lookup",
+      "schedule": "*/10 * * * *"
+    },
+    {
       "path": "/api/cron/v3-scrape-job-postings",
       "schedule": "*/10 * * * *"
     },
