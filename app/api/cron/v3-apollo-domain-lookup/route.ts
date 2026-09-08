@@ -6,6 +6,17 @@ import { runApolloDomainLookup, DEFAULT_LIMIT } from "@/lib/apollo/domain-lookup
 /**
  * CRON: resolucion de dominio por nombre contra Apollo (organizations/search).
  *
+ * PAUSADO (08-sep-2026). El schedule salio de `vercel.json`, asi que Vercel ya
+ * no lo invoca. La ruta sigue en pie: se puede correr a mano con el secreto de
+ * cron (y con `?dryRun=1&limit=N` para probar sin escribir). Reanudarlo es
+ * devolver al array `crons` la entrada de esta ruta con su schedule de cada 10
+ * minutos y desplegar; DEFAULT_LIMIT ya esta calibrado para esa cadencia.
+ *
+ * Mientras tanto la cola `v3.apollo_domain_lookup` deja de drenarse y sus filas
+ * se quedan en `pending`: nada se pierde, el barrido se retoma donde quedo. La
+ * cuota horaria de Apollo que este barrido consumia queda libre para el trabajo
+ * manual.
+ *
  * Drena `v3.apollo_domain_lookup`, la cola sembrada con las ~420.750 companies
  * sin `website` y con nombre buscable. El endpoint es gratuito, asi que a
  * diferencia de v3-apollo-org-enrichment esta cola SI puede estar llena de

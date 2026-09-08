@@ -230,10 +230,14 @@ ingesta y de merge.*
   enrichment de Apollo, llena `apollo_employees_count`/`apollo_industry` sin tocar
   columnas de LinkedIn. Hoy solo 194 sincronizadas.
 
-**Fase 3.5 — Apollo por NOMBRE para las que no tienen dominio (gratis, en curso)**
+**Fase 3.5 — Apollo por NOMBRE para las que no tienen dominio (gratis, PAUSADA)**
 *Implementada el 27-ago-2026: `lib/apollo/domain-lookup.ts`, su runner, el cron
 `v3-apollo-domain-lookup` y la migración `20260827205412`, **aplicada** el 27-ago-2026:
-420.753 filas sembradas en `pending`. El cron queda activo recién al desplegar.*
+420.753 filas sembradas en `pending`.*
+*Pausada el 08-sep-2026: el schedule del cron salió de `vercel.json` y Vercel ya no
+lo invoca. El código, la cola y el checkpoint quedan intactos —las filas sin procesar
+siguen en `pending`—, así que reanudar es devolver la entrada al array `crons` y
+desplegar; el barrido retoma donde quedó. La ruta se puede seguir corriendo a mano.*
 - El problema que resuelve: las 455.747 companies sin `website` (88% del catálogo)
   no entran a **ninguna** fase de Apollo, porque `enrich` y `bulk_enrich` reciben
   dominios, no nombres. Descontando las ~34.700 `Unknown Company <uuid>` quedan
