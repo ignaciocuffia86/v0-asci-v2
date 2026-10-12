@@ -369,6 +369,31 @@ d12.finding =
 d12.evidence = ["v3.bookmark_dedupe_log", "lib/v3/services/dictionary.ts:304,315 (dictionary_term_suggestions con lector)"]
 addEvidence(dead("DEAD-11"), "NO verificado el 12-oct-2026: la variable vive en el proyecto de Vercel, no en el repo; en el repo 'WEBHOOL' sólo aparece en docs/")
 
+// ═══ Correcciones tomadas de las pasadas semanales previas (PRs #152-#158, consolidadas acá) ═══
+// El reveal de teléfono "removido" era cierto SOLO para este pipeline de decisores
+// (lib/shared/apollo-decision-makers.ts:267 sigue sin pedir teléfono); como afirmación
+// del sistema era falso desde el 27-ago: request_contact_phones lo pide por otro camino.
+const dm = node("svc_shared_apollo_dm")
+dm.notes = dm.notes.replace(
+  "El reveal de teléfono sigue removido: Apollo consumía 5 créditos por reveal y el webhook de entrega asincrónica nunca llegaba.",
+  "El reveal de teléfono NO está en ESTE pipeline (apollo-decision-makers.ts sigue sin pedirlo: Apollo cobraba 5 créditos por reveal y el webhook nunca llegaba). Pero el reveal volvió al sistema por otro camino el 27-ago-2026 (#148/#150): la tool MCP request_contact_phones, con el webhook ya escribiendo el lado v3. Leer 'removido' como 'el sistema no pide teléfonos' es falso.",
+)
+// El webhook escribe v2 y v3 en la misma request: ya no es zona v2 pura.
+node("api_apollo_webhook").zone = "shared"
+
+addOpt({
+  id: "OPT-22", severity: "alta", area: "correctitud",
+  title: "recommend_accounts_for_value_proposition falla siempre: selecciona columnas de job_postings que no existen",
+  evidence: [
+    "lib/v3/services/value-proposition-recommender.ts:33 — .select('id,company_id,title,description,location,posted_date,url') sobre job_postings",
+    "information_schema.columns de public.job_postings (12-oct-2026): existen posted_at y job_url; NO existen posted_date ni url",
+    "lib/v3/mcp-server-tools.ts registra la tool recommend_accounts_for_value_proposition (scope recommendations:read)",
+  ],
+  finding: "La consulta de vacantes pide dos columnas que no existen. PostgREST devuelve error por columna inexistente y la query pierde TODO el bloque de vacantes; como el recomendador destructura sólo { data }, el error no se lanza y las vacantes quedan como lista vacía en silencio: el prefiltro puntúa sin vacantes (peso 2 por vacante). Hallazgo traído de la pasada del 21-sep (PR #156) y re-verificado acá contra el esquema real. No se verificó si hay un test que cubra la rama.",
+  why: "Un recomendador que ignora las vacantes sin avisar ordena cuentas con una señal menos de las que declara, y nadie ve el error.",
+  fix: "Pendiente, y NO se arregla en este PR (esta rutina no toca código de la app): cambiar posted_date→posted_at y url→job_url en el select, y leer el error de la query en vez de descartarlo.",
+})
+
 // ═══ Validación de integridad referencial ═══
 const ids = new Set(j.nodes.map((n) => n.id))
 const errs = []

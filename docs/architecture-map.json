@@ -408,7 +408,7 @@
     {
       "id": "api_apollo_webhook",
       "label": "Webhook Apollo",
-      "zone": "v2",
+      "zone": "shared",
       "layer": 2,
       "kind": "webhook",
       "desc": "Callback de Apollo autenticado por secreto en el path. Desde #148 (27-ago) conoce los DOS mundos: el lado v3 (lib/v3/services/contact-phone-inbox.ts) se llama en UN solo punto, ANTES de las tres salidas de v2, para que ninguna rama lo deje afuera. Reglas con test propio: el número va al caché COMPARTIDO apollo_contacts_cache y el estado a v3.account_contacts; el ESTADO se toca sólo en filas 'pending' (pedir es por workspace) y la FECHA de verificación en TODAS las filas de esa persona (describe el dato, no el pedido).",
@@ -776,7 +776,7 @@
         "lib/shared/apollo-decision-makers.ts",
         "lib/shared/apollo-title-groups.ts"
       ],
-      "notes": "Se extrajo en vez de copiarse: habría sido la TERCERA vez que este repo paga tener dos implementaciones del mismo pipeline (pasó con las noticias y con el research). Los decisores aterrizan en los mismos dos lugares que en v2 —user_company_contacts con source 'apollo' e is_decision_maker true, y apollo_contacts_cache—, y por eso un decisor encontrado desde cualquiera de los dos mundos aparece en el bookmark del otro. bookmark_id va en null desde v3: es una columna de v2 y la tabla la acepta nullable. El reveal de teléfono sigue removido: Apollo consumía 5 créditos por reveal y el webhook de entrega asincrónica nunca llegaba."
+      "notes": "Se extrajo en vez de copiarse: habría sido la TERCERA vez que este repo paga tener dos implementaciones del mismo pipeline (pasó con las noticias y con el research). Los decisores aterrizan en los mismos dos lugares que en v2 —user_company_contacts con source 'apollo' e is_decision_maker true, y apollo_contacts_cache—, y por eso un decisor encontrado desde cualquiera de los dos mundos aparece en el bookmark del otro. bookmark_id va en null desde v3: es una columna de v2 y la tabla la acepta nullable. El reveal de teléfono NO está en ESTE pipeline (apollo-decision-makers.ts sigue sin pedirlo: Apollo cobraba 5 créditos por reveal y el webhook nunca llegaba). Pero el reveal volvió al sistema por otro camino el 27-ago-2026 (#148/#150): la tool MCP request_contact_phones, con el webhook ya escribiendo el lado v3. Leer 'removido' como 'el sistema no pide teléfonos' es falso."
     },
     {
       "id": "svc_etl",
@@ -4929,6 +4929,20 @@
       "finding": "El 88% del catálogo no tiene website y por eso no entra a ninguna fase de Apollo (enrich y bulk_enrich reciben dominios, no nombres). El barrido gratuito por nombre existe pero está pausado para dejar la cuota horaria de Apollo al trabajo manual.",
       "why": "A 350 llamadas/hora el barrido completo son ~50 días; pausar lo corre, no lo cancela.",
       "fix": "Reanudar es devolver la entrada al array crons y desplegar. No verificado: cuántas filas de la cola están hoy en pending vs. procesadas (no se consultó la cola)."
+    },
+    {
+      "id": "OPT-22",
+      "severity": "alta",
+      "area": "correctitud",
+      "title": "recommend_accounts_for_value_proposition falla siempre: selecciona columnas de job_postings que no existen",
+      "evidence": [
+        "lib/v3/services/value-proposition-recommender.ts:33 — .select('id,company_id,title,description,location,posted_date,url') sobre job_postings",
+        "information_schema.columns de public.job_postings (12-oct-2026): existen posted_at y job_url; NO existen posted_date ni url",
+        "lib/v3/mcp-server-tools.ts registra la tool recommend_accounts_for_value_proposition (scope recommendations:read)"
+      ],
+      "finding": "La consulta de vacantes pide dos columnas que no existen. PostgREST devuelve error por columna inexistente y la query pierde TODO el bloque de vacantes; como el recomendador destructura sólo { data }, el error no se lanza y las vacantes quedan como lista vacía en silencio: el prefiltro puntúa sin vacantes (peso 2 por vacante). Hallazgo traído de la pasada del 21-sep (PR #156) y re-verificado acá contra el esquema real. No se verificó si hay un test que cubra la rama.",
+      "why": "Un recomendador que ignora las vacantes sin avisar ordena cuentas con una señal menos de las que declara, y nadie ve el error.",
+      "fix": "Pendiente, y NO se arregla en este PR (esta rutina no toca código de la app): cambiar posted_date→posted_at y url→job_url en el select, y leer el error de la query en vez de descartarlo."
     }
   ],
   "deadCode": [
