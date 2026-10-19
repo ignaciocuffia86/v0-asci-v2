@@ -1,20 +1,20 @@
 {
   "meta": {
     "name": "ASCI — Mapa de arquitectura v2 + v3",
-    "generatedAt": "2026-08-24",
+    "generatedAt": "2026-10-19",
     "repo": "ignaciocuffia86/v0-asci-v2",
-    "summary": "Monorepo Next.js único donde conviven ASCI v2 (producción, schema public) y ASCI v3 (multitenant, schema v3) sobre la MISMA base Supabase. El aislamiento es por schema, no por proyecto ni por base. Actualización 2026-08-24, repaso completo de los 21 PRs que entraron desde que se armó el mapa (las dos pasadas anteriores fueron quirúrgicas y dejaron todo lo demás congelado en el 4-ago). Lo que cambió, por orden de peso: (1) SEGURIDAD — los cinco hallazgos P0 están cerrados (guard de superadmin en las server actions privilegiadas, assertCron en los 11 crons, REVOKE de los 9 RPC de export a anon, proxy-image con allowlist exacta y sin redirects, cabeceras de seguridad con CSP en Report-Only), y con ellos el endpoint público /api/test-alert, que se borró. (2) MIGRACIONES VERSIONADAS — supabase/migrations tiene 19 archivos con baseline sellada; OPT-14 dejó de ser cierta. Se sumó un gate de CI (typecheck + lint + tests) y next build volvió a fallar por errores de tipo. (3) TRES SERVIDORES MCP, no uno: el estándar (37 tools, sobre las señales del diccionario), Explore (8 tools, sobre la tabla CRUDA de contactos y vacantes) y Perfiles (3 tools, persona-first, para buscar TALENTO con contacto personal). Comparten auth, rate limit y telemetría; se separan por scope y por prefijo de tool_name. (4) EL BOOKMARK DE v3 ES LA RADIOGRAFÍA COMERCIAL — una sola vista sin pestañas, con resumen ejecutivo, scorecard, movimientos de personal, vacantes, radar de noticias, ángulos, riesgos, decisores (Apollo) y método. Lo determinístico se arma en cada render; los tres textos con IA se cachean en v3.account_reports por fingerprint de inputs (~US$0,001) y las noticias se buscan solas al seguir la cuenta y por cron. (5) lib/shared/ EXISTE — el contrato de evidencia, la búsqueda de noticias y el pipeline de decisores de Apollo son un único módulo que llaman las dos versiones. Es la frontera que OPT-12 pedía, todavía practicada y no declarada por lint. (6) Perplexity RETIRADO: era el último canal de IA fuera de v3.ai_usage_log. Hoy todo el consumo pasa por el AI Gateway.",
+    "summary": "Monorepo Next.js único donde conviven ASCI v2 (producción, schema public) y ASCI v3 (multitenant, schema v3) sobre la MISMA base Supabase. El aislamiento es por schema, no por proyecto ni por base. Actualización 2026-10-19, repaso de los 82 commits (#123 a #154, 24-ago a 8-sep) que entraron desde la pasada anterior. Por orden de peso: (1) PERFIL MCP ADMIN — una cuarta ruta (/api/v3/mcp/admin) sobre la MISMA registración de tools que el estándar (lib/v3/mcp-server-tools.ts, 45 tools): la diferencia es el texto, no el código. Sin topes de cupo ni de lugares del plan; el único techo enforceable del gasto irreversible de Apollo es el presupuesto del lote (batchPlanHash), y todo se cierra con get_cost_summary. (2) EJECUCIÓN SOBRE LISTAS — screen_account_list, estimate_batch, create_batch_job y create_export, con sus tablas v3.mcp_*. (3) ENRICHMENT DE APOLLO POR COLA — dos crons que drenan colas SEMBRADAS (organizaciones con website; dominio por nombre para las ~420.750 companies sin website). El de dominio por nombre está PAUSADO desde el 8-sep: sale del schedule de vercel.json, la ruta sigue viva. (4) GASTO MEDIDO — v3.apify_runs registra el costo de Apify por corrida, y el ledger de Apollo dejó de anotar en cero el enrichment de organizaciones (cuesta 1 crédito por cuenta resuelta). (5) IDENTIDAD DE PERSONA Y EMPRESA — contact_identities, fusión reversible de contactos (v3.contact_merges) y la Fase 0 del ETL de companies. (6) TELÉFONOS — el webhook de Apollo escribe también el camino v3 y los 80 teléfonos que v2 ya había pagado se movieron al caché compartido. Re-verificación de lo abierto: OPT-05 (cron_executions: 1,83M filas, sin retención) y OPT-06 (17 archivos con createClient crudo) EMPEORARON; ningún hallazgo pasó a resuelto en este período. NO VERIFICADO: las migraciones del período se escribieron en el repo pero este repaso no comprobó cuáles están aplicadas en producción.",
     "stats": {
-      "tsFiles": 432,
-      "apiRoutes": 55,
+      "tsFiles": 490,
+      "apiRoutes": 58,
       "pages": 50,
-      "crons": 12,
-      "sqlScripts": 241,
-      "migrations": 19,
-      "tablesPublic": 55,
-      "tablesV3": 53,
-      "mcpServers": 3,
-      "mcpTools": 48
+      "crons": 13,
+      "sqlScripts": 268,
+      "migrations": 49,
+      "tablesPublic": 58,
+      "tablesV3": 68,
+      "mcpServers": 4,
+      "mcpTools": 56
     },
     "legend": {
       "zones": {
@@ -31,7 +31,14 @@
         "4 — Datos (Postgres / Supabase)"
       ]
     },
-    "invariant": "v2 esta en produccion con usuarios reales: ningun cambio de v3 puede afectarla. Los nodos 'shared' son exactamente donde ese invariante puede romperse."
+    "invariant": "v2 esta en produccion con usuarios reales: ningun cambio de v3 puede afectarla. Los nodos 'shared' son exactamente donde ese invariante puede romperse.",
+    "statsNotes": {
+      "crons": "13 entradas en vercel.json. v3-apollo-domain-lookup tiene ruta pero NO está en vercel.json (pausado el 8-sep).",
+      "mcpTools": "45 (standard y admin comparten registración en lib/v3/mcp-server-tools.ts) + 8 Explore + 3 Perfiles = 56 tools distintas. El perfil admin no suma: expone las mismas 45.",
+      "mcpServers": "4 rutas MCP: server (standard), admin, explore, profiles. Tres registraciones de tools distintas.",
+      "tablesPublic": "information_schema.tables, BASE TABLE, medido el 19-oct-2026 contra asciv2-database (era 55).",
+      "tablesV3": "ídem (era 53)."
+    }
   },
   "nodes": [
     {
@@ -40,7 +47,7 @@
       "zone": "external",
       "layer": 0,
       "kind": "api",
-      "desc": "Fuente primaria de contactos y organizaciones. Consumida por v2 y reusada por v3.",
+      "desc": "Fuente primaria de contactos y organizaciones. Consumida por v2 y reusada por v3. Organizations/enrich cuesta 1 crédito por cuenta resuelta (el ledger lo anotaba en cero hasta fcf40a4); organizations/search es gratuito pero consume cuota horaria del plan (400/h).",
       "files": [
         "lib/apollo/client.ts"
       ],
@@ -62,7 +69,8 @@
       "env": [
         "APIFY_TOKEN",
         "APIFY_ACTOR_ID"
-      ]
+      ],
+      "notes": "Su costo se mide por corrida en v3.apify_runs (usageTotalUsd, verificado contra una corrida real: 35 vacantes, US$0,01425). No incluye el alquiler mensual del actor (US$29,99 fijos), que no se prorratea."
     },
     {
       "id": "ext_perplexity",
@@ -408,13 +416,15 @@
     {
       "id": "api_apollo_webhook",
       "label": "Webhook Apollo",
-      "zone": "v2",
+      "zone": "shared",
       "layer": 2,
       "kind": "webhook",
-      "desc": "Callback de Apollo autenticado por secreto en el path.",
+      "desc": "Callback de Apollo autenticado por secreto en el path. Desde #148 tiene dos caminos: el de v2 (user_company_contacts) y el de v3 (lib/v3/services/contact-phone-inbox.ts), que se llama en UN solo punto antes de las tres salidas de la función.",
       "files": [
-        "app/api/webhooks/apollo/[secret]/route.ts"
-      ]
+        "app/api/webhooks/apollo/[secret]/route.ts",
+        "lib/v3/services/contact-phone-inbox.ts"
+      ],
+      "notes": "En v3 el número va al caché COMPARTIDO (apollo_contacts_cache) y el estado a v3.account_contacts. El estado se toca solo en filas `pending` (pedir es por workspace); la fecha de verificación se toca en todas las filas de la persona, porque describe el dato y no el pedido."
     },
     {
       "id": "api_v3_chat",
@@ -463,16 +473,33 @@
     },
     {
       "id": "api_mcp_server",
-      "label": "MCP estándar (37 tools)",
+      "label": "MCP estándar (45 tools)",
       "zone": "v3",
       "layer": 2,
       "kind": "mcp",
-      "desc": "El PRIMERO de los tres servidores MCP, y el único que conversa con las señales ya interpretadas por el diccionario. Punto de entrada único para lectura de cuentas, research, contactos y documentos; instrumenta cada tool con auditoría y cuota vía proxy sobre server.tool. Scope base companies:read / signals:read / accounts:read.",
+      "desc": "El PRIMERO de los servidores MCP y el que conversa con las señales ya interpretadas por el diccionario. Desde #139 la ruta son 33 líneas: sus `instructions` y createV3McpHandler({profile:'standard'}). Las 45 tools viven en lib/v3/mcp-server-tools.ts y las comparte con el perfil admin; cada una pasa por withToolAudit (auditoría y cuota) vía proxy sobre server.tool. Scope base companies:read / signals:read / accounts:read.",
       "files": [
-        "app/api/v3/mcp/server/[transport]/route.ts"
+        "app/api/v3/mcp/server/[transport]/route.ts",
+        "lib/v3/mcp-server-tools.ts"
       ],
-      "risk": "Ruta monolítica muy grande: concentra registro de tools, auth, cuota y transporte, y el patrón se copió dos veces más (ver OPT-07).",
+      "risk": "La ruta ya no es monolítica (el andamiaje se extrajo a createV3McpHandler), pero Explore y Perfiles siguen con su propia copia: ver OPT-07.",
       "notes": "Dos tools cambiaron de contrato el 21-ago. get_company_signal_summary acepta detail 'compact' (default en la tool) o 'full': el modo completo devolvía ~10.000 tokens por cuenta —hasta 3 snippets por término, las implementaciones enteras y 30 vacantes con 500 caracteres cada una—, con lo cual validar las 20 cuentas de una búsqueda era inviable y la validación terminaba delegada al usuario. get_company_profile devuelve ahora un bloque firmographics (linkedinUrl, domain, employeesApollo, isPublic, ticker, stockExchange) con null EXPLÍCITO y un fieldNotes que aclara que null significa 'no lo sabemos' y no 'empresa chica'."
+    },
+    {
+      "id": "api_mcp_admin",
+      "label": "MCP Admin (perfil, 45 tools)",
+      "zone": "v3",
+      "layer": 2,
+      "kind": "mcp",
+      "desc": "Perfil del equipo de ASCI. NO tiene tools propias: son las mismas 45 del estándar. La ruta aporta solo `instructions` y nueve reglas find/replace sobre las descripciones (ADMIN_DESCRIPTION_RULES). Existe aparte porque el prompt es por SERVER y no por credencial: sin el texto, el modelo pregunta 42 veces aunque el guard deje pasar. Una credencial sin el marcador `unrestricted` se rechaza en el handshake.",
+      "files": [
+        "app/api/v3/mcp/admin/[transport]/route.ts",
+        "lib/v3/mcp-server-tools.ts",
+        "lib/v3/admin-workspace.ts",
+        "lib/v3/mcp-key-scopes.ts"
+      ],
+      "risk": "Sin tope de cupo mensual ni de lugares del plan por diseño. El único techo enforceable del gasto de Apollo es el presupuesto del lote (enrichment_credits_authorized). Sin batchJobId sigue rigiendo el cupo mensual, para todos los perfiles.",
+      "notes": "Dos confirmaciones se conservan: Apollo (crédito de un tercero, irreversible) y lo destructivo (remove_workspace_account, confirm_document_analysis). Las instrucciones y los comentarios de las rutas dicen '44 tools' pero el código registra 45: deriva de documentación, no de comportamiento."
     },
     {
       "id": "api_mcp_explore",
@@ -507,7 +534,8 @@
       "desc": "Registro dinamico de cliente, authorize, token y revoke.",
       "files": [
         "app/api/v3/mcp/oauth/"
-      ]
+      ],
+      "notes": "Desde #143 un token OAuth puede ser `unrestricted`: el marcador NO sale de los scopes (salen del consentimiento del usuario, que se puede manipular) sino de dos hechos del servidor: el workspace guardado en la fila del token y el rol global leído de profiles. Un superadmin que entra por el workspace de un cliente NO queda sin topes. Antes devolvía `false` literal y un conector de claude.ai al perfil admin veía cero tools sin error visible."
     },
     {
       "id": "api_mcp_doc_upload",
@@ -665,6 +693,33 @@
       ]
     },
     {
+      "id": "cron_v3_apollo_org",
+      "label": "cron v3-apollo-org-enrichment (10m)",
+      "zone": "v3",
+      "layer": 2,
+      "kind": "cron",
+      "desc": "Drena la cola SEMBRADA v3.apollo_company_enrichment (status pending, o error con reintento vencido; MAX_ATTEMPTS=3). Jamás descubre trabajo por su cuenta: ~61.300 empresas con website sin resolver costarían ~38.000 créditos y eso es una decisión de gasto. Con la cola vacía no llama a Apollo y gasta cero; autorizar otro lote es un INSERT.",
+      "files": [
+        "app/api/cron/v3-apollo-org-enrichment/route.ts",
+        "lib/apollo/org-enrichment-runner.ts"
+      ],
+      "schedule": "*/10 * * * *"
+    },
+    {
+      "id": "cron_v3_apollo_domain",
+      "label": "cron v3-apollo-domain-lookup (PAUSADO)",
+      "zone": "v3",
+      "layer": 2,
+      "kind": "cron",
+      "desc": "Resuelve el dominio por NOMBRE (organizations/search, gratuito) para las ~420.750 companies sin website, el 88% del catálogo que no entra a ninguna fase de Apollo porque enrich recibe dominios. 350 llamadas/hora sobre una cuota de 400. Solo promueve a companies.website lo clasificado auto_ok y solo sobre columnas vacías. PAUSADO el 8-sep (#154): su entrada salió de vercel.json, que es lo único que mira Vercel. La ruta sigue en pie (corre a mano con el secreto de cron y ?dryRun=1&limit=N) y la cola conserva sus filas en pending.",
+      "files": [
+        "app/api/cron/v3-apollo-domain-lookup/route.ts",
+        "lib/apollo/domain-lookup-runner.ts",
+        "lib/apollo/domain-lookup.ts"
+      ],
+      "notes": "Reanudar = devolver la entrada al array `crons` con */10 y desplegar."
+    },
+    {
       "id": "svc_supabase",
       "label": "Clientes Supabase",
       "zone": "shared",
@@ -706,11 +761,11 @@
     },
     {
       "id": "svc_apollo",
-      "label": "Apollo (11 módulos)",
+      "label": "Apollo (lib/apollo/)",
       "zone": "v2",
       "layer": 3,
       "kind": "service",
-      "desc": "Search, enrich, organizations, cache por hash de query, validación de títulos, parsers y dominio. El pipeline de búsqueda de decisores salió de acá a lib/shared/ el 21-ago para que lo usen las dos versiones; v2 quedó como wrapper.",
+      "desc": "Search, enrich, organizations, cache por hash de query, validación de títulos, parsers y dominio. Desde 26-ago suma los runners de las colas (org-enrichment-runner, domain-lookup-runner), company-writer, bulk-organizations, rate-limits y usage-stats. El pipeline de búsqueda de decisores vive en lib/shared/ y v2 es wrapper.",
       "files": [
         "lib/apollo/"
       ]
@@ -946,6 +1001,8 @@
         "lib/v3/services/contacts.ts",
         "lib/v3/services/contact-provider.ts",
         "lib/v3/services/mcp-contact-enrichment.ts",
+        "lib/v3/services/mcp-contact-phones.ts",
+        "lib/v3/services/contact-phone-inbox.ts",
         "lib/v3/mcp-contact-coverage.ts"
       ]
     },
@@ -1067,12 +1124,30 @@
       "zone": "v3",
       "layer": 3,
       "kind": "service",
-      "desc": "Implementación de las tools de lectura, ciclo de vida de cuenta y circuito client-assisted.",
+      "desc": "Registro único de las 45 tools del perfil standard y admin, más la implementación de lectura, ciclo de vida de cuenta y circuito client-assisted.",
       "files": [
+        "lib/v3/mcp-server-tools.ts",
         "lib/v3/mcp-read-tools.ts",
         "lib/v3/mcp-account-lifecycle.ts",
         "lib/v3/mcp-client-ai.ts"
       ]
+    },
+    {
+      "id": "svc_v3_mcp_batch",
+      "label": "Screening, lotes y export MCP",
+      "zone": "v3",
+      "layer": 3,
+      "kind": "service",
+      "desc": "screen_account_list (una llamada para una lista; estado matched_no_signal distingue 'no tiene' de 'no está'), estimate_batch (cotiza el lote entero con una confirmación), create_batch_job (congela el batchPlanHash y el presupuesto de créditos calculado en el server, nunca del input), get_batch_job y create_export. Incluye icebreakers determinísticos sin IA.",
+      "files": [
+        "lib/v3/services/screen-account-list.ts",
+        "lib/v3/services/mcp-batch-estimate.ts",
+        "lib/v3/services/mcp-batch-job.ts",
+        "lib/v3/services/mcp-export.ts",
+        "lib/v3/services/icebreaker-deterministic.ts",
+        "lib/v3/services/mcp-cost-summary.ts"
+      ],
+      "risk": "La clave de consolidación del screening es public.company_screen_key, separada de company_core_name A PROPÓSITO: auto_merge_safe_duplicates agrupa por normalized_name y fusiona, así que aflojar el normalizador habría fusionado empresas hoy separadas sin vuelta atrás."
     },
     {
       "id": "svc_v3_mcp_auth",
@@ -1100,6 +1175,20 @@
         "lib/v3/mcp-usage.ts"
       ],
       "risk": "mcp_request_logs es auditoria Y contador de rate limit a la vez: mezclar ambos parte el tope."
+    },
+    {
+      "id": "svc_v3_spend_ledger",
+      "label": "Ledger de gasto",
+      "zone": "v3",
+      "layer": 3,
+      "kind": "service",
+      "desc": "Atribuye costo por corrida: Apify en v3.apify_runs (cron de primera pasada, mensual, kick de la UI y explore), Apollo vía contact_enrichment_runs/apollo_api_calls, IA en ai_usage_log. La unidad de atribución es la EMPRESA, no el usuario: el cron deduplica entre workspaces. get_cost_summary declara la calidad de cada número y marca el total como PISO cuando solo algunas corridas traen costo.",
+      "files": [
+        "lib/v3/services/spend-ledger.ts",
+        "lib/v3/services/mcp-cost-summary.ts",
+        "lib/apollo/usage-stats.ts"
+      ],
+      "notes": "El 78% del gasto de IA registrado no tiene workspace_id (medido al escribir #142), por eso el resumen para credenciales sin topes suma una vista del gasto compartido."
     },
     {
       "id": "svc_v3_docs",
@@ -1242,6 +1331,14 @@
       "notes": "Tiene ~1 GB de índices GIN: los UPDATE masivos son no-HOT y caros. Las fechas de puesto YA venían en el export crudo y quedaban guardadas en import_rows.row_data, pero process_contact_batch_internal nunca las leía, así que se perdían al materializar; parse_position_date las normaliza desde 'YYYY-MM' / 'YYYY-MM-DD' / 'YYYY' a date o NULL, nunca a error."
     },
     {
+      "id": "db_contact_identity",
+      "label": "public.contact_identities / v3.contact_merges",
+      "zone": "shared",
+      "layer": 4,
+      "kind": "table",
+      "desc": "Identidad de persona independiente de la URL cruda de LinkedIn (slug, sufijo, nombre normalizado) y registro de fusiones reversibles (merge_contacts / revert_contact_merge). contacts se deduplicaba con ON CONFLICT sobre el string crudo y LinkedIn cambia la URL sin que cambie la persona."
+    },
+    {
       "id": "db_job_postings",
       "label": "public.job_postings",
       "zone": "shared",
@@ -1313,7 +1410,24 @@
       "tables": [
         "public.apollo_contacts_cache"
       ],
-      "notes": "Está indexado por dominio de la empresa, no por companyId. Es cache legacy sólo de nombre: es la tabla que lee getCompanyCachedContacts de v3."
+      "notes": "Está indexado por dominio de la empresa, no por companyId. Desde #149 una fila significa 'YA pagamos por esta persona' y dentro de la ventana de frescura no se vuelve a pedir, tenga email o no (medido: 921 de 4.223 llamadas a people/match eran repetidas dentro de la ventana, 21,8%). Desde #150 también guarda teléfonos: los 80 que v2 había pagado se movieron acá; antes el caché tenía 4.416 personas y cero teléfonos. Ante un error de lectura del caché se pide todo (la dirección segura del error es gastar de más)."
+    },
+    {
+      "id": "db_apollo_queues",
+      "label": "v3.apollo_company_enrichment / apollo_domain_lookup",
+      "zone": "v3",
+      "layer": 4,
+      "kind": "table",
+      "desc": "Dos colas sembradas con checkpoint: organizaciones por enriquecer (status, intentos, próximo reintento) y dominio por nombre (clasificación auto_ok / revisar). Nada las llena solas: sembrarlas es la decisión de gasto.",
+      "notes": "apollo_company_enrichment aloja además los ~45 campos de organizations/enrich que antes se descartaban (columnas apollo_*). Precedencia: las señales propias mandan; industry, is_public y ticker NO se tocan."
+    },
+    {
+      "id": "db_apify_runs",
+      "label": "v3.apify_runs",
+      "zone": "v3",
+      "layer": 4,
+      "kind": "table",
+      "desc": "Una fila por corrida de Apify y única fuente del costo de scraping (usageTotalUsd, origen, empresa)."
     },
     {
       "id": "db_dictionary",
@@ -1575,6 +1689,14 @@
         "v3.mcp_request_logs",
         "v3.mcp_usage_reservations"
       ]
+    },
+    {
+      "id": "db_mcp_batch",
+      "label": "v3.mcp_screenings / exports / batch_*",
+      "zone": "v3",
+      "layer": 4,
+      "kind": "table",
+      "desc": "v3.mcp_screenings, v3.mcp_exports, v3.mcp_batch_plans, v3.mcp_batch_jobs y v3.mcp_batch_job_items: el ciclo screening -> plan congelado -> trabajo -> entregable."
     },
     {
       "id": "db_ai_usage",
@@ -2849,6 +2971,139 @@
       "to": "svc_shared_apollo_dm",
       "kind": "call",
       "label": "tab de prospectos"
+    },
+    {
+      "id": "e193",
+      "from": "ext_mcp_client",
+      "to": "api_mcp_admin",
+      "kind": "call",
+      "label": "conector de claude.ai o API key admin"
+    },
+    {
+      "id": "e194",
+      "from": "api_mcp_admin",
+      "to": "svc_v3_mcp_auth",
+      "kind": "call",
+      "label": "rechaza si no es unrestricted"
+    },
+    {
+      "id": "e195",
+      "from": "api_mcp_admin",
+      "to": "svc_v3_mcp_tools",
+      "kind": "call",
+      "label": "mismas 45 tools"
+    },
+    {
+      "id": "e196",
+      "from": "api_mcp_admin",
+      "to": "svc_v3_usage",
+      "kind": "call",
+      "label": "cuota + auditoría"
+    },
+    {
+      "id": "e197",
+      "from": "svc_v3_mcp_tools",
+      "to": "svc_v3_mcp_batch",
+      "kind": "call",
+      "label": "screening, lote, export"
+    },
+    {
+      "id": "e198",
+      "from": "svc_v3_mcp_batch",
+      "to": "db_mcp_batch",
+      "kind": "rw",
+      "label": "plan congelado, jobs, export"
+    },
+    {
+      "id": "e199",
+      "from": "svc_v3_mcp_batch",
+      "to": "svc_v3_contacts",
+      "kind": "call",
+      "label": "enrichment contra presupuesto del lote"
+    },
+    {
+      "id": "e200",
+      "from": "svc_v3_mcp_batch",
+      "to": "svc_v3_spend_ledger",
+      "kind": "call",
+      "label": "get_cost_summary"
+    },
+    {
+      "id": "e201",
+      "from": "svc_v3_spend_ledger",
+      "to": "db_apify_runs",
+      "kind": "rw",
+      "label": "costo por corrida"
+    },
+    {
+      "id": "e202",
+      "from": "svc_v3_spend_ledger",
+      "to": "db_ai_usage",
+      "kind": "read",
+      "label": "costo de IA"
+    },
+    {
+      "id": "e203",
+      "from": "ext_apify",
+      "to": "db_apify_runs",
+      "kind": "write",
+      "label": "usageTotalUsd"
+    },
+    {
+      "id": "e204",
+      "from": "cron_v3_apollo_org",
+      "to": "svc_apollo",
+      "kind": "call",
+      "label": "org-enrichment-runner"
+    },
+    {
+      "id": "e205",
+      "from": "cron_v3_apollo_domain",
+      "to": "svc_apollo",
+      "kind": "call",
+      "label": "domain-lookup-runner (pausado)"
+    },
+    {
+      "id": "e206",
+      "from": "svc_apollo",
+      "to": "db_apollo_queues",
+      "kind": "rw",
+      "label": "drena cola con checkpoint"
+    },
+    {
+      "id": "e207",
+      "from": "svc_apollo",
+      "to": "ext_apollo",
+      "kind": "call",
+      "label": "organizations/enrich y /search"
+    },
+    {
+      "id": "e208",
+      "from": "svc_apollo",
+      "to": "db_companies",
+      "kind": "write",
+      "label": "website solo si vacío; apollo_* siempre"
+    },
+    {
+      "id": "e209",
+      "from": "api_apollo_webhook",
+      "to": "db_apollo_cache",
+      "kind": "write",
+      "label": "teléfono al caché compartido (v3)"
+    },
+    {
+      "id": "e210",
+      "from": "svc_etl",
+      "to": "db_contact_identity",
+      "kind": "rw",
+      "label": "resuelve identidad de persona"
+    },
+    {
+      "id": "e211",
+      "from": "svc_v3_contacts",
+      "to": "db_apollo_cache",
+      "kind": "rw",
+      "label": "no re-pedir lo ya pagado"
     }
   ],
   "flows": [
@@ -4047,6 +4302,84 @@
           "detail": "Al confirmar, followAccount por fila. Opcionalmente puentea a v2 creando bookmarks para usuarios seleccionados."
         }
       ]
+    },
+    {
+      "id": "f_mcp_admin_batch",
+      "name": "Lote sobre una lista de empresas (MCP admin)",
+      "version": "v3",
+      "trigger": "El equipo pega una lista de cuentas en el conector ASCI ADMIN y pide un informe",
+      "desc": "Reemplaza 42 llamadas sueltas y 42 confirmaciones por una cotización y un lote. El control del gasto irreversible pasa de la operación al lote que alguien cotizó y confirmó.",
+      "steps": [
+        {
+          "n": 1,
+          "nodeId": "api_mcp_admin",
+          "edgeId": "e193",
+          "detail": "OAuth de claude.ai: unrestricted sale del workspace del token y del rol global, no de los scopes."
+        },
+        {
+          "n": 2,
+          "nodeId": "svc_v3_mcp_batch",
+          "edgeId": "e197",
+          "detail": "screen_account_list en UNA llamada; estimate_batch cotiza el lote entero (slots con enforced:false para esta credencial)."
+        },
+        {
+          "n": 3,
+          "nodeId": "db_mcp_batch",
+          "edgeId": "e198",
+          "detail": "create_batch_job congela batchPlanHash y enrichment_credits_authorized, calculado en el server desde el plan guardado."
+        },
+        {
+          "n": 4,
+          "nodeId": "svc_v3_contacts",
+          "edgeId": "e199",
+          "detail": "prepare/run_contact_enrichment cobran contra el presupuesto del lote; run devuelve authorizedBy. Sin batchJobId rige el cupo mensual."
+        },
+        {
+          "n": 5,
+          "nodeId": "svc_v3_spend_ledger",
+          "edgeId": "e200",
+          "detail": "get_cost_summary cierra el informe: IA medida, Apollo estimado, Apify medido por corrida; total PISO si falta algún costo."
+        }
+      ]
+    },
+    {
+      "id": "f_apollo_queues",
+      "name": "Enrichment de Apollo por colas sembradas",
+      "version": "v3",
+      "trigger": "Alguien siembra filas en v3.apollo_company_enrichment o v3.apollo_domain_lookup",
+      "desc": "El trabajo no se descubre, se siembra: con la cola vacía el cron no llama a Apollo. El barrido por dominio de nombre está pausado desde el 8-sep-2026.",
+      "steps": [
+        {
+          "n": 1,
+          "nodeId": "cron_v3_apollo_org",
+          "edgeId": "e204",
+          "detail": "Cada 10 min reclama pending y error con reintento vencido. MAX_ATTEMPTS=3 evita un crédito por vuelta para siempre sobre una fila que siempre falla."
+        },
+        {
+          "n": 2,
+          "nodeId": "svc_apollo",
+          "edgeId": "e206",
+          "detail": "Reclama de la cola; countPending cuenta lo mismo que se reclama."
+        },
+        {
+          "n": 3,
+          "nodeId": "ext_apollo",
+          "edgeId": "e207",
+          "detail": "organizations/enrich: 1 crédito por cuenta resuelta. bulk_enrich no devuelve tecnologías."
+        },
+        {
+          "n": 4,
+          "nodeId": "db_companies",
+          "edgeId": "e208",
+          "detail": "Columnas apollo_* siempre; genéricas solo si están vacías; industry, is_public y ticker no se tocan."
+        },
+        {
+          "n": 5,
+          "nodeId": "cron_v3_apollo_domain",
+          "edgeId": "e205",
+          "detail": "PAUSADO. Haría lo mismo con organizations/search (gratis, 350 llamadas/h) para resolver website."
+        }
+      ]
     }
   ],
   "contactPoints": [
@@ -4175,6 +4508,19 @@
       ],
       "desc": "Las tres tablas de hallazgos las escriben SEIS motores distintos (v2_research, v2_manual, v3_news, v3_radar, v3_drilldown, mcp_client, etl_apify, cron_refresh) y desde el 18-ago todos entran por el mismo módulo, que estampa produced_by, dedupe_hash y atribución.",
       "impact": "Es la zona de contacto que MENOS duele hoy y más dolería si se saltea: cualquier .insert() crudo que la esquive vuelve a partir la procedencia, y la procedencia es lo que permite medir qué motor genera qué. Ya pasó: Perplexity escribía directo, y el CHECK de company_news.source estampó 'parallel' durante meses para filas de cinco motores distintos."
+    },
+    {
+      "id": "cp_admin_unrestricted",
+      "title": "Credencial sin topes (perfil MCP admin)",
+      "severity": "alta",
+      "nodes": [
+        "api_mcp_admin",
+        "api_mcp_oauth",
+        "svc_v3_mcp_auth",
+        "svc_v3_mcp_batch"
+      ],
+      "desc": "Un solo flag, `unrestricted`, levanta el cupo mensual, el tope de cargos y los lugares del plan en las 45 tools. Se otorga por dos caminos: una API key admin, o un token OAuth cuyo workspace y rol global lo permiten.",
+      "impact": "Un bug en cómo se deriva el flag emite una credencial sin topes sobre créditos de Apollo que no se recuperan. Lo que lo acota es el presupuesto del lote y la medición de todo gasto. No verificado en este repaso: que un token OAuth viejo emitido antes de #143 no conserve el marcador."
     }
   ],
   "optimizations": [
@@ -4233,40 +4579,41 @@
     },
     {
       "id": "OPT-05",
-      "title": "PARCIAL: cron_executions ya tiene RLS, pero sigue sin retención",
+      "title": "EMPEORÓ: cron_executions sigue sin retención y creció 40%",
       "severity": "media",
       "area": "datos",
       "evidence": [
-        "public.cron_executions (relrowsecurity=false, ~1.3M filas)",
-        "cleanup_old_import_data no la referencia"
+        "public.cron_executions: count 1.828.165, min(started_at) 2026-01-19 (consulta de solo lectura, 19-oct-2026)",
+        "supabase/migrations no tiene ninguna purga sobre cron_executions"
       ],
-      "finding": "La tabla de log de crons ya NO está expuesta: la migración 20260818220610 le habilitó RLS junto a las otras 6 tablas que el Security Advisor marcaba. Lo que sigue abierto es el crecimiento: cleanup_old_import_data no la referencia y hay dos crons corriendo cada minuto.",
+      "finding": "public.cron_executions tiene RLS desde 20260818220610, pero sigue sin retención: 1.828.165 filas el 19-oct-2026 (eran ~1,3M el 24-ago) y la más vieja es del 19-ene-2026, o sea que nunca se purgó. Dos crons corren cada minuto y ahora hay 13 en total.",
       "why": "Es puro costo: infla el tamaño de la base y los backups sin aportar valor pasados unos días. La ausencia de RLS además la expone vía PostgREST.",
       "fix": "Falta sólo la mitad de datos: agregar retención (por ejemplo 14 días) dentro de cleanup_old_import_data o en un cron propio, y evaluar particionado por fecha si se quiere conservar historia. La mitad de seguridad ya está hecha."
     },
     {
       "id": "OPT-06",
-      "title": "16 archivos instancian createClient crudo y saltean los helpers de Supabase",
+      "title": "EMPEORÓ: 17 archivos instancian createClient crudo y saltean los helpers de Supabase",
       "severity": "alta",
       "area": "arquitectura",
       "evidence": [
-        "13 archivos con import de @supabase/supabase-js fuera de lib/supabase/",
-        "app/actions/dictionary.ts, 6 rutas de cron, app/api/ingest/upload, app/api/landing-stats, components/v3/navbar.tsx"
+        "grep -rlE \"from '@supabase/supabase-js'\" app lib components, excluyendo lib/supabase/: 17 archivos (19-oct-2026)",
+        "app/api/cron/*: 8 de las rutas de cron, app/api/v3/admin/normalize-country-phase5/route.ts, lib/v3/services/account-brief-row.ts, components/v3/navbar.tsx"
       ],
-      "finding": "13 archivos (eran 16) instancian createClient crudo de @supabase/supabase-js en vez de pasar por lib/supabase/{server,client,admin}.ts. La baja no vino de una limpieza: son archivos que se borraron o reescribieron por otros motivos. El patrón sigue disponible y nada lo impide.",
+      "finding": "17 archivos (eran 13) importan createClient de @supabase/supabase-js fuera de lib/supabase/. Los cuatro nuevos son del enrichment de Apollo: dos rutas de cron (v3-apollo-org-enrichment, v3-apollo-domain-lookup) y lib/apollo/{org-enrichment-runner,company-writer,domain-lookup-runner}. El patrón se copió en código nuevo, no se limpió.",
       "why": "Cada instancia manual es una decision de seguridad tomada en silencio: elegir service_role ahi equivale a desactivar RLS para ese camino, y no hay forma de auditarlo de un vistazo. Es exactamente el patron que habilita fugas cross-tenant como la de get_company_signal_summary.",
       "fix": "Centralizar en lib/supabase/*, dejar admin() como único punto que toca service_role con un comentario que justifique cada uso, y agregar una regla de lint que prohiba importar @supabase/supabase-js fuera de lib/supabase/."
     },
     {
       "id": "OPT-07",
-      "title": "La ruta del servidor MCP concentra transporte, auth, cuota y tools — y ahora son tres rutas",
+      "title": "PARCIAL: standard y admin comparten registración; Explore y Perfiles siguen copiados",
       "severity": "media",
       "area": "arquitectura",
       "evidence": [
-        "app/api/v3/mcp/server/[transport]/route.ts",
-        "lib/v3/mcp-read-tools.ts"
+        "lib/v3/mcp-server-tools.ts: 45 server.tool(",
+        "app/api/v3/mcp/explore/[transport]/route.ts: 8 tool(",
+        "app/api/v3/mcp/profiles/[transport]/route.ts: 3 tool("
       ],
-      "finding": "El patrón se replicó en vez de corregirse: a la ruta del MCP estándar (37 tools) se le sumaron la de Explore (8) y la de Perfiles (3), cada una con su propia copia del bloque de transporte, auth, rate limit, mapa de nextAction por código de error y registro de tools. Lo compartido de verdad son las funciones que llaman (mcp-auth, mcp-usage, mcp_request_logs), no el andamiaje de la ruta.",
+      "finding": "Desde #139 las 45 tools del estándar viven en lib/v3/mcp-server-tools.ts y createV3McpHandler concentra transporte, auth y cuota: las rutas server y admin quedaron en 33 y 41 líneas. Lo que sigue copiado es Explore (499 líneas, 8 tools) y Perfiles (307 líneas, 3 tools), cada una con su bloque de auth y registro. La mitad del hallazgo se cerró; la otra mitad no.",
       "why": "Es el archivo de mayor riesgo de conflicto de merge del repo y el mas dificil de testear por partes. Los bugs conocidos (tool citada pero inexistente, DNS que nunca se detecta, búsqueda no determinista) son sintomas de que no hay un contrato verificable por tool.",
       "fix": "Extraer el andamiaje —createMcpHandler + withMcpAuth + auditoría + el mapa de nextAction— a un factory que reciba el scope y la lista de tools, y dejar en cada ruta sólo sus tools. Hoy un arreglo en el manejo de errores hay que hacerlo tres veces."
     },
@@ -4328,13 +4675,13 @@
       "severity": "media",
       "area": "arquitectura",
       "evidence": [
-        "RESUELTO en parte: lib/shared/ (evidence.ts, evidence-level.ts, news-search.ts, apollo-decision-makers.ts, apollo-title-groups.ts)",
+        "lib/shared/: evidence.ts, evidence-level.ts, news-search.ts, apollo-decision-makers.ts, apollo-title-groups.ts, canonical-signals.ts, linkedin-profile.ts, phone-status.ts",
         "lib/ai-service.ts vs lib/v3/ai.ts",
         "lib/documents/ vs lib/v3/services/mcp-document-*.ts",
         "lib/tech-radar.ts vs lib/v3/services/radar*.ts",
         "app/actions/search-v2.ts vs lib/v3/services/capability-search.ts"
       ],
-      "finding": "Cada capacidad transversal (IA, documentos, radar, búsqueda, dedupe, digest) tenía una implementación en v2 y otra en v3, sin módulo compartido ni regla explícita. AVANZÓ MUCHO: lib/shared/ ya existe y tiene cuatro inquilinos reales que las DOS versiones llaman —el contrato de evidencia, la búsqueda de noticias, el pipeline de decisores de Apollo y los grupos de cargos—, además del motor de research en lib/research/. La duplicación restante es la de IA, documentos y búsqueda.",
+      "finding": "SIGUE PARCIAL, avanzó: lib/shared/ pasó de cinco a ocho módulos (canonical-signals, linkedin-profile y phone-status entraron en el período; phone-status existe para que v2 y v3 hablen el mismo vocabulario de estado de teléfono). La duplicación restante es la de IA, documentos, radar y búsqueda. La frontera sigue practicada, no declarada por lint.",
       "why": "Es el costo esperable de convivir sin romper producción, pero hoy no esta acotado: nada impide que v3 importe un módulo de v2 y quede acoplado a un cambio futuro. El punto del costo invisible de IA en v2 YA NO APLICA para research: el motor registra en v3.ai_usage_log de forma incondicional en las tres etapas, así que las rutas de v2 que pasan por él (news con research-collect y research-structure) ahora sí se ven. El resto de la capa de IA de v2 sigue sin instrumentar.",
       "fix": "Lo que falta ya no es demostrar el patrón sino DECLARARLO: prohibición por lint de que lib/v3 importe de lib/ raíz salvo desde lib/shared/. Cada vez que se pospuso, se pagó: la sección de decisores de v3 fue la tercera vez que este repo estuvo a punto de tener dos implementaciones del mismo pipeline (pasó con las noticias y con el research). Ojo con la ubicación: el motor de research vive en lib/research/ y escribe en el schema v3, así que la frontera está practicada, no declarada."
     },
@@ -4344,10 +4691,9 @@
       "severity": "media",
       "area": "arquitectura",
       "evidence": [
-        "uso de .schema(\"v3\") disperso",
-        "app/actions/v3/csv-import.ts:285,324"
+        "412 usos de .schema(\"v3\") en app/lib/components (19-oct-2026)"
       ],
-      "finding": "El acceso a v3 depende de recordar .schema('v3') en cada consulta. En csv-import.ts el mismo archivo mezcla .from('csv_imports') sin schema y .schema('v3').from('csv_imports') a pocas lineas de distancia.",
+      "finding": "El acceso a v3 depende de recordar .schema('v3') en cada consulta (412 usos). La evidencia anterior citaba app/actions/v3/csv-import.ts, que se borró el 19-ago (DEAD-01), así que el ejemplo concreto de .from('csv_imports') mezclado con y sin schema ya no existe. NO VERIFICADO en este repaso: si quedó otro archivo con la misma mezcla.",
       "why": "Un olvido no falla al compilar: apunta silenciosamente a public. Dado que v2 vive en public con usuarios reales, el modo de fallo es escribir o leer la producción de v2 creyendo estar en v3.",
       "fix": "Un único helper v3Db() que devuelva el cliente ya apuntado al schema, prohibir .from() crudo en lib/v3 y app/*/v3 por lint, y generar tipos por schema para que el error salte en compilacion."
     },
@@ -4389,6 +4735,20 @@
       "finding": "El actor bebity/linkedin-jobs-scraper recibe titulos de puesto, no una empresa, así que devuelve vacantes de cualquier compania que matchee.",
       "why": "Sin guardrail de pertenencia se atribuyen vacantes ajenas a la cuenta, y como job_postings alimenta al diccionario, la señal falsa termina visible también en la búsqueda de v2. Es contaminacion que cruza de v3 a producción.",
       "fix": "RESUELTA el 19-ago-2026 por los dos lados. En el ORIGEN: se agregó companies.linkedin_company_id y el actor pasó a filtrar por companyId numérico, que es EXACTO y no tiene homónimos. El backfill salió de las vacantes ya cargadas (CSV históricos y runs de Apify guardan el ID en source_data) con dos reglas medidas contra producción: sólo se toma el ID dominante de una compañía si cubre >=80% de sus vacantes, y un ID que apunta a más de una compañía sólo se asigna si una concentra >=90% (caso real: YPF con 135 vacantes contra dos duplicados con 1 cada uno). En la INGESTA: belongsToCompany es lo PRIMERO que corre y descarta lo ajeno, y el resultado reporta cuántas se descartaron —suele ser la mayoría cuando se cae al filtro por nombre."
+    },
+    {
+      "id": "OPT-17",
+      "title": "Un cron pausado se sostiene solo por una ausencia en vercel.json",
+      "severity": "baja",
+      "area": "operación",
+      "evidence": [
+        "vercel.json: 13 crons, sin v3-apollo-domain-lookup",
+        "app/api/cron/v3-apollo-domain-lookup/route.ts: ruta viva, comentario PAUSADO (8-sep)",
+        "scripts/*.sql y supabase/migrations: cola v3.apollo_domain_lookup con filas pending"
+      ],
+      "finding": "La pausa de v3-apollo-domain-lookup es correcta y está documentada en la ruta, pero su única señal es que falta una entrada en vercel.json: nada en el mapa de crons, en un test ni en un panel distingue 'pausado a propósito' de 'nunca se agregó'.",
+      "why": "Quien mire vercel.json para saber qué corre no ve que existe un barrido a medio drenar, y quien reanude tiene que recordar el schedule. Es el tipo de estado que se pierde con el tiempo.",
+      "fix": "Mantener este nodo marcado PAUSADO mientras dure. Al reanudar, devolver la entrada */10 y actualizar stats.crons. Si la pausa se vuelve permanente, borrar la ruta y el runner en vez de dejarlos vivos."
     }
   ],
   "deadCode": [
@@ -4423,11 +4783,11 @@
       "id": "DEAD-03",
       "title": "app/actions/v3/tech-radar.ts sin consumidores",
       "severity": "media",
-      "loc": 340,
+      "loc": 369,
       "evidence": [
         "ningun import de app/actions/v3/tech-radar"
       ],
-      "finding": "Reemplazado por lib/v3/services/radar.ts y radar-agents.ts, que son los que usa el pipeline.",
+      "finding": "Reemplazado por lib/v3/services/radar.ts y radar-agents.ts, que son los que usa el pipeline. Hoy el archivo tiene 369 líneas (el mapa decía 340): el último cambio es el merge de #110 del 21-ago, así que la diferencia es una medición vieja y no código nuevo. Sigue sin importadores.",
       "verification": "Grep de 'tech-radar' en app, components y lib: las referencias apuntan a lib/tech-radar-constants y a los servicios de radar, no a este archivo.",
       "recommendation": "Borrar."
     },
@@ -4539,10 +4899,10 @@
       "severity": "baja",
       "loc": 0,
       "evidence": [
-        "v3.bookmark_dedupe_log",
-        "v3.dictionary_term_suggestions"
+        "v3.bookmark_dedupe_log: 21 filas, sin referencias en app/lib/components",
+        "v3.dictionary_term_suggestions: 769 filas; solo la toca lib/v3/services/dictionary.ts:304 (insert/update de sugerencias) sin ningún lector aparte"
       ],
-      "finding": "Ambas existen en el schema v3 pero no aparecen en los patrones de acceso del código de v3 relevados.",
+      "finding": "Corrección: dictionary_term_suggestions NO es una tabla sin acceso. dictionary.ts la escribe (acumula occurrences y las últimas 20 evidencias) y se lee solo para deduplicar esa escritura. Lo que sigue sin existir es un consumidor: 769 filas que nadie revisa. bookmark_dedupe_log sigue sin ninguna referencia en código y tiene 21 filas.",
       "verification": "Cruce entre el inventario de tablas de v3 y los .from() encontrados en lib/v3, app/actions/v3 y app/api/v3.",
       "recommendation": "Confirmar con un conteo de filas y una revisión de scripts antes de tocarlas: pueden alimentarse desde SQL suelto en scripts/. Si estan vacias y sin lector, borrarlas reduce ruido en el esquema."
     },
