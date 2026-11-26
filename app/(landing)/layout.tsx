@@ -1,11 +1,27 @@
 import type React from "react"
 import Script from "next/script"
 import type { Metadata } from "next"
+import { Inter, Inter_Tight } from "next/font/google"
+
+// Tipografía de la landing: una sans para el texto y una sola familia para
+// todos los títulos. Se cargan acá (y no en el root) para no tocar la app.
+const textFont = Inter({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  variable: "--font-landing-text",
+  display: "swap",
+})
+const displayFont = Inter_Tight({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  variable: "--font-landing-display",
+  display: "swap",
+})
 
 export const metadata: Metadata = {
-  title: "ASCI | Inteligencia de Senales para Ventas B2B - Prospeccion y Enrichment",
+  title: "ASCI | Señales de compra B2B para Claude y ChatGPT",
   description:
-    "Descubri senales de compra, encontra tomadores de decision y acelera tu pipeline B2B. La plataforma de inteligencia comercial para equipos de ventas en Latinoamerica. Alternativa a Apollo y ZoomInfo en espanol.",
+    "ASCI es un servidor MCP que conecta tu asistente de IA a 669 mil perfiles profesionales y 275 mil avisos de empleo, con foco en Latinoamérica. Preguntá qué empresas usan una tecnología, quién la usa y a quién llamar, con la evidencia de cada señal.",
 }
 
 const jsonLd = {
@@ -18,7 +34,7 @@ const jsonLd = {
       applicationCategory: "BusinessApplication",
       operatingSystem: "Web",
       description:
-        "Plataforma de inteligencia de senales para ventas B2B. Detecta senales de compra, encuentra tomadores de decision y acelera tu pipeline comercial en Latinoamerica.",
+        "Servidor MCP de señales de compra B2B para Latinoamérica. Conecta Claude, ChatGPT o cualquier cliente MCP a perfiles profesionales y avisos de empleo, para prospectar por tecnología con la evidencia de cada señal.",
       offers: {
         "@type": "Offer",
         category: "Software as a Service",
@@ -29,17 +45,17 @@ const jsonLd = {
         "@type": "Organization",
         name: "Bigua",
         url: "https://bigua.lat",
-        logo: "https://asci.bigua.lat/logo.jpg",
+        logo: "https://asci.bigua.lat/brand/bigua-isologo-dark.png",
       },
       featureList: [
-        "Deteccion de senales de compra",
-        "Busqueda de tomadores de decision",
-        "Enrichment de contactos B2B",
-        "Monitoreo de stack tecnologico",
-        "Pipeline de prospeccion Kanban",
-        "Resumen de compania con IA",
-        "Exportacion de contactos a CSV y Excel",
-        "Integracion con Apollo.io",
+        "Servidor MCP para Claude, ChatGPT y otros clientes compatibles",
+        "Prospección de cuentas por tecnología, país e industria",
+        "Evidencia citada de cada señal: persona o aviso, fecha y link",
+        "Avisos de empleo recientes como señal de compra",
+        "Presencia tecnológica sobre un listado de cuentas propio",
+        "Tomadores de decisión y revelado de contactos con Apollo.io",
+        "Radar de rotación: quién entró y quién salió de una cuenta",
+        "Búsqueda de personas por tecnología y por concepto",
       ],
       screenshot: "https://asci.bigua.lat/opengraph-image",
     },
@@ -47,7 +63,7 @@ const jsonLd = {
       "@type": "Organization",
       name: "Bigua",
       url: "https://bigua.lat",
-      logo: "https://asci.bigua.lat/logo.jpg",
+      logo: "https://asci.bigua.lat/brand/bigua-isologo-dark.png",
       description:
         "Growth y ventas B2B. Marketing, prospeccion y automatizacion para empresas en Latinoamerica.",
       sameAs: ["https://bigua.lat"],
@@ -57,7 +73,7 @@ const jsonLd = {
       name: "ASCI by Bigua",
       url: "https://asci.bigua.lat",
       description:
-        "Plataforma de inteligencia de senales para ventas B2B en Latinoamerica.",
+        "Señales de compra B2B para Latinoamérica, dentro de Claude y ChatGPT vía MCP.",
       inLanguage: "es",
       publisher: {
         "@type": "Organization",
@@ -85,7 +101,12 @@ export default function LandingLayout({
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
         strategy="afterInteractive"
       />
-      {children}
+      <div
+        className={`${textFont.variable} ${displayFont.variable}`}
+        style={{ fontFamily: "var(--font-landing-text), ui-sans-serif, system-ui, sans-serif" }}
+      >
+        {children}
+      </div>
     </>
   )
 }
