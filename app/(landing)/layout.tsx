@@ -1,6 +1,22 @@
 import type React from "react"
 import Script from "next/script"
 import type { Metadata } from "next"
+import { Inter, Inter_Tight } from "next/font/google"
+
+// Tipografía de la landing: una sans para el texto y una sola familia para
+// todos los títulos. Se cargan acá (y no en el root) para no tocar la app.
+const textFont = Inter({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  variable: "--font-landing-text",
+  display: "swap",
+})
+const displayFont = Inter_Tight({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  variable: "--font-landing-display",
+  display: "swap",
+})
 
 export const metadata: Metadata = {
   title: "ASCI | Inteligencia de Senales para Ventas B2B - Prospeccion y Enrichment",
@@ -29,7 +45,7 @@ const jsonLd = {
         "@type": "Organization",
         name: "Bigua",
         url: "https://bigua.lat",
-        logo: "https://asci.bigua.lat/logo.jpg",
+        logo: "https://asci.bigua.lat/brand/bigua-isologo-dark.png",
       },
       featureList: [
         "Deteccion de senales de compra",
@@ -47,7 +63,7 @@ const jsonLd = {
       "@type": "Organization",
       name: "Bigua",
       url: "https://bigua.lat",
-      logo: "https://asci.bigua.lat/logo.jpg",
+      logo: "https://asci.bigua.lat/brand/bigua-isologo-dark.png",
       description:
         "Growth y ventas B2B. Marketing, prospeccion y automatizacion para empresas en Latinoamerica.",
       sameAs: ["https://bigua.lat"],
@@ -85,7 +101,12 @@ export default function LandingLayout({
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
         strategy="afterInteractive"
       />
-      {children}
+      <div
+        className={`${textFont.variable} ${displayFont.variable}`}
+        style={{ fontFamily: "var(--font-landing-text), ui-sans-serif, system-ui, sans-serif" }}
+      >
+        {children}
+      </div>
     </>
   )
 }

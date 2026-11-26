@@ -20,7 +20,7 @@ export default async function Image() {
           flexDirection: "column",
           alignItems: "center",
           justifyContent: "center",
-          backgroundColor: "#0a0f1c",
+          backgroundColor: "#0a0a0a",
           position: "relative",
           overflow: "hidden",
         }}
@@ -31,7 +31,7 @@ export default async function Image() {
             position: "absolute",
             inset: 0,
             backgroundImage:
-              "linear-gradient(rgba(59,130,246,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(59,130,246,0.06) 1px, transparent 1px)",
+              "linear-gradient(rgba(217,242,112,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(217,242,112,0.05) 1px, transparent 1px)",
             backgroundSize: "60px 60px",
           }}
         />
@@ -46,46 +46,46 @@ export default async function Image() {
         >
           <path
             d="M60 10 C87.6 10 110 32.4 110 60"
-            stroke="#3B82F6"
-            strokeWidth="4"
+            stroke="#d9f270"
+            strokeWidth="8"
             strokeLinecap="round"
-            opacity="0.25"
+            opacity="0.35"
           />
           <path
             d="M60 28 C77.7 28 92 42.3 92 60"
-            stroke="#3B82F6"
-            strokeWidth="4.5"
+            stroke="#d9f270"
+            strokeWidth="8"
             strokeLinecap="round"
-            opacity="0.5"
+            opacity="0.65"
           />
           <path
             d="M60 46 C67.7 46 74 52.3 74 60"
-            stroke="#3B82F6"
-            strokeWidth="5"
+            stroke="#d9f270"
+            strokeWidth="8"
             strokeLinecap="round"
-            opacity="0.8"
+            opacity="1"
           />
-          <circle cx="60" cy="60" r="5" fill="#3B82F6" />
+          <circle cx="60" cy="60" r="5" fill="#d9f270" />
           <path
             d="M60 110 C32.4 110 10 87.6 10 60"
-            stroke="#3B82F6"
-            strokeWidth="4"
+            stroke="#d9f270"
+            strokeWidth="8"
             strokeLinecap="round"
-            opacity="0.25"
+            opacity="0.35"
           />
           <path
             d="M60 92 C42.3 92 28 77.7 28 60"
-            stroke="#3B82F6"
-            strokeWidth="4.5"
+            stroke="#d9f270"
+            strokeWidth="8"
             strokeLinecap="round"
-            opacity="0.5"
+            opacity="0.65"
           />
           <path
             d="M60 74 C52.3 74 46 67.7 46 60"
-            stroke="#3B82F6"
-            strokeWidth="5"
+            stroke="#d9f270"
+            strokeWidth="8"
             strokeLinecap="round"
-            opacity="0.8"
+            opacity="1"
           />
         </svg>
 
@@ -94,9 +94,9 @@ export default async function Image() {
           style={{
             display: "flex",
             fontSize: "64px",
-            fontWeight: 800,
-            color: "#f8fafc",
-            letterSpacing: "-0.02em",
+            fontWeight: 500,
+            color: "#f5f5f0",
+            letterSpacing: "-0.035em",
             marginBottom: "16px",
           }}
         >
@@ -108,45 +108,14 @@ export default async function Image() {
           style={{
             display: "flex",
             fontSize: "26px",
-            fontWeight: 500,
-            color: "#94a3b8",
+            fontWeight: 400,
+            color: "#a3a3a3",
             textAlign: "center",
             maxWidth: "700px",
             lineHeight: 1.4,
           }}
         >
-          Inteligencia de Senales para Ventas B2B
-        </div>
-
-        {/* Keywords bar */}
-        <div
-          style={{
-            display: "flex",
-            gap: "12px",
-            marginTop: "32px",
-            flexWrap: "wrap",
-            justifyContent: "center",
-            maxWidth: "900px",
-          }}
-        >
-          {["Prospeccion", "Enrichment", "Decision Makers", "Senales de Compra", "Pipeline B2B"].map(
-            (keyword) => (
-              <div
-                key={keyword}
-                style={{
-                  padding: "8px 20px",
-                  backgroundColor: "rgba(59,130,246,0.1)",
-                  border: "1px solid rgba(59,130,246,0.2)",
-                  borderRadius: "99px",
-                  color: "#60A5FA",
-                  fontSize: "16px",
-                  fontWeight: 500,
-                }}
-              >
-                {keyword}
-              </div>
-            ),
-          )}
+          Inteligencia de señales para ventas B2B
         </div>
 
         {/* Footer */}
@@ -157,11 +126,11 @@ export default async function Image() {
             display: "flex",
             alignItems: "center",
             gap: "8px",
-            color: "#475569",
+            color: "#737373",
             fontSize: "16px",
           }}
         >
-          by Bigua — bigua.lat
+          by Biguá · bigua.lat
         </div>
       </div>
     ),

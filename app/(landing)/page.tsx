@@ -1,5 +1,6 @@
 'use client'
 
+import Image from "next/image"
 import Link from "next/link"
 import { useEffect, useRef, useState } from "react"
 import { motion, useInView, useScroll, useTransform } from "framer-motion"
@@ -12,26 +13,40 @@ import {
   Building2,
   Globe,
   ChevronRight,
-
   FileText,
   Sparkles,
-
   Menu,
   X,
 } from "lucide-react"
 import { NetHuntForm } from "@/components/nethunt-form"
 
-/* ─── ASCI Sonar Logo ─── */
-function AsciLogo({ size = 40, className = "", style }: { size?: number; className?: string; style?: React.CSSProperties }) {
+/* ─── ASCI Sonar Logo ───
+   Trazos más gruesos y opacidades más altas que el original: a 28–32 px el
+   arco exterior quedaba en ~1 px al 25 % y se perdía sobre el fondo oscuro. */
+function AsciLogo({ size = 40, className = "", style, title }: { size?: number; className?: string; style?: React.CSSProperties; title?: string }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} style={style}>
-      <path d="M60 10 C87.6 10 110 32.4 110 60" stroke="currentColor" strokeWidth="4" strokeLinecap="round" opacity="0.25" />
-      <path d="M60 28 C77.7 28 92 42.3 92 60" stroke="currentColor" strokeWidth="4.5" strokeLinecap="round" opacity="0.5" />
-      <path d="M60 46 C67.7 46 74 52.3 74 60" stroke="currentColor" strokeWidth="5" strokeLinecap="round" opacity="0.8" />
-      <circle cx="60" cy="60" r="5" fill="currentColor" />
-      <path d="M60 110 C32.4 110 10 87.6 10 60" stroke="currentColor" strokeWidth="4" strokeLinecap="round" opacity="0.25" />
-      <path d="M60 92 C42.3 92 28 77.7 28 60" stroke="currentColor" strokeWidth="4.5" strokeLinecap="round" opacity="0.5" />
-      <path d="M60 74 C52.3 74 46 67.7 46 60" stroke="currentColor" strokeWidth="5" strokeLinecap="round" opacity="0.8" />
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 120 120"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+      style={style}
+      shapeRendering="geometricPrecision"
+      role={title ? "img" : undefined}
+      aria-label={title}
+      aria-hidden={title ? undefined : true}
+    >
+      <g strokeLinecap="round" stroke="currentColor">
+        <path d="M60 12 C86.5 12 108 33.5 108 60" strokeWidth="8" opacity="0.35" />
+        <path d="M60 30 C76.6 30 90 43.4 90 60" strokeWidth="8" opacity="0.65" />
+        <path d="M60 48 C66.6 48 72 53.4 72 60" strokeWidth="8" />
+        <path d="M60 108 C33.5 108 12 86.5 12 60" strokeWidth="8" opacity="0.35" />
+        <path d="M60 90 C43.4 90 30 76.6 30 60" strokeWidth="8" opacity="0.65" />
+        <path d="M60 72 C53.4 72 48 66.6 48 60" strokeWidth="8" />
+      </g>
+      <circle cx="60" cy="60" r="6" fill="currentColor" />
     </svg>
   )
 }
@@ -42,6 +57,26 @@ const DARK = "#0a0a0a"
 const OFF_WHITE = "#f5f5f0"
 const GRAY = "#737373"
 const BORDER = "#1f1f1f"
+
+/* ─── Escala tipográfica ───
+   Una sola familia para títulos (Inter Tight) y una sans para el texto (Inter),
+   cargadas en app/(landing)/layout.tsx. Pesos: 400 texto, 500 títulos.
+   Cuanto más grande la letra, más cerrado el tracking y el interlineado.
+
+     Display   40 → 56   500  -0.028em  1.05
+     Sección   28 → 36   500  -0.02em   1.12
+     Tarjeta   16        500  -0.01em   1.35
+     Lead      17        400            1.6
+     Texto     16        400            1.65   (en tarjetas: 15)
+     Botón     texto de alrededor − 1 px
+     Meta      13–14     400                                          */
+const DISPLAY = "font-[family-name:var(--font-landing-display)] font-medium not-italic"
+const T_HERO = `${DISPLAY} text-[40px] leading-[1.05] tracking-[-0.028em] md:text-[56px] text-balance`
+const T_SECTION = `${DISPLAY} text-[28px] leading-[1.12] tracking-[-0.02em] md:text-[36px] text-balance`
+const T_CARD = `${DISPLAY} text-[16px] leading-[1.35] tracking-[-0.01em] text-balance`
+const P_LEAD = "text-[17px] leading-[1.6] text-pretty"
+const P_BODY = "text-[16px] leading-[1.65] text-pretty"
+const P_CARD = "text-[15px] leading-[1.6] text-pretty"
 
 /* ─── Section wrapper with scroll reveal ─── */
 function Section({ children, className = "", id, style }: { children: React.ReactNode; className?: string; id?: string; style?: React.CSSProperties }) {
@@ -82,10 +117,10 @@ function AnimatedStat({ value, suffix, label }: { value: number; suffix: string;
 
   return (
     <div ref={ref} className="text-center">
-      <div className="text-4xl md:text-5xl font-bold tabular-nums" style={{ color: OFF_WHITE }}>
+      <div className={`${DISPLAY} text-[30px] leading-none tracking-[-0.02em] tabular-nums md:text-[36px]`} style={{ color: OFF_WHITE }}>
         {count.toLocaleString()}{suffix}
       </div>
-      <div className="text-sm mt-2" style={{ color: GRAY }}>
+      <div className="mt-3 text-[13px] leading-snug" style={{ color: GRAY }}>
         {label}
       </div>
     </div>
@@ -102,21 +137,12 @@ function FeatureCard({ icon: Icon, title, description, index }: { icon: React.El
       initial={{ opacity: 0, y: 24 }}
       animate={isInView ? { opacity: 1, y: 0 } : {}}
       transition={{ duration: 0.5, delay: index * 0.08, ease: [0.22, 1, 0.36, 1] }}
-      className="group relative rounded-2xl p-6 transition-all duration-300 hover:-translate-y-1"
+      className="rounded-2xl p-7"
       style={{ border: `1px solid ${BORDER}`, backgroundColor: "#111111" }}
     >
-      <div
-        className="mb-5 flex h-11 w-11 items-center justify-center rounded-xl transition-colors duration-300"
-        style={{ backgroundColor: `${LIME}12`, color: LIME }}
-      >
-        <Icon className="h-5 w-5" />
-      </div>
-      <h3 className="mb-2 text-lg font-semibold" style={{ color: OFF_WHITE }}>{title}</h3>
-      <p className="text-sm leading-relaxed" style={{ color: GRAY }}>{description}</p>
-      <div
-        className="absolute inset-0 rounded-2xl opacity-0 transition-opacity duration-300 group-hover:opacity-100 pointer-events-none"
-        style={{ boxShadow: `0 0 40px ${LIME}08, inset 0 1px 0 ${LIME}15` }}
-      />
+      <Icon className="mb-6 h-5 w-5" strokeWidth={1.75} style={{ color: LIME }} aria-hidden />
+      <h3 className={`mb-2 ${T_CARD}`} style={{ color: OFF_WHITE }}>{title}</h3>
+      <p className={P_CARD} style={{ color: GRAY }}>{description}</p>
     </motion.div>
   )
 }
@@ -133,17 +159,14 @@ function StepCard({ number, title, description, index }: { number: number; title
       transition={{ duration: 0.5, delay: index * 0.15, ease: [0.22, 1, 0.36, 1] }}
       className="relative"
     >
-      <div className="mb-5">
-        <span className="text-6xl font-bold" style={{ color: `${LIME}20` }}>{number}</span>
+      <div className="mb-4 text-[13px] tabular-nums" style={{ color: LIME }}>
+        {String(number).padStart(2, "0")}
       </div>
-      <h3 className="mb-3 text-xl font-semibold" style={{ color: OFF_WHITE }}>{title}</h3>
-      <p className="leading-relaxed" style={{ color: GRAY }}>{description}</p>
+      <h3 className={`mb-2 ${T_CARD}`} style={{ color: OFF_WHITE }}>{title}</h3>
+      <p className={P_CARD} style={{ color: GRAY }}>{description}</p>
     </motion.div>
   )
 }
-
-/* ─── Testimonial Card ─── */
-
 
 /* ═══════════════════════════════════════════════════
    MAIN PAGE
@@ -196,7 +219,7 @@ export default function HomePage() {
 
   const navLinks = [
     { href: "#features", label: "Producto" },
-    { href: "#how-it-works", label: "Como Funciona" },
+    { href: "#how-it-works", label: "Cómo funciona" },
     { href: "#request-access", label: "Contacto" },
   ]
 
@@ -212,9 +235,9 @@ export default function HomePage() {
         }}
       >
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
-          <Link href="/" className="flex items-center gap-2.5">
-            <AsciLogo size={32} style={{ color: LIME }} />
-            <span className="text-lg font-bold tracking-tight" style={{ color: OFF_WHITE }}>ASCI</span>
+          <Link href="/" className="flex items-center gap-2.5" aria-label="ASCI, inicio">
+            <AsciLogo size={28} style={{ color: LIME }} />
+            <span className={`${DISPLAY} text-[17px] tracking-[-0.015em]`} style={{ color: OFF_WHITE }}>ASCI</span>
           </Link>
 
           <nav className="hidden items-center gap-8 md:flex">
@@ -222,7 +245,7 @@ export default function HomePage() {
               <Link
                 key={link.href}
                 href={link.href}
-                className="text-sm font-medium transition-colors duration-200 hover:opacity-100"
+                className="text-[14px] transition-colors duration-200"
                 style={{ color: GRAY }}
                 onMouseOver={(e) => (e.currentTarget.style.color = OFF_WHITE)}
                 onMouseOut={(e) => (e.currentTarget.style.color = GRAY)}
@@ -235,20 +258,20 @@ export default function HomePage() {
           <div className="hidden items-center gap-3 md:flex">
             <Link href="/auth/login">
               <button
-                className="rounded-lg px-4 py-2 text-sm font-medium transition-colors duration-200"
+                className="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors duration-200"
                 style={{ color: GRAY }}
                 onMouseOver={(e) => (e.currentTarget.style.color = OFF_WHITE)}
                 onMouseOut={(e) => (e.currentTarget.style.color = GRAY)}
               >
-                Iniciar Sesion
+                Iniciar sesión
               </button>
             </Link>
             <Link href="#request-access">
               <button
-                className="rounded-xl px-5 py-2.5 text-sm font-semibold transition-all duration-200 hover:brightness-110"
+                className="rounded-lg px-4 py-2 text-[13px] font-medium transition-all duration-200 hover:brightness-110"
                 style={{ backgroundColor: LIME, color: DARK }}
               >
-                Solicitar Demo
+                Solicitar demo
               </button>
             </Link>
           </div>
@@ -276,7 +299,7 @@ export default function HomePage() {
               <Link
                 key={link.href}
                 href={link.href}
-                className="block py-3 text-sm font-medium"
+                className="block py-3 text-[15px]"
                 style={{ color: GRAY }}
                 onClick={() => setMobileMenu(false)}
               >
@@ -284,16 +307,16 @@ export default function HomePage() {
               </Link>
             ))}
             <div className="mt-4 flex flex-col gap-3">
-              <Link href="/auth/login" className="text-sm font-medium text-center py-2.5" style={{ color: GRAY }}>
-                Iniciar Sesion
+              <Link href="/auth/login" className="py-2.5 text-center text-[14px] font-medium" style={{ color: GRAY }}>
+                Iniciar sesión
               </Link>
               <Link
                 href="#request-access"
-                className="rounded-xl px-5 py-2.5 text-sm font-semibold text-center"
+                className="rounded-lg px-5 py-2.5 text-center text-[14px] font-medium"
                 style={{ backgroundColor: LIME, color: DARK }}
                 onClick={() => setMobileMenu(false)}
               >
-                Solicitar Demo
+                Solicitar demo
               </Link>
             </div>
           </motion.div>
@@ -304,7 +327,7 @@ export default function HomePage() {
         {/* ═══════════════════════════════════════
             HERO
             ═══════════════════════════════════════ */}
-        <section ref={heroRef} className="relative min-h-screen flex items-center justify-center overflow-hidden pt-16">
+        <section ref={heroRef} className="relative flex min-h-screen items-center justify-center overflow-hidden pt-32 pb-24 md:pt-16 md:pb-0">
           {/* Subtle grid background */}
           <div
             className="absolute inset-0 opacity-[0.03]"
@@ -320,27 +343,15 @@ export default function HomePage() {
           />
 
           <motion.div style={{ opacity: heroOpacity, y: heroY }} className="relative z-10 mx-auto max-w-5xl px-6 text-center">
-            {/* Badge */}
-            <motion.div
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.6, delay: 0.1 }}
-              className="mb-8 inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-xs font-semibold uppercase tracking-widest"
-              style={{ border: `1px solid ${LIME}30`, color: LIME, backgroundColor: `${LIME}08` }}
-            >
-              <Sparkles className="h-3 w-3" />
-              Signal-Based Selling para LATAM
-            </motion.div>
-
             {/* Headline */}
             <motion.h1
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.7, delay: 0.2, ease: [0.22, 1, 0.36, 1] }}
-              className="mb-6 text-balance text-5xl font-bold leading-[1.06] tracking-tight md:text-6xl lg:text-[4.5rem]"
+              className={`mx-auto mb-6 max-w-3xl ${T_HERO}`}
               style={{ color: OFF_WHITE }}
             >
-              Sabe que tecnologias usa{" "}
+              Sabé qué tecnologías usa{" "}
               <span style={{ color: LIME }}>cada empresa</span>{" "}
               antes de llamar
             </motion.h1>
@@ -350,10 +361,10 @@ export default function HomePage() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.7, delay: 0.35 }}
-              className="mx-auto mb-10 max-w-2xl text-pretty text-lg leading-relaxed md:text-xl"
+              className={`mx-auto mb-10 max-w-xl ${P_LEAD} text-balance`}
               style={{ color: GRAY }}
             >
-              ASCI detecta senales ocultas en perfiles de empleados y busquedas laborales para mapear el stack tecnologico y los procesos de cualquier compania. Prospeccion B2B con contexto real, no con datos frios.
+              ASCI detecta señales en perfiles de empleados y búsquedas laborales para mapear el stack tecnológico y los procesos de cualquier compañía. Prospección B2B con contexto real, no con datos fríos.
             </motion.p>
 
             {/* CTAs */}
@@ -361,24 +372,15 @@ export default function HomePage() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.6, delay: 0.5 }}
-              className="flex flex-col items-center justify-center gap-4 sm:flex-row"
+              className="flex justify-center"
             >
-              <Link href="#request-access">
-                <button
-                  className="flex items-center gap-2 rounded-xl px-7 py-3.5 text-base font-semibold transition-all duration-200 hover:brightness-110 hover:-translate-y-0.5"
-                  style={{ backgroundColor: LIME, color: DARK }}
-                >
-                  Solicitar Demo
-                  <ArrowRight className="h-4 w-4" />
-                </button>
-              </Link>
-              <Link href="/auth/login">
-                <button
-                  className="rounded-xl px-7 py-3.5 text-base font-medium transition-all duration-200 hover:brightness-125"
-                  style={{ border: `1px solid ${BORDER}`, color: OFF_WHITE, backgroundColor: "transparent" }}
-                >
-                  Ya tengo cuenta
-                </button>
+              <Link
+                href="#request-access"
+                className="flex items-center gap-2 rounded-xl px-6 py-3 text-[16px] font-medium transition-all duration-200 hover:brightness-110"
+                style={{ backgroundColor: LIME, color: DARK }}
+              >
+                Solicitar demo
+                <ArrowRight className="h-4 w-4" aria-hidden />
               </Link>
             </motion.div>
 
@@ -387,7 +389,7 @@ export default function HomePage() {
               initial={{ opacity: 0, y: 40 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.8, delay: 0.7, ease: [0.22, 1, 0.36, 1] }}
-              className="relative mx-auto mt-20 max-w-4xl"
+              className="relative mx-auto mt-24 max-w-4xl text-left"
             >
               <div
                 className="absolute -inset-8 rounded-3xl opacity-20 blur-3xl"
@@ -403,7 +405,7 @@ export default function HomePage() {
                   </div>
                   <div className="flex flex-1 justify-center">
                     <div
-                      className="flex items-center gap-2 rounded-lg px-4 py-1.5 text-xs"
+                      className="flex items-center gap-2 rounded-lg px-4 py-1.5 text-[12px]"
                       style={{ backgroundColor: "#1a1a1a", color: GRAY }}
                     >
                       <Search className="h-3 w-3" />
@@ -416,9 +418,9 @@ export default function HomePage() {
                   <div className="mb-5 flex items-center gap-3">
                     <div className="flex flex-1 items-center gap-3 rounded-xl px-4 py-3" style={{ backgroundColor: "#1a1a1a", border: `1px solid ${BORDER}` }}>
                       <Search className="h-4 w-4" style={{ color: GRAY }} />
-                      <span className="text-sm" style={{ color: GRAY }}>Buscar por tecnologia, proceso o empresa...</span>
+                      <span className="text-[13px]" style={{ color: GRAY }}>Buscar por tecnología, proceso o empresa…</span>
                     </div>
-                    <div className="hidden sm:block rounded-xl px-5 py-3 text-sm font-medium" style={{ backgroundColor: LIME, color: DARK }}>
+                    <div className="hidden rounded-xl px-5 py-3 text-[12px] font-medium sm:block" style={{ backgroundColor: LIME, color: DARK }}>
                       Buscar
                     </div>
                   </div>
@@ -434,24 +436,24 @@ export default function HomePage() {
                         style={{ backgroundColor: "#1a1a1a", border: `1px solid ${BORDER}` }}
                       >
                         <div className="mb-3 flex items-start gap-3">
-                          <div className="flex h-9 w-9 items-center justify-center rounded-lg text-xs font-bold" style={{ backgroundColor: `${LIME}15`, color: LIME }}>
+                          <div className="flex h-9 w-9 items-center justify-center rounded-lg text-[13px] font-medium" style={{ backgroundColor: `${LIME}15`, color: LIME }}>
                             {company.name[0]}
                           </div>
                           <div className="min-w-0 flex-1">
-                            <div className="truncate text-sm font-semibold" style={{ color: OFF_WHITE }}>{company.name}</div>
-                            <div className="text-xs" style={{ color: GRAY }}>{company.industry}</div>
+                            <div className="truncate text-[13px] font-medium" style={{ color: OFF_WHITE }}>{company.name}</div>
+                            <div className="text-[12px]" style={{ color: GRAY }}>{company.industry}</div>
                           </div>
                         </div>
                         <div className="mb-3 flex flex-wrap gap-1.5">
                           {company.tags.map((tag) => (
-                            <span key={tag} className="rounded-md px-2 py-0.5 text-[10px] font-medium" style={{ backgroundColor: `${LIME}12`, color: LIME }}>
+                            <span key={tag} className="rounded-md px-2 py-0.5 text-[11px]" style={{ backgroundColor: `${LIME}12`, color: LIME }}>
                               {tag}
                             </span>
                           ))}
                         </div>
                         <div className="flex items-center justify-between">
-                          <span className="text-xs" style={{ color: GRAY }}>{company.signals} senales</span>
-                          <span className="flex items-center gap-0.5 text-xs font-medium" style={{ color: LIME }}>
+                          <span className="text-[12px]" style={{ color: GRAY }}>{company.signals} señales</span>
+                          <span className="flex items-center gap-0.5 text-[12px]" style={{ color: LIME }}>
                             Ver detalle <ChevronRight className="h-3 w-3" />
                           </span>
                         </div>
@@ -467,13 +469,13 @@ export default function HomePage() {
         {/* ═══════════════════════════════════════
             STATS
             ═══════════════════════════════════════ */}
-        <Section className="py-20" style={{ borderTop: `1px solid ${BORDER}`, borderBottom: `1px solid ${BORDER}` }}>
+        <Section className="py-20 md:py-24" style={{ borderTop: `1px solid ${BORDER}`, borderBottom: `1px solid ${BORDER}` }}>
           <div className="mx-auto max-w-5xl px-6">
-            <div className="grid grid-cols-2 gap-10 md:grid-cols-4">
-              <AnimatedStat value={stats.contacts_analyzed} suffix="+" label="Contactos Analizados" />
-              <AnimatedStat value={stats.companies_indexed} suffix="+" label="Empresas Indexadas" />
-              <AnimatedStat value={stats.technologies_processes} suffix="" label="Tecnologias y Procesos" />
-              <AnimatedStat value={stats.signals_detected} suffix="+" label="Senales Detectadas" />
+            <div className="grid grid-cols-2 gap-x-8 gap-y-12 md:grid-cols-4">
+              <AnimatedStat value={stats.contacts_analyzed} suffix="+" label="Contactos analizados" />
+              <AnimatedStat value={stats.companies_indexed} suffix="+" label="Empresas indexadas" />
+              <AnimatedStat value={stats.technologies_processes} suffix="" label="Tecnologías y procesos" />
+              <AnimatedStat value={stats.signals_detected} suffix="+" label="Señales detectadas" />
             </div>
           </div>
         </Section>
@@ -481,26 +483,23 @@ export default function HomePage() {
         {/* ═══════════════════════════════════════
             FEATURES
             ═══════════════════════════════════════ */}
-        <Section id="features" className="py-24 md:py-32">
+        <Section id="features" className="py-28 md:py-40">
           <div className="mx-auto max-w-6xl px-6">
-            <div className="mx-auto mb-16 max-w-2xl text-center">
-              <p className="mb-4 text-xs font-semibold uppercase tracking-widest" style={{ color: LIME }}>
-                Producto
-              </p>
-              <h2 className="mb-5 text-balance text-3xl font-bold md:text-4xl" style={{ color: OFF_WHITE }}>
-                Todo lo que necesitas para prospectar con contexto
+            <div className="mx-auto mb-16 max-w-2xl text-center md:mb-20">
+              <h2 className={`mb-5 ${T_SECTION}`} style={{ color: OFF_WHITE }}>
+                Todo lo que necesitás para prospectar con contexto
               </h2>
-              <p className="text-lg leading-relaxed" style={{ color: GRAY }}>
-                Funcionalidades pensadas para equipos de ventas B2B que quieren ir mas alla del email frio.
+              <p className={`mx-auto max-w-xl ${P_BODY} text-balance`} style={{ color: GRAY }}>
+                Pensado para equipos de ventas B2B que quieren ir más allá del email frío.
               </p>
             </div>
             <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
-              <FeatureCard index={0} icon={Search} title="Segmentacion por Senales" description="Busca empresas por tecnologia, proceso o nombre. Cada senal proviene de perfiles reales de empleados actuales y pasados, o de busquedas laborales activas." />
-              <FeatureCard index={1} icon={Building2} title="Perfil 360 de Empresa" description="Cada empresa tiene un panel con su stack tecnologico, procesos internos, empleados detectados, busquedas laborales activas y noticias recientes." />
-              <FeatureCard index={2} icon={FileText} title="Documentacion & Value Profile" description="Subi tus casos de exito, propuestas de valor y brochures. La IA los vincula con el diccionario de senales para entender tu fit con cada cuenta." />
-              <FeatureCard index={3} icon={Users} title="Prospectos & Decision Makers" description="Busca contactos relevantes en Apollo.io desde el workspace. La IA sugiere job titles basandose en las senales detectadas de cada cuenta." />
-              <FeatureCard index={4} icon={Globe} title="Noticias e Implementaciones" description="Investiga con IA las noticias recientes e implementaciones de cada cuenta. Alimentan los icebreakers y el brief ejecutivo con contexto actualizado." />
-              <FeatureCard index={5} icon={Sparkles} title="Estrategia, Icebreakers & Brief" description="Genera estrategias de abordaje, icebreakers personalizados y briefs ejecutivos. Todo basado en senales, documentacion y noticias reales." />
+              <FeatureCard index={0} icon={Search} title="Segmentación por señales" description="Buscá empresas por tecnología, proceso o nombre. Cada señal proviene de perfiles reales de empleados actuales y pasados, o de búsquedas laborales activas." />
+              <FeatureCard index={1} icon={Building2} title="Perfil 360 de empresa" description="Cada empresa tiene un panel con su stack tecnológico, procesos internos, empleados detectados, búsquedas laborales activas y noticias recientes." />
+              <FeatureCard index={2} icon={FileText} title="Documentación y value profile" description="Subí tus casos de éxito, propuestas de valor y brochures. La IA los vincula con el diccionario de señales para entender tu fit con cada cuenta." />
+              <FeatureCard index={3} icon={Users} title="Prospectos y decision makers" description="Buscá contactos relevantes en Apollo.io desde el workspace. La IA sugiere job titles a partir de las señales detectadas en cada cuenta." />
+              <FeatureCard index={4} icon={Globe} title="Noticias e implementaciones" description="Investigá con IA las noticias recientes e implementaciones de cada cuenta. Alimentan los icebreakers y el brief ejecutivo con contexto actualizado." />
+              <FeatureCard index={5} icon={Sparkles} title="Estrategia, icebreakers y brief" description="Generá estrategias de abordaje, icebreakers personalizados y briefs ejecutivos, basados en señales, documentación y noticias reales." />
             </div>
           </div>
         </Section>
@@ -508,25 +507,22 @@ export default function HomePage() {
         {/* ═══════════════════════════════════════
             HOW IT WORKS
             ═══���═══════════════════════════════════ */}
-        <Section id="how-it-works" className="py-24 md:py-32" style={{ borderTop: `1px solid ${BORDER}` }}>
+        <Section id="how-it-works" className="py-28 md:py-40" style={{ borderTop: `1px solid ${BORDER}` }}>
           <div className="mx-auto max-w-5xl px-6">
-            <div className="mx-auto mb-16 max-w-2xl text-center">
-              <p className="mb-4 text-xs font-semibold uppercase tracking-widest" style={{ color: LIME }}>
-                Como Funciona
-              </p>
-              <h2 className="mb-5 text-balance text-3xl font-bold md:text-4xl" style={{ color: OFF_WHITE }}>
+            <div className="mx-auto mb-16 max-w-2xl text-center md:mb-20">
+              <h2 className={`mb-5 ${T_SECTION}`} style={{ color: OFF_WHITE }}>
                 De datos dispersos a inteligencia accionable
               </h2>
-              <p className="text-lg leading-relaxed" style={{ color: GRAY }}>
-                ASCI transforma informacion publica en senales de compra que tu equipo puede usar hoy.
+              <p className={`mx-auto max-w-xl ${P_BODY} text-balance`} style={{ color: GRAY }}>
+                ASCI transforma información pública en señales de compra que tu equipo puede usar hoy.
               </p>
             </div>
 
             <div className="grid grid-cols-1 gap-12 md:grid-cols-4">
-              <StepCard index={0} number={1} title="Ingesta & Senales" description="Importa contactos y busquedas laborales. ASCI analiza cada perfil contra un diccionario de tecnologias y procesos, creando senales unicas por empresa." />
-              <StepCard index={1} number={2} title="Documentacion" description="Subi tus propuestas de valor, casos de exito y brochures. La IA los analiza, extrae tags de industria, tecnologia y proceso, y construye tu perfil de valor." />
-              <StepCard index={2} number={3} title="Segmentacion" description="Busca por tecnologia, proceso o empresa. Filtra por pais e industria. Guarda cuentas como bookmarks con prioridad (T1, T2, T3) y estado de avance." />
-              <StepCard index={3} number={4} title="Workspace & Accion" description="Cada cuenta tiene su workspace con estrategia IA, noticias, implementaciones, prospectos, icebreakers y brief ejecutivo. Todo conectado a tus documentos y senales." />
+              <StepCard index={0} number={1} title="Ingesta y señales" description="Importá contactos y búsquedas laborales. ASCI analiza cada perfil contra un diccionario de tecnologías y procesos y crea señales únicas por empresa." />
+              <StepCard index={1} number={2} title="Documentación" description="Subí tus propuestas de valor, casos de éxito y brochures. La IA los analiza, extrae tags de industria, tecnología y proceso, y construye tu perfil de valor." />
+              <StepCard index={2} number={3} title="Segmentación" description="Buscá por tecnología, proceso o empresa. Filtrá por país e industria. Guardá cuentas como bookmarks con prioridad (T1, T2, T3) y estado de avance." />
+              <StepCard index={3} number={4} title="Workspace y acción" description="Cada cuenta tiene su workspace con estrategia IA, noticias, implementaciones, prospectos, icebreakers y brief ejecutivo, conectado a tus documentos y señales." />
             </div>
           </div>
         </Section>
@@ -534,33 +530,28 @@ export default function HomePage() {
         {/* ═══════════════════════════════════════
             WORKSPACE SHOWCASE
             ═════════════��═════════════════════════ */}
-        <Section className="py-24 md:py-32" style={{ borderTop: `1px solid ${BORDER}` }}>
+        <Section className="py-28 md:py-40" style={{ borderTop: `1px solid ${BORDER}` }}>
           <div className="mx-auto max-w-6xl px-6">
             <div className="grid grid-cols-1 items-center gap-16 lg:grid-cols-2">
               {/* Left */}
               <div>
-                <p className="mb-4 text-xs font-semibold uppercase tracking-widest" style={{ color: LIME }}>
-                  Workspace Inteligente
-                </p>
-                <h2 className="mb-6 text-3xl font-bold md:text-4xl" style={{ color: OFF_WHITE }}>
+                <h2 className={`mb-5 ${T_SECTION}`} style={{ color: OFF_WHITE }}>
                   Tu centro de comando para cada cuenta
                 </h2>
-                <p className="mb-10 text-lg leading-relaxed" style={{ color: GRAY }}>
-                  Cada cuenta guardada tiene su workspace privado. La IA cruza las senales detectadas con tus documentos de propuesta de valor y casos de exito para generar estrategias, icebreakers y briefs personalizados.
+                <p className={`mb-12 ${P_BODY}`} style={{ color: GRAY }}>
+                  Cada cuenta guardada tiene su workspace privado. La IA cruza las señales detectadas con tus documentos de propuesta de valor y casos de éxito para generar estrategias, icebreakers y briefs personalizados.
                 </p>
-                <div className="space-y-6">
+                <div className="space-y-7">
                   {[
-                    { icon: Target, title: "Estrategia con IA", desc: "Genera angulos de venta usando las senales detectadas, tus documentos de propuesta de valor, y el contexto de noticias e implementaciones de la cuenta." },
-                    { icon: FileText, title: "Documentacion conectada", desc: "Tus casos de exito y propuestas de valor se vinculan automaticamente a cada cuenta segun las senales. La IA entiende tu fit con cada prospecto." },
-                    { icon: Zap, title: "Icebreakers & Brief", desc: "Mensajes de apertura personalizados y briefs ejecutivos que combinan senales, noticias, implementaciones y tu propia documentacion comercial." },
+                    { icon: Target, title: "Estrategia con IA", desc: "Ángulos de venta a partir de las señales detectadas, tus documentos de propuesta de valor y el contexto de noticias e implementaciones de la cuenta." },
+                    { icon: FileText, title: "Documentación conectada", desc: "Tus casos de éxito y propuestas de valor se vinculan automáticamente a cada cuenta según las señales. La IA entiende tu fit con cada prospecto." },
+                    { icon: Zap, title: "Icebreakers y brief", desc: "Mensajes de apertura personalizados y briefs ejecutivos que combinan señales, noticias, implementaciones y tu propia documentación comercial." },
                   ].map((f) => (
                     <div key={f.title} className="flex items-start gap-4">
-                      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl" style={{ backgroundColor: `${LIME}12`, color: LIME }}>
-                        <f.icon className="h-5 w-5" />
-                      </div>
+                      <f.icon className="mt-0.5 h-5 w-5 flex-shrink-0" strokeWidth={1.75} style={{ color: LIME }} aria-hidden />
                       <div>
-                        <h4 className="font-semibold" style={{ color: OFF_WHITE }}>{f.title}</h4>
-                        <p className="text-sm leading-relaxed" style={{ color: GRAY }}>{f.desc}</p>
+                        <h3 className={`mb-1.5 ${T_CARD}`} style={{ color: OFF_WHITE }}>{f.title}</h3>
+                        <p className={P_CARD} style={{ color: GRAY }}>{f.desc}</p>
                       </div>
                     </div>
                   ))}
@@ -571,19 +562,19 @@ export default function HomePage() {
                 <div className="overflow-hidden rounded-2xl" style={{ border: `1px solid ${BORDER}`, backgroundColor: "#0f0f0f" }}>
                   <div className="flex items-center justify-between px-6 py-4" style={{ borderBottom: `1px solid ${BORDER}` }}>
                     <div className="flex items-center gap-3">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-lg text-sm font-bold" style={{ backgroundColor: `${LIME}15`, color: LIME }}>G</div>
+                      <div className="flex h-10 w-10 items-center justify-center rounded-lg text-[14px] font-medium" style={{ backgroundColor: `${LIME}15`, color: LIME }}>G</div>
                       <div>
-                        <div className="font-semibold" style={{ color: OFF_WHITE }}>Galicia Bank</div>
-                        <div className="text-sm" style={{ color: GRAY }}>Financial Services</div>
+                        <div className="text-[14px] font-medium" style={{ color: OFF_WHITE }}>Galicia Bank</div>
+                        <div className="text-[13px]" style={{ color: GRAY }}>Financial Services</div>
                       </div>
                     </div>
-                    <span className="rounded-lg px-3 py-1 text-xs font-medium" style={{ backgroundColor: `${LIME}15`, color: LIME }}>Alta Prioridad</span>
+                    <span className="rounded-lg px-3 py-1 text-[12px]" style={{ backgroundColor: `${LIME}15`, color: LIME }}>Alta prioridad</span>
                   </div>
                   <div className="flex gap-1 px-6 py-3" style={{ borderBottom: `1px solid ${BORDER}` }}>
                     {["Resumen", "Estrategia", "Noticias", "Icebreakers"].map((tab, i) => (
                       <span
                         key={tab}
-                        className="rounded-lg px-3.5 py-1.5 text-xs font-medium"
+                        className="rounded-lg px-3.5 py-1.5 text-[12px]"
                         style={{
                           backgroundColor: i === 0 ? `${LIME}15` : "transparent",
                           color: i === 0 ? LIME : GRAY,
@@ -597,27 +588,27 @@ export default function HomePage() {
                     <div className="rounded-xl p-4" style={{ backgroundColor: `${LIME}08`, border: `1px solid ${LIME}20` }}>
                       <div className="mb-2 flex items-center gap-2">
                         <Sparkles className="h-4 w-4" style={{ color: LIME }} />
-                        <span className="text-sm font-medium" style={{ color: OFF_WHITE }}>Estrategia Generada por IA</span>
+                        <span className="text-[13px] font-medium" style={{ color: OFF_WHITE }}>Estrategia generada por IA</span>
                       </div>
-                      <p className="text-sm" style={{ color: GRAY }}>
-                        Basado en 12 senales tech y tu caso de exito en banca digital: enfocar pitch en modernizacion de core bancario. Migracion a AWS y adopcion de metodologias agiles...
+                      <p className="text-[13px] leading-relaxed" style={{ color: GRAY }}>
+                        Basado en 12 señales tech y tu caso de éxito en banca digital: enfocar el pitch en modernización del core bancario, migración a AWS y adopción de metodologías ágiles…
                       </p>
                     </div>
                     <div className="grid grid-cols-3 gap-3">
                       {[
-                        { val: "12", label: "Senales Tech" },
+                        { val: "12", label: "Señales tech" },
                         { val: "6", label: "Procesos" },
-                        { val: "8", label: "Busquedas Lab." },
+                        { val: "8", label: "Búsquedas lab." },
                       ].map((s) => (
                         <div key={s.label} className="rounded-lg p-3 text-center" style={{ backgroundColor: "#1a1a1a" }}>
-                          <div className="text-xl font-bold" style={{ color: OFF_WHITE }}>{s.val}</div>
-                          <div className="text-[10px]" style={{ color: GRAY }}>{s.label}</div>
+                          <div className={`${DISPLAY} text-[20px] tracking-[-0.02em]`} style={{ color: OFF_WHITE }}>{s.val}</div>
+                          <div className="text-[11px]" style={{ color: GRAY }}>{s.label}</div>
                         </div>
                       ))}
                     </div>
                     <div className="flex flex-wrap gap-1.5">
                       {["AWS", "SAP S/4HANA", "DevOps", "Kubernetes", "Terraform"].map((tag) => (
-                        <span key={tag} className="rounded-md px-2.5 py-1 text-[11px] font-medium" style={{ backgroundColor: `${LIME}12`, color: LIME }}>{tag}</span>
+                        <span key={tag} className="rounded-md px-2.5 py-1 text-[11px]" style={{ backgroundColor: `${LIME}12`, color: LIME }}>{tag}</span>
                       ))}
                     </div>
                   </div>
@@ -630,7 +621,7 @@ export default function HomePage() {
         {/* ═══════════════════════════════════════
             CTA + FORM
             ═══════════════════════════════════════ */}
-        <section id="request-access" className="py-24 md:py-32" style={{ borderTop: `1px solid ${BORDER}` }}>
+        <section id="request-access" className="py-28 md:py-40" style={{ borderTop: `1px solid ${BORDER}` }}>
           <div className="mx-auto max-w-3xl px-6 text-center">
             <motion.div
               initial={{ opacity: 0, y: 24 }}
@@ -638,12 +629,11 @@ export default function HomePage() {
               viewport={{ once: true }}
               transition={{ duration: 0.6 }}
             >
-              <AsciLogo size={48} className="mx-auto mb-6" style={{ color: LIME }} />
-              <h2 className="mb-4 text-balance text-3xl font-bold md:text-4xl" style={{ color: OFF_WHITE }}>
-                Comenza a encontrar senales hoy
+              <h2 className={`mb-5 ${T_SECTION}`} style={{ color: OFF_WHITE }}>
+                Empezá a encontrar señales hoy
               </h2>
-              <p className="mx-auto mb-12 max-w-xl text-lg leading-relaxed" style={{ color: GRAY }}>
-                Unite a los equipos de ventas que ya estan usando inteligencia de senales para mejorar su prospeccion B2B en Latinoamerica.
+              <p className={`mx-auto mb-14 max-w-xl ${P_BODY} text-balance`} style={{ color: GRAY }}>
+                Sumate a los equipos de ventas que ya usan inteligencia de señales para mejorar su prospección B2B en Latinoamérica.
               </p>
             </motion.div>
 
@@ -662,22 +652,32 @@ export default function HomePage() {
       {/* ═══════════════════════════════════════
           FOOTER
           ═══════════════════════════════════════ */}
-      <footer className="py-10" style={{ borderTop: `1px solid ${BORDER}` }}>
+      <footer className="py-12" style={{ borderTop: `1px solid ${BORDER}` }}>
         <div className="mx-auto max-w-6xl px-6">
           <div className="flex flex-col items-center justify-between gap-6 md:flex-row">
             <Link href="/" className="flex items-center gap-2">
-              <AsciLogo size={28} style={{ color: LIME }} />
-              <span className="text-base font-bold" style={{ color: OFF_WHITE }}>ASCI</span>
+              <AsciLogo size={24} style={{ color: LIME }} title="ASCI" />
+              <span className={`${DISPLAY} text-[15px] tracking-[-0.01em]`} style={{ color: OFF_WHITE }}>ASCI</span>
             </Link>
-            <p className="text-sm" style={{ color: GRAY }}>
-              &copy; 2026 ASCI. Asistente de Senales de Compra e Inferencias.
+            <p className="text-center text-[13px]" style={{ color: GRAY }}>
+              &copy; 2026 ASCI · Asistente de Señales de Compra e Inferencias
             </p>
-            <p className="text-sm" style={{ color: GRAY }}>
-              Desarrollado por{" "}
-              <Link href="https://bigua.lat" target="_blank" className="transition-colors duration-200 hover:underline" style={{ color: LIME }}>
-                Bigua
-              </Link>
-            </p>
+            <Link
+              href="https://bigua.lat"
+              target="_blank"
+              rel="noopener"
+              className="flex items-center gap-2.5 text-[13px] opacity-80 transition-opacity duration-200 hover:opacity-100"
+              style={{ color: GRAY }}
+            >
+              Desarrollado por
+              <Image
+                src="/brand/bigua-isologo-light.png"
+                alt="Biguá"
+                width={447}
+                height={147}
+                className="h-5 w-auto"
+              />
+            </Link>
           </div>
         </div>
       </footer>
