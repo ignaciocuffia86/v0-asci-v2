@@ -1,26 +1,34 @@
-# ASCI by Bigua
+# ASCI by Biguá
 
-> Inteligencia de mercado para equipos de ventas B2B. Identifica el stack tecnologico y procesos de cualquier empresa de Latinoamerica.
-
-ASCI es una plataforma de sales intelligence que detecta senales de compra en empresas, descubre que tecnologias y procesos utilizan, encuentra tomadores de decision y genera estrategias de acercamiento personalizadas con inteligencia artificial. Disenada para equipos de ventas B2B que operan en Latinoamerica.
+> Servidor MCP de señales de compra B2B, con foco en Latinoamérica. Conecta Claude, ChatGPT o cualquier cliente compatible con MCP a 669 mil perfiles profesionales y 275 mil avisos de empleo, para saber qué tecnología usa cada empresa, quién la usa y a quién llamar, con la evidencia de cada señal.
 
 URL: https://asci.bigua.lat
-Creado por: Bigua (https://bigua.lat)
-Acceso: Por invitacion. Contacto en https://bigua.lat
+Servidor MCP: https://mcp.bigua.lat/mcp (login por email; acceso por invitación)
+Creado por: Biguá (https://bigua.lat)
 
-## Documentacion
+## Qué resuelve
 
-- [Documentacion completa para LLMs](https://asci.bigua.lat/llms-full.txt): Toda la documentacion de ASCI en un solo archivo de texto plano, optimizado para contexto de LLMs.
+- Prospectar por tecnología: qué cuentas usan un producto, por país e industria, ordenadas por respaldo y sin partners ni integradores.
+- La vacante como señal de compra: avisos de los últimos días que piden una tecnología, con el link y quién los publicó.
+- ABM sobre un listado propio: qué tecnología tiene cada cuenta, por país.
+- Evidencia: el fragmento, la persona o el aviso que prueba cada señal, con fecha y link.
+- Tomadores de decisión: a quién llamar en cada cuenta; ver el padrón no tiene costo y sólo se cobra el revelado de contactos.
+- Radar de rotación: quién entró y quién salió de una cuenta, y de dónde vino o adónde fue.
+- Talento: personas por tecnología o por concepto, ordenadas por cuánta evidencia hay de que lo usan.
 
-## Secciones
+## Herramientas principales
 
-- Que es ASCI: Vision general, propuesta de valor y audiencia objetivo.
-- Busqueda de Leads: Tres dimensiones de busqueda (por proceso, por tecnologia, por compania) con filtros por pais y scoring de relevancia.
-- Bookmarks y Gestion de Cuentas: Guardar, organizar (Kanban/Lista) y priorizar cuentas con tiers y estados de pipeline.
-- Workspace de una Cuenta: Espacio de trabajo por cuenta con 8 tabs: Resumen, Posiciones, Noticias, Implementaciones, Estrategia, Prospectos, Icebreakers y Brief Ejecutivo.
-- Documentos: Carga de documentos de venta (PDF, DOCX, PPTX, URLs) que la IA usa como contexto.
-- Senales e Inteligencia: Tipos de senales (empleados actuales, alumni, busquedas laborales, noticias, implementaciones) y scoring.
-- Inteligencia Artificial: Generacion de estrategias, icebreakers y briefs ejecutivos con IA generativa.
-- Flujo de Trabajo Tipico: Paso a paso desde la busqueda hasta el contacto.
-- Acceso y Autenticacion: Modelo de acceso por invitacion.
-- FAQ: Preguntas frecuentes, diferenciacion vs Apollo/ZoomInfo, cobertura de paises.
+- Cuentas: resolver_cuentas, presencia, prospectar, evidencia, novedades, avisos_recientes
+- Personas: personas, personas_por_texto, personas_por_mail, rotacion
+- Contactos: roles_objetivo, tomadores_de_decision, buscar_contactos, revelar_contacto, revelar_lote
+- Investigación: productos, radiografia, hallazgos
+
+## Datos
+
+- Fuentes: perfiles profesionales y avisos de empleo, con foco en Latinoamérica; contactos de decisores vía Apollo.io.
+- Diccionario de 461 tecnologías, con fabricante, categoría y ciclo de vida.
+- El país de cada señal sale de la gente o del aviso, no de la casa matriz: una multinacional aparece en cada país donde tiene respaldo.
+
+## Documentación
+
+- [Documentación completa para LLMs](https://asci.bigua.lat/llms-full.txt): describe la aplicación web de ASCI.

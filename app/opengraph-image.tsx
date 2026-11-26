@@ -2,7 +2,7 @@ import { ImageResponse } from "next/og"
 
 export const runtime = "edge"
 
-export const alt = "ASCI - Inteligencia de Senales para Ventas B2B"
+export const alt = "ASCI - Señales de compra B2B para Claude y ChatGPT"
 export const size = {
   width: 1200,
   height: 630,
@@ -115,7 +115,7 @@ export default async function Image() {
             lineHeight: 1.4,
           }}
         >
-          Inteligencia de señales para ventas B2B
+          Señales de compra B2B para Claude y ChatGPT
         </div>
 
         {/* Footer */}
