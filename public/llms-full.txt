@@ -1,384 +1,275 @@
-# ASCI by Bigua - Full Documentation for LLMs
+# ASCI by Biguá - Documentación completa para LLMs
 
-> ASCI es una plataforma de inteligencia de mercado para equipos de ventas B2B.
-> Identifica el stack tecnologico y procesos de cualquier empresa de Latinoamerica.
+> ASCI es un servidor MCP de señales de compra B2B, con foco en Latinoamérica.
+> Conecta Claude, ChatGPT o cualquier cliente compatible con MCP a perfiles profesionales y avisos de empleo,
+> para saber qué tecnología usa cada empresa, quién la usa y a quién llamar, con la evidencia de cada señal.
 > URL: https://asci.bigua.lat
-> Creado por: Bigua (https://bigua.lat)
+> Servidor MCP: https://mcp.bigua.lat/mcp
+> Creado por: Biguá (https://bigua.lat)
 
 ---
 
-## Seccion: Que es ASCI
+## Sección: Qué es ASCI
 
-title: Que es ASCI
-description: Vision general de la plataforma ASCI, su propuesta de valor y para quien esta disenada.
+title: Qué es ASCI
+description: Visión general de ASCI como servidor MCP, su propuesta de valor y para quién está pensado.
 source: https://asci.bigua.lat
 
-### Descripcion General
+### Descripción general
 
-ASCI (Automated Sales & Commercial Intelligence) es una plataforma de inteligencia comercial disenada para equipos de ventas B2B que operan en Latinoamerica. Permite identificar senales de compra en empresas, descubrir que tecnologias y procesos utilizan, encontrar tomadores de decision y generar estrategias de acercamiento personalizadas con inteligencia artificial.
+ASCI (Asistente de Señales de Compra e Inferencias) es un servidor MCP (Model Context Protocol). No es una aplicación más que hay que aprender: vive adentro del asistente de IA que el equipo ya usa. Una vez conectado, el usuario le pregunta a Claude o a ChatGPT en lenguaje natural, y el asistente llama a las herramientas de ASCI para responder.
 
-### Para quien es ASCI
+Lo que ASCI sabe responder:
 
-ASCI esta disenada para:
+- Qué tecnología usa una empresa, en qué país y con cuánto respaldo.
+- Qué empresas usan una tecnología, filtradas por país e industria.
+- Qué empresas están contratando gente para una tecnología o un rol, en los últimos días.
+- Quién trabaja con una tecnología, y con cuánta evidencia.
+- Quién entró y quién salió de una cuenta.
+- A quién llamar en cada cuenta, y su contacto.
 
-- Equipos de ventas B2B que venden tecnologia, servicios o productos SaaS a empresas en Latinoamerica.
-- SDRs (Sales Development Representatives) que necesitan priorizar cuentas basandose en senales reales.
-- Account Executives que necesitan contexto profundo antes de una reunion comercial.
-- Sales Managers que quieren visibilidad sobre el pipeline y la adopcion de herramientas de su equipo.
-- Vendors internacionales que quieren entrar al mercado LATAM y necesitan entender el ecosistema local.
+Cada respuesta trae la evidencia: el fragmento del perfil o del aviso, la fecha y el link.
+
+### Para quién es
+
+- Equipos de ventas B2B que venden tecnología, servicios o software a empresas.
+- SDRs y account executives que necesitan priorizar cuentas con señales, no con listas frías.
+- Equipos de marketing que arman campañas y eventos por segmento tecnológico.
+- Partners de migración y software factories que buscan base instalada de un producto, o tecnología legada.
+- Reclutadores que buscan perfiles por tecnología y experiencia probada.
 
 ### Propuesta de valor
 
-- **Senales de compra reales**: Detecta que tecnologias y procesos mencionan los empleados actuales de una empresa, no solo lo que dice su sitio web.
-- **Contexto profundo por cuenta**: Noticias recientes, implementaciones tecnologicas, busquedas laborales activas y datos firmograficos consolidados.
-- **Generacion de contenido con IA**: Estrategias de venta, icebreakers personalizados y briefs ejecutivos generados automaticamente usando el contexto de cada cuenta.
-- **Foco en Latinoamerica**: Base de datos y senales enfocadas en empresas que operan en la region.
+- **La tecnología se declara sola.** La gente la escribe en su perfil y las empresas la piden en sus avisos. ASCI lo lee, lo normaliza contra un diccionario de 461 tecnologías y lo resume por empresa y por país.
+- **Cada señal trae su prueba.** El fragmento, la persona o el aviso, la fecha y el link. Se puede defender por qué se llama a una cuenta.
+- **Firmeza, no menciones sueltas.** Una cuenta con doce personas que hoy usan un producto no pesa lo mismo que un ex empleado que lo nombró una vez. La respuesta dice cuánto respaldo tiene cada cuenta.
+- **Sin ruido de proveedores.** Partners, integradores y software factories quedan afuera por defecto, y la respuesta dice cuántos escondió.
+- **Dice lo que no sabe.** Si un nombre de tecnología no existe en el diccionario, la respuesta lo marca y sugiere el nombre correcto, en vez de devolver un cero que parece un resultado.
+- **Sin plataforma nueva.** Funciona dentro de Claude, ChatGPT y cualquier cliente MCP.
 
 ---
 
-## Seccion: Busqueda de Leads
+## Sección: Datos
 
-title: Busqueda de Leads
-description: Las tres dimensiones de busqueda inteligente que ofrece ASCI para descubrir cuentas objetivo.
-source: https://asci.bigua.lat/search
-
-### Busqueda por Proceso
-
-Encuentra empresas donde los empleados actuales mencionan procesos especificos en sus perfiles profesionales. Es ideal para identificar necesidades operativas activas dentro de una organizacion.
-
-Ejemplo: Buscar "Gestion de inventario" para encontrar empresas donde hay personas trabajando activamente en ese proceso.
-
-La busqueda considera solo empleados actuales (no alumni), lo que indica que el proceso esta activo hoy en la organizacion.
-
-### Busqueda por Tecnologia
-
-Analiza la huella tecnologica de empresas considerando tanto empleados actuales como alumni (ex-empleados). Esto permite ver tanto la adopcion actual como la historica de una tecnologia.
-
-Ejemplo: Buscar "SAP" para ver que empresas tienen (o tuvieron) usuarios de SAP, indicando familiaridad o dependencia de esa plataforma.
-
-La diferencia entre empleados actuales y alumni es clave: muchos alumni con una tecnologia puede indicar rotacion o migracion, mientras que muchos actuales indica adopcion activa.
-
-### Busqueda por Compania
-
-Permite obtener una radiografia completa de las senales de una empresa especifica. Muestra todos los procesos y tecnologias detectados, las busquedas laborales activas, y los puntajes de relevancia.
-
-### Filtros comunes
-
-- **Pais**: Filtra por pais de la empresa (Argentina, Mexico, Colombia, Chile, Brasil, etc.).
-- **Excluir proveedores**: Opcion para excluir empresas que son proveedores de tecnologia (consultoras, integradores) y quedarse solo con empresas de industria.
-- **Ordenamiento**: Por relevancia, por senales actuales, por senales alumni, o por busquedas laborales.
-
-### Resultados de busqueda
-
-Cada resultado muestra:
-
-- Nombre y logo de la empresa.
-- Industria y pais.
-- Cantidad de senales detectadas (empleados actuales que mencionan el proceso/tecnologia).
-- Cantidad de senales alumni.
-- Cantidad de busquedas laborales activas relacionadas.
-- Puntaje de relevancia calculado.
-
-Desde los resultados se puede abrir el panel de detalle de cualquier empresa, y guardarla como bookmark para trabajarla despues.
-
----
-
-## Seccion: Bookmarks y Gestion de Cuentas
-
-title: Bookmarks y Gestion de Cuentas
-description: Como guardar, organizar y priorizar las cuentas objetivo dentro de ASCI.
-source: https://asci.bigua.lat/bookmarks
-
-### Que es un Bookmark
-
-Un bookmark es una cuenta (empresa) que el usuario guarda para trabajar. Al bookmarkear una empresa desde los resultados de busqueda, se crea un workspace dedicado con toda la informacion necesaria para desarrollar esa cuenta.
-
-El bookmark retiene el contexto de busqueda: si el usuario bookmarkeo desde una busqueda de "SAP en Argentina", ese contexto se guarda y mejora la relevancia de las recomendaciones de IA posteriores.
-
-### Vistas de Bookmarks
-
-- **Vista Kanban**: Organiza las cuentas en columnas por estado del pipeline (Nuevo, En Analisis, Contactado, En Negociacion, Ganado, Perdido).
-- **Vista Lista**: Tabla con todas las cuentas, filtrable y ordenable.
-
-### Clasificacion
-
-- **Tiers (Prioridad)**: Alta, Transaccional, Baja. Permite priorizar cuentas segun su potencial.
-- **Estados**: Nuevo, En Analisis, Contactado, En Negociacion, Ganado, Perdido. Representan el avance del vendedor con cada cuenta.
-
-### Filtros
-
-Los bookmarks se pueden filtrar por:
-
-- Busqueda de texto (nombre, notas, industria).
-- Prioridad (tier).
-- Estado del pipeline.
-
----
-
-## Seccion: Workspace de una Cuenta
-
-title: Workspace de una Cuenta
-description: El espacio de trabajo dedicado a cada cuenta bookmarkeada, con todas las herramientas de analisis y generacion de contenido.
-source: https://asci.bigua.lat/bookmarks/[id]
-
-### Estructura del Workspace
-
-Cada cuenta bookmarkeada tiene un workspace con las siguientes tabs:
-
-#### Resumen
-
-Vision general de la empresa: datos firmograficos (industria, pais, sitio web, LinkedIn), senales detectadas (procesos y tecnologias mencionadas por empleados actuales), y un resumen de la actividad reciente.
-
-#### Posiciones (Busquedas Laborales)
-
-Listado de las busquedas laborales activas de la empresa. Las busquedas laborales son senales fuertes de inversion: si una empresa busca un "Data Engineer con experiencia en Snowflake", es probable que esten invirtiendo en datos.
-
-Se puede filtrar por pais para ver busquedas en filiales especificas.
-
-#### Noticias
-
-Noticias recientes de la compania obtenidas automaticamente. Las noticias proporcionan contexto actualizado sobre que esta pasando en la empresa: rondas de inversion, expansiones, lanzamientos de productos, alianzas.
-
-Las noticias seleccionadas como relevantes por el usuario alimentan directamente la generacion de Icebreakers y del Brief Ejecutivo, dandoles contexto fresco.
-
-#### Implementaciones
-
-A diferencia de las noticias (que son informacion general), las implementaciones son proyectos concretos que la compania realizo o esta realizando con tecnologias especificas. Son senales mas solidas de inversion y prioridad porque representan compromisos reales.
-
-Ejemplo: "Empresa X implemento Salesforce para su equipo de 200 vendedores en Q3 2025."
-
-Las implementaciones tambien impactan en los Icebreakers y el Brief Ejecutivo.
-
-#### Estrategia
-
-La estrategia de venta se genera con inteligencia artificial usando:
-
-- Las senales detectadas en la empresa (procesos, tecnologias).
-- Las noticias e implementaciones recientes.
-- Los documentos del usuario (pitch decks, casos de exito, propuestas).
-- El contexto de busqueda original.
-
-La estrategia incluye pain points identificados, propuesta de valor personalizada, objeciones anticipadas y recomendaciones de approach.
-
-Una cuenta bookmarkeada desde un proceso especifico (ej: "Gestion de inventario") genera estrategias mas enfocadas que una cuenta bookmarkeada sin contexto.
-
-#### Prospectos
-
-Permite buscar contactos (tomadores de decision) dentro de la empresa. ASCI sugiere job titles relevantes basandose en las senales detectadas y permite filtrar por pais.
-
-Esto es especialmente util para multinacionales: el usuario puede filtrar por el pais de la filial local para encontrar los contactos correctos.
-
-Los datos de contacto incluyen nombre, cargo, email y perfil de LinkedIn.
-
-#### Icebreakers
-
-Genera mensajes de apertura personalizados usando inteligencia artificial. Los icebreakers utilizan:
-
-- Senales de la empresa (procesos, tecnologias).
-- Noticias e implementaciones recientes.
-- Documentos del usuario.
-- La estrategia generada.
-
-Se pueden generar distintos tipos de mensajes segun el contacto objetivo y el canal (email, LinkedIn, llamada).
-
-#### Brief Ejecutivo
-
-El brief consolida toda la informacion en un documento ejecutivo listo para usar antes de una reunion o llamada. Incluye:
-
-- Resumen de la empresa.
-- Senales clave detectadas.
-- Noticias e implementaciones relevantes.
-- Estrategia recomendada.
-- Prospectos identificados.
-- Icebreakers sugeridos.
-
-El brief se puede exportar y compartir con el equipo.
-
----
-
-## Seccion: Documentos
-
-title: Documentos
-description: Sistema de carga y analisis de documentos propios del usuario para enriquecer las recomendaciones de IA.
-source: https://asci.bigua.lat/docs
-
-### Que son los Documentos
-
-El usuario puede subir sus propios documentos de venta: pitch decks, propuestas comerciales, casos de exito, presentaciones de producto, battlecards, etc.
-
-Formatos soportados: PDF, DOCX, PPTX y URLs de paginas web.
-
-### Como funcionan
-
-1. El usuario sube un documento o pega una URL.
-2. ASCI extrae el texto automaticamente.
-3. La IA analiza el contenido y genera un perfil del documento con tags y un resumen.
-4. El documento queda disponible como contexto para todas las generaciones de IA (estrategia, icebreakers, brief).
-
-### Para que sirven
-
-Los documentos le dan a la IA contexto sobre que vende el usuario, cual es su propuesta de valor, sus diferenciadores y sus casos de exito. Esto hace que las estrategias, icebreakers y briefs sean mucho mas relevantes y personalizados en lugar de genericos.
-
----
-
-## Seccion: Senales e Inteligencia
-
-title: Senales e Inteligencia
-description: Como ASCI detecta y utiliza senales de compra para calificar empresas.
+title: Los datos de ASCI
+description: De dónde salen las señales, cuánto hay y cómo se interpretan.
 source: https://asci.bigua.lat
 
-### Tipos de senales
+### Fuentes
 
-ASCI detecta multiples tipos de senales que indican actividad o interes de una empresa:
+- **Perfiles profesionales:** alrededor de 669 mil personas y 2,7 millones de puestos, actuales y anteriores, con su descripción y sus skills.
+- **Avisos de empleo:** alrededor de 275 mil avisos, con su fecha de publicación, su texto y, cuando se conoce, quién los publicó.
+- **Empresas:** alrededor de 113 mil.
+- **Contactos de decisores:** desde Apollo.io, en una caché propia que se consulta gratis, y con revelado pago bajo demanda.
 
-1. **Senales de empleados actuales**: Procesos y tecnologias mencionados en perfiles de empleados que trabajan actualmente en la empresa. Es la senal mas fuerte porque indica actividad presente.
+Las cifras son de noviembre de 2026 y crecen con cada carga.
 
-2. **Senales de alumni**: Procesos y tecnologias mencionados por ex-empleados. Indica experiencia historica con esa tecnologia, lo que puede significar familiaridad o una posible migracion.
+### El diccionario de tecnologías
 
-3. **Busquedas laborales**: Posiciones abiertas que mencionan procesos o tecnologias especificas. Indica inversion futura y prioridades actuales de la empresa.
+461 tecnologías, cada una con su fabricante, su categoría (ERP y backoffice, Cloud e infraestructura, Datos y BI, Desarrollo, Ciberseguridad, Core bancario y pagos, IA y agentes, entre casi cuarenta) y su ciclo de vida: vigente, legado o fin de soporte. Cada producto declara además su papel en una migración: origen, destino o neutro.
 
-4. **Noticias**: Eventos recientes de la empresa (financiamiento, expansiones, partnerships, lanzamientos).
+Los términos se reconocen aunque el texto no use el nombre del producto: "Protheus" se reconoce como TOTVS y "Golang" como Go.
 
-5. **Implementaciones**: Proyectos concretos de adopcion o uso de tecnologias especificas. Senal directa de inversion.
+### Cómo se interpreta una señal
 
-### Puntaje de relevancia
-
-Cada empresa recibe un puntaje de relevancia calculado en base a la cantidad y tipo de senales. Las senales de empleados actuales tienen mayor peso que alumni, y las busquedas laborales suman un bonus adicional.
+- **Firmeza:** cuánto respaldo tiene una cuenta para un producto. Cuenta las personas que hoy lo usan, las que lo usaron y los avisos que lo piden.
+- **País de la señal:** el país sale de la persona o del aviso, no de la casa matriz. Una multinacional aparece en cada país donde tiene gente o avisos que la respalden, cada uno con sus propios números.
+- **Prueba e indicio:** cuando se pide evidencia para un país, los fragmentos de ese país son prueba y los de la misma empresa en otros países son indicio. Se cuentan por separado.
+- **Proveedores:** las empresas que implementan o revenden una tecnología se separan de las que la usan, y quedan afuera por defecto.
 
 ---
 
-## Seccion: Inteligencia Artificial
+## Sección: Herramientas
 
-title: Inteligencia Artificial
-description: Como ASCI utiliza IA generativa para crear contenido de ventas personalizado.
+title: Herramientas del MCP
+description: Las herramientas que el asistente puede llamar, agrupadas por tipo de pregunta.
 source: https://asci.bigua.lat
 
-### Generacion de Estrategia
+El usuario no tiene que nombrarlas: el asistente elige cuál llamar según el pedido. Qué herramientas tiene cada usuario depende de su perfil de acceso.
 
-La IA analiza las senales de la empresa, las noticias, implementaciones y los documentos del usuario para generar una estrategia de venta personalizada. Incluye:
+### Cuentas
 
-- Analisis de pain points.
-- Propuesta de valor adaptada.
-- Objeciones anticipadas.
-- Plan de approach recomendado.
+- **resolver_cuentas:** convierte una lista de nombres de empresa en cuentas. Separa las que resuelven, las ambiguas y las que no están. Es el primer paso para trabajar sobre un listado propio.
+- **presencia:** qué tecnología tiene cada cuenta, con una fila por cuenta, país y producto, y su firmeza. Recibe la lista entera de una vez.
+- **prospectar:** al revés que presencia: de una tecnología a las cuentas que la usan. El país es obligatorio y se puede filtrar por industria. Con varios productos, trae a las cuentas que tengan cualquiera de ellos.
+- **evidencia:** los fragmentos que prueban que una cuenta usa un producto, con persona o aviso, fecha, link y alcance (local u otro país).
+- **novedades:** qué cambió en un período para una cartera de cuentas.
+- **avisos_recientes:** avisos activos de los últimos días (hasta 60) para una tecnología, una categoría o un texto libre, aunque la empresa no tenga cuenta en ASCI. Una fila por empresa, con el link del aviso y quién lo publicó.
 
-### Generacion de Icebreakers
+### Personas
 
-Mensajes de apertura personalizados basados en el contexto completo de la cuenta. La IA combina senales de la empresa con el perfil del contacto objetivo para generar mensajes relevantes y no genericos.
+- **personas:** quién usa una tecnología, ordenado por cuánta evidencia hay de que la usa. Filtra por país, años de experiencia, rol y seniority; con varios productos puede exigir que la persona los tenga todos. Trae la cita que lo prueba.
+- **personas_por_texto:** personas por un concepto en texto libre ("adquirencia", "racks"), para lo que no es una tecnología del diccionario. Busca en el perfil y en los puestos actuales y anteriores.
+- **personas_por_mail:** identidad para una lista de mails: nombre, puesto, empresa actual y LinkedIn. Enumera los mails que no encontró.
+- **rotacion:** quién entró y quién salió de una cuenta, de dónde venía cada uno y adónde fue, con agregados por destino, por origen y por rol.
 
-### Brief Ejecutivo
+### Contactos
 
-Documento consolidado que la IA genera combinando toda la informacion disponible de una cuenta en un formato ejecutivo listo para una reunion.
+- **roles_objetivo:** el catálogo de roles de decisor, por ejemplo TI, operaciones, innovación, datos, finanzas y compras.
+- **tomadores_de_decision:** a quién llamar en un conjunto de cuentas, desde la caché. No gasta créditos.
+- **buscar_contactos:** el padrón de una cuenta en Apollo.io. No gasta créditos.
+- **revelar_contacto:** el mail de una persona. 1 crédito. Con teléfono, 5 créditos, y el número llega después.
+- **revelar_lote:** el mail de una lista de personas elegidas. 1 crédito por persona que no esté ya en la caché.
+- **revelar_publicante:** quién publicó un aviso. 1 crédito sólo si se encuentra a la persona.
+- **guardar_contactos:** guarda una lista de contactos por cuenta. No gasta créditos.
 
-### Contexto que alimenta la IA
+### Investigación
 
-Todas las generaciones de IA en ASCI se nutren de:
-
-- Senales de la empresa (procesos, tecnologias, empleados).
-- Noticias e implementaciones recientes.
-- Busquedas laborales activas.
-- Documentos del usuario (pitch decks, casos de exito).
-- Contexto de busqueda original (desde que proceso/tecnologia se bookmarkeo).
+- **productos:** el diccionario de tecnologías, buscable por nombre, fabricante, término, categoría y ciclo de vida. Es la herramienta para resolver un nombre de producto antes de filtrar.
+- **radiografia:** el plan de investigación web de una cuenta, ordenado por lo que todavía no se sabe de ella.
+- **guardar_hallazgos** y **hallazgos:** lo que se encontró de una cuenta, y también las áreas donde no se encontró nada.
+- **confirmar_cuenta** y **revertir_cuenta:** resuelven una ambigüedad entre cuentas, y la deshacen.
 
 ---
 
-## Seccion: Flujo de Trabajo Tipico
+## Sección: Casos de uso
 
-title: Flujo de Trabajo Tipico
-description: El recorrido habitual de un usuario en ASCI, desde la busqueda hasta el contacto.
+title: Casos de uso
+description: Pedidos reales de equipos comerciales y cómo los resuelve ASCI.
 source: https://asci.bigua.lat
 
-### Paso 1: Subir documentos de venta
+### Prospectar por tecnología
 
-El usuario sube sus pitch decks, propuestas y casos de exito para que la IA tenga contexto sobre su producto.
+Pedido: "¿Qué aseguradoras de Chile usan Oracle Forms?"
+Herramienta: prospectar.
+Resultado: las cuentas ordenadas por firmeza, sin los partners que implementan el producto, y cuántos se escondieron.
 
-### Paso 2: Buscar cuentas objetivo
+### La vacante como señal de compra
 
-Usa la busqueda por proceso, tecnologia o compania para encontrar empresas con senales relevantes. Filtra por pais y excluye proveedores si es necesario.
+Pedido: "Avisos de los últimos 30 días que piden Snowflake en México."
+Herramienta: avisos_recientes.
+Resultado: una fila por empresa, con el aviso más reciente, su link y quién lo publicó. Una empresa que busca gente para una tecnología tiene una necesidad hoy.
 
-### Paso 3: Bookmarkear cuentas
+### ABM sobre un listado propio
 
-Guarda las empresas interesantes como bookmarks. El contexto de busqueda se preserva.
+Pedido: "Acá van mis 80 cuentas: ¿cuáles tienen SAP y cuáles Salesforce?"
+Herramientas: resolver_cuentas y presencia.
+Resultado: la matriz cuenta, país y tecnología en dos llamadas, no en ochenta.
 
-### Paso 4: Analizar la cuenta
+### Señal técnica, decisor de negocio
 
-Dentro del workspace, revisa noticias, implementaciones y busquedas laborales para entender el momento de la empresa.
+Pedido: "¿A quién de finanzas y de TI le hablo en esas cuentas?"
+Herramientas: tomadores_de_decision, buscar_contactos y revelar_lote.
+Resultado: los decisores por rol. Ver el padrón es gratis; sólo se paga el contacto que se elige revelar.
 
-### Paso 5: Generar estrategia
+### La prueba de cada señal
 
-Usa la tab de Estrategia para que la IA genere un plan de approach personalizado.
+Pedido: "¿Por qué decís que esta cuenta tiene SAP?"
+Herramienta: evidencia.
+Resultado: los fragmentos escritos por la propia gente de la cuenta, con nombre, puesto, fecha y link.
 
-### Paso 6: Encontrar prospectos
+### Radar de rotación
 
-Busca tomadores de decision en la tab de Prospectos. Filtra por pais si es una multinacional.
+Pedido: "¿Quién entró y quién se fue del área de TI de mi cartera este año?"
+Herramienta: rotacion.
+Resultado: las dos caras del movimiento. Un CIO que sale o un responsable de datos que entra es una ventana de oportunidad.
 
-### Paso 7: Crear icebreakers
+### El caso de éxito que camina solo
 
-Genera mensajes de apertura personalizados para cada contacto.
+Pedido: "¿Adónde se fue la gente que trabajó con nosotros en este cliente?"
+Herramienta: rotacion, con egresos.
+Resultado: quiénes salieron de la cuenta y dónde están hoy. Quien ya conoce tu producto, en una empresa nueva, es el mejor primer contacto.
 
-### Paso 8: Preparar el brief
+### Talento con evidencia
 
-Genera el brief ejecutivo antes de la reunion para tener toda la informacion consolidada.
+Pedido: "Desarrolladores Java en Argentina con más de cinco años usándolo."
+Herramientas: personas y personas_por_texto.
+Resultado: personas ordenadas por cuánta evidencia hay de que usan la tecnología, con la cita.
+
+### Devolverle identidad a una lista de mails
+
+Pedido: "Tengo esta lista de mails de un evento: ¿quiénes son?"
+Herramienta: personas_por_mail.
+Resultado: nombre, puesto, empresa actual y LinkedIn de cada uno, y la lista de los que no se encontraron.
 
 ---
 
-## Seccion: Acceso y Autenticacion
+## Sección: Cómo se conecta
 
-title: Acceso y Autenticacion
-description: Como acceder a ASCI y modelo de acceso.
-source: https://asci.bigua.lat/auth/login
+title: Cómo se conecta
+description: Pasos para conectar ASCI a Claude, ChatGPT u otro cliente MCP.
+source: https://asci.bigua.lat
 
 ### Acceso
 
-ASCI es un producto de acceso por invitacion. Los usuarios acceden a traves de un login con email y contrasena.
+El acceso es por invitación. Biguá da de alta al usuario con su email y un perfil de acceso. Publicar la dirección del servidor no abre los datos: sólo entra quien está dado de alta y con el acceso vigente.
 
-URL: https://asci.bigua.lat
+### Claude
 
-No hay un plan de precios publico. Para solicitar acceso, contactar a Bigua en https://bigua.lat.
+En Claude se agrega un conector personalizado con la dirección `https://mcp.bigua.lat/mcp`. Al conectar se abre una página de ASCI: la persona pone su email, recibe un código y autoriza.
 
-### Perfiles de usuario
+### ChatGPT
 
-- **Usuario**: Acceso completo a busqueda, bookmarks, documentos y workspace.
-- **Administrador**: Acceso adicional a metricas de uso, gestion de usuarios y configuracion de prompts de IA.
+En ChatGPT, con el modo desarrollador, se crea una app con la misma dirección. El login es el mismo: email y código.
 
----
+### Otros clientes MCP
 
-## Seccion: Sobre Bigua
-
-title: Sobre Bigua
-description: Informacion sobre la empresa detras de ASCI.
-source: https://bigua.lat
-
-### Bigua
-
-ASCI es un producto desarrollado por Bigua, una empresa enfocada en soluciones de inteligencia comercial para el mercado B2B latinoamericano.
-
-Sitio web: https://bigua.lat
+Los clientes que no soportan el login por email pueden usar una clave personal en la cabecera `Authorization: Bearer`. La clave la entrega Biguá, se muestra una sola vez y es personal.
 
 ---
 
-## Seccion: FAQ
+## Sección: Costos y límites
 
-title: Preguntas Frecuentes
-description: Respuestas a las preguntas mas comunes sobre ASCI.
+title: Costos y límites
+description: Qué cuesta créditos, qué es gratis y qué no hace ASCI.
 source: https://asci.bigua.lat
 
-### Que diferencia a ASCI de herramientas como Apollo, ZoomInfo o LinkedIn Sales Navigator?
+### Qué es gratis y qué cuesta
 
-ASCI se enfoca en senales de compra reales extraidas de la actividad de empleados, no solo datos firmograficos. Ademas, genera contenido de ventas (estrategias, icebreakers, briefs) automaticamente con IA usando el contexto profundo de cada cuenta. Esta especificamente disenado para equipos que venden en Latinoamerica.
+- Explorar es gratis: cuentas, señales, evidencia, avisos, personas, rotación, decisores en caché y padrones de Apollo.io.
+- Revelar cuesta: el mail de una persona, 1 crédito; el teléfono, 5 créditos. Un contacto ya revelado no se vuelve a cobrar.
+- El flujo recomendado es de dos pasos: buscar el padrón gratis, elegir, y revelar sólo a quien se eligió.
+- Los perfiles de acceso pueden tener topes diarios de revelado o un cupo mensual de contactos entregados.
 
-### De donde vienen las senales?
+### Lo que ASCI no hace
 
-Las senales se extraen de perfiles profesionales publicos, busquedas laborales activas, noticias corporativas e implementaciones tecnologicas reportadas. ASCI procesa y normaliza esta informacion para hacerla actionable.
+- No tiene noticias corporativas, fusiones ni movimientos de C-level como señal. Mide qué tecnología usa una empresa y qué está buscando, no qué le está pasando en la prensa.
+- No tiene una taxonomía de procesos de negocio (KYC, AML, conciliación). El diccionario es de productos.
+- No sabe quién está abierto a cambiar de trabajo. Lo más cercano es quién figura como independiente.
+- No lee la web de cada empresa para evaluar complementariedad de catálogo.
 
-### Que tipo de documentos puedo subir?
+---
 
-PDF, DOCX, PPTX y URLs de paginas web. Idealmente: pitch decks, propuestas comerciales, casos de exito, presentaciones de producto y battlecards.
+## Sección: Sobre Biguá
 
-### En que paises funciona?
+title: Sobre Biguá
+description: La empresa detrás de ASCI.
+source: https://bigua.lat
 
-ASCI tiene cobertura en toda Latinoamerica, con mayor densidad de datos en Argentina, Mexico, Colombia, Chile, Brasil, Peru y Uruguay.
+### Biguá
 
-### Puedo usar ASCI en ingles?
+Biguá es una empresa de growth y ventas B2B para Latinoamérica: marketing, prospección y automatización. Desarrolla ASCI y lo usa en su propia operación comercial y en la de sus clientes.
 
-La interfaz esta en espanol. Las senales y datos de empresas se muestran en el idioma original. La IA puede generar contenido tanto en espanol como en ingles dependiendo del contexto.
+Web: https://bigua.lat
+
+---
+
+## Sección: Preguntas frecuentes
+
+title: Preguntas frecuentes
+description: Respuestas a las preguntas más comunes sobre ASCI.
+source: https://asci.bigua.lat
+
+### ¿Qué diferencia a ASCI de Apollo, ZoomInfo o LinkedIn Sales Navigator?
+
+Esas herramientas dicen quién trabaja dónde. ASCI dice qué tecnología usa cada empresa, qué está buscando contratar y cuánto respaldo tiene esa afirmación, con la evidencia citada. Y no es una plataforma aparte: se usa desde el asistente de IA. Para el contacto final, ASCI usa Apollo.io por debajo.
+
+### ¿Qué es un servidor MCP?
+
+MCP (Model Context Protocol) es el estándar con el que los asistentes de IA se conectan a fuentes de datos y herramientas externas. ASCI es un servidor MCP: le da al asistente herramientas que puede llamar para responder con datos reales en vez de con lo que sabe de memoria.
+
+### ¿Con qué asistentes funciona?
+
+Con Claude, con ChatGPT en modo desarrollador y con cualquier cliente compatible con MCP.
+
+### ¿De dónde vienen las señales?
+
+De perfiles profesionales y de avisos de empleo. ASCI los procesa contra un diccionario de 461 tecnologías y calcula la señal por empresa y por país. Los contactos de decisores vienen de Apollo.io.
+
+### ¿En qué países funciona?
+
+El foco es Latinoamérica. El país de cada señal sale de la persona o del aviso, así que una multinacional aparece en cada país donde tiene respaldo.
+
+### ¿En qué idioma se usa?
+
+Se le pregunta al asistente en español o en inglés. Los fragmentos de evidencia se muestran en el idioma original.
