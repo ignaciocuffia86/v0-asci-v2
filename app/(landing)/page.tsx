@@ -574,7 +574,7 @@ export default function HomePage() {
                     {["Resumen", "Estrategia", "Noticias", "Icebreakers"].map((tab, i) => (
                       <span
                         key={tab}
-                        className="rounded-lg px-3.5 py-1.5 text-[12px]"
+                        className={`rounded-lg px-3.5 py-1.5 text-[12px] whitespace-nowrap ${i === 3 ? "hidden sm:inline" : ""}`}
                         style={{
                           backgroundColor: i === 0 ? `${LIME}15` : "transparent",
                           color: i === 0 ? LIME : GRAY,
